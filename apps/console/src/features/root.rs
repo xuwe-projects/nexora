@@ -12,7 +12,8 @@ use actions::account::{
     OpenAccountSettings, SignOutAccount,
 };
 use gpui::{
-    Anchor, AnyElement, Context, IntoElement, MouseButton, Render, Window, div, prelude::*, px,
+    Anchor, AnyElement, Context, Hsla, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
+    Window, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
@@ -39,6 +40,8 @@ pub struct RootView {
     pinned_tabs: Vec<FeatureId>,
     /// 最近一次右键点击的标签页，用于构建标签页上下文菜单。
     tab_context_feature: Option<FeatureId>,
+    /// 普通标签区域的横向滚动句柄，用于在从更多菜单选择标签时自动滚动到目标标签。
+    regular_tab_scroll_handle: ScrollHandle,
     home_feature: HomeFeature,
     virtual_scroll_feature: VirtualScrollFeature,
 }
@@ -53,6 +56,7 @@ impl RootView {
             opened_tabs: vec![FeatureId::default()],
             pinned_tabs: Vec::new(),
             tab_context_feature: None,
+            regular_tab_scroll_handle: ScrollHandle::new(),
             home_feature: HomeFeature::default(),
             virtual_scroll_feature: VirtualScrollFeature::default(),
         }
@@ -77,6 +81,17 @@ impl RootView {
     /// 返回顺序就是它们在标签栏左侧展示的顺序；置顶标签会排在普通标签之前。
     pub fn pinned_tabs(&self) -> &[FeatureId] {
         &self.pinned_tabs
+    }
+
+    /// 返回顶部标签栏中未置顶的普通功能区。
+    ///
+    /// 普通标签会进入右侧可横向滚动区域；置顶标签则固定展示在左侧，避免被滚动条隐藏。
+    pub fn regular_tabs(&self) -> Vec<FeatureId> {
+        self.opened_tabs
+            .iter()
+            .copied()
+            .filter(|feature| !self.is_tab_pinned(*feature))
+            .collect()
     }
 
     /// 判断指定功能区对应的标签页是否已经置顶。
@@ -123,6 +138,7 @@ impl RootView {
     pub fn select_feature(&mut self, feature: FeatureId) {
         self.open_feature_tab(feature);
         self.active_feature = feature;
+        self.scroll_regular_tab_into_view(feature);
     }
 
     /// 关闭指定功能区对应的标签页。
@@ -229,6 +245,7 @@ impl RootView {
         }
 
         self.reorder_tabs_by_pin();
+        self.scroll_regular_tab_into_view(self.active_feature);
     }
 
     fn open_feature_tab(&mut self, feature: FeatureId) {
@@ -238,9 +255,22 @@ impl RootView {
         }
     }
 
-    fn select_opened_tab(&mut self, index: usize) {
-        if let Some(feature) = self.opened_tabs.get(index).copied() {
+    fn select_tab(&mut self, feature: FeatureId) {
+        if self.opened_tabs.contains(&feature) {
             self.active_feature = feature;
+            self.scroll_regular_tab_into_view(feature);
+        }
+    }
+
+    fn select_pinned_tab(&mut self, index: usize) {
+        if let Some(feature) = self.pinned_tabs.get(index).copied() {
+            self.select_tab(feature);
+        }
+    }
+
+    fn select_regular_tab(&mut self, index: usize) {
+        if let Some(feature) = self.regular_tabs().get(index).copied() {
+            self.select_tab(feature);
         }
     }
 
@@ -261,6 +291,7 @@ impl RootView {
 
         self.pinned_tabs
             .retain(|pinned| self.opened_tabs.contains(pinned));
+        self.scroll_regular_tab_into_view(self.active_feature);
     }
 
     fn ensure_active_or_select(&mut self, fallback: FeatureId) {
@@ -290,6 +321,29 @@ impl RootView {
         self.opened_tabs = pinned;
         self.pinned_tabs
             .retain(|pinned| self.opened_tabs.contains(pinned));
+    }
+
+    fn active_pinned_tab_index(&self) -> Option<usize> {
+        self.pinned_tabs
+            .iter()
+            .position(|feature| *feature == self.active_feature)
+    }
+
+    fn regular_tab_index(&self, feature: FeatureId) -> Option<usize> {
+        self.opened_tabs
+            .iter()
+            .filter(|opened| !self.is_tab_pinned(**opened))
+            .position(|opened| *opened == feature)
+    }
+
+    fn active_regular_tab_index(&self) -> Option<usize> {
+        self.regular_tab_index(self.active_feature)
+    }
+
+    fn scroll_regular_tab_into_view(&self, feature: FeatureId) {
+        if let Some(index) = self.regular_tab_index(feature) {
+            self.regular_tab_scroll_handle.scroll_to_item(index);
+        }
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -466,10 +520,66 @@ impl RootView {
             }))
     }
 
+    fn render_tab(
+        feature: FeatureId,
+        is_pinned: bool,
+        has_separator: bool,
+        root_view: WeakEntity<Self>,
+        tab_separator_color: Hsla,
+    ) -> Tab {
+        let action_root = root_view.clone();
+        let context_root = root_view.clone();
+        let action_icon = if is_pinned {
+            IconName::Check
+        } else {
+            IconName::Close
+        };
+        let action_tooltip = if is_pinned {
+            "取消置顶"
+        } else {
+            "关闭标签"
+        };
+
+        Tab::new()
+            .prefix(Icon::new(feature_icon(feature)))
+            .label(feature.title())
+            .suffix(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new(format!("close-tab-{}", nav_badge(feature)))
+                            .ghost()
+                            .xsmall()
+                            .icon(action_icon)
+                            .tooltip(action_tooltip)
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                _ = action_root.update(cx, |this, cx| {
+                                    if is_pinned {
+                                        this.toggle_pin_tab(feature);
+                                    } else {
+                                        this.close_tab(feature);
+                                    }
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .when(has_separator, |this| {
+                        this.child(div().w(px(1.0)).h(px(18.0)).bg(tab_separator_color))
+                    }),
+            )
+            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                _ = context_root.update(cx, |this, _| {
+                    this.tab_context_feature = Some(feature);
+                });
+            })
+    }
+
     fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let active_tab_index = self.active_tab_index().unwrap_or_default();
-        let opened_tabs = self.opened_tabs().to_vec();
         let pinned_tabs = self.pinned_tabs().to_vec();
+        let regular_tabs = self.regular_tabs();
+        let active_pinned_tab_index = self.active_pinned_tab_index();
+        let active_regular_tab_index = self.active_regular_tab_index();
         let root_view = cx.entity().downgrade();
         let title_bar_background = cx.theme().tokens.title_bar;
         let tab_separator_color = cx.theme().border;
@@ -492,16 +602,12 @@ impl RootView {
                             .min_w_0()
                             .h_full()
                             .child(
-                                TabBar::new("console-open-tabs")
+                                h_flex()
                                     .w_full()
                                     .h_full()
-                                    .menu(true)
-                                    .selected_index(active_tab_index)
-                                    .on_click(cx.listener(|this, index: &usize, _, cx| {
-                                        this.select_opened_tab(*index);
-                                        cx.notify();
-                                    }))
-                                    .prefix(
+                                    .min_w_0()
+                                    .items_center()
+                                    .child(
                                         h_flex()
                                             .mx_1()
                                             .child(
@@ -517,89 +623,95 @@ impl RootView {
                                                     .icon(IconName::ArrowRight),
                                             ),
                                     )
-                                    .children(opened_tabs.iter().copied().enumerate().map(
-                                        |(tab_index, feature)| {
-                                            let is_pinned = pinned_tabs.contains(&feature);
-                                            let has_separator = tab_index + 1 < opened_tabs.len();
-                                            let action_root = root_view.clone();
-                                            let context_root = root_view.clone();
-                                            let action_icon = if is_pinned {
-                                                IconName::Check
-                                            } else {
-                                                IconName::Close
-                                            };
-                                            let action_tooltip = if is_pinned {
-                                                "取消置顶"
-                                            } else {
-                                                "关闭标签"
-                                            };
-
-                                            Tab::new()
-                                                .prefix(Icon::new(feature_icon(feature)))
-                                                .label(feature.title())
-                                                .suffix(
-                                                    h_flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            Button::new(format!(
-                                                                "close-tab-{}",
-                                                                nav_badge(feature)
-                                                            ))
-                                                            .ghost()
-                                                            .xsmall()
-                                                            .icon(action_icon)
-                                                            .tooltip(action_tooltip)
-                                                            .on_click(move |_, _, cx| {
-                                                                cx.stop_propagation();
-                                                                _ = action_root.update(
-                                                                    cx,
-                                                                    |this, cx| {
-                                                                        if is_pinned {
-                                                                            this.toggle_pin_tab(
-                                                                                feature,
-                                                                            );
-                                                                        } else {
-                                                                            this.close_tab(feature);
-                                                                        }
-                                                                        cx.notify();
-                                                                    },
-                                                                );
-                                                            }),
-                                                        )
-                                                        .when(has_separator, |this| {
-                                                            this.child(
-                                                                div()
-                                                                    .w(px(1.0))
-                                                                    .h(px(18.0))
-                                                                    .bg(tab_separator_color),
-                                                            )
-                                                        }),
+                                    .when(!pinned_tabs.is_empty(), |this| {
+                                        this.child(
+                                            TabBar::new("console-pinned-tabs")
+                                                .flex_none()
+                                                .h_full()
+                                                .when_some(
+                                                    active_pinned_tab_index,
+                                                    |this, index| this.selected_index(index),
                                                 )
-                                                .on_mouse_down(
-                                                    MouseButton::Right,
-                                                    move |_, _, cx| {
-                                                        _ = context_root.update(cx, |this, _| {
-                                                            this.tab_context_feature =
-                                                                Some(feature);
-                                                        });
+                                                .on_click(cx.listener(
+                                                    |this, index: &usize, _, cx| {
+                                                        this.select_pinned_tab(*index);
+                                                        cx.notify();
                                                     },
-                                                )
-                                        },
-                                    ))
-                                    .suffix(
-                                        h_flex()
-                                            .mx_1()
+                                                ))
+                                                .children(
+                                                    pinned_tabs.iter().copied().enumerate().map(
+                                                        |(tab_index, feature)| {
+                                                            let has_separator = tab_index + 1
+                                                                < pinned_tabs.len()
+                                                                || !regular_tabs.is_empty();
+
+                                                            Self::render_tab(
+                                                                feature,
+                                                                true,
+                                                                has_separator,
+                                                                root_view.clone(),
+                                                                tab_separator_color,
+                                                            )
+                                                        },
+                                                    ),
+                                                ),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .id("console-regular-tabs-zone")
+                                            .relative()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
                                             .child(
-                                                Button::new("tabs-inbox")
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .icon(IconName::Inbox),
-                                            )
-                                            .child(
-                                                Button::new("tabs-more")
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .icon(IconName::Ellipsis),
+                                                TabBar::new("console-regular-tabs")
+                                                    .w_full()
+                                                    .h_full()
+                                                    .track_scroll(&self.regular_tab_scroll_handle)
+                                                    .menu(!regular_tabs.is_empty())
+                                                    .when_some(
+                                                        active_regular_tab_index,
+                                                        |this, index| this.selected_index(index),
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        |this, index: &usize, _, cx| {
+                                                            this.select_regular_tab(*index);
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .children(
+                                                        regular_tabs
+                                                            .iter()
+                                                            .copied()
+                                                            .enumerate()
+                                                            .map(|(tab_index, feature)| {
+                                                                Self::render_tab(
+                                                                    feature,
+                                                                    false,
+                                                                    tab_index + 1
+                                                                        < regular_tabs.len(),
+                                                                    root_view.clone(),
+                                                                    tab_separator_color,
+                                                                )
+                                                            }),
+                                                    )
+                                                    .suffix(
+                                                        h_flex()
+                                                            .mx_1()
+                                                            .child(
+                                                                Button::new("tabs-inbox")
+                                                                    .ghost()
+                                                                    .xsmall()
+                                                                    .icon(IconName::Inbox),
+                                                            )
+                                                            .child(
+                                                                Button::new("tabs-more")
+                                                                    .ghost()
+                                                                    .xsmall()
+                                                                    .icon(IconName::Ellipsis),
+                                                            ),
+                                                    ),
                                             ),
                                     ),
                             )

@@ -322,3 +322,28 @@ fn root_view_toggles_pinned_tabs_at_the_front() {
     );
     assert_eq!(view.pinned_tabs(), &[FeatureId::Tasks]);
 }
+
+#[test]
+fn root_view_keeps_pinned_tabs_out_of_regular_scroll_tabs() {
+    let mut view = RootView::new();
+
+    view.select_feature(FeatureId::Projects);
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::VirtualScroll);
+    view.toggle_pin_tab(FeatureId::Projects);
+    view.toggle_pin_tab(FeatureId::VirtualScroll);
+
+    assert_eq!(
+        view.pinned_tabs(),
+        &[FeatureId::Projects, FeatureId::VirtualScroll]
+    );
+    assert_eq!(view.regular_tabs(), &[FeatureId::Home, FeatureId::Tasks]);
+
+    view.toggle_pin_tab(FeatureId::Projects);
+
+    assert_eq!(view.pinned_tabs(), &[FeatureId::VirtualScroll]);
+    assert_eq!(
+        view.regular_tabs(),
+        &[FeatureId::Projects, FeatureId::Home, FeatureId::Tasks]
+    );
+}
