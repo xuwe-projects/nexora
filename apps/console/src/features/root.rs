@@ -469,6 +469,7 @@ impl RootView {
     fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let active_tab_index = self.active_tab_index().unwrap_or_default();
         let opened_tabs = self.opened_tabs().to_vec();
+        let pinned_tabs = self.pinned_tabs().to_vec();
         let root_view = cx.entity().downgrade();
 
         TitleBar::new()
@@ -486,7 +487,6 @@ impl RootView {
                             .id("console-open-tabs-zone")
                             .flex_1()
                             .min_w_0()
-                            .max_w(px(720.0))
                             .h_full()
                             .child(
                                 TabBar::new("console-open-tabs")
@@ -515,8 +515,19 @@ impl RootView {
                                             ),
                                     )
                                     .children(opened_tabs.iter().copied().map(|feature| {
-                                        let close_root = root_view.clone();
+                                        let is_pinned = pinned_tabs.contains(&feature);
+                                        let action_root = root_view.clone();
                                         let context_root = root_view.clone();
+                                        let action_icon = if is_pinned {
+                                            IconName::Check
+                                        } else {
+                                            IconName::Close
+                                        };
+                                        let action_tooltip = if is_pinned {
+                                            "取消置顶"
+                                        } else {
+                                            "关闭标签"
+                                        };
 
                                         Tab::new()
                                             .prefix(Icon::new(feature_icon(feature)))
@@ -528,12 +539,16 @@ impl RootView {
                                                 ))
                                                 .ghost()
                                                 .xsmall()
-                                                .icon(IconName::Close)
-                                                .tooltip("关闭标签")
+                                                .icon(action_icon)
+                                                .tooltip(action_tooltip)
                                                 .on_click(move |_, _, cx| {
                                                     cx.stop_propagation();
-                                                    _ = close_root.update(cx, |this, cx| {
-                                                        this.close_tab(feature);
+                                                    _ = action_root.update(cx, |this, cx| {
+                                                        if is_pinned {
+                                                            this.toggle_pin_tab(feature);
+                                                        } else {
+                                                            this.close_tab(feature);
+                                                        }
                                                         cx.notify();
                                                     });
                                                 }),
