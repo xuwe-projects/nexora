@@ -471,6 +471,8 @@ impl RootView {
         let opened_tabs = self.opened_tabs().to_vec();
         let pinned_tabs = self.pinned_tabs().to_vec();
         let root_view = cx.entity().downgrade();
+        let title_bar_background = cx.theme().tokens.title_bar;
+        let tab_separator_color = cx.theme().border;
 
         TitleBar::new()
             .border_b(px(0.0))
@@ -481,10 +483,11 @@ impl RootView {
                     .min_w_0()
                     .gap_2()
                     .items_center()
-                    .px_2()
+                    .px_3()
                     .child(
                         div()
                             .id("console-open-tabs-zone")
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .h_full()
@@ -514,51 +517,75 @@ impl RootView {
                                                     .icon(IconName::ArrowRight),
                                             ),
                                     )
-                                    .children(opened_tabs.iter().copied().map(|feature| {
-                                        let is_pinned = pinned_tabs.contains(&feature);
-                                        let action_root = root_view.clone();
-                                        let context_root = root_view.clone();
-                                        let action_icon = if is_pinned {
-                                            IconName::Check
-                                        } else {
-                                            IconName::Close
-                                        };
-                                        let action_tooltip = if is_pinned {
-                                            "取消置顶"
-                                        } else {
-                                            "关闭标签"
-                                        };
+                                    .children(opened_tabs.iter().copied().enumerate().map(
+                                        |(tab_index, feature)| {
+                                            let is_pinned = pinned_tabs.contains(&feature);
+                                            let has_separator = tab_index + 1 < opened_tabs.len();
+                                            let action_root = root_view.clone();
+                                            let context_root = root_view.clone();
+                                            let action_icon = if is_pinned {
+                                                IconName::Check
+                                            } else {
+                                                IconName::Close
+                                            };
+                                            let action_tooltip = if is_pinned {
+                                                "取消置顶"
+                                            } else {
+                                                "关闭标签"
+                                            };
 
-                                        Tab::new()
-                                            .prefix(Icon::new(feature_icon(feature)))
-                                            .label(feature.title())
-                                            .suffix(
-                                                Button::new(format!(
-                                                    "close-tab-{}",
-                                                    nav_badge(feature)
-                                                ))
-                                                .ghost()
-                                                .xsmall()
-                                                .icon(action_icon)
-                                                .tooltip(action_tooltip)
-                                                .on_click(move |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                    _ = action_root.update(cx, |this, cx| {
-                                                        if is_pinned {
-                                                            this.toggle_pin_tab(feature);
-                                                        } else {
-                                                            this.close_tab(feature);
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                            )
-                                            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                                                _ = context_root.update(cx, |this, _| {
-                                                    this.tab_context_feature = Some(feature);
-                                                });
-                                            })
-                                    }))
+                                            Tab::new()
+                                                .prefix(Icon::new(feature_icon(feature)))
+                                                .label(feature.title())
+                                                .suffix(
+                                                    h_flex()
+                                                        .gap_1()
+                                                        .child(
+                                                            Button::new(format!(
+                                                                "close-tab-{}",
+                                                                nav_badge(feature)
+                                                            ))
+                                                            .ghost()
+                                                            .xsmall()
+                                                            .icon(action_icon)
+                                                            .tooltip(action_tooltip)
+                                                            .on_click(move |_, _, cx| {
+                                                                cx.stop_propagation();
+                                                                _ = action_root.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        if is_pinned {
+                                                                            this.toggle_pin_tab(
+                                                                                feature,
+                                                                            );
+                                                                        } else {
+                                                                            this.close_tab(feature);
+                                                                        }
+                                                                        cx.notify();
+                                                                    },
+                                                                );
+                                                            }),
+                                                        )
+                                                        .when(has_separator, |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .w(px(1.0))
+                                                                    .h(px(18.0))
+                                                                    .bg(tab_separator_color),
+                                                            )
+                                                        }),
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    move |_, _, cx| {
+                                                        _ = context_root.update(cx, |this, _| {
+                                                            this.tab_context_feature =
+                                                                Some(feature);
+                                                        });
+                                                    },
+                                                )
+                                        },
+                                    ))
                                     .suffix(
                                         h_flex()
                                             .mx_1()
@@ -575,6 +602,16 @@ impl RootView {
                                                     .icon(IconName::Ellipsis),
                                             ),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .id("console-open-tabs-bottom-mask")
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(px(1.0))
+                                    .bg(title_bar_background),
                             )
                             .context_menu({
                                 let root_view = root_view.clone();
@@ -705,7 +742,7 @@ impl RootView {
                         div()
                             .id("titlebar-drag-space")
                             .flex_none()
-                            .w(px(120.0))
+                            .w(px(80.0))
                             .h_full(),
                     ),
             )
