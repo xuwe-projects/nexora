@@ -666,6 +666,7 @@ impl RootView {
                     .w_full()
                     .h_full()
                     .min_w_0()
+                    .overflow_hidden()
                     .gap_2()
                     .items_center()
                     .child(
@@ -675,15 +676,21 @@ impl RootView {
                             .flex_1()
                             .min_w_0()
                             .h_full()
+                            .overflow_hidden()
                             .child(
                                 h_flex()
                                     .w_full()
                                     .h_full()
                                     .min_w_0()
+                                    .overflow_hidden()
                                     .items_center()
                                     .child(
                                         h_flex()
                                             .mx_1()
+                                            .flex_shrink_0()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation();
+                                            })
                                             .child(
                                                 Button::new("tabs-back")
                                                     .ghost()
@@ -692,6 +699,7 @@ impl RootView {
                                                     .disabled(!can_navigate_back)
                                                     .tooltip("后退")
                                                     .on_click(cx.listener(|this, _, _, cx| {
+                                                        cx.stop_propagation();
                                                         this.navigate_back();
                                                         cx.notify();
                                                     })),
@@ -704,6 +712,7 @@ impl RootView {
                                                     .disabled(!can_navigate_forward)
                                                     .tooltip("前进")
                                                     .on_click(cx.listener(|this, _, _, cx| {
+                                                        cx.stop_propagation();
                                                         this.navigate_forward();
                                                         cx.notify();
                                                     })),
@@ -714,7 +723,7 @@ impl RootView {
                                             div()
                                                 .id("console-pinned-tabs-zone")
                                                 .flex_none()
-                                                .max_w(px(280.0))
+                                                .max_w(px(220.0))
                                                 .min_w_0()
                                                 .h_full()
                                                 .overflow_hidden()
@@ -722,6 +731,7 @@ impl RootView {
                                                     TabBar::new("console-pinned-tabs")
                                                         .w_full()
                                                         .h_full()
+                                                        .menu(pinned_tabs.len() > 2)
                                                         .when_some(
                                                             active_pinned_tab_index,
                                                             |this, index| {
@@ -753,6 +763,7 @@ impl RootView {
                                             .flex_1()
                                             .min_w_0()
                                             .h_full()
+                                            .overflow_hidden()
                                             .child(
                                                 TabBar::new("console-regular-tabs")
                                                     .w_full()
@@ -781,6 +792,13 @@ impl RootView {
                                                     .suffix(
                                                         h_flex()
                                                             .mx_1()
+                                                            .flex_shrink_0()
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                |_, _, cx| {
+                                                                    cx.stop_propagation();
+                                                                },
+                                                            )
                                                             .child(
                                                                 Button::new("tabs-inbox")
                                                                     .ghost()
@@ -937,6 +955,7 @@ impl RootView {
                             .id("titlebar-drag-space")
                             .flex_none()
                             .w(px(54.0))
+                            .min_w(px(54.0))
                             .h_full(),
                     ),
             )
