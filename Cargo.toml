@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/cli",
+    "apps/console",
+    "apps/server",
+    "crates/actions",
+    "crates/desktop",
+    "crates/ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+actions = { path = "crates/actions" }
+ui = { path = "crates/ui" }
+desktop = { path = "crates/desktop" }
+
+# UI 框架
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", default-features = false }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# 可选：使用内置默认资源
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
+gpui_wgpu = { opt-level = 3 }
+gpui_macos = { opt-level = 3 }
+gpui_util = { opt-level = 3 }
+"gpui-component" = { opt-level = 3 }
+"gpui-component-assets" = { opt-level = 3 }
+"gpui-component-macros" = { opt-level = 3 }
+sum_tree = { opt-level = 3 }
+ropey = { opt-level = 3 }
+lsp-types = { opt-level = 3 }
+markdown = { opt-level = 3 }
+xml5ever = { opt-level = 3 }

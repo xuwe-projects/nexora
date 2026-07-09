@@ -1,0 +1,4 @@
+interface:
+  display_name: "Desktop UI Component Selection"
+  short_description: "桌面交互到 gpui-component 的组件选择指南"
+  default_prompt: "Use $desktop-ui-component-selection to choose gpui-component primitives for this desktop UI interaction."
