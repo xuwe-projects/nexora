@@ -228,3 +228,97 @@ fn root_view_tracks_opened_tabs_without_duplicates() {
     );
     assert_eq!(view.active_tab_index(), Some(1));
 }
+
+#[test]
+fn root_view_closes_tabs_with_active_fallback() {
+    let mut view = RootView::new();
+
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::VirtualScroll);
+    view.close_tab(FeatureId::Tasks);
+
+    assert_eq!(
+        view.opened_tabs(),
+        &[FeatureId::Home, FeatureId::VirtualScroll]
+    );
+    assert_eq!(view.active_feature(), FeatureId::VirtualScroll);
+
+    view.close_tab(FeatureId::VirtualScroll);
+    assert_eq!(view.opened_tabs(), &[FeatureId::Home]);
+    assert_eq!(view.active_feature(), FeatureId::Home);
+
+    view.close_tab(FeatureId::Home);
+    assert_eq!(view.opened_tabs(), &[FeatureId::Home]);
+    assert_eq!(view.active_feature(), FeatureId::Home);
+}
+
+#[test]
+fn root_view_bulk_closes_tabs_while_preserving_pinned_tabs() {
+    let mut view = RootView::new();
+
+    view.select_feature(FeatureId::Projects);
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::VirtualScroll);
+    view.toggle_pin_tab(FeatureId::Projects);
+
+    assert_eq!(view.pinned_tabs(), &[FeatureId::Projects]);
+    assert_eq!(
+        view.opened_tabs(),
+        &[
+            FeatureId::Projects,
+            FeatureId::Home,
+            FeatureId::Tasks,
+            FeatureId::VirtualScroll,
+        ]
+    );
+
+    view.close_tabs_to_left(FeatureId::VirtualScroll);
+    assert_eq!(
+        view.opened_tabs(),
+        &[FeatureId::Projects, FeatureId::VirtualScroll]
+    );
+    assert_eq!(view.active_feature(), FeatureId::VirtualScroll);
+
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::Settings);
+    view.close_tabs_to_right(FeatureId::Tasks);
+    assert_eq!(
+        view.opened_tabs(),
+        &[
+            FeatureId::Projects,
+            FeatureId::VirtualScroll,
+            FeatureId::Tasks
+        ]
+    );
+
+    view.close_other_tabs(FeatureId::Tasks);
+    assert_eq!(view.opened_tabs(), &[FeatureId::Projects, FeatureId::Tasks]);
+    assert_eq!(view.active_feature(), FeatureId::Tasks);
+}
+
+#[test]
+fn root_view_toggles_pinned_tabs_at_the_front() {
+    let mut view = RootView::new();
+
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::VirtualScroll);
+    view.toggle_pin_tab(FeatureId::VirtualScroll);
+    view.toggle_pin_tab(FeatureId::Tasks);
+
+    assert!(view.is_tab_pinned(FeatureId::VirtualScroll));
+    assert_eq!(
+        view.opened_tabs(),
+        &[FeatureId::VirtualScroll, FeatureId::Tasks, FeatureId::Home]
+    );
+    assert_eq!(
+        view.pinned_tabs(),
+        &[FeatureId::VirtualScroll, FeatureId::Tasks]
+    );
+
+    view.toggle_pin_tab(FeatureId::VirtualScroll);
+    assert_eq!(
+        view.opened_tabs(),
+        &[FeatureId::Tasks, FeatureId::VirtualScroll, FeatureId::Home]
+    );
+    assert_eq!(view.pinned_tabs(), &[FeatureId::Tasks]);
+}

@@ -11,12 +11,14 @@ use actions::account::{
     self as account_actions, AccountActionKind, AccountActionSpec, OpenAccountProfile,
     OpenAccountSettings, SignOutAccount,
 };
-use gpui::{Anchor, AnyElement, Context, IntoElement, Render, Window, div, prelude::*, px};
+use gpui::{
+    Anchor, AnyElement, Context, IntoElement, MouseButton, Render, Window, div, prelude::*, px,
+};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex,
-    menu::DropdownMenu as _,
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
     sidebar::{
         Sidebar, SidebarCollapsible, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu,
         SidebarMenuItem,
@@ -33,6 +35,10 @@ pub struct RootView {
     active_feature: FeatureId,
     /// 顶部标签栏中已经打开过的功能区。
     opened_tabs: Vec<FeatureId>,
+    /// 顶部标签栏中被置顶的功能区。
+    pinned_tabs: Vec<FeatureId>,
+    /// 最近一次右键点击的标签页，用于构建标签页上下文菜单。
+    tab_context_feature: Option<FeatureId>,
     home_feature: HomeFeature,
     virtual_scroll_feature: VirtualScrollFeature,
 }
@@ -45,6 +51,8 @@ impl RootView {
         Self {
             active_feature: FeatureId::default(),
             opened_tabs: vec![FeatureId::default()],
+            pinned_tabs: Vec::new(),
+            tab_context_feature: None,
             home_feature: HomeFeature::default(),
             virtual_scroll_feature: VirtualScrollFeature::default(),
         }
@@ -62,6 +70,20 @@ impl RootView {
     /// 该列表按用户首次打开页面的顺序保存；重复选择同一个 feature 不会插入重复标签。
     pub fn opened_tabs(&self) -> &[FeatureId] {
         &self.opened_tabs
+    }
+
+    /// 返回顶部标签栏中被置顶的功能区。
+    ///
+    /// 返回顺序就是它们在标签栏左侧展示的顺序；置顶标签会排在普通标签之前。
+    pub fn pinned_tabs(&self) -> &[FeatureId] {
+        &self.pinned_tabs
+    }
+
+    /// 判断指定功能区对应的标签页是否已经置顶。
+    ///
+    /// 置顶状态只影响标签栏排序和批量关闭行为，不改变 feature 自身的业务状态。
+    pub fn is_tab_pinned(&self, feature: FeatureId) -> bool {
+        self.pinned_tabs.contains(&feature)
     }
 
     /// 返回当前选中功能区在顶部标签栏中的索引。
@@ -103,9 +125,116 @@ impl RootView {
         self.active_feature = feature;
     }
 
+    /// 关闭指定功能区对应的标签页。
+    ///
+    /// 如果关闭的是当前激活标签，会优先激活原位置右侧的标签；没有右侧标签时回退到左侧标签。
+    /// 如果所有标签都被关闭，会重新打开首页，保证应用始终有一个可展示页面。
+    pub fn close_tab(&mut self, feature: FeatureId) {
+        let removed_index = self
+            .opened_tabs
+            .iter()
+            .position(|opened| *opened == feature);
+        let Some(index) = removed_index else {
+            return;
+        };
+
+        let closing_active = self.active_feature == feature;
+        self.opened_tabs.remove(index);
+        self.pinned_tabs.retain(|pinned| *pinned != feature);
+
+        if self.opened_tabs.is_empty() {
+            self.opened_tabs.push(FeatureId::default());
+        }
+
+        if closing_active {
+            let fallback_index = index.min(self.opened_tabs.len().saturating_sub(1));
+            if let Some(feature) = self.opened_tabs.get(fallback_index).copied() {
+                self.active_feature = feature;
+            }
+        }
+
+        self.ensure_active_tab();
+    }
+
+    /// 关闭指定标签页左侧的普通标签页。
+    ///
+    /// 已置顶标签会被保留，避免批量操作破坏用户显式固定的工作上下文。
+    pub fn close_tabs_to_left(&mut self, feature: FeatureId) {
+        let Some(index) = self.tab_index(feature) else {
+            return;
+        };
+
+        self.opened_tabs = self
+            .opened_tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(tab_index, opened)| {
+                (tab_index >= index || *opened == feature || self.is_tab_pinned(*opened))
+                    .then_some(*opened)
+            })
+            .collect();
+        self.ensure_active_or_select(feature);
+    }
+
+    /// 关闭指定标签页右侧的普通标签页。
+    ///
+    /// 已置顶标签会被保留，目标标签本身也会始终保留。
+    pub fn close_tabs_to_right(&mut self, feature: FeatureId) {
+        let Some(index) = self.tab_index(feature) else {
+            return;
+        };
+
+        self.opened_tabs = self
+            .opened_tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(tab_index, opened)| {
+                (tab_index <= index || *opened == feature || self.is_tab_pinned(*opened))
+                    .then_some(*opened)
+            })
+            .collect();
+        self.ensure_active_or_select(feature);
+    }
+
+    /// 关闭除指定标签页和置顶标签页之外的其他标签页。
+    ///
+    /// 当目标标签本身未置顶时，它会保留在置顶标签之后，方便用户继续操作右键选中的页面。
+    pub fn close_other_tabs(&mut self, feature: FeatureId) {
+        if !self.opened_tabs.contains(&feature) {
+            return;
+        }
+
+        self.opened_tabs = self
+            .opened_tabs
+            .iter()
+            .copied()
+            .filter(|opened| *opened == feature || self.is_tab_pinned(*opened))
+            .collect();
+        self.ensure_active_or_select(feature);
+        self.reorder_tabs_by_pin();
+    }
+
+    /// 切换指定标签页的置顶状态。
+    ///
+    /// 置顶后标签会移动到标签栏左侧；取消置顶后会回到普通标签区域，但仍保留当前打开状态。
+    pub fn toggle_pin_tab(&mut self, feature: FeatureId) {
+        if !self.opened_tabs.contains(&feature) {
+            return;
+        }
+
+        if self.is_tab_pinned(feature) {
+            self.pinned_tabs.retain(|pinned| *pinned != feature);
+        } else {
+            self.pinned_tabs.push(feature);
+        }
+
+        self.reorder_tabs_by_pin();
+    }
+
     fn open_feature_tab(&mut self, feature: FeatureId) {
         if !self.opened_tabs.contains(&feature) {
             self.opened_tabs.push(feature);
+            self.reorder_tabs_by_pin();
         }
     }
 
@@ -113,6 +242,54 @@ impl RootView {
         if let Some(feature) = self.opened_tabs.get(index).copied() {
             self.active_feature = feature;
         }
+    }
+
+    fn tab_index(&self, feature: FeatureId) -> Option<usize> {
+        self.opened_tabs
+            .iter()
+            .position(|opened| *opened == feature)
+    }
+
+    fn ensure_active_tab(&mut self) {
+        if self.opened_tabs.is_empty() {
+            self.opened_tabs.push(FeatureId::default());
+        }
+
+        if !self.opened_tabs.contains(&self.active_feature) {
+            self.active_feature = self.opened_tabs[0];
+        }
+
+        self.pinned_tabs
+            .retain(|pinned| self.opened_tabs.contains(pinned));
+    }
+
+    fn ensure_active_or_select(&mut self, fallback: FeatureId) {
+        if !self.opened_tabs.contains(&self.active_feature) {
+            self.active_feature = fallback;
+        }
+
+        self.ensure_active_tab();
+    }
+
+    fn reorder_tabs_by_pin(&mut self) {
+        let mut pinned = Vec::new();
+        for feature in self.pinned_tabs.iter().copied() {
+            if self.opened_tabs.contains(&feature) && !pinned.contains(&feature) {
+                pinned.push(feature);
+            }
+        }
+
+        let mut unpinned = self
+            .opened_tabs
+            .iter()
+            .copied()
+            .filter(|feature| !pinned.contains(feature))
+            .collect::<Vec<_>>();
+
+        pinned.append(&mut unpinned);
+        self.opened_tabs = pinned;
+        self.pinned_tabs
+            .retain(|pinned| self.opened_tabs.contains(pinned));
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -292,6 +469,7 @@ impl RootView {
     fn render_top_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let active_tab_index = self.active_tab_index().unwrap_or_default();
         let opened_tabs = self.opened_tabs().to_vec();
+        let root_view = cx.entity().downgrade();
 
         TitleBar::new()
             .border_b(px(0.0))
@@ -302,54 +480,211 @@ impl RootView {
                     .min_w_0()
                     .gap_2()
                     .items_center()
+                    .px_2()
                     .child(
-                        TabBar::new("console-open-tabs")
+                        div()
+                            .id("console-open-tabs-zone")
                             .flex_1()
                             .min_w_0()
+                            .max_w(px(720.0))
                             .h_full()
-                            .menu(true)
-                            .selected_index(active_tab_index)
-                            .on_click(cx.listener(|this, index: &usize, _, cx| {
-                                this.select_opened_tab(*index);
-                                cx.notify();
-                            }))
-                            .prefix(
-                                h_flex()
-                                    .mx_1()
-                                    .child(
-                                        Button::new("tabs-back")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::ArrowLeft),
+                            .child(
+                                TabBar::new("console-open-tabs")
+                                    .w_full()
+                                    .h_full()
+                                    .menu(true)
+                                    .selected_index(active_tab_index)
+                                    .on_click(cx.listener(|this, index: &usize, _, cx| {
+                                        this.select_opened_tab(*index);
+                                        cx.notify();
+                                    }))
+                                    .prefix(
+                                        h_flex()
+                                            .mx_1()
+                                            .child(
+                                                Button::new("tabs-back")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::ArrowLeft),
+                                            )
+                                            .child(
+                                                Button::new("tabs-forward")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::ArrowRight),
+                                            ),
                                     )
-                                    .child(
-                                        Button::new("tabs-forward")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::ArrowRight),
+                                    .children(opened_tabs.iter().copied().map(|feature| {
+                                        let close_root = root_view.clone();
+                                        let context_root = root_view.clone();
+
+                                        Tab::new()
+                                            .prefix(Icon::new(feature_icon(feature)))
+                                            .label(feature.title())
+                                            .suffix(
+                                                Button::new(format!(
+                                                    "close-tab-{}",
+                                                    nav_badge(feature)
+                                                ))
+                                                .ghost()
+                                                .xsmall()
+                                                .icon(IconName::Close)
+                                                .tooltip("关闭标签")
+                                                .on_click(move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    _ = close_root.update(cx, |this, cx| {
+                                                        this.close_tab(feature);
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                            )
+                                            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                                                _ = context_root.update(cx, |this, _| {
+                                                    this.tab_context_feature = Some(feature);
+                                                });
+                                            })
+                                    }))
+                                    .suffix(
+                                        h_flex()
+                                            .mx_1()
+                                            .child(
+                                                Button::new("tabs-inbox")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Inbox),
+                                            )
+                                            .child(
+                                                Button::new("tabs-more")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Ellipsis),
+                                            ),
                                     ),
                             )
-                            .children(opened_tabs.iter().copied().map(|feature| {
-                                Tab::new()
-                                    .prefix(Icon::new(feature_icon(feature)))
-                                    .label(feature.title())
-                            }))
-                            .suffix(
-                                h_flex()
-                                    .mx_1()
-                                    .child(
-                                        Button::new("tabs-inbox")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::Inbox),
-                                    )
-                                    .child(
-                                        Button::new("tabs-more")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::Ellipsis),
-                                    ),
-                            ),
+                            .context_menu({
+                                let root_view = root_view.clone();
+                                move |menu, _, cx| {
+                                    let Some(root) = root_view.upgrade() else {
+                                        return menu;
+                                    };
+
+                                    let Some((
+                                        feature,
+                                        pinned,
+                                        can_close_left,
+                                        can_close_right,
+                                        can_close_other,
+                                    )) = ({
+                                        let root = root.read(cx);
+                                        let Some(feature) = root.tab_context_feature else {
+                                            return menu;
+                                        };
+                                        let Some(index) = root.tab_index(feature) else {
+                                            return menu;
+                                        };
+                                        let can_close_left = root
+                                            .opened_tabs
+                                            .iter()
+                                            .take(index)
+                                            .any(|opened| !root.is_tab_pinned(*opened));
+                                        let can_close_right = root
+                                            .opened_tabs
+                                            .iter()
+                                            .skip(index + 1)
+                                            .any(|opened| !root.is_tab_pinned(*opened));
+                                        let can_close_other =
+                                            root.opened_tabs.iter().any(|opened| {
+                                                *opened != feature && !root.is_tab_pinned(*opened)
+                                            });
+
+                                        Some((
+                                            feature,
+                                            root.is_tab_pinned(feature),
+                                            can_close_left,
+                                            can_close_right,
+                                            can_close_other,
+                                        ))
+                                    })
+                                    else {
+                                        return menu;
+                                    };
+
+                                    menu.min_w(220.)
+                                        .item(
+                                            PopupMenuItem::new("关闭")
+                                                .icon(IconName::Close)
+                                                .on_click({
+                                                    let root_view = root_view.clone();
+                                                    move |_, _, cx| {
+                                                        _ = root_view.update(cx, |this, cx| {
+                                                            this.close_tab(feature);
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new("关闭左侧标签页")
+                                                .icon(IconName::ArrowLeft)
+                                                .disabled(!can_close_left)
+                                                .on_click({
+                                                    let root_view = root_view.clone();
+                                                    move |_, _, cx| {
+                                                        _ = root_view.update(cx, |this, cx| {
+                                                            this.close_tabs_to_left(feature);
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("关闭右侧标签页")
+                                                .icon(IconName::ArrowRight)
+                                                .disabled(!can_close_right)
+                                                .on_click({
+                                                    let root_view = root_view.clone();
+                                                    move |_, _, cx| {
+                                                        _ = root_view.update(cx, |this, cx| {
+                                                            this.close_tabs_to_right(feature);
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("关闭其他标签页")
+                                                .disabled(!can_close_other)
+                                                .on_click({
+                                                    let root_view = root_view.clone();
+                                                    move |_, _, cx| {
+                                                        _ = root_view.update(cx, |this, cx| {
+                                                            this.close_other_tabs(feature);
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new(if pinned {
+                                                "取消置顶标签页"
+                                            } else {
+                                                "置顶标签页"
+                                            })
+                                            .checked(pinned)
+                                            .on_click({
+                                                let root_view = root_view.clone();
+                                                move |_, _, cx| {
+                                                    _ = root_view.update(cx, |this, cx| {
+                                                        this.toggle_pin_tab(feature);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }),
+                                        )
+                                }
+                            }),
                     )
                     .child(
                         div()
