@@ -16,7 +16,7 @@ use gpui::{
     Window, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
@@ -42,6 +42,10 @@ pub struct RootView {
     tab_context_feature: Option<FeatureId>,
     /// 普通标签区域的横向滚动句柄，用于在从更多菜单选择标签时自动滚动到目标标签。
     regular_tab_scroll_handle: ScrollHandle,
+    /// 当前窗口访问过的功能区历史，用于支持顶部栏前进和后退。
+    navigation_history: Vec<FeatureId>,
+    /// 当前所在的历史游标位置，指向 `navigation_history` 中正在展示的功能区。
+    navigation_history_index: usize,
     home_feature: HomeFeature,
     virtual_scroll_feature: VirtualScrollFeature,
 }
@@ -57,6 +61,8 @@ impl RootView {
             pinned_tabs: Vec::new(),
             tab_context_feature: None,
             regular_tab_scroll_handle: ScrollHandle::new(),
+            navigation_history: vec![FeatureId::default()],
+            navigation_history_index: 0,
             home_feature: HomeFeature::default(),
             virtual_scroll_feature: VirtualScrollFeature::default(),
         }
@@ -92,6 +98,27 @@ impl RootView {
             .copied()
             .filter(|feature| !self.is_tab_pinned(*feature))
             .collect()
+    }
+
+    /// 返回当前窗口的功能区访问历史。
+    ///
+    /// 访问历史用于驱动顶部栏前进和后退按钮；同一个连续功能区不会重复写入历史。
+    pub fn navigation_history(&self) -> &[FeatureId] {
+        &self.navigation_history
+    }
+
+    /// 判断顶部栏后退按钮当前是否可用。
+    ///
+    /// 返回 `true` 表示历史游标左侧还有更早访问过的功能区，可以调用 `navigate_back` 返回。
+    pub fn can_navigate_back(&self) -> bool {
+        self.navigation_history_index > 0
+    }
+
+    /// 判断顶部栏前进按钮当前是否可用。
+    ///
+    /// 返回 `true` 表示用户刚执行过后退，并且历史游标右侧还有可恢复的功能区。
+    pub fn can_navigate_forward(&self) -> bool {
+        self.navigation_history_index + 1 < self.navigation_history.len()
     }
 
     /// 判断指定功能区对应的标签页是否已经置顶。
@@ -136,9 +163,43 @@ impl RootView {
     ///
     /// RootView 只保存导航状态，各个 feature 的业务状态仍应由对应模块自行管理。
     pub fn select_feature(&mut self, feature: FeatureId) {
-        self.open_feature_tab(feature);
-        self.active_feature = feature;
-        self.scroll_regular_tab_into_view(feature);
+        self.navigate_to_feature(feature, true);
+    }
+
+    /// 按访问历史后退到上一个功能区。
+    ///
+    /// 后退只移动历史游标，不会追加新的历史记录；如果目标功能区对应标签已被关闭，会自动重新打开。
+    pub fn navigate_back(&mut self) {
+        if !self.can_navigate_back() {
+            return;
+        }
+
+        self.navigation_history_index -= 1;
+        if let Some(feature) = self
+            .navigation_history
+            .get(self.navigation_history_index)
+            .copied()
+        {
+            self.navigate_to_feature(feature, false);
+        }
+    }
+
+    /// 按访问历史前进到下一个功能区。
+    ///
+    /// 前进只移动历史游标，不会追加新的历史记录；如果目标功能区对应标签已被关闭，会自动重新打开。
+    pub fn navigate_forward(&mut self) {
+        if !self.can_navigate_forward() {
+            return;
+        }
+
+        self.navigation_history_index += 1;
+        if let Some(feature) = self
+            .navigation_history
+            .get(self.navigation_history_index)
+            .copied()
+        {
+            self.navigate_to_feature(feature, false);
+        }
     }
 
     /// 关闭指定功能区对应的标签页。
@@ -256,10 +317,7 @@ impl RootView {
     }
 
     fn select_tab(&mut self, feature: FeatureId) {
-        if self.opened_tabs.contains(&feature) {
-            self.active_feature = feature;
-            self.scroll_regular_tab_into_view(feature);
-        }
+        self.navigate_to_feature(feature, true);
     }
 
     fn select_pinned_tab(&mut self, index: usize) {
@@ -344,6 +402,32 @@ impl RootView {
         if let Some(index) = self.regular_tab_index(feature) {
             self.regular_tab_scroll_handle.scroll_to_item(index);
         }
+    }
+
+    fn navigate_to_feature(&mut self, feature: FeatureId, record_history: bool) {
+        self.open_feature_tab(feature);
+
+        if self.active_feature == feature {
+            self.scroll_regular_tab_into_view(feature);
+            return;
+        }
+
+        self.active_feature = feature;
+        if record_history {
+            self.push_navigation_history(feature);
+        }
+        self.scroll_regular_tab_into_view(feature);
+    }
+
+    fn push_navigation_history(&mut self, feature: FeatureId) {
+        if self.navigation_history.get(self.navigation_history_index) == Some(&feature) {
+            return;
+        }
+
+        self.navigation_history
+            .truncate(self.navigation_history_index + 1);
+        self.navigation_history.push(feature);
+        self.navigation_history_index = self.navigation_history.len().saturating_sub(1);
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -572,6 +656,8 @@ impl RootView {
         let active_regular_tab_index = self.active_regular_tab_index();
         let root_view = cx.entity().downgrade();
         let title_bar_background = cx.theme().tokens.title_bar;
+        let can_navigate_back = self.can_navigate_back();
+        let can_navigate_forward = self.can_navigate_forward();
 
         TitleBar::new()
             .border_b(px(0.0))
@@ -602,39 +688,62 @@ impl RootView {
                                                 Button::new("tabs-back")
                                                     .ghost()
                                                     .xsmall()
-                                                    .icon(IconName::ArrowLeft),
+                                                    .icon(IconName::ArrowLeft)
+                                                    .disabled(!can_navigate_back)
+                                                    .tooltip("后退")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.navigate_back();
+                                                        cx.notify();
+                                                    })),
                                             )
                                             .child(
                                                 Button::new("tabs-forward")
                                                     .ghost()
                                                     .xsmall()
-                                                    .icon(IconName::ArrowRight),
+                                                    .icon(IconName::ArrowRight)
+                                                    .disabled(!can_navigate_forward)
+                                                    .tooltip("前进")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.navigate_forward();
+                                                        cx.notify();
+                                                    })),
                                             ),
                                     )
                                     .when(!pinned_tabs.is_empty(), |this| {
                                         this.child(
-                                            TabBar::new("console-pinned-tabs")
+                                            div()
+                                                .id("console-pinned-tabs-zone")
                                                 .flex_none()
+                                                .max_w(px(280.0))
+                                                .min_w_0()
                                                 .h_full()
-                                                .when_some(
-                                                    active_pinned_tab_index,
-                                                    |this, index| this.selected_index(index),
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, index: &usize, _, cx| {
-                                                        this.select_pinned_tab(*index);
-                                                        cx.notify();
-                                                    },
-                                                ))
-                                                .children(pinned_tabs.iter().copied().map(
-                                                    |feature| {
-                                                        Self::render_tab(
-                                                            feature,
-                                                            true,
-                                                            root_view.clone(),
+                                                .overflow_hidden()
+                                                .child(
+                                                    TabBar::new("console-pinned-tabs")
+                                                        .w_full()
+                                                        .h_full()
+                                                        .when_some(
+                                                            active_pinned_tab_index,
+                                                            |this, index| {
+                                                                this.selected_index(index)
+                                                            },
                                                         )
-                                                    },
-                                                )),
+                                                        .on_click(cx.listener(
+                                                            |this, index: &usize, _, cx| {
+                                                                this.select_pinned_tab(*index);
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                        .children(pinned_tabs.iter().copied().map(
+                                                            |feature| {
+                                                                Self::render_tab(
+                                                                    feature,
+                                                                    true,
+                                                                    root_view.clone(),
+                                                                )
+                                                            },
+                                                        )),
+                                                ),
                                         )
                                     })
                                     .child(
@@ -827,7 +936,7 @@ impl RootView {
                         div()
                             .id("titlebar-drag-space")
                             .flex_none()
-                            .w(px(80.0))
+                            .w(px(54.0))
                             .h_full(),
                     ),
             )

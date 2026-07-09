@@ -230,6 +230,49 @@ fn root_view_tracks_opened_tabs_without_duplicates() {
 }
 
 #[test]
+fn root_view_navigates_browser_like_history() {
+    let mut view = RootView::new();
+
+    assert_eq!(view.navigation_history(), &[FeatureId::Home]);
+    assert!(!view.can_navigate_back());
+    assert!(!view.can_navigate_forward());
+
+    view.select_feature(FeatureId::Tasks);
+    view.select_feature(FeatureId::VirtualScroll);
+
+    assert_eq!(
+        view.navigation_history(),
+        &[FeatureId::Home, FeatureId::Tasks, FeatureId::VirtualScroll]
+    );
+    assert_eq!(view.active_feature(), FeatureId::VirtualScroll);
+    assert!(view.can_navigate_back());
+    assert!(!view.can_navigate_forward());
+
+    view.navigate_back();
+    assert_eq!(view.active_feature(), FeatureId::Tasks);
+    assert!(view.can_navigate_back());
+    assert!(view.can_navigate_forward());
+
+    view.navigate_back();
+    assert_eq!(view.active_feature(), FeatureId::Home);
+    assert!(!view.can_navigate_back());
+    assert!(view.can_navigate_forward());
+
+    view.navigate_forward();
+    assert_eq!(view.active_feature(), FeatureId::Tasks);
+    assert!(view.can_navigate_back());
+    assert!(view.can_navigate_forward());
+
+    view.select_feature(FeatureId::Settings);
+    assert_eq!(
+        view.navigation_history(),
+        &[FeatureId::Home, FeatureId::Tasks, FeatureId::Settings]
+    );
+    assert_eq!(view.active_feature(), FeatureId::Settings);
+    assert!(!view.can_navigate_forward());
+}
+
+#[test]
 fn root_view_closes_tabs_with_active_fallback() {
     let mut view = RootView::new();
 
