@@ -355,7 +355,7 @@ impl RootView {
                         div()
                             .id("titlebar-drag-space")
                             .flex_none()
-                            .w(px(176.0))
+                            .w(px(120.0))
                             .h_full(),
                     ),
             )
