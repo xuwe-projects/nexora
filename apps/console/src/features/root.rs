@@ -12,7 +12,7 @@ use actions::account::{
     OpenAccountSettings, SignOutAccount,
 };
 use gpui::{
-    Anchor, AnyElement, Context, Hsla, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
+    Anchor, AnyElement, Context, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
     Window, div, prelude::*, px,
 };
 use gpui_component::{
@@ -520,13 +520,7 @@ impl RootView {
             }))
     }
 
-    fn render_tab(
-        feature: FeatureId,
-        is_pinned: bool,
-        has_separator: bool,
-        root_view: WeakEntity<Self>,
-        tab_separator_color: Hsla,
-    ) -> Tab {
+    fn render_tab(feature: FeatureId, is_pinned: bool, root_view: WeakEntity<Self>) -> Tab {
         let action_root = root_view.clone();
         let context_root = root_view.clone();
         let action_icon = if is_pinned {
@@ -541,32 +535,28 @@ impl RootView {
         };
 
         Tab::new()
+            .px_1()
             .prefix(Icon::new(feature_icon(feature)))
             .label(feature.title())
             .suffix(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new(format!("close-tab-{}", nav_badge(feature)))
-                            .ghost()
-                            .xsmall()
-                            .icon(action_icon)
-                            .tooltip(action_tooltip)
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                _ = action_root.update(cx, |this, cx| {
-                                    if is_pinned {
-                                        this.toggle_pin_tab(feature);
-                                    } else {
-                                        this.close_tab(feature);
-                                    }
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .when(has_separator, |this| {
-                        this.child(div().w(px(1.0)).h(px(18.0)).bg(tab_separator_color))
-                    }),
+                h_flex().gap_1().child(
+                    Button::new(format!("close-tab-{}", nav_badge(feature)))
+                        .ghost()
+                        .xsmall()
+                        .icon(action_icon)
+                        .tooltip(action_tooltip)
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            _ = action_root.update(cx, |this, cx| {
+                                if is_pinned {
+                                    this.toggle_pin_tab(feature);
+                                } else {
+                                    this.close_tab(feature);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                ),
             )
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                 _ = context_root.update(cx, |this, _| {
@@ -582,7 +572,6 @@ impl RootView {
         let active_regular_tab_index = self.active_regular_tab_index();
         let root_view = cx.entity().downgrade();
         let title_bar_background = cx.theme().tokens.title_bar;
-        let tab_separator_color = cx.theme().border;
 
         TitleBar::new()
             .border_b(px(0.0))
@@ -593,7 +582,6 @@ impl RootView {
                     .min_w_0()
                     .gap_2()
                     .items_center()
-                    .px_3()
                     .child(
                         div()
                             .id("console-open-tabs-zone")
@@ -638,23 +626,15 @@ impl RootView {
                                                         cx.notify();
                                                     },
                                                 ))
-                                                .children(
-                                                    pinned_tabs.iter().copied().enumerate().map(
-                                                        |(tab_index, feature)| {
-                                                            let has_separator = tab_index + 1
-                                                                < pinned_tabs.len()
-                                                                || !regular_tabs.is_empty();
-
-                                                            Self::render_tab(
-                                                                feature,
-                                                                true,
-                                                                has_separator,
-                                                                root_view.clone(),
-                                                                tab_separator_color,
-                                                            )
-                                                        },
-                                                    ),
-                                                ),
+                                                .children(pinned_tabs.iter().copied().map(
+                                                    |feature| {
+                                                        Self::render_tab(
+                                                            feature,
+                                                            true,
+                                                            root_view.clone(),
+                                                        )
+                                                    },
+                                                )),
                                         )
                                     })
                                     .child(
@@ -680,22 +660,15 @@ impl RootView {
                                                             cx.notify();
                                                         },
                                                     ))
-                                                    .children(
-                                                        regular_tabs
-                                                            .iter()
-                                                            .copied()
-                                                            .enumerate()
-                                                            .map(|(tab_index, feature)| {
-                                                                Self::render_tab(
-                                                                    feature,
-                                                                    false,
-                                                                    tab_index + 1
-                                                                        < regular_tabs.len(),
-                                                                    root_view.clone(),
-                                                                    tab_separator_color,
-                                                                )
-                                                            }),
-                                                    )
+                                                    .children(regular_tabs.iter().copied().map(
+                                                        |feature| {
+                                                            Self::render_tab(
+                                                                feature,
+                                                                false,
+                                                                root_view.clone(),
+                                                            )
+                                                        },
+                                                    ))
                                                     .suffix(
                                                         h_flex()
                                                             .mx_1()
