@@ -11,9 +11,7 @@ use actions::account::{
     self as account_actions, AccountActionKind, AccountActionSpec, OpenAccountProfile,
     OpenAccountSettings, SignOutAccount,
 };
-use gpui::{
-    Anchor, AnyElement, Context, IntoElement, MouseButton, Render, Window, div, prelude::*, px,
-};
+use gpui::{Anchor, AnyElement, Context, IntoElement, Render, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     button::{Button, ButtonVariants as _},
@@ -304,10 +302,10 @@ impl RootView {
                     .min_w_0()
                     .gap_2()
                     .items_center()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         TabBar::new("console-open-tabs")
-                            .w_full()
+                            .flex_1()
+                            .min_w_0()
                             .h_full()
                             .menu(true)
                             .selected_index(active_tab_index)
@@ -352,6 +350,13 @@ impl RootView {
                                             .icon(IconName::Ellipsis),
                                     ),
                             ),
+                    )
+                    .child(
+                        div()
+                            .id("titlebar-drag-space")
+                            .flex_none()
+                            .w(px(176.0))
+                            .h_full(),
                     ),
             )
             .into_any_element()
