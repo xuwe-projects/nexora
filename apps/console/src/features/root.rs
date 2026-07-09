@@ -663,7 +663,7 @@ impl RootView {
             .border_b(px(0.0))
             .child(
                 h_flex()
-                    .w_full()
+                    .flex_1()
                     .h_full()
                     .min_w_0()
                     .overflow_hidden()
@@ -679,7 +679,12 @@ impl RootView {
                             .overflow_hidden()
                             .child(
                                 h_flex()
-                                    .w_full()
+                                    .id("console-open-tabs-strip")
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .top_0()
+                                    .bottom_0()
                                     .h_full()
                                     .min_w_0()
                                     .overflow_hidden()
