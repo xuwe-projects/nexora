@@ -906,7 +906,7 @@ impl Render for RootView {
             .child(
                 SidebarShell::new(sidebar, top_bar, active_feature)
                     .with_content_scrollable(content_scrollable)
-                    .render(cx),
+                    .render(window, cx),
             )
     }
 }

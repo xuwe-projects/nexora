@@ -4,12 +4,49 @@
 
 use std::ops::Range;
 
-use gpui::{AnyElement, Context, IntoElement, Pixels, div, prelude::*, px};
-use gpui_component::{
-    ActiveTheme as _,
-    resizable::{h_resizable, resizable_panel},
-    scroll::ScrollableElement as _,
+use gpui::{
+    AnyElement, Context, DragMoveEvent, IntoElement, Pixels, Render, WeakEntity, Window, div,
+    prelude::*, px,
 };
+use gpui_component::{ActiveTheme as _, scroll::ScrollableElement as _};
+
+struct SidebarShellState {
+    width: Pixels,
+}
+
+impl SidebarShellState {
+    fn new(width: Pixels, range: &Range<Pixels>) -> Self {
+        Self {
+            width: Self::clamp_width(width, range),
+        }
+    }
+
+    fn clamp_width(width: Pixels, range: &Range<Pixels>) -> Pixels {
+        width.max(range.start).min(range.end)
+    }
+
+    fn width(&self, range: &Range<Pixels>) -> Pixels {
+        Self::clamp_width(self.width, range)
+    }
+
+    fn set_width(&mut self, width: Pixels, range: &Range<Pixels>) {
+        self.width = Self::clamp_width(width, range);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SidebarResizeDrag {
+    width_before: Pixels,
+    mouse_x_before: Pixels,
+}
+
+struct SidebarResizePreview;
+
+impl Render for SidebarResizePreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
 
 /// 带侧边栏的桌面应用壳布局。
 ///
@@ -49,8 +86,8 @@ impl SidebarShell {
 
     /// 设置侧边导航区域的初始宽度。
     ///
-    /// 该值会传给 `gpui-component` 的 `ResizablePanel` 作为首次渲染时的宽度；
-    /// 用户后续拖拽调整后，实际宽度会由组件内部状态继续维护。
+    /// 该值会作为首次渲染时的像素宽度；用户后续拖拽调整后，实际宽度会由应用壳内部状态继续维护。
+    /// 窗口整体尺寸变化不会按比例修改侧边栏宽度。
     pub fn with_sidebar_width(mut self, width: Pixels) -> Self {
         self.sidebar_width = width;
         self
@@ -121,12 +158,14 @@ impl SidebarShell {
     ///
     /// 返回元素包含固定的桌面控制台布局结构：外层全尺寸容器、窗口顶部栏、左侧导航区域，
     /// 以及可以按 feature 需要开启或关闭外层滚动的主内容区域；侧边导航支持拖拽调整宽度并受上下限约束。
+    /// 侧边导航宽度会保存为像素状态，因此窗口整体拉宽或缩小时不会按比例改变侧栏宽度，只有用户拖动分隔条时才会更新。
     /// 颜色和背景会读取当前 `gpui-component` 主题，避免业务应用在布局层写死视觉样式。
-    pub fn render<T>(self, cx: &Context<T>) -> AnyElement
+    pub fn render<T>(self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
-        let theme = cx.theme();
+        let background = cx.theme().tokens.background;
+        let foreground = cx.theme().foreground;
         let Self {
             sidebar,
             top_bar,
@@ -136,6 +175,10 @@ impl SidebarShell {
             sidebar_width,
             sidebar_width_range,
         } = self;
+        let state = window.use_keyed_state("sidebar-shell-state", cx, |_, _| {
+            SidebarShellState::new(sidebar_width, &sidebar_width_range)
+        });
+        let current_sidebar_width = state.read(cx).width(&sidebar_width_range);
 
         let content_panel = div()
             .flex_1()
@@ -153,32 +196,81 @@ impl SidebarShell {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.tokens.background)
-            .text_color(theme.foreground)
+            .bg(background)
+            .text_color(foreground)
             .child(top_bar)
             .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("sidebar-shell-layout")
-                        .child(
-                            resizable_panel()
-                                .flex_none()
-                                .size(sidebar_width)
-                                .size_range(sidebar_width_range)
-                                .child(sidebar),
-                        )
-                        .child(
-                            resizable_panel().child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h_full()
-                                    .child(content_panel),
-                            ),
-                        ),
-                ),
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .id("sidebar-shell-sidebar")
+                            .relative()
+                            .flex_none()
+                            .w(current_sidebar_width)
+                            .min_w(sidebar_width_range.start)
+                            .max_w(sidebar_width_range.end)
+                            .h_full()
+                            .child(sidebar)
+                            .child(Self::render_resize_handle(
+                                state.downgrade(),
+                                current_sidebar_width,
+                                sidebar_width_range.clone(),
+                                window,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(content_panel),
+                    ),
             )
             .into_any_element()
+    }
+
+    fn render_resize_handle(
+        state: WeakEntity<SidebarShellState>,
+        width_before: Pixels,
+        width_range: Range<Pixels>,
+        window: &mut Window,
+    ) -> impl IntoElement {
+        div()
+            .id("sidebar-shell-resize-handle")
+            .absolute()
+            .top_0()
+            .right(-px(4.0))
+            .h_full()
+            .w(px(1.0))
+            .px(px(4.0))
+            .cursor_col_resize()
+            .child(div().w(px(1.0)).h_full())
+            .on_drag(
+                SidebarResizeDrag {
+                    width_before,
+                    mouse_x_before: window.mouse_position().x,
+                },
+                |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| SidebarResizePreview)
+                },
+            )
+            .on_drag_move::<SidebarResizeDrag>(
+                move |event: &DragMoveEvent<SidebarResizeDrag>, _, cx| {
+                    cx.stop_propagation();
+                    let drag = event.drag(cx);
+                    let width = drag.width_before + event.event.position.x - drag.mouse_x_before;
+                    _ = state.update(cx, |state, cx| {
+                        state.set_width(width, &width_range);
+                        cx.notify();
+                    });
+                },
+            )
     }
 }
