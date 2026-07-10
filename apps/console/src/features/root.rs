@@ -40,6 +40,8 @@ pub struct RootView {
     pinned_tabs: Vec<FeatureId>,
     /// 最近一次右键点击的标签页，用于构建标签页上下文菜单。
     tab_context_feature: Option<FeatureId>,
+    /// 置顶标签区域的横向滚动句柄，用于从更多菜单选择置顶标签时自动滚动到目标标签。
+    pinned_tab_scroll_handle: ScrollHandle,
     /// 普通标签区域的横向滚动句柄，用于在从更多菜单选择标签时自动滚动到目标标签。
     regular_tab_scroll_handle: ScrollHandle,
     /// 当前窗口访问过的功能区历史，用于支持顶部栏前进和后退。
@@ -60,6 +62,7 @@ impl RootView {
             opened_tabs: vec![FeatureId::default()],
             pinned_tabs: Vec::new(),
             tab_context_feature: None,
+            pinned_tab_scroll_handle: ScrollHandle::new(),
             regular_tab_scroll_handle: ScrollHandle::new(),
             navigation_history: vec![FeatureId::default()],
             navigation_history_index: 0,
@@ -306,7 +309,7 @@ impl RootView {
         }
 
         self.reorder_tabs_by_pin();
-        self.scroll_regular_tab_into_view(self.active_feature);
+        self.scroll_tab_into_view(self.active_feature);
     }
 
     fn open_feature_tab(&mut self, feature: FeatureId) {
@@ -349,7 +352,7 @@ impl RootView {
 
         self.pinned_tabs
             .retain(|pinned| self.opened_tabs.contains(pinned));
-        self.scroll_regular_tab_into_view(self.active_feature);
+        self.scroll_tab_into_view(self.active_feature);
     }
 
     fn ensure_active_or_select(&mut self, fallback: FeatureId) {
@@ -382,9 +385,13 @@ impl RootView {
     }
 
     fn active_pinned_tab_index(&self) -> Option<usize> {
+        self.pinned_tab_index(self.active_feature)
+    }
+
+    fn pinned_tab_index(&self, feature: FeatureId) -> Option<usize> {
         self.pinned_tabs
             .iter()
-            .position(|feature| *feature == self.active_feature)
+            .position(|pinned| *pinned == feature)
     }
 
     fn regular_tab_index(&self, feature: FeatureId) -> Option<usize> {
@@ -398,8 +405,10 @@ impl RootView {
         self.regular_tab_index(self.active_feature)
     }
 
-    fn scroll_regular_tab_into_view(&self, feature: FeatureId) {
-        if let Some(index) = self.regular_tab_index(feature) {
+    fn scroll_tab_into_view(&self, feature: FeatureId) {
+        if let Some(index) = self.pinned_tab_index(feature) {
+            self.pinned_tab_scroll_handle.scroll_to_item(index);
+        } else if let Some(index) = self.regular_tab_index(feature) {
             self.regular_tab_scroll_handle.scroll_to_item(index);
         }
     }
@@ -408,7 +417,7 @@ impl RootView {
         self.open_feature_tab(feature);
 
         if self.active_feature == feature {
-            self.scroll_regular_tab_into_view(feature);
+            self.scroll_tab_into_view(feature);
             return;
         }
 
@@ -416,7 +425,7 @@ impl RootView {
         if record_history {
             self.push_navigation_history(feature);
         }
-        self.scroll_regular_tab_into_view(feature);
+        self.scroll_tab_into_view(feature);
     }
 
     fn push_navigation_history(&mut self, feature: FeatureId) {
@@ -736,6 +745,9 @@ impl RootView {
                                                     TabBar::new("console-pinned-tabs")
                                                         .w_full()
                                                         .h_full()
+                                                        .track_scroll(
+                                                            &self.pinned_tab_scroll_handle,
+                                                        )
                                                         .menu(pinned_tabs.len() > 2)
                                                         .when_some(
                                                             active_pinned_tab_index,
