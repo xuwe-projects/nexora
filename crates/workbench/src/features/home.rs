@@ -1,4 +1,4 @@
-//! 控制台首页功能模块。
+//! 控制台工作台首页功能模块。
 //!
 //! 该模块展示桌面程序模板的概览页，用于说明一个 feature 如何独立组织自己的页面内容。
 
@@ -51,7 +51,7 @@ impl HomeFeature {
                     .rounded_lg()
                     .border_1()
                     .border_color(theme.border)
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.group_box)
                     .child(
                         div()
                             .text_xs()
@@ -237,7 +237,7 @@ fn metric_card(
         .rounded_lg()
         .border_1()
         .border_color(theme.border)
-        .bg(theme.tokens.background)
+        .bg(theme.tokens.group_box)
         .child(
             div()
                 .text_xs()
@@ -270,7 +270,7 @@ fn metric_card(
 
 fn panel(title: &'static str) -> GroupBox {
     GroupBox::new()
-        .outline()
+        .fill()
         .title(title)
         .gap_3()
         .flex_1()
@@ -311,7 +311,7 @@ fn virtual_form_panel(
         )
         .child(
             div().h(px(320.)).w_full().child(
-                DataTable::new(&table)
+                DataTable::new(table)
                     .with_size(gpui_component::Size::Small)
                     .stripe(true)
                     .scrollbar_visible(true, true),
@@ -341,7 +341,7 @@ fn virtual_form_dropdown() -> AnyElement {
                                 IconName::Search
                             })
                             .checked(index == 0)
-                            .on_click(|_, _, _| {}),
+                            .disabled(true),
                     )
                 },
             )
@@ -574,7 +574,8 @@ impl TableDelegate for VirtualFormTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        div().id(("virtual-form-row", row_ix))
+        let row_id = self.rows.get(row_ix).map_or("missing", |row| row.id());
+        div().id(row_id)
     }
 
     fn context_menu(
@@ -591,18 +592,18 @@ impl TableDelegate for VirtualFormTableDelegate {
         menu.item(
             PopupMenuItem::new(format!("打开 {}", row.id()))
                 .icon(IconName::PanelLeftOpen)
-                .on_click(|_, _, _| {}),
+                .disabled(true),
         )
         .item(
             PopupMenuItem::new(format!("查看 {}", row.owner()))
                 .icon(IconName::CircleUser)
-                .on_click(|_, _, _| {}),
+                .disabled(true),
         )
         .separator()
         .item(
             PopupMenuItem::new("复制记录编号")
                 .icon(IconName::Copy)
-                .on_click(|_, _, _| {}),
+                .disabled(true),
         )
     }
 

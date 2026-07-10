@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust 技术选型"
+  short_description: "约束 Rust 数据库、迁移、HTTP 与异步运行时选型"
+  default_prompt: "使用 $rust-technology-selection 为当前 Rust 模块选择数据库、迁移和 HTTP 技术栈。"

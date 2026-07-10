@@ -7,18 +7,5 @@ edition.workspace = true
 icon = ["assets/logos/logo-icon.icns"]
 
 [dependencies]
-actions = { workspace = true }
 desktop = { workspace = true }
-ui = { workspace = true }
-
-gpui = { workspace = true }
-gpui-component = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-gpui_platform = { workspace = true, features = ["font-kit"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-gpui_platform = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-gpui_platform = { workspace = true, features = ["wayland", "x11"] }
+workbench = { workspace = true }

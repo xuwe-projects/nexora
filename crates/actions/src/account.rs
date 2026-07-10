@@ -4,13 +4,13 @@
 
 use gpui::{Action, App, KeyBinding};
 
+use crate::settings::{self, OpenSettings};
+
 gpui::actions!(
     console_account_menu,
     [
         /// 打开当前登录用户的个人资料页。
         OpenAccountProfile,
-        /// 打开账户或应用设置入口。
-        OpenAccountSettings,
         /// 退出当前登录账户。
         SignOutAccount
     ]
@@ -44,25 +44,21 @@ pub struct AccountActionSpec {
     kind: AccountActionKind,
     label: String,
     shortcut: Option<&'static str>,
-    uses_account_avatar: bool,
 }
 
 impl AccountActionSpec {
     /// 创建一个账户菜单动作配置。
     ///
-    /// `kind` 表示业务意图；`label` 是菜单文案；`shortcut` 是建议展示给用户的快捷键；
-    /// `uses_account_avatar` 表示该项是否应该使用账户头像语义渲染。
+    /// `kind` 表示业务意图；`label` 是菜单文案；`shortcut` 是建议展示给用户的快捷键。
     pub fn new(
         kind: AccountActionKind,
         label: impl Into<String>,
         shortcut: Option<&'static str>,
-        uses_account_avatar: bool,
     ) -> Self {
         Self {
             kind,
             label: label.into(),
             shortcut,
-            uses_account_avatar,
         }
     }
 
@@ -87,20 +83,13 @@ impl AccountActionSpec {
         self.shortcut
     }
 
-    /// 返回该菜单项是否应该使用账户头像语义。
-    ///
-    /// 当前只有个人资料入口返回 `true`，便于 UI 使用头像或用户图标强调身份入口。
-    pub fn uses_account_avatar(&self) -> bool {
-        self.uses_account_avatar
-    }
-
     /// 将菜单配置转换为 GPUI action 对象。
     ///
     /// `PopupMenu`、快捷键系统和命令派发都通过该 action 身份连接到具体处理器。
     pub fn to_action(&self) -> Box<dyn Action> {
         match self.kind {
             AccountActionKind::Profile => Box::new(OpenAccountProfile),
-            AccountActionKind::Settings => Box::new(OpenAccountSettings),
+            AccountActionKind::Settings => Box::new(OpenSettings),
             AccountActionKind::SignOut => Box::new(SignOutAccount),
         }
     }
@@ -115,15 +104,13 @@ pub fn menu_actions(account_name: impl Into<String>) -> Vec<AccountActionSpec> {
             AccountActionKind::Profile,
             account_name,
             Some("Cmd+Shift+P"),
-            true,
         ),
-        AccountActionSpec::new(AccountActionKind::Settings, "设置", Some("Cmd+,"), false),
         AccountActionSpec::new(
-            AccountActionKind::SignOut,
-            "退出登录",
-            Some("Cmd+Shift+Q"),
-            false,
+            AccountActionKind::Settings,
+            "设置",
+            Some(settings::shortcut_label()),
         ),
+        AccountActionSpec::new(AccountActionKind::SignOut, "退出登录", Some("Cmd+Shift+Q")),
     ]
 }
 
@@ -133,7 +120,6 @@ pub fn menu_actions(account_name: impl Into<String>) -> Vec<AccountActionSpec> {
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-shift-p", OpenAccountProfile, Some(CONTEXT)),
-        KeyBinding::new("cmd-,", OpenAccountSettings, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-q", SignOutAccount, Some(CONTEXT)),
     ]);
 }

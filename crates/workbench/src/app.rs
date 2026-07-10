@@ -1,21 +1,28 @@
-//! 控制台桌面应用定义。
+//! 控制台工作台应用定义。
 //!
 //! 该模块实现 `desktop::Application`，把控制台应用接入统一的桌面启动流程。
 
-use crate::features::root::RootView;
-use actions::account as account_actions;
+use crate::features::{root::RootView, settings as settings_feature};
+use actions::{account as account_actions, settings as settings_actions, window as window_actions};
 use desktop::{Application, ApplicationOptions};
 use gpui::{App, AppContext, Entity, Window, WindowOptions, px, size};
 use gpui_component::TitleBar;
-use std::default::Default;
 
 /// 控制台桌面应用。
 ///
 /// 该类型保存应用启动选项，并负责创建主窗口中的业务根视图。
-#[derive(Default)]
 pub struct Console {
     /// 控制台应用的运行时配置。
     options: ApplicationOptions,
+}
+
+impl Default for Console {
+    /// 创建与 `Console::new` 完全一致的默认控制台应用。
+    ///
+    /// 默认值包含窗口尺寸、最小尺寸、激活行为和原生标题栏配置，避免派生默认值绕过应用约定。
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Console {
@@ -33,7 +40,6 @@ impl Console {
                     ..Default::default()
                 }),
                 daemon_mode: false,
-                ..Default::default()
             },
         }
     }
@@ -66,6 +72,9 @@ impl Application for Console {
     fn build_root_view(&mut self, _window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
         actions::init();
         account_actions::bind_keys(cx);
+        settings_actions::bind_keys(cx);
+        settings_feature::init(cx);
+        window_actions::init("Xuwe Console", cx);
         cx.new(|_| RootView::new())
     }
 }

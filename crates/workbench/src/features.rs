@@ -1,4 +1,4 @@
-//! 控制台应用的功能模块集合。
+//! 控制台工作台的功能模块集合。
 //!
 //! 每个公开子模块对应一个可独立维护的界面或功能区域。
 
@@ -203,7 +203,7 @@ pub fn feature_catalog() -> &'static [FeatureItem] {
         FeatureChildItem::new(FeatureId::ProjectTemplates, "模板项目"),
         FeatureChildItem::new(FeatureId::ProjectEnvironments, "运行环境"),
     ];
-    static CATALOG: [FeatureItem; 17] = [
+    static CATALOG: [FeatureItem; 16] = [
         FeatureItem::new(FeatureId::Home, "工作台"),
         FeatureItem::with_children(FeatureId::Projects, "工作台", &PROJECT_CHILDREN),
         FeatureItem::new(FeatureId::Tasks, "工作台"),
@@ -220,7 +220,6 @@ pub fn feature_catalog() -> &'static [FeatureItem] {
         FeatureItem::new(FeatureId::Billing, "扩展示例"),
         FeatureItem::new(FeatureId::HelpCenter, "扩展示例"),
         FeatureItem::new(FeatureId::Experiments, "扩展示例"),
-        FeatureItem::new(FeatureId::Settings, "系统"),
     ];
 
     &CATALOG

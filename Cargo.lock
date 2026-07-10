@@ -1002,6 +1002,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "proc-macro2",
+ "serde_json",
+ "syn",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1125,12 +1136,8 @@ dependencies = [
 name = "console"
 version = "0.1.0"
 dependencies = [
- "actions",
  "desktop",
- "gpui",
- "gpui-component",
- "gpui_platform",
- "ui",
+ "workbench",
 ]
 
 [[package]]
@@ -1480,6 +1487,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "theme",
 ]
 
 [[package]]
@@ -6494,6 +6502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "theme"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "serde_json",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6897,8 +6914,6 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui-component",
- "gpui-component-assets",
- "gpui_platform",
 ]
 
 [[package]]
@@ -8198,6 +8213,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
+name = "workbench"
+version = "0.1.0"
+dependencies = [
+ "actions",
+ "desktop",
+ "gpui",
+ "gpui-component",
+ "theme",
+ "ui",
+]
+
+[[package]]
 name = "workspace-hack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8323,13 +8350,6 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
-
-[[package]]
-name = "xuwecli"
-version = "0.1.0"
-dependencies = [
- "clap",
-]
 
 [[package]]
 name = "y4m"

@@ -1,4 +1,9 @@
-//! 本地开发与发布辅助命令。
+//! 团队 CLI 的命令解析与执行能力。
+//!
+//! 当前实现包含 macOS 桌面应用构建和环境检查，后续可以继续拆分 `new`、`init`、`run`
+//! 等独立命令模块，并随 `apps/cli` 整体迁移到其他项目。
+
+mod lint;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use std::{
@@ -12,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-/// CLI 内部和库 API 共用的结果类型。
+/// CLI 命令解析与执行流程共用的结果类型。
 ///
 /// 错误会统一封装为 `CliError`，方便二进制入口和集成测试使用同一套错误表达。
 pub type CliResult<T> = Result<T, CliError>;
@@ -22,6 +27,10 @@ pub type CliResult<T> = Result<T, CliError>;
 /// 该函数接收完整命令行参数，解析子命令并执行对应流程。
 /// 当前主要用于 `xuwecli build` 和 `xuwecli doctor`，二进制入口会把
 /// `std::env::args_os()` 直接传入这里。
+///
+/// # Errors
+///
+/// 参数不合法、目标命令缺少运行依赖，或者构建、检查和文件操作失败时返回错误。
 pub fn run<I, S>(args: I) -> Result<(), Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,
@@ -62,6 +71,11 @@ where
             run_doctor(config.fix)?;
             Ok(())
         }
+        CliConfig::Lint(config) => lint::run(
+            &config.workspace,
+            config.deny_warnings,
+            config.format == LintOutputFormat::Json,
+        ),
     };
 
     result.map_err(Into::into)
@@ -108,15 +122,18 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum CliCommand {
     /// 构建、签名并打包 macOS 桌面应用。
-    Build(BuildConfig),
+    Build(Box<BuildConfig>),
     /// 检查本地 macOS 打包依赖。
     Doctor(DoctorConfig),
+    /// 检查 workspace 是否符合团队工程规范。
+    Lint(LintConfig),
 }
 
 #[derive(Debug, Clone)]
 enum CliConfig {
-    Build(BuildConfig),
+    Build(Box<BuildConfig>),
     Doctor(DoctorConfig),
+    Lint(LintConfig),
     Help,
     Version,
 }
@@ -126,6 +143,27 @@ struct DoctorConfig {
     /// 缺少可自动安装的依赖时尝试安装。
     #[arg(long)]
     fix: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct LintConfig {
+    /// 要检查的 Cargo workspace 根目录。
+    #[arg(long, default_value = ".")]
+    workspace: PathBuf,
+    /// 将启发式警告也视为失败。
+    #[arg(long)]
+    deny_warnings: bool,
+    /// 诊断输出格式。
+    #[arg(long, value_enum, default_value = "human")]
+    format: LintOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LintOutputFormat {
+    /// 输出适合开发者在终端阅读的诊断。
+    Human,
+    /// 输出适合 CI 和编辑器消费的 JSON。
+    Json,
 }
 
 /// macOS 桌面应用构建模式。
@@ -346,6 +384,10 @@ impl BuildPlan {
 ///
 /// 该函数只执行参数解析和计划推导，不会检查系统依赖、运行构建命令或访问 Apple 工具链。
 /// `host_arch` 应传入 `uname -m` 风格的架构名称，例如 `arm64` 或 `x86_64`。
+///
+/// # Errors
+///
+/// 命令行参数无法解析、构建配置互相冲突或主机架构不受支持时返回错误。
 pub fn build_plan_from_args<I, S>(args: I, host_arch: &str) -> CliResult<BuildPlan>
 where
     I: IntoIterator<Item = S>,
@@ -383,6 +425,7 @@ fn cli_config(cli: Cli) -> CliConfig {
     match cli.command {
         Some(CliCommand::Build(config)) => CliConfig::Build(config),
         Some(CliCommand::Doctor(config)) => CliConfig::Doctor(config),
+        Some(CliCommand::Lint(config)) => CliConfig::Lint(config),
         None => CliConfig::Help,
     }
 }
@@ -470,6 +513,10 @@ fn build_plan(config: CliConfig, host_arch: &str) -> CliResult<BuildPlan> {
 /// 根据 macOS 主机架构返回对应的 Rust target。
 ///
 /// 支持 `arm64`、`aarch64` 和 `x86_64`，其他架构会返回面向用户的错误信息。
+///
+/// # Errors
+///
+/// 当 `arch` 不是当前 CLI 支持的 macOS 架构名称时返回错误。
 pub fn macos_target_for_arch(arch: &str) -> CliResult<&'static str> {
     match arch {
         "arm64" | "aarch64" => Ok("aarch64-apple-darwin"),
@@ -787,6 +834,10 @@ fn notarize_and_staple(plan: &BuildPlan) -> CliResult<()> {
 /// 为指定产物写入同名 `.sha256` 校验文件。
 ///
 /// 该函数会调用系统 `shasum -a 256` 计算哈希，并在同目录写入 `<文件名>.sha256`。
+///
+/// # Errors
+///
+/// 产物没有文件名、`shasum` 执行失败、输出格式异常或校验文件无法写入时返回错误。
 pub fn write_sha256_sidecar(path: &Path) -> CliResult<PathBuf> {
     let output = Command::new("shasum")
         .arg("-a")

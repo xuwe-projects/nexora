@@ -1,14 +1,15 @@
-//! 任务管理功能模块。
+//! 控制台任务管理功能模块。
 //!
 //! 该模块展示构建、打包和发布任务队列，说明异步工作流可以作为独立 feature 管理。
 
 use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px};
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, Theme,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, Theme,
     button::{Button, ButtonVariants as _},
     table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow},
     tag::Tag,
 };
+use ui::Card;
 
 /// 任务管理功能视图。
 ///
@@ -31,9 +32,8 @@ impl TasksFeature {
             .map(|row| task_table_row(row, theme))
             .collect::<Vec<_>>();
 
-        div()
-            .flex()
-            .flex_col()
+        Card::new()
+            .p_4()
             .gap_4()
             .child(
                 div()
@@ -65,7 +65,7 @@ impl TasksFeature {
                             .small()
                             .icon(IconName::Play)
                             .label("运行构建")
-                            .on_click(|_, _, _| {}),
+                            .disabled(true),
                     ),
             )
             .child(

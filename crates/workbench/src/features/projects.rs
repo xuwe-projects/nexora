@@ -1,14 +1,15 @@
-//! 项目管理功能模块。
+//! 控制台项目管理功能模块。
 //!
 //! 该模块展示项目列表页的基础结构，用于演示一个 feature 如何封装自己的列表内容。
 
 use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px};
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, Theme,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, Theme,
     button::Button,
     table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow},
     tag::Tag,
 };
+use ui::Card;
 
 /// 项目管理功能视图。
 ///
@@ -31,9 +32,8 @@ impl ProjectsFeature {
             .map(|row| project_table_row(row, theme))
             .collect::<Vec<_>>();
 
-        div()
-            .flex()
-            .flex_col()
+        Card::new()
+            .p_4()
             .gap_4()
             .child(section_header(
                 "项目工作区",
@@ -196,7 +196,7 @@ fn section_header(title: &'static str, description: &'static str, theme: &Theme)
                 .outline()
                 .icon(IconName::FolderOpen)
                 .label("导入项目")
-                .on_click(|_, _, _| {}),
+                .disabled(true),
         )
         .into_any_element()
 }

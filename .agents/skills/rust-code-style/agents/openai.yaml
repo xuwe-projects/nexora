@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust 代码风格"
+  short_description: "统一 Rust 文档、测试、依赖边界与 crate 命名规范"
+  default_prompt: "使用 $rust-code-style 编写或审查当前仓库的 Rust 代码与 Cargo 配置。"

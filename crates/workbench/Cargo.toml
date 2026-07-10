@@ -1,8 +1,13 @@
 [package]
-name = "ui"
+name = "workbench"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+actions = { workspace = true }
+desktop = { workspace = true }
+theme = { workspace = true }
+ui = { workspace = true }
+
 gpui = { workspace = true }
 gpui-component = { workspace = true }

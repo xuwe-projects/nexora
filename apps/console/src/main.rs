@@ -1,7 +1,7 @@
 //! 控制台桌面应用入口。
 
-use console::app::Console;
 use desktop::Application as _;
+use workbench::app::Console;
 
 /// 启动控制台桌面应用。
 ///

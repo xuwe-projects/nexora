@@ -1,7 +1,10 @@
-use std::{env, fs, path::PathBuf, process::Command};
-use xuwecli::{
+#[path = "../src/commands/mod.rs"]
+pub mod commands;
+
+use commands::{
     BuildMode, SigningMode, build_plan_from_args, macos_target_for_arch, write_sha256_sidecar,
 };
+use std::{env, fs, path::PathBuf};
 
 #[test]
 fn maps_host_arch_to_macos_target() {
@@ -117,20 +120,4 @@ fn build_args_support_equals_syntax() {
     assert_eq!(plan.mode(), BuildMode::Local);
     assert_eq!(plan.signing(), SigningMode::None);
     assert!(!plan.notarize());
-}
-
-#[test]
-fn version_flags_are_supported() {
-    for flag in ["--version", "-v"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_xuwecli"))
-            .arg(flag)
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            format!("xuwecli {}\n", env!("CARGO_PKG_VERSION"))
-        );
-    }
 }

@@ -1,8 +1,11 @@
 [package]
-name = "ui"
+name = "theme"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

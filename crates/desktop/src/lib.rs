@@ -1,4 +1,4 @@
-//! 桌面应用运行时封装。
+//! 跨应用桌面运行时封装。
 //!
 //! 该模块负责统一创建 GPUI 应用、初始化 `gpui-component`，并根据应用配置打开主窗口。
 
@@ -6,7 +6,6 @@ use gpui::{
     App, AppContext, Entity, Pixels, QuitMode, Render, Size, Window, WindowBounds, WindowOptions,
     px, size,
 };
-use gpui_component::{Theme, scroll::ScrollbarShow};
 use gpui_platform::application;
 
 /// 桌面应用运行时选项。
@@ -150,9 +149,8 @@ where
         .with_assets(gpui_component_assets::Assets)
         .with_quit_mode(plan.quit_mode)
         .run(move |cx| {
-            // 初始化 gpui component
             gpui_component::init(cx);
-            Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+            theme::init(cx);
 
             if !plan.open_startup_window {
                 return;
@@ -170,7 +168,9 @@ where
 
             cx.open_window(window_options, |window, cx| {
                 let view = build_root_view(window, cx);
-                cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                let root = cx.new(|cx| gpui_component::Root::new(view, window, cx));
+                theme::attach_window(window, cx);
+                root
             })
             .unwrap();
 

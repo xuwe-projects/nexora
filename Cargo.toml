@@ -6,7 +6,9 @@ members = [
     "apps/server",
     "crates/actions",
     "crates/desktop",
+    "crates/theme",
     "crates/ui",
+    "crates/workbench",
 ]
 
 [workspace.package]
@@ -15,11 +17,25 @@ edition = "2024"
 
 [workspace.dependencies]
 actions = { path = "crates/actions" }
-ui = { path = "crates/ui" }
 desktop = { path = "crates/desktop" }
+theme = { path = "crates/theme" }
+ui = { path = "crates/ui" }
+workbench = { path = "crates/workbench" }
+
+# 命令行参数
+clap = { version = "4", features = ["derive"] }
+
+# 数据格式
+serde_json = "1"
+toml_edit = { version = "0.22", default-features = false, features = ["parse"] }
+
+# Rust 源码分析
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+# xuwe-lint: allow(xuwe::broad_dependency_feature) reason="CLI 需要解析完整 Rust 文件 AST"
+syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "visit"] }
 
 # UI 框架
-gpui = { git = "https://github.com/zed-industries/zed" }
+gpui = { git = "https://github.com/zed-industries/zed", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", default-features = false }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 # 可选：使用内置默认资源

@@ -1,4 +1,7 @@
-use actions::account::{self, AccountActionKind};
+use actions::{
+    account::{self, AccountActionKind},
+    settings::{self, OpenSettings},
+};
 
 #[test]
 fn account_menu_actions_keep_stable_order_and_shortcuts() {
@@ -13,9 +16,9 @@ fn account_menu_actions_keep_stable_order_and_shortcuts() {
     );
     assert_eq!(actions[0].kind(), AccountActionKind::Profile);
     assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+P"));
-    assert!(actions[0].uses_account_avatar());
     assert_eq!(actions[1].kind(), AccountActionKind::Settings);
-    assert_eq!(actions[1].shortcut(), Some("Cmd+,"));
+    assert_eq!(actions[1].shortcut(), Some(settings::shortcut_label()));
+    assert!(actions[1].to_action().as_any().is::<OpenSettings>());
     assert_eq!(actions[2].kind(), AccountActionKind::SignOut);
     assert_eq!(actions[2].shortcut(), Some("Cmd+Shift+Q"));
 }

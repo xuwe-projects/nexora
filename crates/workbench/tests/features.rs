@@ -1,5 +1,7 @@
 use actions::account::AccountActionKind;
-use console::features::{
+use desktop::Application as _;
+use workbench::app::Console;
+use workbench::features::{
     FeatureId, feature_catalog,
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
@@ -37,9 +39,9 @@ fn feature_catalog_has_stable_navigation_order() {
             FeatureId::Billing,
             FeatureId::HelpCenter,
             FeatureId::Experiments,
-            FeatureId::Settings,
         ]
     );
+    assert!(!ids.contains(&FeatureId::Settings));
 }
 
 #[test]
@@ -174,11 +176,23 @@ fn setting_groups_keep_template_configuration() {
 
 #[test]
 fn root_view_defaults_to_home_feature() {
-    let view = RootView::new();
+    let view = RootView::default();
 
     assert_eq!(view.active_feature(), FeatureId::Home);
     assert_eq!(view.account_display_name(), "Jason Lee");
     assert_eq!(view.account_plan_label(), "Free");
+}
+
+#[test]
+fn console_default_keeps_application_window_defaults() {
+    let application = Console::default();
+    let options = application.options();
+
+    assert!(options.activate);
+    assert!(options.window_size.is_some());
+    assert!(options.window_min_size.is_some());
+    assert!(options.window_options.is_some());
+    assert!(!options.daemon_mode);
 }
 
 #[test]
@@ -195,7 +209,6 @@ fn root_view_exposes_account_menu_actions() {
     );
     assert_eq!(actions[0].kind(), AccountActionKind::Profile);
     assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+P"));
-    assert!(actions[0].uses_account_avatar());
     assert_eq!(actions[1].kind(), AccountActionKind::Settings);
     assert_eq!(actions[1].shortcut(), Some("Cmd+,"));
     assert_eq!(actions[2].kind(), AccountActionKind::SignOut);

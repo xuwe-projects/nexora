@@ -1,4 +1,4 @@
-//! 虚拟滚动数据表功能模块。
+//! 控制台虚拟滚动数据表功能模块。
 //!
 //! 该模块使用 `gpui-component` 的 `DataTable` 展示大规模股票数据，作为行列虚拟滚动、
 //! 固定列、列调整、列排序和分组表头的独立导航示例。
@@ -13,6 +13,7 @@ use gpui_component::{
     ActiveTheme as _, Sizable as _, Size, StyleSized as _, StyledExt as _,
     table::{Column, ColumnFixed, ColumnGroup, ColumnSort, DataTable, TableDelegate, TableState},
 };
+use ui::Card;
 
 const DEFAULT_ROW_COUNT: usize = 5000;
 
@@ -185,14 +186,13 @@ impl VirtualScrollFeature {
         let delegate = table_state.delegate();
         let theme = cx.theme();
 
-        div()
-            .flex()
-            .flex_col()
+        Card::new()
             .size_full()
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
             .text_sm()
+            .p_4()
             .gap_4()
             .child(
                 div()
@@ -528,7 +528,8 @@ impl TableDelegate for StockTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        div().id(("stock-row", row_ix))
+        let stock_id = self.stocks.get(row_ix).map_or(0, |stock| stock.id);
+        div().id(("stock-row", stock_id))
     }
 
     fn render_td(

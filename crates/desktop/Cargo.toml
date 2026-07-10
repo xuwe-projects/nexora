@@ -3,20 +3,21 @@ name = "desktop"
 version.workspace = true
 edition.workspace = true
 
-[lib]
-path = "src/desktop.rs"
-
 [dependencies]
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 # 可选：使用内置默认资源
 gpui-component-assets = { workspace = true }
+theme = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui = { workspace = true, features = ["font-kit"] }
 gpui_platform = { workspace = true, features = ["font-kit"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+gpui = { workspace = true, features = ["windows-manifest"] }
 gpui_platform = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gpui = { workspace = true, features = ["wayland", "x11"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }
