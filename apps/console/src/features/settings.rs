@@ -6,9 +6,8 @@ use crate::config::ConsolePreferencesStore;
 use actions::settings::OpenSettings;
 use changelog::{ChangelogEntry, ChangelogError, EmbeddedChangelogRepository};
 use gpui::{
-    AnyElement, App, Context, Global, IntoElement, ParentElement as _, Pixels, Render,
-    SharedString, StyleRefinement, Window, WindowBounds, WindowHandle, WindowOptions, div,
-    prelude::*, px, size,
+    AnyElement, App, Context, Global, IntoElement, ParentElement as _, Render, SharedString,
+    StyleRefinement, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, TitleBar,
@@ -20,7 +19,8 @@ use gpui_component::{
 use theme::{ColorScheme, ThemePreset};
 use updater::UpdateConfig;
 
-const MACOS_TITLE_BAR_HEIGHT: Pixels = px(34.0);
+#[cfg(target_os = "macos")]
+const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(34.0);
 
 /// 应用级设置窗口状态。
 ///
