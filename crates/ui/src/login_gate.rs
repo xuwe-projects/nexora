@@ -6,8 +6,8 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    App, ClickEvent, Image, ImageFormat, IntoElement, MouseButton, ParentElement as _, RenderOnce,
-    SharedString, Styled as _, Window, div, img, prelude::*, px,
+    App, ClickEvent, Image, ImageFormat, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    Styled as _, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
@@ -129,46 +129,31 @@ impl RenderOnce for LoginGate {
             .overflow_hidden()
             .bg(theme.background)
             .child(
-                TitleBar::new()
-                    .h(px(76.0))
-                    .border_b(px(0.0))
-                    .bg(theme.background)
+                h_flex()
+                    .absolute()
+                    .left(px(42.0))
+                    .top(px(34.0))
+                    .gap_3()
+                    .items_center()
+                    .child(img(logo_image()).size(px(42.0)))
                     .child(
-                        h_flex()
-                            .size_full()
-                            .pr_6()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                h_flex()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(img(logo_image()).size(px(42.0)))
-                                    .child(
-                                        div()
-                                            .text_xl()
-                                            .font_semibold()
-                                            .text_color(theme.foreground)
-                                            .child(self.product_name),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .child(
-                                        Button::new("login-settings")
-                                            .ghost()
-                                            .small()
-                                            .icon(IconName::Settings2)
-                                            .label("设置")
-                                            .on_click(move |event, window, cx| {
-                                                on_settings(event, window, cx);
-                                            }),
-                                    ),
-                            ),
+                        div()
+                            .text_xl()
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(self.product_name),
                     ),
+            )
+            .child(
+                Button::new("login-settings")
+                    .absolute()
+                    .right(px(34.0))
+                    .top(px(38.0))
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings2)
+                    .label("设置")
+                    .on_click(move |event, window, cx| on_settings(event, window, cx)),
             )
             .child(
                 div()
@@ -278,6 +263,15 @@ impl RenderOnce for LoginGate {
                     .child(footer_link("login-privacy", "隐私", self.privacy_url))
                     .child(div().px_1().text_color(theme.muted_foreground).child("·"))
                     .child(footer_link("login-help", "帮助", self.help_url)),
+            )
+            .child(
+                TitleBar::new()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .border_b(px(0.0))
+                    .bg(gpui::transparent_black()),
             )
     }
 }
