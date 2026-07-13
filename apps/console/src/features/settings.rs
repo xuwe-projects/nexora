@@ -8,9 +8,8 @@ use crate::config;
 use actions::settings::OpenSettings;
 use changelog::{ChangelogEntry, ChangelogError, EmbeddedChangelogRepository};
 use gpui::{
-    AnyElement, App, Context, Global, IntoElement, ParentElement as _, Render, SharedString,
-    StyleRefinement, Subscription, Window, WindowBounds, WindowHandle, WindowOptions, div,
-    prelude::*, px, size,
+    AnyElement, App, Axis, Context, Global, IntoElement, ParentElement as _, Render, SharedString,
+    StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, TitleBar,
@@ -68,14 +67,19 @@ fn open_settings_window(cx: &mut App) {
     }
 
     cx.global_mut::<SettingsWindowState>().window = None;
-    let window_options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(860.0), px(680.0)), cx)),
-        window_min_size: Some(size(px(680.0), px(520.0))),
-        titlebar: Some(TitleBar::title_bar_options()),
-        ..Default::default()
-    };
+    let window_options = settings_window_options(config::startup_display_uuid(cx), cx);
+    #[cfg(target_os = "windows")]
+    let target_display_id = window_options
+        .display_id
+        .or_else(|| cx.primary_display().map(|display| display.id()));
 
-    match cx.open_window(window_options, |window, cx| {
+    match cx.open_window(window_options, move |window, cx| {
+        #[cfg(target_os = "windows")]
+        if let Some(target_display_id) = target_display_id
+            && let Err(error) = desktop::center_window_on_display(window, target_display_id)
+        {
+            eprintln!("无法在目标显示器上居中设置窗口: {error}");
+        }
         let settings = cx.new(SettingsWindow::new);
         let root = cx.new(|cx| gpui_component::Root::new(settings, window, cx));
         theme::attach_window(window, cx);
@@ -90,6 +94,26 @@ fn open_settings_window(cx: &mut App) {
     }
 }
 
+/// 根据当前显示器偏好创建设置窗口的原生选项。
+///
+/// 提供稳定 UUID 时，窗口会在对应显示器上以 `860 × 680` 居中；显示器不可用时回退
+/// 系统主显示器。该函数也集中维护设置窗口的最小尺寸和标题栏配置。
+pub(crate) fn settings_window_options(display_uuid: Option<&str>, cx: &App) -> WindowOptions {
+    let window_size = size(px(860.0), px(680.0));
+    let mut window_options = WindowOptions {
+        window_min_size: Some(size(px(680.0), px(520.0))),
+        titlebar: Some(TitleBar::title_bar_options()),
+        ..Default::default()
+    };
+    desktop::apply_window_display_preference(
+        &mut window_options,
+        display_uuid,
+        Some(window_size),
+        cx,
+    );
+    window_options
+}
+
 /// 应用设置功能视图。
 ///
 /// 当前实现包含可交互且会本地持久化的主题、启动显示器设置，以及只读模板配置和更新信息。
@@ -98,7 +122,7 @@ pub struct SettingsFeature;
 impl SettingsFeature {
     /// 渲染设置页面。
     ///
-    /// 页面首先展示可立即生效的主题设置与下次启动显示器，随后展示后台模式、打包配置和更新信息。
+    /// 页面首先展示可立即生效的主题设置与新窗口默认显示器，随后展示后台模式、打包配置和更新信息。
     /// 用户偏好从应用级内存状态读取，交互变更会立即写入当前操作系统用户的本地配置文件。
     pub fn render<T>(cx: &mut Context<T>) -> AnyElement
     where
@@ -345,30 +369,13 @@ fn window_setting_page(cx: &App) -> SettingPage {
     SettingPage::new("窗口")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::LayoutDashboard))
-        .description("设置主窗口下次启动时使用的显示器，并查看窗口默认参数。")
+        .description("设置主窗口启动与新窗口打开时使用的显示器，并查看窗口默认参数。")
         .default_open(true)
         .resettable(true)
         .group(
-            SettingGroup::new().title("启动位置").item(
-                SettingItem::new(
-                    "默认显示器",
-                    SettingField::dropdown(
-                        display_options,
-                        |cx: &App| {
-                            SharedString::from(
-                                config::startup_display_uuid(cx).unwrap_or(SYSTEM_PRIMARY_DISPLAY),
-                            )
-                        },
-                        |value: SharedString, cx: &mut App| {
-                            let display_uuid = (value.as_ref() != SYSTEM_PRIMARY_DISPLAY)
-                                .then(|| value.to_string());
-                            config::persist_startup_display_uuid(display_uuid, cx);
-                        },
-                    )
-                    .default_value(SharedString::from(SYSTEM_PRIMARY_DISPLAY)),
-                )
-                .description("保存后在下次启动生效；显示器未连接时会临时回退到系统主显示器。"),
-            ),
+            SettingGroup::new()
+                .title("启动位置")
+                .item(startup_display_setting_item(display_options)),
         )
         .group(
             SettingGroup::new()
@@ -386,6 +393,33 @@ fn window_setting_page(cx: &App) -> SettingPage {
                     )
                 })),
         )
+}
+
+/// 创建使用纵向布局的默认显示器设置项。
+///
+/// 纵向布局让官方下拉控件独占整行，避免显示器名称和分辨率较长时被设置项右边界裁切。
+pub(crate) fn startup_display_setting_item(
+    display_options: Vec<(SharedString, SharedString)>,
+) -> SettingItem {
+    SettingItem::new(
+        "默认显示器",
+        SettingField::dropdown(
+            display_options,
+            |cx: &App| {
+                SharedString::from(
+                    config::startup_display_uuid(cx).unwrap_or(SYSTEM_PRIMARY_DISPLAY),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                let display_uuid =
+                    (value.as_ref() != SYSTEM_PRIMARY_DISPLAY).then(|| value.to_string());
+                config::persist_startup_display_uuid(display_uuid, cx);
+            },
+        )
+        .default_value(SharedString::from(SYSTEM_PRIMARY_DISPLAY)),
+    )
+    .layout(Axis::Vertical)
+    .description("用于主窗口下次启动及之后新打开的窗口；显示器未连接时会临时回退到系统主显示器。")
 }
 
 fn startup_display_options(cx: &App) -> Vec<(SharedString, SharedString)> {

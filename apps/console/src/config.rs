@@ -50,16 +50,16 @@ impl ConsolePreferences {
         self.appearance.color_scheme = selection.color_scheme();
     }
 
-    /// 返回下次启动主窗口时优先使用的显示器稳定 UUID。
+    /// 返回主窗口启动及后续新窗口优先使用的显示器稳定 UUID。
     ///
     /// 返回 `None` 表示跟随操作系统当前主显示器。
     pub fn startup_display_uuid(&self) -> Option<&str> {
         self.window.startup_display_uuid.as_deref()
     }
 
-    /// 更新下次启动主窗口时优先使用的显示器稳定 UUID。
+    /// 更新主窗口启动及后续新窗口优先使用的显示器稳定 UUID。
     ///
-    /// 传入 `None` 会恢复为跟随操作系统主显示器；该设置只影响后续新建的主窗口。
+    /// 传入 `None` 会恢复为跟随操作系统主显示器；该设置影响后续创建的窗口。
     pub fn set_startup_display_uuid(&mut self, display_uuid: Option<String>) {
         self.schema_version = CONSOLE_SCHEMA_VERSION;
         self.window.startup_display_uuid = display_uuid;
@@ -88,7 +88,7 @@ struct AppearancePreferences {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct WindowPreferences {
-    /// 下次启动主窗口时使用的显示器稳定 UUID；为空时跟随系统主显示器。
+    /// 主窗口启动及后续新窗口使用的显示器稳定 UUID；为空时跟随系统主显示器。
     startup_display_uuid: Option<String>,
 }
 
@@ -133,7 +133,7 @@ pub fn theme_selection(cx: &App) -> ThemeSelection {
         .theme_selection()
 }
 
-/// 返回下次启动主窗口时优先使用的显示器稳定 UUID。
+/// 返回主窗口启动及后续新窗口优先使用的显示器稳定 UUID。
 ///
 /// `None` 表示跟随操作系统主显示器；返回值来自启动时加载的内存状态，不会在渲染期间访问文件。
 ///
@@ -174,7 +174,7 @@ pub fn persist_theme_selection(selection: ThemeSelection, cx: &mut App) {
     });
 }
 
-/// 更新下次启动显示器并立即保存到当前用户的本地配置文件。
+/// 更新窗口默认显示器并立即保存到当前用户的本地配置文件。
 ///
 /// 传入 `None` 表示改为跟随系统主显示器。文件保存失败时保留本次运行中的选择，
 /// 并把错误输出到标准错误。

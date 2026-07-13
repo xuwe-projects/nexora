@@ -1,6 +1,10 @@
-use desktop::{Application, ApplicationOptions, find_display_id_by_uuid};
+use desktop::{
+    Application, ApplicationOptions, apply_window_display_preference, centered_window_bounds,
+    find_display_id_by_uuid,
+};
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div, px, size,
+    App, AppContext, Bounds, Context, Entity, IntoElement, Render, TestAppContext, Window, div,
+    point, px, size,
 };
 
 #[derive(Default)]
@@ -66,6 +70,26 @@ fn with_startup_display_uuid_stores_stable_identifier() {
     );
 }
 
+#[test]
+fn centers_window_on_secondary_display_with_positive_origin() {
+    let display_bounds = Bounds::new(point(px(1920.0), px(24.0)), size(px(2560.0), px(1400.0)));
+
+    assert_eq!(
+        centered_window_bounds(display_bounds, size(px(900.0), px(640.0))),
+        Bounds::new(point(px(2750.0), px(404.0)), size(px(900.0), px(640.0)),)
+    );
+}
+
+#[test]
+fn centers_window_on_secondary_display_with_negative_origin() {
+    let display_bounds = Bounds::new(point(px(-1600.0), px(-900.0)), size(px(1600.0), px(860.0)));
+
+    assert_eq!(
+        centered_window_bounds(display_bounds, size(px(900.0), px(640.0))),
+        Bounds::new(point(px(-1250.0), px(-790.0)), size(px(900.0), px(640.0)),)
+    );
+}
+
 #[gpui::test]
 fn display_uuid_resolves_current_display_and_rejects_unknown_value(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -77,5 +101,59 @@ fn display_uuid_resolves_current_display_and_rejects_unknown_value(cx: &mut Test
             Some(display.id())
         );
         assert_eq!(find_display_id_by_uuid("missing-display", cx), None);
+    });
+}
+
+#[gpui::test]
+fn window_display_preference_centers_on_selected_display(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let display = cx.primary_display().expect("测试平台应当提供主显示器");
+        let uuid = display.uuid().expect("测试显示器应当提供稳定 UUID");
+        let window_size = size(px(860.0), px(680.0));
+        let mut options = gpui::WindowOptions::default();
+
+        apply_window_display_preference(
+            &mut options,
+            Some(uuid.to_string().as_str()),
+            Some(window_size),
+            cx,
+        );
+
+        assert_eq!(options.display_id, Some(display.id()));
+        assert_eq!(
+            options
+                .window_bounds
+                .expect("应当生成窗口边界")
+                .get_bounds(),
+            centered_window_bounds(display.visible_bounds(), window_size)
+        );
+    });
+}
+
+#[gpui::test]
+fn missing_window_display_preference_falls_back_to_primary_display(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let display = cx.primary_display().expect("测试平台应当提供主显示器");
+        let window_size = size(px(860.0), px(680.0));
+        let mut options = gpui::WindowOptions {
+            display_id: Some(display.id()),
+            ..Default::default()
+        };
+
+        apply_window_display_preference(
+            &mut options,
+            Some("missing-display"),
+            Some(window_size),
+            cx,
+        );
+
+        assert_eq!(options.display_id, None);
+        assert_eq!(
+            options
+                .window_bounds
+                .expect("应当生成回退窗口边界")
+                .get_bounds(),
+            centered_window_bounds(display.visible_bounds(), window_size)
+        );
     });
 }

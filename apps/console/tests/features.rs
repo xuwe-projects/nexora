@@ -6,8 +6,9 @@ use std::{
 
 use actions::account::AccountActionKind;
 use configuration::UserConfigStore;
-use desktop::Application as _;
-use gpui::{AppContext as _, TestAppContext};
+use desktop::{Application as _, centered_window_bounds};
+use gpui::{AppContext as _, Axis, TestAppContext, px, size};
+use gpui_component::setting::SettingItem;
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/auth.rs"]
@@ -24,7 +25,10 @@ use features::{
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
     root::RootView,
-    settings::{current_console_changelog, setting_groups},
+    settings::{
+        current_console_changelog, setting_groups, settings_window_options,
+        startup_display_setting_item,
+    },
     tasks::task_rows,
     virtual_scroll::virtual_scroll_stock_seeds,
 };
@@ -157,6 +161,40 @@ fn version_one_preferences_default_to_system_primary_display() {
         ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark)
     );
     _ = fs::remove_dir_all(directory);
+}
+
+#[gpui::test]
+fn settings_window_uses_selected_display_and_expected_size(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let display = cx.primary_display().expect("测试平台应当提供主显示器");
+        let display_uuid = display.uuid().expect("测试显示器应当提供稳定 UUID");
+        let window_size = size(px(860.0), px(680.0));
+
+        let options = settings_window_options(Some(display_uuid.to_string().as_str()), cx);
+
+        assert_eq!(options.display_id, Some(display.id()));
+        assert_eq!(
+            options
+                .window_bounds
+                .expect("应当生成设置窗口边界")
+                .get_bounds(),
+            centered_window_bounds(display.visible_bounds(), window_size)
+        );
+        assert_eq!(options.window_min_size, Some(size(px(680.0), px(520.0))));
+    });
+}
+
+#[test]
+fn startup_display_setting_uses_full_width_vertical_layout() {
+    let item = startup_display_setting_item(vec![(
+        "display-uuid".into(),
+        "显示器 2（1920 × 1080）".into(),
+    )]);
+    let SettingItem::Item { layout, .. } = item else {
+        panic!("默认显示器应当使用标准设置项");
+    };
+
+    assert_eq!(layout, Axis::Vertical);
 }
 
 #[test]

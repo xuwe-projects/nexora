@@ -157,6 +157,103 @@ pub fn find_display_id_by_uuid(display_uuid: &str, cx: &App) -> Option<DisplayId
     })
 }
 
+/// 在指定显示器工作区内计算居中的窗口边界。
+///
+/// `display_bounds` 应使用 [`gpui::PlatformDisplay::visible_bounds`]，从而避开任务栏或
+/// Dock 占用的区域。显示器原点可以是负数，因此该函数同样适用于位于主显示器左侧或上方的副屏。
+pub fn centered_window_bounds(
+    display_bounds: Bounds<Pixels>,
+    window_size: Size<Pixels>,
+) -> Bounds<Pixels> {
+    Bounds::centered_at(display_bounds.center(), window_size)
+}
+
+/// 把稳定显示器 UUID 和可选窗口尺寸应用到原生窗口选项。
+///
+/// 提供 UUID 时会解析当前进程中的 [`DisplayId`]；目标显示器不可用时清空显示器 ID，
+/// 让平台回退到系统主显示器。未提供 UUID 时保留调用方已有的 `display_id`。提供尺寸时，
+/// 会在最终选定的显示器上重新计算居中窗口边界。
+pub fn apply_window_display_preference(
+    window_options: &mut WindowOptions,
+    display_uuid: Option<&str>,
+    window_size: Option<Size<Pixels>>,
+    cx: &App,
+) {
+    if let Some(display_uuid) = display_uuid {
+        window_options.display_id = find_display_id_by_uuid(display_uuid, cx);
+    }
+    if let Some(window_size) = window_size {
+        let display = window_options
+            .display_id
+            .and_then(|display_id| cx.find_display(display_id))
+            .or_else(|| cx.primary_display());
+        let bounds = display
+            .map(|display| centered_window_bounds(display.visible_bounds(), window_size))
+            .unwrap_or_else(|| Bounds::new(gpui::Point::default(), window_size));
+        window_options.window_bounds = Some(WindowBounds::Windowed(bounds));
+    }
+}
+
+/// 在 Windows 原生窗口创建完成后，将窗口重新置于目标显示器工作区中央。
+///
+/// 锁定版 GPUI 会先通过 `CW_USEDEFAULT` 创建窗口，再用这个临时窗口所在显示器的 DPI
+/// 换算目标显示器坐标。两个显示器缩放比例不同时，初始位置会向右下方偏移。此函数使用
+/// 已完成 DPI 切换后的实际窗口尺寸和目标显示器物理工作区修正位置。
+///
+/// # Errors
+///
+/// 当 GPUI 未返回 Win32 窗口句柄、目标显示器已失效，或 Windows 无法读取、移动窗口时
+/// 返回对应的系统 I/O 错误。调用方可以保留 GPUI 已生成的初始位置并记录该错误。
+#[cfg(target_os = "windows")]
+pub fn center_window_on_display(window: &Window, display_id: DisplayId) -> std::io::Result<()> {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{HWND, RECT},
+        Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
+        UI::WindowsAndMessaging::{
+            GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+        },
+    };
+
+    let raw_handle = window
+        .window_handle()
+        .map_err(std::io::Error::other)?
+        .as_raw();
+    let RawWindowHandle::Win32(window_handle) = raw_handle else {
+        return Err(std::io::Error::other("GPUI 未返回 Win32 窗口句柄"));
+    };
+    let hwnd = HWND(window_handle.hwnd.get() as *mut _);
+    let monitor = HMONITOR(u64::from(display_id) as *mut _);
+    let mut monitor_info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }.as_bool() {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut window_rect = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut window_rect) }.map_err(std::io::Error::other)?;
+    let work_area = monitor_info.rcWork;
+    let window_width = window_rect.right - window_rect.left;
+    let window_height = window_rect.bottom - window_rect.top;
+    let x = work_area.left + (work_area.right - work_area.left - window_width) / 2;
+    let y = work_area.top + (work_area.bottom - work_area.top - window_height) / 2;
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        )
+    }
+    .map_err(std::io::Error::other)
+}
+
 /// 使用指定选项和根视图工厂启动 GPUI 应用。
 ///
 /// 该函数负责创建平台应用、挂载 `gpui-component` 资源、初始化组件库，
@@ -189,24 +286,28 @@ where
             } = std::mem::take(desktop_application.options_mut());
 
             let mut window_options = window_options.unwrap_or_default();
-
-            if let Some(display_uuid) = startup_display_uuid {
-                window_options.display_id = find_display_id_by_uuid(&display_uuid, cx);
-            }
-
-            if let Some(window_size) = window_size {
-                window_options.window_bounds = Some(WindowBounds::Windowed(Bounds::centered(
-                    window_options.display_id,
-                    window_size,
-                    cx,
-                )));
-            }
+            apply_window_display_preference(
+                &mut window_options,
+                startup_display_uuid.as_deref(),
+                window_size,
+                cx,
+            );
+            #[cfg(target_os = "windows")]
+            let target_display_id = window_options
+                .display_id
+                .or_else(|| cx.primary_display().map(|display| display.id()));
 
             if let Some(window_min_size) = window_min_size {
                 window_options.window_min_size = Some(window_min_size);
             }
 
-            cx.open_window(window_options, |window, cx| {
+            cx.open_window(window_options, move |window, cx| {
+                #[cfg(target_os = "windows")]
+                if let Some(target_display_id) = target_display_id
+                    && let Err(error) = center_window_on_display(window, target_display_id)
+                {
+                    eprintln!("无法在目标显示器上居中窗口: {error}");
+                }
                 let view = desktop_application.build_root_view(window, cx);
                 let root = cx.new(|cx| gpui_component::Root::new(view, window, cx));
                 theme::attach_window(window, cx);

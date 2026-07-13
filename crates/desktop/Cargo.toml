@@ -20,6 +20,12 @@ gpui_platform = { workspace = true, features = ["font-kit"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui = { workspace = true, features = ["windows-manifest"] }
 gpui_platform = { workspace = true }
+raw-window-handle = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui = { workspace = true, features = ["wayland", "x11"] }
