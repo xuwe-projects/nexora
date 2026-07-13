@@ -5,10 +5,12 @@ members = [
     "apps/console",
     "apps/server",
     "crates/actions",
+    "crates/changelog",
+    "crates/configuration",
     "crates/desktop",
     "crates/theme",
     "crates/ui",
-    "crates/workbench",
+    "crates/updater",
 ]
 
 [workspace.package]
@@ -17,17 +19,31 @@ edition = "2024"
 
 [workspace.dependencies]
 actions = { path = "crates/actions" }
+changelog = { path = "crates/changelog" }
+configuration = { path = "crates/configuration" }
 desktop = { path = "crates/desktop" }
 theme = { path = "crates/theme" }
 ui = { path = "crates/ui" }
-workbench = { path = "crates/workbench" }
+updater = { path = "crates/updater" }
 
 # 命令行参数
 clap = { version = "4", features = ["derive"] }
 
 # 数据格式
+config-rs = { package = "config", version = "0.15.25", default-features = false, features = ["toml"] }
+directories = { version = "6", default-features = false }
+include_dir = { version = "0.7", default-features = false }
+semver = { version = "1", default-features = false, features = ["std"] }
+serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = "1"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+toml = { version = "1", default-features = false, features = ["display", "serde", "std"] }
 toml_edit = { version = "0.22", default-features = false, features = ["parse"] }
+
+# 更新下载
+async-channel = { version = "2", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Rust 源码分析
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }

@@ -299,6 +299,46 @@ crates/application/
 └── src/lib.rs
 ```
 
+## 模块文件组织
+
+- 禁止使用 `mod.rs` 作为模块入口文件；模块入口统一使用与模块同名的 `.rs` 文件。
+- 模块同时包含自身定义和多个子模块时，父模块放在 `src/<module>.rs`，子模块放在 `src/<module>/` 目录中。
+- crate 入口通过 `mod features;` 或 `pub mod features;` 引入 `src/features.rs`；`features.rs` 再声明 `home`、`settings` 等子模块。
+- 不要同时创建 `src/features.rs` 与 `src/features/mod.rs`，也不要把父模块自己的类型和函数散落到子模块目录中。
+- 移动或新增模块时检查整个 workspace，确保生产源码和测试辅助模块中都没有遗留 `mod.rs`。
+
+推荐结构：
+
+```text
+src/
+├── main.rs
+├── features.rs
+└── features/
+    ├── home.rs
+    ├── settings.rs
+    └── tasks.rs
+```
+
+```rust
+// src/main.rs
+mod features;
+
+// src/features.rs
+mod home;
+mod settings;
+mod tasks;
+```
+
+禁止结构：
+
+```text
+src/
+└── features/
+    ├── mod.rs
+    ├── home.rs
+    └── settings.rs
+```
+
 ## 测试组织
 
 - 所有 Rust 测试用例必须放在对应 crate 的 `tests/` 集成测试目录中，例如 `apps/console/tests/` 或 `crates/desktop/tests/`。

@@ -1,0 +1,144 @@
+//! Console 桌面应用定义。
+//!
+//! 该模块实现 `desktop::Application`，把控制台应用接入统一的桌面启动流程。
+
+use crate::{
+    config::{ConsolePreferencesStore, preferences_store},
+    features::{root::RootView, settings as settings_feature},
+};
+use actions::{account as account_actions, settings as settings_actions, window as window_actions};
+use desktop::{Application, ApplicationOptions};
+use gpui::{App, AppContext, Entity, Window, WindowOptions, px, size};
+use gpui_component::TitleBar;
+use updater::{UpdateChannel, UpdateConfig};
+
+/// Console 本地开发构建使用的默认安装包构建号。
+///
+/// 正式发布应通过 `BUNDLE_VERSION` 提供持续递增的构建号；未设置时才使用该默认值。
+const DEFAULT_BUNDLE_VERSION: u64 = 1;
+
+/// 控制台桌面应用。
+///
+/// 该类型保存应用启动选项，并负责创建主窗口中的业务根视图。
+pub struct Console {
+    /// 控制台应用的运行时配置。
+    options: ApplicationOptions,
+}
+
+impl Default for Console {
+    /// 创建与 `Console::new` 完全一致的默认控制台应用。
+    ///
+    /// 默认值包含窗口尺寸、最小尺寸、激活行为和原生标题栏配置，避免派生默认值绕过应用约定。
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Console {
+    /// 创建一个使用默认启动选项的控制台应用。
+    ///
+    /// 调用方可以继续通过 `with_*` 方法覆盖守护模式、激活行为、窗口尺寸、最小窗口尺寸或窗口选项。
+    pub fn new() -> Self {
+        Self {
+            options: ApplicationOptions {
+                window_size: Some(size(px(900.), px(640.))),
+                window_min_size: Some(size(px(900.), px(640.))),
+                activate: true,
+                window_options: Some(WindowOptions {
+                    titlebar: Some(TitleBar::title_bar_options()),
+                    ..Default::default()
+                }),
+                daemon_mode: false,
+            },
+        }
+    }
+}
+
+impl Application for Console {
+    /// 控制台应用主窗口中的业务根视图类型。
+    ///
+    /// 该类型负责渲染控制台窗口的最外层业务内容。
+    type RootView = RootView;
+
+    /// 返回控制台应用当前的运行时配置。
+    ///
+    /// 该配置会在调用 `run` 时被桌面运行器读取并消费。
+    fn options(&self) -> &ApplicationOptions {
+        &self.options
+    }
+
+    /// 返回控制台应用运行时配置的可变引用。
+    ///
+    /// 桌面运行器提供的链式配置方法会通过该引用写入启动参数。
+    fn options_mut(&mut self) -> &mut ApplicationOptions {
+        &mut self.options
+    }
+
+    /// 创建控制台应用的根视图实体。
+    ///
+    /// 当前实现创建 `features::root::RootView`，该实体会由桌面运行器包裹进
+    /// `gpui_component::Root` 后作为窗口根节点。
+    fn build_root_view(&mut self, _window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
+        gpui_component::set_locale("zh-CN");
+        actions::init();
+        account_actions::bind_keys(cx);
+        settings_actions::bind_keys(cx);
+        let preferences_store = initialize_preferences(cx);
+        settings_feature::init(console_updater_config(), preferences_store, cx);
+        window_actions::init("Xuwe Console", cx);
+        cx.new(|_| RootView::new())
+    }
+}
+
+fn initialize_preferences(cx: &mut App) -> Option<ConsolePreferencesStore> {
+    let store = match preferences_store() {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("无法确定 Console 用户配置目录: {error}");
+            return None;
+        }
+    };
+    match store.load_versioned_or_default() {
+        Ok(preferences) => theme::set_selection(preferences.theme_selection(), cx),
+        Err(error) => eprintln!("无法加载 Console 用户配置: {error}"),
+    }
+
+    Some(store)
+}
+
+/// 创建 Console 使用的更新配置。
+///
+/// 发布构建通过 `UPDATE_MANIFEST_URL` 编译时环境变量提供当前通道的 `latest.json`
+/// 地址；本地开发未设置该变量时，设置页仍可展示版本和更新日志，但不会启用在线更新。
+fn console_updater_config() -> Option<UpdateConfig> {
+    let manifest_url = option_env!("UPDATE_MANIFEST_URL")?;
+    let bundle_version = match option_env!("BUNDLE_VERSION") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Console 构建号 BUNDLE_VERSION 无效: {error}");
+                return None;
+            }
+        },
+        None => DEFAULT_BUNDLE_VERSION,
+    };
+    let mut config = match UpdateConfig::new(
+        manifest_url,
+        "com.xuwe.console",
+        env!("CARGO_PKG_VERSION"),
+        bundle_version,
+        UpdateChannel::Stable,
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Console 更新配置无效: {error}");
+            return None;
+        }
+    };
+
+    if let Some(team_id) = option_env!("MACOS_TEAM_ID") {
+        config = config.with_expected_team_id(team_id);
+    }
+
+    Some(config)
+}

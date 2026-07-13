@@ -130,7 +130,7 @@ fn rust_and_gpui_rules_report_source_violations() {
         "Cargo.toml",
         r#"[workspace]
 resolver = "3"
-members = ["crates/workbench"]
+members = ["crates/dashboard"]
 
 [workspace.package]
 version = "0.1.0"
@@ -143,9 +143,9 @@ sqlx = "0.8"
 "#,
     );
     fixture.write(
-        "crates/workbench/Cargo.toml",
+        "crates/dashboard/Cargo.toml",
         r#"[package]
-name = "workbench"
+name = "dashboard"
 version.workspace = true
 edition.workspace = true
 
@@ -156,7 +156,7 @@ sqlx = { workspace = true }
 "#,
     );
     fixture.write(
-        "crates/workbench/src/lib.rs",
+        "crates/dashboard/src/lib.rs",
         r#"//! 故意包含违规写法的测试源码。
 
 use std::sync::Mutex;
@@ -211,6 +211,10 @@ fn find_user(name: &str) {
 }
 "#,
     );
+    fixture.write(
+        "crates/dashboard/src/nested/mod.rs",
+        "//! 故意使用禁止的模块入口文件。\n",
+    );
 
     let output = fixture.run(&["--deny-warnings"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -222,6 +226,7 @@ fn find_user(name: &str) {
         "xuwe::detached_lifecycle",
         "xuwe::dynamic_sql_concatenation",
         "xuwe::empty_event_handler",
+        "xuwe::forbidden_mod_rs",
         "xuwe::global_refresh_scope",
         "xuwe::hardcoded_visual_color",
         "xuwe::icon_button_without_tooltip",

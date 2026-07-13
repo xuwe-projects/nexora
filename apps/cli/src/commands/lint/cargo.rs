@@ -409,7 +409,7 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
             let lightweight_contract_has_heavy_dependency = is_contract_crate(&member.name)
                 && matches!(
                     target.name.as_str(),
-                    "api" | "server" | "application" | "desktop" | "workbench"
+                    "api" | "server" | "application" | "desktop"
                 );
 
             if library_depends_on_app

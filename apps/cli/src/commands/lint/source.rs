@@ -72,6 +72,21 @@ fn check_file(
     path: &Path,
     report: &mut Report,
 ) -> CliResult<()> {
+    if path.file_name().and_then(|name| name.to_str()) == Some("mod.rs") {
+        report.push(
+            Diagnostic::error(
+                "xuwe::forbidden_mod_rs",
+                relative_path(workspace.root(), path),
+                1,
+                1,
+                "模块入口禁止使用 `mod.rs`",
+            )
+            .with_help(
+                "把模块入口迁移到同名 `.rs` 文件，例如 `features/mod.rs` 改为 `features.rs`",
+            ),
+        );
+    }
+
     let source = fs::read_to_string(path).map_err(|error| {
         CliError::new(format!("无法读取 Rust 源码 {}：{error}", path.display()))
     })?;

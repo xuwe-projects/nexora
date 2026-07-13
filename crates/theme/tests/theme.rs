@@ -1,4 +1,5 @@
-use gpui_component::{ThemeMode, ThemeSet};
+use gpui::TestAppContext;
+use gpui_component::{Theme, ThemeMode, ThemeSet};
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
 const XUWE_THEME_SET: &str = include_str!("../themes/xuwe.json");
@@ -48,4 +49,19 @@ fn embedded_themes_distinguish_workspace_and_content_surfaces() {
         assert_ne!(colors["background"], colors["group_box.background"]);
         assert_eq!(colors["group_box.background"], colors["table.background"]);
     }
+}
+
+#[gpui::test]
+fn theme_global_initializes_and_switches_inside_gpui(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        theme::init(cx);
+
+        assert_eq!(theme::selection(cx), ThemeSelection::default());
+
+        theme::set_color_scheme(ColorScheme::Dark, cx);
+
+        assert_eq!(theme::selection(cx).color_scheme(), ColorScheme::Dark);
+        assert_eq!(Theme::global(cx).mode, ThemeMode::Dark);
+    });
 }

@@ -1,0 +1,15 @@
+[package]
+name = "updater"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

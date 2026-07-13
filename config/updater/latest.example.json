@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "app_id": "com.xuwe.console",
+  "channel": "stable",
+  "version": "0.2.0",
+  "bundle_version": 12,
+  "notes_url": "./notes/0.2.0/console/zh-CN.md",
+  "artifacts": [
+    {
+      "target": "aarch64-apple-darwin",
+      "url": "./console-0.2.0-12-aarch64.app.zip",
+      "sha256": "填写安装包的 SHA-256",
+      "size": 67108864
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "url": "./console-0.2.0-12-x86_64.app.zip",
+      "sha256": "填写安装包的 SHA-256",
+      "size": 68157440
+    }
+  ]
+}

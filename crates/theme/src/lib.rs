@@ -5,6 +5,7 @@
 
 use gpui::{App, Global, Window};
 use gpui_component::{Theme, ThemeMode, ThemeRegistry, scroll::ScrollbarShow};
+use serde::{Deserialize, Serialize};
 
 const XUWE_THEME_SET: &str = include_str!("../themes/xuwe.json");
 const XUWE_LIGHT_THEME_NAME: &str = "Xuwe Light";
@@ -14,7 +15,8 @@ const XUWE_DARK_THEME_NAME: &str = "Xuwe Dark";
 ///
 /// 颜色模式和具体主题预设相互独立：模式决定当前使用浅色还是深色主题，
 /// 预设则决定两种模式分别对应哪一组颜色 token。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorScheme {
     /// 跟随操作系统当前的窗口外观，并在系统外观变化时自动同步。
     #[default]
@@ -59,32 +61,29 @@ impl ColorScheme {
 ///
 /// 每个预设同时声明一套浅色主题和一套深色主题，切换颜色模式时会自动选择同一预设
 /// 中对应的主题，避免把两个不相关的主题意外组合在一起。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ThemePreset {
-    /// 模板提供的 Xuwe 主题，使用中性色作为界面基底，并使用蓝色作为主要交互强调色。
+    /// 模板提供的铉微主题，使用中性色作为界面基底，并使用蓝色作为主要交互强调色。
     #[default]
     Xuwe,
-    /// `gpui-component` 自带的默认浅色和深色主题。
-    ComponentDefault,
 }
 
 impl ThemePreset {
     /// 设置界面可以选择的全部内置主题预设。
-    pub const ALL: [Self; 2] = [Self::Xuwe, Self::ComponentDefault];
+    pub const ALL: [Self; 1] = [Self::Xuwe];
 
     /// 返回用于配置存储和下拉选项值的稳定标识。
     pub const fn id(self) -> &'static str {
         match self {
             Self::Xuwe => "xuwe",
-            Self::ComponentDefault => "component-default",
         }
     }
 
     /// 返回适合直接展示在中文设置界面中的主题名称。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Xuwe => "Xuwe",
-            Self::ComponentDefault => "GPUI Component 默认",
+            Self::Xuwe => "铉微",
         }
     }
 
@@ -243,10 +242,6 @@ fn apply_active_theme(window: Option<&mut Window>, cx: &mut App) {
                     .get(XUWE_DARK_THEME_NAME)
                     .cloned()
                     .expect("主题注册表必须包含 Xuwe Dark"),
-            ),
-            ThemePreset::ComponentDefault => (
-                registry.default_light_theme().clone(),
-                registry.default_dark_theme().clone(),
             ),
         }
     };

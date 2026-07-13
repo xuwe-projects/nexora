@@ -7,5 +7,17 @@ edition.workspace = true
 icon = ["assets/logos/logo-icon.icns"]
 
 [dependencies]
+actions = { workspace = true }
+changelog = { workspace = true }
+configuration = { workspace = true }
 desktop = { workspace = true }
-workbench = { workspace = true }
+serde = { workspace = true }
+theme = { workspace = true }
+ui = { workspace = true }
+updater = { workspace = true }
+
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

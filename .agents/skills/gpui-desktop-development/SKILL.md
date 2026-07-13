@@ -233,7 +233,42 @@ impl<D> DataTable<D> {
 - 窗口私有状态放在对应窗口根 Entity；跨窗口共享模型使用 `Entity<Model>`，真正应用级状态使用 Global。
 - 只有用户明确要求故障隔离、安全隔离或独立服务生命周期时，才设计多进程架构；这不属于普通多窗口实现。
 
-## 13. 实现与审查流程
+## 13. GPUI 测试策略
+
+普通 Rust 测试和 GPUI 集成测试必须按被测行为依赖的运行环境分层：
+
+- 纯数据转换、解析、排序、配置 builder、状态机和不依赖 GPUI 上下文的业务逻辑继续使用普通 `#[test]`。
+- 凡是被测行为依赖 `App`、`Window`、`Entity`、`Global`、`Action`、GPUI 前后台执行器或事件循环，优先使用 `#[gpui::test]`，并让测试函数接收 `&mut TestAppContext`。
+- 是否使用 `#[gpui::test]` 由测试执行的行为决定，不由源码是否导入了 GPUI 类型决定。仅为了实现 trait 而在类型签名中出现 `App`、`Window` 或 `Entity`，但实际断言只检查纯配置时，仍使用普通 `#[test]`。
+- GPUI 测试应通过 `TestAppContext::new`、`update_entity`、`read_entity`、`add_window`、`open_window` 等测试 API 操作状态和窗口，不要手工构造假的 `App`、`Window` 或绕过 Entity 所有权模型。
+- 测试 `gpui-component` 组件、主题或其他 Global 前，先在 `cx.update(...)` 中完成 `gpui_component::init` 及被测模块初始化，保证测试环境与真实应用启动顺序一致。
+- 测试 Action 时通过 GPUI Action 注册与分发链路触发，不要只直接调用 Action 处理函数后声称快捷键或菜单集成已经得到覆盖。
+- 测试 GPUI 异步任务、订阅或延迟副作用时，使用 `TestAppContext` 提供的确定性执行器和 `run_until_parked` 等能力推进任务，不要使用真实休眠等待。
+- `TestAppContext` 使用模拟平台，适合状态、事件、窗口生命周期、布局和绘制流程测试；需要验证真实平台像素输出时，再使用 GPUI 提供的 `VisualTestAppContext` 或项目约定的截图测试。
+- 所有测试继续遵守 `rust-code-style`：放在 crate 的独立 `tests/` 目录中，不在生产源码内增加 `#[cfg(test)]` 测试模块。
+
+示例：
+
+```rust
+use gpui::{AppContext as _, TestAppContext};
+
+#[gpui::test]
+fn feature_entity_updates_inside_gpui(cx: &mut TestAppContext) {
+    let feature = cx.new(|_| Feature::default());
+
+    cx.update_entity(&feature, |feature, cx| {
+        feature.select(ItemId::Home);
+        cx.notify();
+    });
+
+    assert_eq!(
+        cx.read_entity(&feature, |feature, _| feature.selected()),
+        ItemId::Home
+    );
+}
+```
+
+## 14. 实现与审查流程
 
 按顺序执行：
 
@@ -246,6 +281,7 @@ impl<D> DataTable<D> {
 7. 使用稳定 Element ID、主题 token、焦点和可访问语义。
 8. 修改可见状态后只触发必要范围的刷新。
 9. 为公共组件、增强组件、状态转换和多窗口入口添加独立集成测试。
+10. 根据测试是否依赖 GPUI 运行环境，选择普通 `#[test]` 或 `#[gpui::test] + TestAppContext`。
 
 ## 检查清单
 
@@ -262,11 +298,13 @@ impl<D> DataTable<D> {
 - [ ] 增强组件是否保持官方默认行为并只增加 API？
 - [ ] 多窗口是否由同一进程中的 `open_window` 创建？
 - [ ] 是否支持焦点、键盘操作和无障碍语义？
+- [ ] 依赖 App、Window、Entity、Global、Action 或 GPUI 异步调度的测试是否使用了 `#[gpui::test] + TestAppContext`？
 
 ## 官方参考
 
 - [GPUI Global](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/global.rs)
 - [GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md)
+- [GPUI Test support](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/test.rs)
 - [Ownership and data flow](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/_ownership_and_data_flow.rs)
 - [View implementation](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/view.rs)
 - [Zed UI components](https://github.com/zed-industries/zed/tree/main/crates/ui/src/components)

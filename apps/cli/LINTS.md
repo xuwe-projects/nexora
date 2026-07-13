@@ -33,6 +33,7 @@ xuwecli lint --format json
 | 规则 | 级别 | 检查内容 |
 | --- | --- | --- |
 | `xuwe::inline_test_module` | error | `src/` 中禁止 `#[cfg(test)]`、`cfg_attr(test, ...)` 和 `mod tests`。 |
+| `xuwe::forbidden_mod_rs` | error | 模块入口禁止使用 `mod.rs`，统一使用与模块同名的 `.rs` 文件。 |
 | `xuwe::missing_errors_section` | error | 返回 `Result` 的公开接口必须包含 `# Errors`。 |
 | `xuwe::missing_panics_section` | error | 存在明确 `panic!`、断言、`unwrap` 或 `expect` 的公开接口必须包含 `# Panics`。 |
 | `xuwe::non_chinese_public_docs` | error | 公开类型、字段、变体、模块、trait、函数和方法必须具有中文 rustdoc。 |

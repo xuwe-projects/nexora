@@ -1,7 +1,11 @@
 //! 控制台桌面应用入口。
 
+mod app;
+mod config;
+mod features;
+
+use app::Console;
 use desktop::Application as _;
-use workbench::app::Console;
 
 /// 启动控制台桌面应用。
 ///
