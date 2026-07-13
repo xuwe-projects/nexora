@@ -3,8 +3,7 @@
 //! 该模块实现 `desktop::Application`，把控制台应用接入统一的桌面启动流程。
 
 use crate::{
-    auth,
-    config::{ConsolePreferencesStore, preferences_store},
+    auth, config,
     features::{root::RootView, settings as settings_feature},
 };
 use actions::{account as account_actions, settings as settings_actions, window as window_actions};
@@ -50,6 +49,7 @@ impl Console {
                     ..Default::default()
                 }),
                 daemon_mode: false,
+                startup_display_uuid: None,
             },
         }
     }
@@ -75,6 +75,15 @@ impl Application for Console {
         &mut self.options
     }
 
+    /// 在主窗口创建前恢复当前操作系统用户的本地偏好。
+    ///
+    /// 主题会立即应用到组件库；启动显示器 UUID 会交给桌面运行器解析为本次进程的显示器 ID。
+    fn initialize(&mut self, cx: &mut App) {
+        config::init(cx);
+        theme::set_selection(config::theme_selection(cx), cx);
+        self.options.startup_display_uuid = config::startup_display_uuid(cx).map(ToOwned::to_owned);
+    }
+
     /// 创建控制台应用的根视图实体。
     ///
     /// 当前实现创建 `features::root::RootView`，该实体会由桌面运行器包裹进
@@ -84,28 +93,11 @@ impl Application for Console {
         actions::init();
         account_actions::bind_keys(cx);
         settings_actions::bind_keys(cx);
-        let preferences_store = initialize_preferences(cx);
         initialize_auth(cx);
-        settings_feature::init(console_updater_config(), preferences_store, cx);
+        settings_feature::init(console_updater_config(), cx);
         window_actions::init("Xuwe Console", cx);
         cx.new(|_| RootView::new())
     }
-}
-
-fn initialize_preferences(cx: &mut App) -> Option<ConsolePreferencesStore> {
-    let store = match preferences_store() {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("无法确定 Console 用户配置目录: {error}");
-            return None;
-        }
-    };
-    match store.load_versioned_or_default() {
-        Ok(preferences) => theme::set_selection(preferences.theme_selection(), cx),
-        Err(error) => eprintln!("无法加载 Console 用户配置: {error}"),
-    }
-
-    Some(store)
 }
 
 fn initialize_auth(cx: &mut App) {

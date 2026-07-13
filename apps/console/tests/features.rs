@@ -1,4 +1,11 @@
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use actions::account::AccountActionKind;
+use configuration::UserConfigStore;
 use desktop::Application as _;
 use gpui::{AppContext as _, TestAppContext};
 #[path = "../src/app.rs"]
@@ -106,6 +113,50 @@ fn console_preferences_keep_theme_selection() {
     preferences.set_theme_selection(selection);
 
     assert_eq!(preferences.theme_selection(), selection);
+}
+
+#[test]
+fn console_preferences_round_trip_theme_and_startup_display() {
+    let directory = temporary_directory("preferences");
+    let path = directory.join("settings.toml");
+    let store = UserConfigStore::<ConsolePreferences>::at_path(&path);
+    let mut preferences = ConsolePreferences::default();
+    let selection = ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark);
+    preferences.set_theme_selection(selection);
+    preferences.set_startup_display_uuid(Some("display-uuid".to_owned()));
+
+    store.save(&preferences).expect("用户偏好应当可以保存");
+    let loaded = store
+        .load_versioned_or_default()
+        .expect("用户偏好应当可以重新加载");
+
+    assert_eq!(loaded.theme_selection(), selection);
+    assert_eq!(loaded.startup_display_uuid(), Some("display-uuid"));
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn version_one_preferences_default_to_system_primary_display() {
+    let directory = temporary_directory("version-one-preferences");
+    let path = directory.join("settings.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试配置目录");
+    fs::write(
+        &path,
+        "schema_version = 1\n\n[appearance]\ntheme_preset = \"xuwe\"\ncolor_scheme = \"dark\"\n",
+    )
+    .expect("应当可以写入旧版用户配置");
+    let store = UserConfigStore::<ConsolePreferences>::at_path(&path);
+
+    let loaded = store
+        .load_versioned_or_default()
+        .expect("旧版用户偏好应当使用新字段默认值加载");
+
+    assert_eq!(loaded.startup_display_uuid(), None);
+    assert_eq!(
+        loaded.theme_selection(),
+        ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark)
+    );
+    _ = fs::remove_dir_all(directory);
 }
 
 #[test]
@@ -460,4 +511,15 @@ fn root_view_keeps_pinned_tabs_out_of_regular_scroll_tabs() {
         view.regular_tabs(),
         &[FeatureId::Projects, FeatureId::Home, FeatureId::Tasks]
     );
+}
+
+fn temporary_directory(label: &str) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "console-{label}-{}-{timestamp}",
+        std::process::id()
+    ))
 }

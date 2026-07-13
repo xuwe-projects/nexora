@@ -2,12 +2,15 @@
 //!
 //! 该模块展示桌面应用常见设置项的页面结构，用于承载后续偏好配置和运行时开关。
 
-use crate::config::ConsolePreferencesStore;
+use std::collections::HashSet;
+
+use crate::config;
 use actions::settings::OpenSettings;
 use changelog::{ChangelogEntry, ChangelogError, EmbeddedChangelogRepository};
 use gpui::{
     AnyElement, App, Context, Global, IntoElement, ParentElement as _, Render, SharedString,
-    StyleRefinement, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
+    StyleRefinement, Subscription, Window, WindowBounds, WindowHandle, WindowOptions, div,
+    prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, TitleBar,
@@ -22,6 +25,9 @@ use updater::UpdateConfig;
 #[cfg(target_os = "macos")]
 const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(34.0);
 
+const SYSTEM_PRIMARY_DISPLAY: &str = "system-primary-display";
+const NIL_DISPLAY_UUID: &str = "00000000-0000-0000-0000-000000000000";
+
 /// 应用级设置窗口状态。
 ///
 /// 该状态通过 GPUI `Global` 保存当前设置窗口的弱生命周期句柄，让菜单和快捷键无论从哪个窗口触发，
@@ -30,7 +36,6 @@ const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(34.0);
 struct SettingsWindowState {
     window: Option<WindowHandle<gpui_component::Root>>,
     updater_config: Option<UpdateConfig>,
-    preferences_store: Option<ConsolePreferencesStore>,
 }
 
 impl Global for SettingsWindowState {}
@@ -39,11 +44,7 @@ impl Global for SettingsWindowState {}
 ///
 /// 该函数应在应用创建主窗口时调用一次。处理器使用 `App::on_action` 监听 `OpenSettings`，
 /// 因此 Sidebar 弹出菜单和跨平台快捷键会进入完全相同的窗口打开流程。
-pub fn init(
-    updater_config: Option<UpdateConfig>,
-    preferences_store: Option<ConsolePreferencesStore>,
-    cx: &mut App,
-) {
+pub fn init(updater_config: Option<UpdateConfig>, cx: &mut App) {
     if cx.has_global::<SettingsWindowState>() {
         return;
     }
@@ -51,7 +52,6 @@ pub fn init(
     cx.set_global(SettingsWindowState {
         window: None,
         updater_config,
-        preferences_store,
     });
     cx.on_action(|_: &OpenSettings, cx| open_settings_window(cx));
 }
@@ -76,7 +76,7 @@ fn open_settings_window(cx: &mut App) {
     };
 
     match cx.open_window(window_options, |window, cx| {
-        let settings = cx.new(|_| SettingsWindow::new());
+        let settings = cx.new(SettingsWindow::new);
         let root = cx.new(|cx| gpui_component::Root::new(settings, window, cx));
         theme::attach_window(window, cx);
         root
@@ -92,28 +92,33 @@ fn open_settings_window(cx: &mut App) {
 
 /// 应用设置功能视图。
 ///
-/// 当前实现包含可交互的主题设置和静态模板配置，用于说明设置 feature 可以独立管理
-/// 运行时偏好、分组说明和当前值。
+/// 当前实现包含可交互且会本地持久化的主题、启动显示器设置，以及只读模板配置和更新信息。
 pub struct SettingsFeature;
 
 impl SettingsFeature {
     /// 渲染设置页面。
     ///
-    /// 页面首先展示可立即生效的主题设置，随后展示窗口、后台模式和打包配置等模板级设置。
-    /// 主题控件直接调用共享 `theme` crate；其余静态项后续可以接入真实持久化配置。
+    /// 页面首先展示可立即生效的主题设置与下次启动显示器，随后展示后台模式、打包配置和更新信息。
+    /// 用户偏好从应用级内存状态读取，交互变更会立即写入当前操作系统用户的本地配置文件。
     pub fn render<T>(cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
         let header_style = settings_header_style();
         let updater_config = cx.global::<SettingsWindowState>().updater_config.clone();
-        let preferences_store = cx.global::<SettingsWindowState>().preferences_store.clone();
 
         Settings::new("console-settings")
             .header_style(&header_style)
             .pages(
-                std::iter::once(theme_setting_page(preferences_store))
-                    .chain(setting_groups().iter().copied().map(setting_page))
+                std::iter::once(theme_setting_page())
+                    .chain(std::iter::once(window_setting_page(cx)))
+                    .chain(
+                        setting_groups()
+                            .iter()
+                            .copied()
+                            .filter(|group| group.title() != "窗口")
+                            .map(setting_page),
+                    )
                     .chain(std::iter::once(update_setting_page(updater_config))),
             )
             .into_any_element()
@@ -124,13 +129,16 @@ impl SettingsFeature {
 ///
 /// 该视图只负责为 `SettingsFeature` 提供全窗口尺寸和主题背景，设置项本身仍由 feature 模块维护，
 /// 并继续使用 `gpui-component` 的 `Settings`、`SettingPage` 和 `SettingField` 组件。
-#[derive(Debug, Default)]
-pub struct SettingsWindow;
+pub struct SettingsWindow {
+    _preferences_subscription: Subscription,
+}
 
 impl SettingsWindow {
-    /// 创建一个新的独立设置窗口视图。
-    pub fn new() -> Self {
-        Self
+    /// 创建独立设置窗口视图，并观察后续用户偏好变化以局部刷新当前窗口。
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            _preferences_subscription: config::observe_preferences(cx),
+        }
     }
 }
 
@@ -267,9 +275,7 @@ pub fn current_console_changelog() -> Result<Option<ChangelogEntry>, ChangelogEr
         .cloned())
 }
 
-fn theme_setting_page(preferences_store: Option<ConsolePreferencesStore>) -> SettingPage {
-    let preset_store = preferences_store.clone();
-    let color_scheme_store = preferences_store;
+fn theme_setting_page() -> SettingPage {
     SettingPage::new("外观")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::Palette))
@@ -294,7 +300,7 @@ fn theme_setting_page(preferences_store: Option<ConsolePreferencesStore>) -> Set
                         move |value: SharedString, cx: &mut App| {
                             if let Some(preset) = ThemePreset::from_id(value.as_ref()) {
                                 theme::set_preset(preset, cx);
-                                persist_theme_selection(preset_store.as_ref(), cx);
+                                config::persist_theme_selection(theme::selection(cx), cx);
                             }
                         },
                     )
@@ -317,7 +323,7 @@ fn theme_setting_page(preferences_store: Option<ConsolePreferencesStore>) -> Set
                         move |value: SharedString, cx: &mut App| {
                             if let Some(scheme) = ColorScheme::from_id(value.as_ref()) {
                                 theme::set_color_scheme(scheme, cx);
-                                persist_theme_selection(color_scheme_store.as_ref(), cx);
+                                config::persist_theme_selection(theme::selection(cx), cx);
                             }
                         },
                     )
@@ -328,21 +334,105 @@ fn theme_setting_page(preferences_store: Option<ConsolePreferencesStore>) -> Set
         )
 }
 
-fn persist_theme_selection(store: Option<&ConsolePreferencesStore>, cx: &App) {
-    let Some(store) = store else {
-        return;
-    };
-    let mut preferences = match store.load_versioned_or_default() {
-        Ok(preferences) => preferences,
-        Err(error) => {
-            eprintln!("无法读取 Console 用户配置，主题选择未保存: {error}");
-            return;
-        }
-    };
-    preferences.set_theme_selection(theme::selection(cx));
-    if let Err(error) = store.save(&preferences) {
-        eprintln!("无法保存 Console 用户主题配置: {error}");
+fn window_setting_page(cx: &App) -> SettingPage {
+    let display_options = startup_display_options(cx);
+    let window_group = setting_groups()
+        .iter()
+        .copied()
+        .find(|group| group.title() == "窗口")
+        .expect("设置模板必须包含窗口分组");
+
+    SettingPage::new("窗口")
+        .header_style(&settings_header_style())
+        .icon(Icon::new(IconName::LayoutDashboard))
+        .description("设置主窗口下次启动时使用的显示器，并查看窗口默认参数。")
+        .default_open(true)
+        .resettable(true)
+        .group(
+            SettingGroup::new().title("启动位置").item(
+                SettingItem::new(
+                    "默认显示器",
+                    SettingField::dropdown(
+                        display_options,
+                        |cx: &App| {
+                            SharedString::from(
+                                config::startup_display_uuid(cx).unwrap_or(SYSTEM_PRIMARY_DISPLAY),
+                            )
+                        },
+                        |value: SharedString, cx: &mut App| {
+                            let display_uuid = (value.as_ref() != SYSTEM_PRIMARY_DISPLAY)
+                                .then(|| value.to_string());
+                            config::persist_startup_display_uuid(display_uuid, cx);
+                        },
+                    )
+                    .default_value(SharedString::from(SYSTEM_PRIMARY_DISPLAY)),
+                )
+                .description("保存后在下次启动生效；显示器未连接时会临时回退到系统主显示器。"),
+            ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("当前配置")
+                .items(window_group.items().iter().map(|(label, value)| {
+                    let value = *value;
+                    SettingItem::new(
+                        *label,
+                        SettingField::render(move |options, _, _| {
+                            Tag::secondary()
+                                .with_size(options.size)
+                                .outline()
+                                .child(value)
+                        }),
+                    )
+                })),
+        )
+}
+
+fn startup_display_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let primary_display_id = cx.primary_display().map(|display| display.id());
+    let mut known_uuids = HashSet::new();
+    let mut options = vec![(
+        SharedString::from(SYSTEM_PRIMARY_DISPLAY),
+        SharedString::from("跟随系统主显示器"),
+    )];
+
+    options.extend(
+        cx.displays()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, display)| {
+                let uuid = display.uuid().ok()?.to_string();
+                if uuid == NIL_DISPLAY_UUID || !known_uuids.insert(uuid.clone()) {
+                    return None;
+                }
+
+                let bounds = display.bounds();
+                let primary_suffix = if primary_display_id == Some(display.id()) {
+                    " · 当前主显示器"
+                } else {
+                    ""
+                };
+                let label = format!(
+                    "显示器 {}（{} × {}）{}",
+                    index + 1,
+                    u32::from(bounds.size.width),
+                    u32::from(bounds.size.height),
+                    primary_suffix,
+                );
+                Some((SharedString::from(uuid), SharedString::from(label)))
+            }),
+    );
+
+    if let Some(saved_uuid) = config::startup_display_uuid(cx)
+        && !known_uuids.contains(saved_uuid)
+    {
+        options.push((
+            SharedString::from(saved_uuid.to_owned()),
+            SharedString::from("上次选择的显示器（当前未连接）"),
+        ));
     }
+
+    options
 }
 
 fn setting_page(group: SettingGroupData) -> SettingPage {

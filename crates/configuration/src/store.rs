@@ -64,6 +64,36 @@ where
         Ok(Self::at_path(project_dirs.config_dir().join(file_name)))
     }
 
+    /// 为指定组织和应用创建系统本机配置目录中的用户配置存储。
+    ///
+    /// 该构造函数使用 [`ProjectDirs::config_local_dir`] 定位不需要随用户漫游的配置：
+    /// Windows 会使用当前用户的 Local AppData，Linux 与 macOS 则遵循各自的平台约定。
+    /// `qualifier`、`organization` 和 `application` 的含义与
+    /// [`UserConfigStore::for_application`] 相同。
+    ///
+    /// # Errors
+    ///
+    /// 当前平台无法提供本机配置目录，或 `file_name` 不是单个普通文件名时返回错误。
+    pub fn for_local_application(
+        qualifier: &str,
+        organization: &str,
+        application: &str,
+        file_name: impl AsRef<Path>,
+    ) -> Result<Self, ConfigurationError> {
+        let file_name = file_name.as_ref();
+        validate_file_name(file_name)?;
+        let project_dirs =
+            ProjectDirs::from(qualifier, organization, application).ok_or_else(|| {
+                ConfigurationError::ConfigDirectoryUnavailable {
+                    application: application.to_owned(),
+                }
+            })?;
+
+        Ok(Self::at_path(
+            project_dirs.config_local_dir().join(file_name),
+        ))
+    }
+
     /// 使用调用方提供的完整文件路径创建用户配置存储。
     ///
     /// 该构造函数适合测试、迁移工具以及已有固定配置位置的应用。

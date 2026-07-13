@@ -1,5 +1,7 @@
-use desktop::{Application, ApplicationOptions};
-use gpui::{App, AppContext, Context, Entity, IntoElement, Render, Window, div, px, size};
+use desktop::{Application, ApplicationOptions, find_display_id_by_uuid};
+use gpui::{
+    App, AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div, px, size,
+};
 
 #[derive(Default)]
 struct TestApplication {
@@ -52,4 +54,28 @@ fn with_daemon_mode_stores_requested_mode() {
     let app = TestApplication::default().with_daemon_mode(true);
 
     assert!(app.options().daemon_mode);
+}
+
+#[test]
+fn with_startup_display_uuid_stores_stable_identifier() {
+    let app = TestApplication::default().with_startup_display_uuid("display-uuid");
+
+    assert_eq!(
+        app.options().startup_display_uuid.as_deref(),
+        Some("display-uuid")
+    );
+}
+
+#[gpui::test]
+fn display_uuid_resolves_current_display_and_rejects_unknown_value(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let display = cx.primary_display().expect("测试平台应当提供主显示器");
+        let uuid = display.uuid().expect("测试显示器应当提供稳定 UUID");
+
+        assert_eq!(
+            find_display_id_by_uuid(uuid.to_string().as_str(), cx),
+            Some(display.id())
+        );
+        assert_eq!(find_display_id_by_uuid("missing-display", cx), None);
+    });
 }

@@ -3,8 +3,8 @@
 //! 该模块负责统一创建 GPUI 应用、初始化 `gpui-component`，并根据应用配置打开主窗口。
 
 use gpui::{
-    App, AppContext, Entity, Pixels, QuitMode, Render, Size, Window, WindowBounds, WindowOptions,
-    px, size,
+    App, AppContext, Bounds, DisplayId, Entity, Pixels, QuitMode, Render, Size, Window,
+    WindowBounds, WindowOptions, px, size,
 };
 use gpui_platform::application;
 
@@ -36,6 +36,11 @@ pub struct ApplicationOptions {
     /// 设置该值后，运行器会把它写入 GPUI 的 `WindowOptions::window_min_size`。
     /// 当它和 `window_options.window_min_size` 同时存在时，该字段会优先接管最小尺寸。
     pub window_min_size: Option<Size<Pixels>>,
+    /// 下次创建主窗口时优先使用的显示器稳定 UUID。
+    ///
+    /// 该值会在 GPUI 初始化后与当前已连接显示器匹配。目标显示器不存在或 UUID 无法读取时，
+    /// 运行器会回退到系统主显示器；不要在这里保存仅当前进程有效的 [`DisplayId`]。
+    pub startup_display_uuid: Option<String>,
 }
 
 /// 桌面应用抽象。
@@ -64,13 +69,18 @@ pub trait Application: Sized + 'static {
     /// 运行器会把返回的实体作为内容嵌入 `gpui_component::Root`。
     fn build_root_view(&mut self, window: &mut Window, cx: &mut App) -> Entity<Self::RootView>;
 
+    /// 在组件库和主题初始化完成后、主窗口创建前初始化应用状态。
+    ///
+    /// 应用可以在这里加载本地用户偏好，并把影响首次开窗的值写入 [`ApplicationOptions`]。
+    /// 该阶段尚未创建原生窗口，因此适合恢复主题和启动显示器等配置。退出策略已在进入
+    /// 平台事件循环前确定，实现方不得在这里修改 [`ApplicationOptions::daemon_mode`]。
+    fn initialize(&mut self, _cx: &mut App) {}
+
     /// 启动桌面应用。
     ///
     /// 该默认实现会消费应用实例，读取当前选项，并进入统一的 GPUI 运行流程。
-    fn run(mut self) {
-        let options = std::mem::take(self.options_mut());
-
-        run_application(options, move |window, cx| self.build_root_view(window, cx));
+    fn run(self) {
+        run_application(self);
     }
 
     /// 使用完整运行时选项替换当前配置。
@@ -125,25 +135,37 @@ pub trait Application: Sized + 'static {
         self.options_mut().window_min_size = Some(size(px(width), px(height)));
         self
     }
+
+    /// 设置下次创建主窗口时优先使用的显示器稳定 UUID。
+    ///
+    /// 运行器会在开窗前把 UUID 解析为当前进程的 [`DisplayId`]；若对应显示器未连接，
+    /// 则安全回退到系统主显示器。
+    fn with_startup_display_uuid(mut self, display_uuid: impl Into<String>) -> Self {
+        self.options_mut().startup_display_uuid = Some(display_uuid.into());
+        self
+    }
+}
+
+/// 根据可跨重启保存的 UUID 查找当前进程中的显示器 ID。
+///
+/// UUID 来自 GPUI [`gpui::PlatformDisplay::uuid`]。目标显示器未连接、平台无法读取 UUID，
+/// 或字符串不匹配时返回 `None`，调用方应回退到系统主显示器。
+pub fn find_display_id_by_uuid(display_uuid: &str, cx: &App) -> Option<DisplayId> {
+    cx.displays().into_iter().find_map(|display| {
+        let uuid = display.uuid().ok()?;
+        (uuid.to_string() == display_uuid).then(|| display.id())
+    })
 }
 
 /// 使用指定选项和根视图工厂启动 GPUI 应用。
 ///
 /// 该函数负责创建平台应用、挂载 `gpui-component` 资源、初始化组件库，
 /// 并按运行时选项创建包裹了 `gpui_component::Root` 的主窗口。
-fn run_application<V, F>(options: ApplicationOptions, build_root_view: F)
+fn run_application<A>(mut desktop_application: A)
 where
-    V: Render + 'static,
-    F: FnOnce(&mut Window, &mut App) -> Entity<V> + 'static,
+    A: Application,
 {
-    let plan = runtime_plan(&options);
-    let ApplicationOptions {
-        daemon_mode: _,
-        activate,
-        window_options,
-        window_size,
-        window_min_size,
-    } = options;
+    let plan = runtime_plan(desktop_application.options());
 
     application()
         .with_assets(gpui_component_assets::Assets)
@@ -151,15 +173,33 @@ where
         .run(move |cx| {
             gpui_component::init(cx);
             theme::init(cx);
+            desktop_application.initialize(cx);
 
             if !plan.open_startup_window {
                 return;
             }
 
+            let ApplicationOptions {
+                daemon_mode: _,
+                activate,
+                window_options,
+                window_size,
+                window_min_size,
+                startup_display_uuid,
+            } = std::mem::take(desktop_application.options_mut());
+
             let mut window_options = window_options.unwrap_or_default();
 
+            if let Some(display_uuid) = startup_display_uuid {
+                window_options.display_id = find_display_id_by_uuid(&display_uuid, cx);
+            }
+
             if let Some(window_size) = window_size {
-                window_options.window_bounds = Some(WindowBounds::centered(window_size, cx));
+                window_options.window_bounds = Some(WindowBounds::Windowed(Bounds::centered(
+                    window_options.display_id,
+                    window_size,
+                    cx,
+                )));
             }
 
             if let Some(window_min_size) = window_min_size {
@@ -167,7 +207,7 @@ where
             }
 
             cx.open_window(window_options, |window, cx| {
-                let view = build_root_view(window, cx);
+                let view = desktop_application.build_root_view(window, cx);
                 let root = cx.new(|cx| gpui_component::Root::new(view, window, cx));
                 theme::attach_window(window, cx);
                 root

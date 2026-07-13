@@ -5,6 +5,7 @@ use std::{
 };
 
 use configuration::{LayeredConfigLoader, UserConfigStore, VersionedConfiguration};
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -42,6 +43,24 @@ impl VersionedConfiguration for Preferences {
     fn schema_version(&self) -> u32 {
         self.schema_version
     }
+}
+
+#[test]
+fn local_user_store_uses_project_local_config_directory() {
+    let project_dirs = ProjectDirs::from("com", "Xuwe", "ConfigurationTest")
+        .expect("当前平台应当可以确定本机配置目录");
+    let store = UserConfigStore::<Preferences>::for_local_application(
+        "com",
+        "Xuwe",
+        "ConfigurationTest",
+        "settings.toml",
+    )
+    .expect("应当可以创建本机用户配置存储");
+
+    assert_eq!(
+        store.path(),
+        project_dirs.config_local_dir().join("settings.toml")
+    );
 }
 
 #[test]
