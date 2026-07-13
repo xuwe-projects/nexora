@@ -9,6 +9,8 @@ use crate::settings::{self, OpenSettings};
 gpui::actions!(
     console_account_menu,
     [
+        /// 打开系统浏览器并登录当前账户。
+        SignInAccount,
         /// 打开当前登录用户的个人资料页。
         OpenAccountProfile,
         /// 退出当前登录账户。
@@ -26,6 +28,9 @@ pub const CONTEXT: &str = "console_account_menu";
 /// 该枚举描述菜单项背后的意图，调用方可以根据它选择图标、路由或具体处理函数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountActionKind {
+    /// 打开系统浏览器并登录当前账户。
+    SignIn,
+
     /// 打开当前登录用户的个人资料页。
     Profile,
 
@@ -88,6 +93,7 @@ impl AccountActionSpec {
     /// `PopupMenu`、快捷键系统和命令派发都通过该 action 身份连接到具体处理器。
     pub fn to_action(&self) -> Box<dyn Action> {
         match self.kind {
+            AccountActionKind::SignIn => Box::new(SignInAccount),
             AccountActionKind::Profile => Box::new(OpenAccountProfile),
             AccountActionKind::Settings => Box::new(OpenSettings),
             AccountActionKind::SignOut => Box::new(SignOutAccount),
@@ -114,11 +120,26 @@ pub fn menu_actions(account_name: impl Into<String>) -> Vec<AccountActionSpec> {
     ]
 }
 
+/// 返回未登录时账户菜单默认动作列表。
+///
+/// 第一项会触发浏览器 OIDC 登录，后续仍提供设置入口，便于用户检查认证配置。
+pub fn signed_out_menu_actions() -> Vec<AccountActionSpec> {
+    vec![
+        AccountActionSpec::new(AccountActionKind::SignIn, "登录", Some("Cmd+Shift+L")),
+        AccountActionSpec::new(
+            AccountActionKind::Settings,
+            "设置",
+            Some(settings::shortcut_label()),
+        ),
+    ]
+}
+
 /// 注册账户菜单默认快捷键。
 ///
 /// 调用方通常在应用初始化或创建根视图前调用该函数，使菜单项和键盘入口共享相同 action。
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-shift-l", SignInAccount, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-p", OpenAccountProfile, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-q", SignOutAccount, Some(CONTEXT)),
     ]);

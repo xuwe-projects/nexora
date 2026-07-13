@@ -3,6 +3,7 @@
 //! 该模块实现 `desktop::Application`，把控制台应用接入统一的桌面启动流程。
 
 use crate::{
+    auth,
     config::{ConsolePreferencesStore, preferences_store},
     features::{root::RootView, settings as settings_feature},
 };
@@ -84,6 +85,7 @@ impl Application for Console {
         account_actions::bind_keys(cx);
         settings_actions::bind_keys(cx);
         let preferences_store = initialize_preferences(cx);
+        initialize_auth(cx);
         settings_feature::init(console_updater_config(), preferences_store, cx);
         window_actions::init("Xuwe Console", cx);
         cx.new(|_| RootView::new())
@@ -104,6 +106,28 @@ fn initialize_preferences(cx: &mut App) -> Option<ConsolePreferencesStore> {
     }
 
     Some(store)
+}
+
+fn initialize_auth(cx: &mut App) {
+    let config = match auth::config_from_environment() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Console OIDC 配置无效: {error}");
+            None
+        }
+    };
+    let store = match config.as_ref() {
+        Some(config) => match auth::token_store(config) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                eprintln!("无法初始化 Console 系统凭据存储: {error}");
+                None
+            }
+        },
+        None => None,
+    };
+
+    auth::init(config, store, cx);
 }
 
 /// 创建 Console 使用的更新配置。

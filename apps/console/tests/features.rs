@@ -3,6 +3,8 @@ use desktop::Application as _;
 use gpui::{AppContext as _, TestAppContext};
 #[path = "../src/app.rs"]
 mod app;
+#[path = "../src/auth.rs"]
+mod auth;
 #[path = "../src/config.rs"]
 mod config;
 #[path = "../src/features.rs"]
@@ -20,6 +22,35 @@ use features::{
     virtual_scroll::virtual_scroll_stock_seeds,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
+
+#[gpui::test]
+fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
+    let config = oidc::OidcConfig::with_default_scopes(
+        "https://id.example.com",
+        "console",
+        "http://127.0.0.1:0/auth/callback",
+    )
+    .unwrap();
+    let session = oidc::OidcSession::from_token_cache(oidc::OidcTokenCache {
+        access_token: "access-token".to_owned(),
+        profile: Some(oidc::OidcUserProfile {
+            subject: "user-1".to_owned(),
+            name: Some("测试用户".to_owned()),
+            ..oidc::OidcUserProfile::default()
+        }),
+        ..oidc::OidcTokenCache::default()
+    })
+    .unwrap();
+
+    cx.update(|cx| {
+        auth::init(Some(config), None, cx);
+        auth::complete_login(Ok(session), cx);
+        assert!(auth::snapshot(cx).authenticated);
+
+        auth::sign_out(cx);
+        assert!(!auth::snapshot(cx).authenticated);
+    });
+}
 
 #[test]
 fn feature_catalog_has_stable_navigation_order() {
@@ -193,7 +224,6 @@ fn root_view_defaults_to_home_feature() {
     let view = RootView::default();
 
     assert_eq!(view.active_feature(), FeatureId::Home);
-    assert_eq!(view.account_display_name(), "Jason Lee");
 }
 
 #[test]
@@ -210,22 +240,19 @@ fn console_default_keeps_application_window_defaults() {
 
 #[test]
 fn root_view_exposes_account_menu_actions() {
-    let view = RootView::new();
-    let actions = view.account_menu_actions();
+    let actions = actions::account::signed_out_menu_actions();
 
     assert_eq!(
         actions
             .iter()
             .map(|action| action.label())
             .collect::<Vec<_>>(),
-        vec!["Jason Lee", "设置", "退出登录"]
+        vec!["登录", "设置"]
     );
-    assert_eq!(actions[0].kind(), AccountActionKind::Profile);
-    assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+P"));
+    assert_eq!(actions[0].kind(), AccountActionKind::SignIn);
+    assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+L"));
     assert_eq!(actions[1].kind(), AccountActionKind::Settings);
     assert_eq!(actions[1].shortcut(), Some("Cmd+,"));
-    assert_eq!(actions[2].kind(), AccountActionKind::SignOut);
-    assert_eq!(actions[2].shortcut(), Some("Cmd+Shift+Q"));
 }
 
 #[test]

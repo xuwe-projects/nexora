@@ -1,0 +1,8 @@
+# Console 桌面应用本地运行配置样例。
+# 复制为 config/desktop.toml 后填写；desktop.toml 已加入 .gitignore。
+
+[oidc]
+issuer_url = "https://id.example.com"
+client_id = "console-native-client-id"
+scopes = "openid profile email offline_access"
+redirect_uri = "http://127.0.0.1:0/auth/callback"

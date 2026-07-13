@@ -53,8 +53,53 @@ SERVER__PORT=8080
 - `local.toml`：本地开发默认配置。
 - `production.toml`：生产部署配置形状示例，不包含真实密钥。
 - `server.env.example`：服务端运行时环境变量示例。
+- `desktop.toml.example`：Console 桌面应用本地运行配置样例。
 - `desktop-build.env.example`：桌面端构建、签名和更新相关环境变量示例。
 - `updater/latest.example.json`：`xuwecli build` 生成的更新清单形状示例，不需要手写。
+
+## 桌面端 OIDC 认证
+
+桌面端认证使用标准 OIDC Authorization Code + PKCE 流程。ZITADEL 已部署时，只需要把
+Console 配置成 Native/Public Application，并允许下面的 loopback redirect URI：
+
+```text
+http://127.0.0.1:0/auth/callback
+```
+
+`OIDC_REDIRECT_URI` 是回调 URI 模板。端口为 `0` 时，应用会先绑定本地 listener，再将
+`0` 替换为实际端口写入 `authorize` 和 `token` 请求；ZITADEL 需要将这个 Native loopback
+redirect URI 视为同一路径上的动态端口。若实例返回 redirect URI 不匹配错误，说明该实例的
+redirect 规则没有允许动态端口，应改用该实例允许的固定端口 URI。
+
+本地开发可以复制运行时配置样例：
+
+```bash
+cp config/desktop.toml.example config/desktop.toml
+```
+
+然后修改 `config/desktop.toml` 中的 `[oidc]` 配置。该文件已被 Git 忽略。应用也读取通用
+OIDC 环境变量，不使用 Provider 名称前缀；环境变量的优先级高于 `desktop.toml`：
+
+```bash
+OIDC_ISSUER_URL=https://id.example.com
+OIDC_CLIENT_ID=console-native-client-id
+OIDC_SCOPES="openid profile email offline_access"
+OIDC_REDIRECT_URI=http://127.0.0.1:0/auth/callback
+```
+
+`desktop-build.env.example` 是供 shell、CI 和发布机构建桌面安装包时参考的 dotenv 风格文件，
+其中还包含签名、公证和更新发布变量。`config-rs` 的文件源不会把这种 `KEY=value` 文件当作
+TOML 读取，因此应用运行时只通过 `config/desktop.toml` 加载 OIDC 文件配置。
+
+以后新增 `apps/<app>` 桌面程序时，可以复用 `crates/oidc`，应用层只需要负责自己的
+环境变量装配、token 存储位置和 GPUI 状态接入。
+
+Console 只把 refresh token 保存到系统安全凭据库：macOS 使用 Keychain，Windows 使用
+Credential Manager，Linux 使用 Secret Service。access token、ID Token 和用户资料只保留在
+当前进程内存中。旧版本生成的明文 `auth.toml` 会在 refresh token 成功迁移并回读校验后删除。
+
+应用启动时会使用 refresh token 换取并验证新会话；运行期间会在 access token 到期前自动续期。
+Provider 返回 `invalid_grant` 时会清除失效凭据并回到登录页，临时网络错误则保留凭据并延迟重试。
 
 ## 更新发布文件
 

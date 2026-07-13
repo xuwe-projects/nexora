@@ -8,8 +8,12 @@ pub mod card;
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
+/// 桌面应用未登录时复用的认证门禁。
+pub mod login_gate;
+
 /// 桌面工作区右侧主面板的统一顶部栏。
 pub mod panel_header;
 
 pub use card::Card;
+pub use login_gate::LoginGate;
 pub use panel_header::PanelHeader;

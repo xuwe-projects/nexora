@@ -199,6 +199,10 @@ pub fn feature_catalog() -> &'static [FeatureItem] {
 #[path = "features/home.rs"]
 pub mod home;
 
+/// 未登录时展示的独立认证门禁。
+#[path = "features/login.rs"]
+pub mod login;
+
 /// 项目管理功能模块。
 #[path = "features/projects.rs"]
 pub mod projects;

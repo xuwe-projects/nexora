@@ -2,14 +2,18 @@
 //!
 //! 该模块定义主窗口中最外层的业务视图，运行器会将其嵌入 `gpui_component::Root`。
 
-use crate::features::{
-    FeatureChildItem, FeatureId, FeatureItem, feature_catalog, home::HomeFeature,
-    projects::ProjectsFeature, tasks::TasksFeature, virtual_scroll::VirtualScrollFeature,
+use crate::{
+    auth,
+    features::{
+        FeatureChildItem, FeatureId, FeatureItem, feature_catalog, home::HomeFeature,
+        login::LoginFeature, projects::ProjectsFeature, tasks::TasksFeature,
+        virtual_scroll::VirtualScrollFeature,
+    },
 };
 use actions::account::{
-    self as account_actions, AccountActionKind, AccountActionSpec, OpenAccountProfile,
-    SignOutAccount,
+    self as account_actions, AccountActionKind, OpenAccountProfile, SignInAccount, SignOutAccount,
 };
+use actions::settings::OpenSettings;
 use gpui::{
     Anchor, AnyElement, Context, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
     Window, div, prelude::*, px, rems,
@@ -140,20 +144,6 @@ impl RootView {
     /// 置顶状态只影响标签栏排序和批量关闭行为，不改变 feature 自身的业务状态。
     pub fn is_tab_pinned(&self, feature: FeatureId) -> bool {
         self.pinned_tabs.contains(&feature)
-    }
-
-    /// 返回侧边栏底部账户区域展示的用户名。
-    ///
-    /// 当前模板使用固定样例值模拟登录用户，后续接入真实账号体系时可以把该值替换为用户状态。
-    pub fn account_display_name(&self) -> &'static str {
-        "Jason Lee"
-    }
-
-    /// 返回侧边栏账户弹出菜单中的动作配置。
-    ///
-    /// 菜单第一项是当前用户资料入口，后续项提供设置和退出登录能力；渲染层会根据这些配置生成 `PopupMenu`。
-    pub fn account_menu_actions(&self) -> Vec<AccountActionSpec> {
-        account_actions::menu_actions(self.account_display_name())
     }
 
     /// 切换当前选中的功能区。
@@ -507,9 +497,16 @@ impl RootView {
     }
 
     fn render_account_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let menu_items = self.account_menu_actions();
+        let snapshot = auth::snapshot(cx);
+        let menu_items = if snapshot.authenticated {
+            account_actions::menu_actions(snapshot.display_name.to_string())
+        } else {
+            account_actions::signed_out_menu_actions()
+        };
         let action_context = cx.focus_handle();
         let theme = cx.theme();
+        let display_name = snapshot.display_name.clone();
+        let status = snapshot.status.clone();
 
         div()
             .relative()
@@ -520,19 +517,45 @@ impl RootView {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(Avatar::new().name(self.account_display_name()).small())
-                            .child(self.account_display_name()),
+                            .child(Avatar::new().name(display_name.clone()).small())
+                            .child(
+                                div().flex().flex_col().min_w_0().child(display_name).child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(status),
+                                ),
+                            ),
                     )
                     .child(Icon::new(IconName::ChevronsUpDown).size_4())
                     .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
                         menu_items.iter().cloned().fold(
                             menu.action_context(action_context.clone()).min_w(220.),
                             |menu, item| {
-                                menu.item(
+                                let menu_item =
                                     gpui_component::menu::PopupMenuItem::new(item.label())
-                                        .icon(account_icon(item.kind()))
-                                        .action(item.to_action()),
-                                )
+                                        .icon(account_icon(item.kind()));
+                                let menu_item = match item.kind() {
+                                    AccountActionKind::SignIn => menu_item.on_click(|_, _, cx| {
+                                        eprintln!("Console OIDC: 登录菜单已点击");
+                                        if let Err(error) = auth::start_login(cx) {
+                                            eprintln!("Console OIDC: 无法开始登录: {error}");
+                                            auth::complete_login(Err(error), cx);
+                                        }
+                                    }),
+                                    AccountActionKind::SignOut => {
+                                        menu_item.on_click(|_, _, cx| auth::sign_out(cx))
+                                    }
+                                    AccountActionKind::Settings => {
+                                        menu_item.on_click(|_, window, cx| {
+                                            window.dispatch_action(Box::new(OpenSettings), cx);
+                                        })
+                                    }
+                                    AccountActionKind::Profile => {
+                                        menu_item.action(item.to_action())
+                                    }
+                                };
+                                menu.item(menu_item)
                             },
                         )
                     }),
@@ -552,7 +575,15 @@ impl RootView {
         cx.notify();
     }
 
+    fn sign_in_account(&mut self, _: &SignInAccount, _: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = auth::start_login(cx) {
+            auth::complete_login(Err(error), cx);
+        }
+        cx.notify();
+    }
+
     fn sign_out_account(&mut self, _: &SignOutAccount, _: &mut Window, cx: &mut Context<Self>) {
+        auth::sign_out(cx);
         cx.notify();
     }
 
@@ -1039,6 +1070,10 @@ impl Render for RootView {
     /// 渲染时会把控制台专属的导航、标签栏和当前 feature 页面传入共享工作区布局，
     /// 体现多个业务模块共同构成桌面程序、窗口结构由公共 UI crate 复用的职责边界。
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !auth::snapshot(cx).authenticated {
+            return LoginFeature::render(window, cx);
+        }
+
         let sidebar = self.render_sidebar(cx);
         let title_bar_content = self.render_title_bar_content(cx);
         let panel_header = self.render_panel_header(cx);
@@ -1047,6 +1082,7 @@ impl Render for RootView {
 
         div()
             .key_context(account_actions::CONTEXT)
+            .on_action(cx.listener(Self::sign_in_account))
             .on_action(cx.listener(Self::open_account_profile))
             .on_action(cx.listener(Self::sign_out_account))
             .size_full()
@@ -1056,6 +1092,7 @@ impl Render for RootView {
                     .with_content_scrollable(content_scrollable)
                     .render(window, cx),
             )
+            .into_any_element()
     }
 }
 
@@ -1106,6 +1143,7 @@ fn full_bleed_sidebar_separator(
 
 fn account_icon(kind: AccountActionKind) -> IconName {
     match kind {
+        AccountActionKind::SignIn => IconName::CircleUser,
         AccountActionKind::Profile => IconName::CircleUser,
         AccountActionKind::Settings => IconName::Settings2,
         AccountActionKind::SignOut => IconName::CircleX,
