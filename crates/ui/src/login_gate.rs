@@ -6,11 +6,11 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    App, ClickEvent, Image, ImageFormat, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Styled as _, Window, div, img, prelude::*, px,
+    App, ClickEvent, Image, ImageFormat, IntoElement, MouseButton, ParentElement as _, RenderOnce,
+    SharedString, Styled as _, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -129,6 +129,48 @@ impl RenderOnce for LoginGate {
             .overflow_hidden()
             .bg(theme.background)
             .child(
+                TitleBar::new()
+                    .h(px(76.0))
+                    .border_b(px(0.0))
+                    .bg(theme.background)
+                    .child(
+                        h_flex()
+                            .size_full()
+                            .pr_6()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(img(logo_image()).size(px(42.0)))
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .font_semibold()
+                                            .text_color(theme.foreground)
+                                            .child(self.product_name),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                    .child(
+                                        Button::new("login-settings")
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::Settings2)
+                                            .label("设置")
+                                            .on_click(move |event, window, cx| {
+                                                on_settings(event, window, cx);
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
                 div()
                     .absolute()
                     .left_0()
@@ -144,38 +186,11 @@ impl RenderOnce for LoginGate {
                     ),
             )
             .child(
-                h_flex()
-                    .absolute()
-                    .left(px(42.0))
-                    .top(px(34.0))
-                    .gap_3()
-                    .items_center()
-                    .child(img(logo_image()).size(px(42.0)))
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_semibold()
-                            .text_color(theme.foreground)
-                            .child(self.product_name),
-                    ),
-            )
-            .child(
-                Button::new("login-settings")
-                    .absolute()
-                    .right(px(34.0))
-                    .top(px(32.0))
-                    .ghost()
-                    .small()
-                    .icon(IconName::Settings2)
-                    .label("设置")
-                    .on_click(move |event, window, cx| on_settings(event, window, cx)),
-            )
-            .child(
                 div()
                     .absolute()
                     .left_1_2()
                     .right_0()
-                    .top_0()
+                    .top(px(76.0))
                     .bottom_0()
                     .flex()
                     .items_center()

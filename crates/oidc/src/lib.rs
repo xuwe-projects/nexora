@@ -11,7 +11,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use jsonwebtoken::{
     Algorithm, AlgorithmFamily, DecodingKey, Validation, decode, decode_header,
     jwk::{AlgorithmParameters, Jwk, JwkSet, KeyOperations, PublicKeyUse},
@@ -25,6 +28,7 @@ use url::Url;
 
 const DEFAULT_SCOPE: &str = "openid profile email offline_access";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+const CALLBACK_LOGO_BYTES: &[u8] = include_bytes!("../../../assets/logos/logo-icon-128.png");
 
 /// OIDC 桌面端认证配置。
 ///
@@ -726,11 +730,11 @@ fn handle_callback_stream(
         .collect::<HashMap<_, _>>();
 
     let result = callback_result(params, expected_state);
-    let body = match &result {
-        Ok(_) => "登录已完成，可以回到桌面应用。",
-        Err(_) => "登录未完成，请回到桌面应用查看错误。",
+    let page_state = match &result {
+        Ok(_) => CallbackPageState::Success,
+        Err(_) => CallbackPageState::Failure,
     };
-    write_callback_response(&mut stream, body)?;
+    write_callback_response(&mut stream, page_state)?;
     result
 }
 
@@ -759,17 +763,385 @@ fn callback_result(
     params.get("code").cloned().ok_or(OidcError::MissingCode)
 }
 
-fn write_callback_response(stream: &mut TcpStream, body: &str) -> Result<(), std::io::Error> {
-    let body = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>OIDC Login</title></head><body>{body}</body></html>"
-    );
+#[derive(Clone, Copy)]
+enum CallbackPageState {
+    Success,
+    Failure,
+}
+
+fn write_callback_response(
+    stream: &mut TcpStream,
+    state: CallbackPageState,
+) -> Result<(), std::io::Error> {
+    let (status, body) = callback_page(state);
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        concat!(
+            "HTTP/1.1 {}\r\n",
+            "content-type: text/html; charset=utf-8\r\n",
+            "content-length: {}\r\n",
+            "cache-control: no-store\r\n",
+            "content-security-policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n",
+            "cross-origin-opener-policy: same-origin\r\n",
+            "cross-origin-resource-policy: same-origin\r\n",
+            "permissions-policy: camera=(), microphone=(), geolocation=()\r\n",
+            "referrer-policy: no-referrer\r\n",
+            "x-content-type-options: nosniff\r\n",
+            "connection: close\r\n\r\n",
+            "{}"
+        ),
+        status,
         body.len(),
         body
     )
 }
+
+fn callback_page(state: CallbackPageState) -> (&'static str, String) {
+    let (status, tone, page_title, eyebrow, title, description, status_text, auto_close) =
+        match state {
+            CallbackPageState::Success => (
+                "200 OK",
+                "success",
+                "登录已完成 · 铉微安全认证",
+                "身份验证完成",
+                "登录已完成",
+                "授权结果已安全返回铉微桌面应用，应用正在验证会话并准备你的工作区。",
+                "桌面应用已收到授权结果",
+                "true",
+            ),
+            CallbackPageState::Failure => (
+                "400 Bad Request",
+                "failure",
+                "登录未完成 · 铉微安全认证",
+                "身份验证中断",
+                "登录未完成",
+                "认证服务未返回可接受的授权结果。请返回桌面应用查看详情，然后重新尝试登录。",
+                "未创建新的登录会话",
+                "false",
+            ),
+        };
+    let logo = STANDARD.encode(CALLBACK_LOGO_BYTES);
+    let body = CALLBACK_PAGE_TEMPLATE
+        .replace("%%TONE%%", tone)
+        .replace("%%PAGE_TITLE%%", page_title)
+        .replace("%%EYEBROW%%", eyebrow)
+        .replace("%%TITLE%%", title)
+        .replace("%%DESCRIPTION%%", description)
+        .replace("%%STATUS_TEXT%%", status_text)
+        .replace("%%AUTO_CLOSE%%", auto_close)
+        .replace("%%LOGO%%", logo.as_str());
+    (status, body)
+}
+
+const CALLBACK_PAGE_TEMPLATE: &str = r#"<!doctype html>
+<html lang="zh-CN" data-auto-close="%%AUTO_CLOSE%%">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>%%PAGE_TITLE%%</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --background: #f5f8ff;
+      --surface: rgba(255, 255, 255, 0.94);
+      --surface-soft: #f7f9fc;
+      --foreground: #101828;
+      --muted: #667085;
+      --border: rgba(16, 24, 40, 0.10);
+      --brand: #2563eb;
+      --brand-strong: #1d4ed8;
+      --brand-soft: #eaf1ff;
+      --success: #067647;
+      --success-soft: #ecfdf3;
+      --danger: #b42318;
+      --danger-soft: #fef3f2;
+      --shadow: 0 28px 80px rgba(37, 99, 235, 0.14), 0 8px 24px rgba(16, 24, 40, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      color: var(--foreground);
+      background:
+        radial-gradient(circle at 14% 16%, rgba(37, 99, 235, 0.16), transparent 32rem),
+        radial-gradient(circle at 90% 88%, rgba(96, 165, 250, 0.13), transparent 28rem),
+        var(--background);
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      content: "";
+      opacity: 0.42;
+      background-image:
+        linear-gradient(rgba(37, 99, 235, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(37, 99, 235, 0.045) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      width: min(100% - 40px, 620px);
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 40px 0;
+      place-content: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin: 0 0 18px 6px;
+      color: var(--foreground);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .brand img {
+      width: 30px;
+      height: 30px;
+      object-fit: contain;
+    }
+
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .content { padding: 42px 44px 34px; }
+
+    .status-icon {
+      display: grid;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 28px;
+      border-radius: 18px;
+      place-items: center;
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .success .status-icon { color: var(--success); background: var(--success-soft); }
+    .failure .status-icon { color: var(--danger); background: var(--danger-soft); }
+    .failure .success-mark, .success .failure-mark { display: none; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(32px, 6vw, 44px);
+      font-weight: 760;
+      letter-spacing: -0.045em;
+      line-height: 1.08;
+    }
+
+    .description {
+      max-width: 470px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.72;
+    }
+
+    .result {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 30px 0 0;
+      padding: 13px 15px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: var(--surface-soft);
+      color: var(--foreground);
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .result-dot {
+      width: 8px;
+      height: 8px;
+      flex: none;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 4px var(--success-soft);
+    }
+
+    .failure .result-dot {
+      background: var(--danger);
+      box-shadow: 0 0 0 4px var(--danger-soft);
+    }
+
+    .actions { margin-top: 24px; }
+
+    button {
+      width: 100%;
+      min-height: 50px;
+      border: 0;
+      border-radius: 13px;
+      color: #fff;
+      background: var(--brand);
+      box-shadow: 0 8px 20px rgba(37, 99, 235, 0.22);
+      cursor: pointer;
+      font: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+    }
+
+    button:hover { background: var(--brand-strong); box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.30); outline-offset: 3px; }
+
+    .hint {
+      min-height: 20px;
+      margin: 13px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      text-align: center;
+    }
+
+    .security {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 18px 24px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface-soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .shield {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      flex: none;
+      border: 1px solid rgba(37, 99, 235, 0.24);
+      border-radius: 8px;
+      color: var(--brand);
+      background: var(--brand-soft);
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #0b0f17;
+        --surface: rgba(21, 27, 38, 0.94);
+        --surface-soft: #111722;
+        --foreground: #f3f6fc;
+        --muted: #98a2b3;
+        --border: rgba(255, 255, 255, 0.10);
+        --brand: #60a5fa;
+        --brand-strong: #3b82f6;
+        --brand-soft: rgba(59, 130, 246, 0.15);
+        --success: #47cd89;
+        --success-soft: rgba(18, 183, 106, 0.14);
+        --danger: #f97066;
+        --danger-soft: rgba(240, 68, 56, 0.14);
+        --shadow: 0 32px 90px rgba(0, 0, 0, 0.40), 0 8px 28px rgba(0, 0, 0, 0.28);
+      }
+
+      body {
+        background:
+          radial-gradient(circle at 14% 16%, rgba(37, 99, 235, 0.20), transparent 32rem),
+          radial-gradient(circle at 90% 88%, rgba(30, 64, 175, 0.14), transparent 28rem),
+          var(--background);
+      }
+
+      body::before { opacity: 0.20; }
+      button { color: #07111f; }
+    }
+
+    @media (max-width: 560px) {
+      .shell { width: min(100% - 24px, 620px); padding: 24px 0; }
+      .brand { margin-left: 2px; }
+      .card { border-radius: 20px; }
+      .content { padding: 32px 24px 26px; }
+      .security { padding: 16px 20px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
+  </style>
+</head>
+<body class="%%TONE%%">
+  <main class="shell">
+    <div>
+      <div class="brand" aria-label="铉微安全认证">
+        <img src="data:image/png;base64,%%LOGO%%" alt="">
+        <span>铉微安全认证</span>
+      </div>
+      <section class="card" aria-labelledby="page-title">
+        <div class="content">
+          <div class="status-icon" aria-hidden="true">
+            <span class="success-mark">✓</span>
+            <span class="failure-mark">!</span>
+          </div>
+          <p class="eyebrow">%%EYEBROW%%</p>
+          <h1 id="page-title">%%TITLE%%</h1>
+          <p class="description">%%DESCRIPTION%%</p>
+          <div class="result" role="status">
+            <span class="result-dot" aria-hidden="true"></span>
+            <span>%%STATUS_TEXT%%</span>
+          </div>
+          <div class="actions">
+            <button id="close-page" type="button">返回桌面应用</button>
+            <p class="hint" id="close-hint" aria-live="polite">如果页面没有自动关闭，请手动关闭本页并返回应用。</p>
+          </div>
+        </div>
+        <footer class="security">
+          <span class="shield" aria-hidden="true">✓</span>
+          <span>本次认证通过本机回环地址完成，页面不会保存你的授权信息。</span>
+        </footer>
+      </section>
+    </div>
+  </main>
+  <script>
+    history.replaceState(null, document.title, location.pathname);
+    const closeButton = document.getElementById("close-page");
+    const closeHint = document.getElementById("close-hint");
+    const closePage = () => {
+      window.close();
+      window.setTimeout(() => {
+        closeHint.textContent = "浏览器阻止了自动关闭，请手动关闭此页面并返回桌面应用。";
+      }, 250);
+    };
+    closeButton.addEventListener("click", closePage);
+    if (document.documentElement.dataset.autoClose === "true") {
+      window.setTimeout(closePage, 1600);
+    }
+  </script>
+</body>
+</html>
+"#;
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {

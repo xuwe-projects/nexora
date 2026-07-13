@@ -184,6 +184,41 @@ fn discovery_rejects_an_issuer_different_from_configuration() {
 }
 
 #[test]
+fn callback_failure_returns_a_complete_safe_html_page() {
+    let (issuer, server) = spawn_provider(1, |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| match request.path.as_str() {
+            "/.well-known/openid-configuration" => {
+                HttpResponse::json(discovery_document(&issuer, false))
+            }
+            path => panic!("unexpected provider request: {path}"),
+        }
+    });
+    let pending = client(&issuer).begin_login().unwrap();
+    let parameters = query_parameters(&Url::parse(pending.authorization_url()).unwrap());
+    let mut callback = Url::parse(parameters.get("redirect_uri").unwrap()).unwrap();
+    callback
+        .query_pairs_mut()
+        .append_pair("code", "secret-authorization-code")
+        .append_pair("state", "unexpected-state");
+    let callback_thread = thread::spawn(move || send_get(&callback));
+
+    let error = pending.finish().unwrap_err();
+    let response = callback_thread.join().unwrap();
+    server.join().unwrap();
+
+    assert!(matches!(error, OidcError::InvalidState));
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("content-security-policy:"));
+    assert!(response.contains("cache-control: no-store"));
+    assert!(response.contains("登录未完成"));
+    assert!(response.contains("返回桌面应用"));
+    assert!(response.contains("prefers-color-scheme: dark"));
+    assert!(!response.contains("secret-authorization-code"));
+    assert!(!response.contains("unexpected-state"));
+}
+
+#[test]
 fn refresh_grant_rotates_tokens_and_validates_a_new_id_token() {
     let requests = Arc::new(Mutex::new(Vec::<HttpRequest>::new()));
     let server_requests = Arc::clone(&requests);
@@ -441,7 +476,14 @@ fn finish_login(
         .append_pair("state", parameters.get("state").unwrap());
     let callback_thread = thread::spawn(move || send_get(&callback));
     let result = pending.finish();
-    callback_thread.join().unwrap();
+    let response = callback_thread.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("content-security-policy:"));
+    assert!(response.contains("cache-control: no-store"));
+    assert!(response.contains("登录已完成"));
+    assert!(response.contains("返回桌面应用"));
+    assert!(response.contains("prefers-color-scheme: dark"));
+    assert!(!response.contains("authorization-code"));
     result
 }
 
@@ -449,7 +491,7 @@ fn query_parameters(url: &Url) -> HashMap<String, String> {
     url.query_pairs().into_owned().collect()
 }
 
-fn send_get(url: &Url) {
+fn send_get(url: &Url) -> String {
     let address = (url.host_str().unwrap(), url.port().unwrap());
     let mut stream = TcpStream::connect(address).unwrap();
     let target = url[url::Position::BeforePath..].to_owned();
@@ -459,8 +501,9 @@ fn send_get(url: &Url) {
         url.host_str().unwrap()
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
 }
 
 fn spawn_provider<F, M>(request_count: usize, make_handler: M) -> (String, JoinHandle<()>)
