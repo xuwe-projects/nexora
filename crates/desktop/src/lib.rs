@@ -2,11 +2,14 @@
 //!
 //! 该模块负责统一创建 GPUI 应用、初始化 `gpui-component`，并根据应用配置打开主窗口。
 
+use std::sync::Arc;
+
 use gpui::{
     App, AppContext, Bounds, DisplayId, Entity, Pixels, QuitMode, Render, Size, Window,
     WindowBounds, WindowOptions, px, size,
 };
 use gpui_platform::application;
+use reqwest_client::ReqwestClient;
 
 /// 桌面应用运行时选项。
 ///
@@ -206,7 +209,7 @@ pub fn apply_window_display_preference(
 /// 返回对应的系统 I/O 错误。调用方可以保留 GPUI 已生成的初始位置并记录该错误。
 #[cfg(target_os = "windows")]
 pub fn center_window_on_display(window: &Window, display_id: DisplayId) -> std::io::Result<()> {
-    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use raw_window_handle::RawWindowHandle;
     use windows::Win32::{
         Foundation::{HWND, RECT},
         Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
@@ -215,8 +218,7 @@ pub fn center_window_on_display(window: &Window, display_id: DisplayId) -> std::
         },
     };
 
-    let raw_handle = window
-        .window_handle()
+    let raw_handle = raw_window_handle::HasWindowHandle::window_handle(window)
         .map_err(std::io::Error::other)?
         .as_raw();
     let RawWindowHandle::Win32(window_handle) = raw_handle else {
@@ -266,6 +268,7 @@ where
 
     application()
         .with_assets(gpui_component_assets::Assets)
+        .with_http_client(Arc::new(ReqwestClient::new()))
         .with_quit_mode(plan.quit_mode)
         .run(move |cx| {
             gpui_component::init(cx);

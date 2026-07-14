@@ -53,6 +53,7 @@ base64 = { version = "0.22", default-features = false, features = ["std"] }
 jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto"] }
 keyring = { version = "4.1.4", default-features = false, features = ["v1"] }
 rand = { version = "0.9", default-features = false, features = ["os_rng", "std"] }
+security-framework = { version = "3.7.0", default-features = false }
 
 # Rust 源码分析
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
@@ -62,6 +63,7 @@ syn = { version = "2", default-features = false, features = ["full", "parsing", 
 # UI 框架
 gpui = { git = "https://github.com/zed-industries/zed", default-features = false }
 gpui_platform = { git = "https://github.com/zed-industries/zed", default-features = false }
+reqwest_client = { git = "https://github.com/zed-industries/zed", default-features = false }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 # 可选：使用内置默认资源
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }

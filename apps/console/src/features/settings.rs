@@ -12,8 +12,9 @@ use gpui::{
     StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, TitleBar,
+    ActiveTheme as _, Icon, IconName, Sizable as _, TitleBar,
     button::{Button, ButtonVariants as _},
+    group_box::GroupBoxVariant,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     tag::Tag,
     text::TextView,
@@ -116,13 +117,13 @@ pub(crate) fn settings_window_options(display_uuid: Option<&str>, cx: &App) -> W
 
 /// 应用设置功能视图。
 ///
-/// 当前实现包含可交互且会本地持久化的主题、启动显示器设置，以及只读模板配置和更新信息。
+/// 当前实现包含可交互且会本地持久化的主题、启动显示器设置，以及面向用户的版本和更新信息。
 pub struct SettingsFeature;
 
 impl SettingsFeature {
     /// 渲染设置页面。
     ///
-    /// 页面首先展示可立即生效的主题设置与新窗口默认显示器，随后展示后台模式、打包配置和更新信息。
+    /// 页面首先展示可立即生效的主题设置与新窗口默认显示器，随后展示版本信息和本次更新内容。
     /// 用户偏好从应用级内存状态读取，交互变更会立即写入当前操作系统用户的本地配置文件。
     pub fn render<T>(cx: &mut Context<T>) -> AnyElement
     where
@@ -133,16 +134,10 @@ impl SettingsFeature {
 
         Settings::new("console-settings")
             .header_style(&header_style)
+            .with_group_variant(GroupBoxVariant::Outline)
             .pages(
                 std::iter::once(theme_setting_page())
                     .chain(std::iter::once(window_setting_page(cx)))
-                    .chain(
-                        setting_groups()
-                            .iter()
-                            .copied()
-                            .filter(|group| group.title() != "窗口")
-                            .map(setting_page),
-                    )
                     .chain(std::iter::once(update_setting_page(updater_config))),
             )
             .into_any_element()
@@ -214,68 +209,6 @@ impl Render for SettingsWindow {
     }
 }
 
-/// 设置页中的一个静态分组。
-///
-/// 真实应用可以把该类型替换为持久化配置、运行时状态或偏好设置模型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettingGroupData {
-    title: &'static str,
-    items: &'static [(&'static str, &'static str)],
-}
-
-impl SettingGroupData {
-    /// 返回设置分组标题。
-    ///
-    /// 标题会显示在分组容器顶部，用于区分窗口、运行和发布等配置域。
-    pub fn title(self) -> &'static str {
-        self.title
-    }
-
-    /// 返回该分组中的设置项。
-    ///
-    /// 每个元组的第一项是设置名称，第二项是当前展示值。
-    pub fn items(self) -> &'static [(&'static str, &'static str)] {
-        self.items
-    }
-}
-
-/// 返回设置页默认展示的模板配置分组。
-///
-/// 返回值顺序就是页面渲染顺序，用于稳定展示窗口、运行和发布三个配置区域。
-pub fn setting_groups() -> &'static [SettingGroupData] {
-    static WINDOW_ITEMS: [(&str, &str); 3] = [
-        ("默认尺寸", "900 x 640"),
-        ("最小尺寸", "900 x 640"),
-        ("启动激活", "开启"),
-    ];
-    static RUNTIME_ITEMS: [(&str, &str); 3] = [
-        ("守护模式", "关闭"),
-        ("默认目标", "aarch64-apple-darwin"),
-        ("打包输出", "dist/"),
-    ];
-    static RELEASE_ITEMS: [(&str, &str); 3] = [
-        ("本地签名", "ad-hoc"),
-        ("公证 profile", "xuwe"),
-        ("校验文件", ".sha256"),
-    ];
-    static GROUPS: [SettingGroupData; 3] = [
-        SettingGroupData {
-            title: "窗口",
-            items: &WINDOW_ITEMS,
-        },
-        SettingGroupData {
-            title: "运行",
-            items: &RUNTIME_ITEMS,
-        },
-        SettingGroupData {
-            title: "发布",
-            items: &RELEASE_ITEMS,
-        },
-    ];
-
-    &GROUPS
-}
-
 /// 返回当前 Console 版本对应的中文更新日志。
 ///
 /// 查询使用 workspace 包版本、`console` 组件标识和 `zh-CN` 语言标识。找到日志时返回
@@ -330,7 +263,7 @@ fn theme_setting_page() -> SettingPage {
                     )
                     .default_value(SharedString::from(ThemePreset::default().id())),
                 )
-                .description("同时定义应用在浅色和深色模式下使用的颜色 token。"),
+                .description("决定应用在浅色和深色模式下使用的配色风格。"),
                 SettingItem::new(
                     "颜色模式",
                     SettingField::dropdown(
@@ -360,38 +293,17 @@ fn theme_setting_page() -> SettingPage {
 
 fn window_setting_page(cx: &App) -> SettingPage {
     let display_options = startup_display_options(cx);
-    let window_group = setting_groups()
-        .iter()
-        .copied()
-        .find(|group| group.title() == "窗口")
-        .expect("设置模板必须包含窗口分组");
 
     SettingPage::new("窗口")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::LayoutDashboard))
-        .description("设置主窗口启动与新窗口打开时使用的显示器，并查看窗口默认参数。")
+        .description("设置主窗口启动与新窗口打开时使用的显示器。")
         .default_open(true)
         .resettable(true)
         .group(
             SettingGroup::new()
                 .title("启动位置")
                 .item(startup_display_setting_item(display_options)),
-        )
-        .group(
-            SettingGroup::new()
-                .title("当前配置")
-                .items(window_group.items().iter().map(|(label, value)| {
-                    let value = *value;
-                    SettingItem::new(
-                        *label,
-                        SettingField::render(move |options, _, _| {
-                            Tag::secondary()
-                                .with_size(options.size)
-                                .outline()
-                                .child(value)
-                        }),
-                    )
-                })),
         )
 }
 
@@ -469,64 +381,19 @@ fn startup_display_options(cx: &App) -> Vec<(SharedString, SharedString)> {
     options
 }
 
-fn setting_page(group: SettingGroupData) -> SettingPage {
-    let (icon, description) = match group.title() {
-        "窗口" => (
-            IconName::LayoutDashboard,
-            "窗口尺寸、激活行为和原生窗口配置。",
-        ),
-        "运行" => (IconName::SquareTerminal, "后台常驻、构建目标和产物目录。"),
-        "发布" => (IconName::Globe, "签名、公证和产物校验配置。"),
-        _ => (IconName::Settings2, "应用运行时配置。"),
-    };
-
-    SettingPage::new(group.title())
-        .header_style(&settings_header_style())
-        .icon(Icon::new(icon))
-        .description(description)
-        .default_open(group.title() == "窗口")
-        .resettable(false)
-        .group(
-            SettingGroup::new()
-                .title("当前配置")
-                .items(group.items().iter().map(|(label, value)| {
-                    let value = *value;
-                    SettingItem::new(
-                        *label,
-                        SettingField::render(move |options, _, _| {
-                            Tag::secondary()
-                                .with_size(options.size)
-                                .outline()
-                                .child(value)
-                        }),
-                    )
-                })),
-        )
-}
-
 fn update_setting_page(updater_config: Option<UpdateConfig>) -> SettingPage {
     let changelog_item = match current_console_changelog() {
         Ok(Some(entry)) => SettingItem::render(move |_, _, _| {
             TextView::markdown("settings-current-changelog", entry.markdown()).selectable(true)
         })
         .keywords(["更新日志", "版本记录", "changelog"]),
-        Ok(None) => SettingItem::render(|_, _, _| {
-            gpui_component::alert::Alert::warning(
-                "settings-current-changelog-missing",
-                "当前版本缺少更新日志，请添加 changelogs/<version>/console/zh-CN.md。",
-            )
+        Ok(None) | Err(_) => SettingItem::render(|_, _, cx| {
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("当前版本暂无更新说明。")
         })
-        .keywords(["更新日志", "版本记录", "changelog"]),
-        Err(error) => {
-            let message = error.to_string();
-            SettingItem::render(move |_, _, _| {
-                gpui_component::alert::Alert::error(
-                    "settings-current-changelog-invalid",
-                    message.clone(),
-                )
-            })
-            .keywords(["更新日志", "版本记录", "changelog"])
-        }
+        .keywords(["更新日志", "版本记录"]),
     };
 
     let version_label = updater_config
@@ -539,73 +406,59 @@ fn update_setting_page(updater_config: Option<UpdateConfig>) -> SettingPage {
             )
         })
         .unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
-    let channel_label = updater_config
-        .as_ref()
-        .map(|config| match config.channel() {
+    let online_update_items = updater_config.map(|config| {
+        let label = match config.channel() {
             updater::UpdateChannel::Stable => "稳定版",
             updater::UpdateChannel::Beta => "测试版",
-            updater::UpdateChannel::Nightly => "每日构建",
-        })
-        .unwrap_or("未配置");
-    let check_config = updater_config.clone();
-    let check_item = SettingItem::new(
-        "检查更新",
-        SettingField::render(move |options, _window, _cx| {
-            let config = check_config.clone();
-            Button::new("settings-check-update")
-                .with_size(options.size)
-                .label("检查更新")
-                .primary()
-                .disabled(config.is_none())
-                .on_click(move |_, window, cx| {
-                    if let Some(config) = config.clone() {
-                        updater::open_update_dialog(config, window, cx);
-                    }
-                })
-        }),
-    )
-    .description(if updater_config.is_some() {
-        "检查当前更新通道的最新版本，并在应用内完成下载和安装。"
-    } else {
-        "发布构建需要设置 UPDATE_MANIFEST_URL 后才能启用在线更新。"
+            updater::UpdateChannel::Nightly => "预览版",
+        };
+        let check_config = config.clone();
+
+        [
+            SettingItem::new(
+                "更新通道",
+                SettingField::render(move |options, _, _| {
+                    Tag::secondary()
+                        .with_size(options.size)
+                        .outline()
+                        .child(label)
+                }),
+            ),
+            SettingItem::new(
+                "检查更新",
+                SettingField::render(move |options, _window, _cx| {
+                    let config = check_config.clone();
+                    Button::new("settings-check-update")
+                        .with_size(options.size)
+                        .label("检查更新")
+                        .primary()
+                        .on_click(move |_, window, cx| {
+                            updater::open_update_dialog(config.clone(), window, cx);
+                        })
+                }),
+            )
+            .description("检查当前更新通道的最新版本，并在应用内完成下载和安装。"),
+        ]
     });
+    let version_items = std::iter::once(SettingItem::new(
+        "当前版本",
+        SettingField::render(move |options, _, _| {
+            Tag::secondary()
+                .with_size(options.size)
+                .outline()
+                .child(version_label.clone())
+        }),
+    ))
+    .chain(online_update_items.into_iter().flatten());
 
     SettingPage::new("更新")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::BookOpen))
-        .description("查看当前版本、更新通道和随应用发布的更新日志。")
+        .description("查看当前版本、检查更新并了解本次版本的新变化。")
         .default_open(false)
         .resettable(false)
-        .group(
-            SettingGroup::new().title("版本信息").items([
-                SettingItem::new(
-                    "当前版本",
-                    SettingField::render(move |options, _, _| {
-                        Tag::secondary()
-                            .with_size(options.size)
-                            .outline()
-                            .child(version_label.clone())
-                    }),
-                ),
-                SettingItem::new(
-                    "更新通道",
-                    SettingField::render(move |options, _, _| {
-                        Tag::secondary()
-                            .with_size(options.size)
-                            .outline()
-                            .child(channel_label)
-                    }),
-                )
-                .description("稳定版、测试版和每日构建分别使用独立的 latest.json。"),
-                check_item,
-            ]),
-        )
-        .group(
-            SettingGroup::new()
-                .title("当前版本更新日志")
-                .description("内容来自 changelogs/<version>/console/zh-CN.md。")
-                .item(changelog_item),
-        )
+        .group(SettingGroup::new().title("版本信息").items(version_items))
+        .group(SettingGroup::new().title("本次更新").item(changelog_item))
 }
 
 fn settings_header_style() -> StyleRefinement {

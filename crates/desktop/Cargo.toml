@@ -8,6 +8,7 @@ gpui = { workspace = true }
 gpui-component = { workspace = true }
 # 可选：使用内置默认资源
 gpui-component-assets = { workspace = true }
+reqwest_client = { workspace = true }
 theme = { workspace = true }
 
 [dev-dependencies]

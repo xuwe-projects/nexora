@@ -94,8 +94,14 @@ fn login_uses_pkce_nonce_and_validates_id_token_before_userinfo() {
             }
             "/token" => {
                 let nonce = server_nonce.lock().unwrap().clone().unwrap();
-                let id_token =
-                    signed_id_token(&encoding_key, &issuer, CLIENT_ID, &nonce, now() + 3_600);
+                let id_token = signed_id_token_with_picture(
+                    &encoding_key,
+                    &issuer,
+                    CLIENT_ID,
+                    &nonce,
+                    now() + 3_600,
+                    "https://cdn.example.com/id-token-avatar.png",
+                );
                 HttpResponse::json(json!({
                     "access_token": "access-1",
                     "refresh_token": "refresh-1",
@@ -143,6 +149,10 @@ fn login_uses_pkce_nonce_and_validates_id_token_before_userinfo() {
 
     assert_eq!(session.profile().subject, "user-1");
     assert_eq!(session.profile().display_name(), "Ada Lovelace");
+    assert_eq!(
+        session.profile().picture.as_deref(),
+        Some("https://cdn.example.com/id-token-avatar.png")
+    );
     assert_eq!(session.tokens().refresh_token.as_deref(), Some("refresh-1"));
 }
 
@@ -291,6 +301,58 @@ fn refresh_grant_rotates_tokens_and_validates_a_new_id_token() {
 }
 
 #[test]
+fn refresh_updates_the_profile_picture_from_userinfo() {
+    let (encoding_key, jwk) = signing_material();
+    let (issuer, server) = spawn_provider(4, move |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| match request.path.as_str() {
+            "/.well-known/openid-configuration" => {
+                HttpResponse::json(discovery_document(&issuer, true))
+            }
+            "/token" => {
+                let id_token = signed_id_token(
+                    &encoding_key,
+                    &issuer,
+                    CLIENT_ID,
+                    "unused-on-refresh",
+                    now() + 3_600,
+                );
+                HttpResponse::json(json!({
+                    "access_token": "access-2",
+                    "refresh_token": "refresh-2",
+                    "id_token": id_token,
+                    "expires_in": 600
+                }))
+            }
+            "/jwks" => HttpResponse::json(json!({ "keys": [jwk] })),
+            "/userinfo" => HttpResponse::json(json!({
+                "sub": "user-1",
+                "name": "Ada Lovelace",
+                "picture": "https://cdn.example.com/new-avatar.png"
+            })),
+            path => panic!("unexpected provider request: {path}"),
+        }
+    });
+    let mut cached_profile = profile();
+    cached_profile.picture = Some("https://cdn.example.com/old-avatar.png".to_owned());
+    let tokens = OidcTokenCache {
+        access_token: "access-1".to_owned(),
+        refresh_token: Some("refresh-1".to_owned()),
+        profile: Some(cached_profile),
+        ..Default::default()
+    };
+
+    let session = client(&issuer).refresh(&tokens).unwrap();
+    server.join().unwrap();
+
+    assert_eq!(session.profile().display_name(), "Ada Lovelace");
+    assert_eq!(
+        session.profile().picture.as_deref(),
+        Some("https://cdn.example.com/new-avatar.png")
+    );
+}
+
+#[test]
 fn refresh_requires_a_refresh_token() {
     let config = OidcConfig::new(
         "https://id.example.com",
@@ -431,6 +493,28 @@ fn signed_id_token(
     nonce: &str,
     expires_at: u64,
 ) -> String {
+    signed_id_token_with_optional_picture(key, issuer, audience, nonce, expires_at, None)
+}
+
+fn signed_id_token_with_picture(
+    key: &EncodingKey,
+    issuer: &str,
+    audience: &str,
+    nonce: &str,
+    expires_at: u64,
+    picture: &str,
+) -> String {
+    signed_id_token_with_optional_picture(key, issuer, audience, nonce, expires_at, Some(picture))
+}
+
+fn signed_id_token_with_optional_picture(
+    key: &EncodingKey,
+    issuer: &str,
+    audience: &str,
+    nonce: &str,
+    expires_at: u64,
+    picture: Option<&str>,
+) -> String {
     let claims = json!({
         "iss": issuer,
         "sub": "user-1",
@@ -438,7 +522,8 @@ fn signed_id_token(
         "exp": expires_at,
         "iat": now(),
         "nonce": nonce,
-        "name": "Ada"
+        "name": "Ada",
+        "picture": picture
     });
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some(KEY_ID.to_owned());

@@ -506,6 +506,14 @@ impl RootView {
         let action_context = cx.focus_handle();
         let theme = cx.theme();
         let display_name = snapshot.display_name.clone();
+        let avatar = if let Some(avatar_url) = snapshot.avatar_url.clone() {
+            Avatar::new()
+                .name(display_name.clone())
+                .src(avatar_url)
+                .small()
+        } else {
+            Avatar::new().name(display_name.clone()).small()
+        };
         let status = snapshot.status.clone();
 
         div()
@@ -515,17 +523,14 @@ impl RootView {
                 SidebarFooter::new()
                     .justify_between()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Avatar::new().name(display_name.clone()).small())
-                            .child(
-                                div().flex().flex_col().min_w_0().child(display_name).child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child(status),
-                                ),
+                        h_flex().gap_2().child(avatar).child(
+                            div().flex().flex_col().min_w_0().child(display_name).child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(status),
                             ),
+                        ),
                     )
                     .child(Icon::new(IconName::ChevronsUpDown).size_4())
                     .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {

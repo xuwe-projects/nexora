@@ -228,13 +228,23 @@ impl OidcClient {
             return Err(OidcError::SubjectMismatch);
         }
 
-        let profile = if let Some(profile) = tokens.profile.clone().or(refreshed_profile) {
-            profile
-        } else if let Some(endpoint) = &metadata.userinfo_endpoint {
-            load_userinfo(&self.http, endpoint, &refreshed_tokens)?
+        let mut profile = if let Some(endpoint) = &metadata.userinfo_endpoint {
+            let userinfo_profile = load_userinfo(&self.http, endpoint, &refreshed_tokens)?;
+            if let Some(refreshed_profile) = refreshed_profile {
+                merge_profiles(userinfo_profile, refreshed_profile)?
+            } else {
+                userinfo_profile
+            }
+        } else if let Some(refreshed_profile) = refreshed_profile {
+            refreshed_profile
+        } else if let Some(cached_profile) = tokens.profile.clone() {
+            cached_profile
         } else {
             return Err(OidcError::MissingProfile);
         };
+        if let Some(cached_profile) = tokens.profile.clone() {
+            profile = merge_profiles(profile, cached_profile)?;
+        }
         refreshed_tokens.profile = Some(profile.clone());
 
         Ok(OidcSession {
@@ -1263,13 +1273,36 @@ fn load_profile(
 ) -> Result<OidcUserProfile, OidcError> {
     if let Some(userinfo_endpoint) = &metadata.userinfo_endpoint {
         let profile = load_userinfo(client, userinfo_endpoint, tokens)?;
-        if profile.subject != id_token_profile.subject {
-            return Err(OidcError::SubjectMismatch);
-        }
-        return Ok(profile);
+        return merge_profiles(profile, id_token_profile);
     }
 
     Ok(id_token_profile)
+}
+
+fn merge_profiles(
+    preferred: OidcUserProfile,
+    fallback: OidcUserProfile,
+) -> Result<OidcUserProfile, OidcError> {
+    if preferred.subject != fallback.subject {
+        return Err(OidcError::SubjectMismatch);
+    }
+
+    Ok(OidcUserProfile {
+        subject: preferred.subject,
+        name: prefer_non_empty(preferred.name, fallback.name),
+        email: prefer_non_empty(preferred.email, fallback.email),
+        preferred_username: prefer_non_empty(
+            preferred.preferred_username,
+            fallback.preferred_username,
+        ),
+        picture: prefer_non_empty(preferred.picture, fallback.picture),
+    })
+}
+
+fn prefer_non_empty(preferred: Option<String>, fallback: Option<String>) -> Option<String> {
+    preferred
+        .filter(|value| !value.trim().is_empty())
+        .or(fallback)
 }
 
 fn load_userinfo(

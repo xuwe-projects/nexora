@@ -12,12 +12,23 @@ use std::{
 use configuration::{ConfigurationError, LayeredConfigLoader, UserConfigStore};
 use gpui::{App, AppContext as _, Global, ReadGlobal as _, SharedString, UpdateGlobal as _};
 use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache};
+#[cfg(target_os = "macos")]
+use security_framework::{
+    base::Error as MacOsSecurityError,
+    os::macos::keychain::{SecKeychain, SecPreferencesDomain},
+};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 const DEFAULT_DESKTOP_CONFIG_PATH: &str = "config/desktop.toml";
 const DEFAULT_OIDC_SCOPES: &str = "openid profile email offline_access";
+#[cfg(target_os = "macos")]
+const MACOS_ERR_SEC_AUTH_FAILED: i32 = -25_293;
+#[cfg(target_os = "macos")]
+const MACOS_ERR_SEC_DUPLICATE_ITEM: i32 = -25_299;
+#[cfg(target_os = "macos")]
+const MACOS_ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25_308;
 
 /// Console refresh token 的跨平台系统安全存储。
 ///
@@ -50,6 +61,43 @@ pub enum AuthTokenStoreError {
     /// 写入系统凭据库后无法读回相同 refresh token。
     #[error("系统凭据库写入校验失败")]
     Verification,
+    /// macOS 登录钥匙串需要由用户解锁，但系统解锁流程没有完成。
+    #[cfg(target_os = "macos")]
+    #[error("macOS 登录钥匙串未解锁: {0}")]
+    MacKeychainUnlock(
+        /// Security.framework 返回的钥匙串解锁错误。
+        #[from]
+        MacOsSecurityError,
+    ),
+    /// macOS 登录钥匙串在系统解锁后仍拒绝当前进程访问。
+    #[cfg(target_os = "macos")]
+    #[error("macOS 登录钥匙串仍拒绝当前构建访问: {0}")]
+    MacKeychainLocked(
+        /// 系统凭据后端在重试时返回的错误。
+        #[source]
+        keyring::Error,
+    ),
+    /// macOS 登录钥匙串中已有当前进程无权更新的同名凭据。
+    #[cfg(target_os = "macos")]
+    #[error("macOS 登录钥匙串中的旧凭据不允许当前构建更新: {0}")]
+    MacKeychainAccessDenied(
+        /// 系统凭据后端在重试时返回的重复条目错误。
+        #[source]
+        keyring::Error,
+    ),
+}
+
+impl AuthTokenStoreError {
+    /// 返回适合显示在账户栏有限空间内的错误处理提示。
+    pub(crate) fn user_message(&self) -> &'static str {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::MacKeychainUnlock(_) | Self::MacKeychainLocked(_) => "请解锁 macOS 登录钥匙串",
+            #[cfg(target_os = "macos")]
+            Self::MacKeychainAccessDenied(_) => "请清理旧的 macOS 登录凭据后重试",
+            _ => "系统凭据库保存失败",
+        }
+    }
 }
 
 impl AuthTokenStore {
@@ -73,10 +121,10 @@ impl AuthTokenStore {
     }
 
     fn load_refresh_token(&self) -> Result<Option<String>, AuthTokenStoreError> {
-        match self.entry()?.get_password() {
+        match self.run_keyring_operation(keyring::Entry::get_password) {
             Ok(token) => return Ok(non_empty(token)),
-            Err(keyring::Error::NoEntry) => {}
-            Err(error) => return Err(error.into()),
+            Err(AuthTokenStoreError::Keyring(keyring::Error::NoEntry)) => {}
+            Err(error) => return Err(error),
         }
 
         self.migrate_legacy_token()
@@ -86,13 +134,28 @@ impl AuthTokenStore {
         let Some(refresh_token) = tokens.refresh_token.as_deref().and_then(non_empty_str) else {
             return self.clear();
         };
-        self.entry()?.set_password(refresh_token)?;
-        Ok(())
+        self.run_keyring_operation(|entry| entry.set_password(refresh_token))
     }
 
     fn clear(&self) -> Result<(), AuthTokenStoreError> {
-        match self.entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        match self.run_keyring_operation(keyring::Entry::delete_credential) {
+            Ok(()) | Err(AuthTokenStoreError::Keyring(keyring::Error::NoEntry)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_keyring_operation<T>(
+        &self,
+        mut operation: impl FnMut(&keyring::Entry) -> Result<T, keyring::Error>,
+    ) -> Result<T, AuthTokenStoreError> {
+        let entry = self.entry()?;
+        match operation(&entry) {
+            Ok(value) => Ok(value),
+            #[cfg(target_os = "macos")]
+            Err(error) if macos_keychain_error_needs_unlock(&error) => {
+                unlock_macos_login_keychain()?;
+                operation(&entry).map_err(macos_keychain_error_after_retry)
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -109,13 +172,52 @@ impl AuthTokenStore {
             return Ok(None);
         };
 
-        let entry = self.entry()?;
-        entry.set_password(refresh_token.as_str())?;
-        if entry.get_password()? != refresh_token {
+        self.run_keyring_operation(|entry| entry.set_password(refresh_token.as_str()))?;
+        if self.run_keyring_operation(keyring::Entry::get_password)? != refresh_token {
             return Err(AuthTokenStoreError::Verification);
         }
         fs::remove_file(self.legacy.path()).map_err(ConfigurationError::from)?;
         Ok(Some(refresh_token))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_keychain_error_code(error: &keyring::Error) -> Option<i32> {
+    match error {
+        keyring::Error::PlatformFailure(source) | keyring::Error::NoStorageAccess(source) => source
+            .downcast_ref::<MacOsSecurityError>()
+            .map(|error| error.code()),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_keychain_error_needs_unlock(error: &keyring::Error) -> bool {
+    matches!(
+        macos_keychain_error_code(error),
+        Some(
+            MACOS_ERR_SEC_AUTH_FAILED
+                | MACOS_ERR_SEC_DUPLICATE_ITEM
+                | MACOS_ERR_SEC_INTERACTION_NOT_ALLOWED
+        )
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn unlock_macos_login_keychain() -> Result<(), MacOsSecurityError> {
+    let mut keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
+    keychain.unlock(None)
+}
+
+/// 把 macOS 钥匙串重试错误转换为可由界面明确提示的认证存储错误。
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_keychain_error_after_retry(error: keyring::Error) -> AuthTokenStoreError {
+    match macos_keychain_error_code(&error) {
+        Some(MACOS_ERR_SEC_DUPLICATE_ITEM) => AuthTokenStoreError::MacKeychainAccessDenied(error),
+        Some(MACOS_ERR_SEC_AUTH_FAILED | MACOS_ERR_SEC_INTERACTION_NOT_ALLOWED) => {
+            AuthTokenStoreError::MacKeychainLocked(error)
+        }
+        _ => AuthTokenStoreError::Keyring(error),
     }
 }
 
@@ -134,6 +236,8 @@ pub struct AuthSnapshot {
     pub display_name: SharedString,
     /// 已登录用户的邮箱。
     pub email: Option<String>,
+    /// 已登录用户的远程头像地址。
+    pub avatar_url: Option<SharedString>,
     /// 当前状态说明或最近一次错误。
     pub status: SharedString,
 }
@@ -323,6 +427,11 @@ pub fn snapshot(cx: &App) -> AuthSnapshot {
         busy: state.busy,
         display_name: display_name.into(),
         email: profile.and_then(|profile| profile.email.clone()),
+        avatar_url: profile
+            .and_then(|profile| profile.picture.as_deref())
+            .and_then(non_empty_str)
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            .map(SharedString::from),
         status: state.status.clone().into(),
     }
 }
@@ -385,22 +494,36 @@ pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
 
 fn wait_for_login(pending: oidc::PendingOidcLogin, cx: &mut App) {
     let store = AuthState::global(cx).store.clone();
-    let login_task = cx.background_spawn(async move {
-        let session = pending.finish().map_err(AuthError::from)?;
-        let storage_warning = store
-            .as_ref()
-            .and_then(|store| store.save_tokens(session.tokens()).err())
-            .map(|error| error.to_string());
-        Ok::<_, AuthError>((session, storage_warning))
-    });
+    let login_task = cx.background_spawn(async move { pending.finish().map_err(AuthError::from) });
     cx.spawn(async move |cx| {
         let result = login_task.await;
         cx.update(|cx| match result {
-            Ok((session, warning)) => apply_session(session, warning, cx),
+            Ok(session) => {
+                cx.activate(true);
+                persist_login_session(session, store, cx);
+            }
             Err(error) => complete_login(Err(error), cx),
         });
     })
     // xuwe-lint: allow(xuwe::detached_lifecycle) reason="loopback 回调等待属于应用级认证 Global 生命周期"
+    .detach();
+}
+
+fn persist_login_session(session: OidcSession, store: Option<AuthTokenStore>, cx: &mut App) {
+    AuthState::update_global(cx, |auth, cx| {
+        auth.status = "正在安全保存登录状态...".to_owned();
+        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
+        cx.refresh_windows();
+    });
+    let storage_task = cx.background_spawn(async move {
+        let warning = persist_session_tokens(store.as_ref(), session.tokens());
+        (session, warning)
+    });
+    cx.spawn(async move |cx| {
+        let (session, warning) = storage_task.await;
+        cx.update(|cx| apply_session(session, warning, cx));
+    })
+    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="系统凭据写入属于应用级认证 Global 生命周期"
     .detach();
 }
 
@@ -495,12 +618,12 @@ fn complete_restore(result: Result<Option<OidcSession>, AuthError>, cx: &mut App
     }
 }
 
-fn apply_session(session: OidcSession, storage_warning: Option<String>, cx: &mut App) {
+fn apply_session(session: OidcSession, storage_warning: Option<AuthTokenStoreError>, cx: &mut App) {
     let expires_at = session.tokens().expires_at;
     AuthState::update_global(cx, |auth, cx| {
         auth.busy = false;
         auth.status = storage_warning
-            .map(|warning| format!("已登录，但无法保持登录: {warning}"))
+            .map(|warning| format!("已登录 · {}", warning.user_message()))
             .unwrap_or_else(|| "已登录".to_owned());
         auth.session = Some(session);
         auth.refresh_generation = auth.refresh_generation.wrapping_add(1);
@@ -509,6 +632,17 @@ fn apply_session(session: OidcSession, storage_warning: Option<String>, cx: &mut
     });
     let generation = AuthState::global(cx).refresh_generation;
     schedule_session_refresh(expires_at, generation, cx);
+}
+
+fn persist_session_tokens(
+    store: Option<&AuthTokenStore>,
+    tokens: &OidcTokenCache,
+) -> Option<AuthTokenStoreError> {
+    let warning = store.and_then(|store| store.save_tokens(tokens).err());
+    if let Some(error) = &warning {
+        eprintln!("Console OIDC: 无法保存 refresh token: {error:?}");
+    }
+    warning
 }
 
 fn schedule_session_refresh(expires_at: Option<u64>, generation: u64, cx: &mut App) {
@@ -540,10 +674,7 @@ fn start_scheduled_refresh(generation: u64, cx: &mut App) {
         let client = OidcClient::new(config)?;
         match client.refresh(&tokens) {
             Ok(session) => {
-                let warning = store
-                    .as_ref()
-                    .and_then(|store| store.save_tokens(session.tokens()).err())
-                    .map(|error| error.to_string());
+                let warning = persist_session_tokens(store.as_ref(), session.tokens());
                 Ok((session, warning))
             }
             Err(error) => {
@@ -566,7 +697,7 @@ fn start_scheduled_refresh(generation: u64, cx: &mut App) {
 
 fn complete_scheduled_refresh(
     generation: u64,
-    result: Result<(OidcSession, Option<String>), AuthError>,
+    result: Result<(OidcSession, Option<AuthTokenStoreError>), AuthError>,
     cx: &mut App,
 ) {
     if AuthState::global(cx).refresh_generation != generation {

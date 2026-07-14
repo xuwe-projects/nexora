@@ -25,14 +25,30 @@ use features::{
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
     root::RootView,
-    settings::{
-        current_console_changelog, setting_groups, settings_window_options,
-        startup_display_setting_item,
-    },
+    settings::{current_console_changelog, settings_window_options, startup_display_setting_item},
     tasks::task_rows,
     virtual_scroll::virtual_scroll_stock_seeds,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_keychain_errors_expose_actionable_messages() {
+    use security_framework::base::Error as MacOsSecurityError;
+
+    let locked = auth::macos_keychain_error_after_retry(keyring::Error::PlatformFailure(Box::new(
+        MacOsSecurityError::from_code(-25_293),
+    )));
+    let stale_entry = auth::macos_keychain_error_after_retry(keyring::Error::PlatformFailure(
+        Box::new(MacOsSecurityError::from_code(-25_299)),
+    ));
+
+    assert_eq!(locked.user_message(), "请解锁 macOS 登录钥匙串");
+    assert_eq!(
+        stale_entry.user_message(),
+        "请清理旧的 macOS 登录凭据后重试"
+    );
+}
 
 #[gpui::test]
 fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
@@ -47,6 +63,7 @@ fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
         profile: Some(oidc::OidcUserProfile {
             subject: "user-1".to_owned(),
             name: Some("测试用户".to_owned()),
+            picture: Some("https://cdn.example.com/avatar.png".to_owned()),
             ..oidc::OidcUserProfile::default()
         }),
         ..oidc::OidcTokenCache::default()
@@ -56,10 +73,17 @@ fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
     cx.update(|cx| {
         auth::init(Some(config), None, cx);
         auth::complete_login(Ok(session), cx);
-        assert!(auth::snapshot(cx).authenticated);
+        let snapshot = auth::snapshot(cx);
+        assert!(snapshot.authenticated);
+        assert_eq!(
+            snapshot.avatar_url.as_deref(),
+            Some("https://cdn.example.com/avatar.png")
+        );
 
         auth::sign_out(cx);
-        assert!(!auth::snapshot(cx).authenticated);
+        let snapshot = auth::snapshot(cx);
+        assert!(!snapshot.authenticated);
+        assert!(snapshot.avatar_url.is_none());
     });
 }
 
@@ -107,6 +131,10 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.version().to_string(), env!("CARGO_PKG_VERSION"));
     assert_eq!(entry.locale(), "zh-CN");
+    assert!(!entry.markdown().contains("Sidebar"));
+    assert!(!entry.markdown().contains("TabBar"));
+    assert!(!entry.markdown().contains("DataTable"));
+    assert!(!entry.markdown().contains("DMG"));
 }
 
 #[test]
@@ -297,15 +325,6 @@ fn task_rows_keep_pipeline_order() {
         ]
     );
     assert_eq!(rows[2].status().label(), "blocked");
-}
-
-#[test]
-fn setting_groups_keep_template_configuration() {
-    let groups = setting_groups();
-    let titles = groups.iter().map(|group| group.title()).collect::<Vec<_>>();
-
-    assert_eq!(titles, vec!["窗口", "运行", "发布"]);
-    assert_eq!(groups[0].items()[0], ("默认尺寸", "900 x 640"));
 }
 
 #[test]
