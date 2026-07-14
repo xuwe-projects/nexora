@@ -445,6 +445,7 @@ impl RootView {
                 div()
                     .relative()
                     .w_full()
+                    .pb_3()
                     .child(
                         SidebarHeader::new().child(
                             div()
@@ -519,6 +520,7 @@ impl RootView {
         div()
             .relative()
             .w_full()
+            .pt_3()
             .child(
                 SidebarFooter::new()
                     .justify_between()
