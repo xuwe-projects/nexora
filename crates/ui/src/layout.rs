@@ -178,6 +178,26 @@ impl WorkspaceLayout {
         } else {
             content_panel.overflow_hidden().into_any_element()
         };
+        let workspace_panels = h_resizable("workspace-layout-panels")
+            .child(
+                resizable_panel()
+                    .size(sidebar_width)
+                    .size_range(sidebar_width_range)
+                    .flex_none()
+                    .child(div().size_full().min_w_0().min_h_0().child(sidebar)),
+            )
+            .child(
+                resizable_panel().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .when_some(panel_header, |this, panel_header| this.child(panel_header))
+                        .child(content_panel),
+                ),
+            );
 
         div()
             .flex()
@@ -186,29 +206,7 @@ impl WorkspaceLayout {
             .bg(background)
             .text_color(foreground)
             .child(title_bar)
-            .child(
-                h_resizable("workspace-layout-panels")
-                    .child(
-                        resizable_panel()
-                            .size(sidebar_width)
-                            .size_range(sidebar_width_range)
-                            .flex_none()
-                            .child(div().size_full().min_w_0().child(sidebar)),
-                    )
-                    .child(
-                        resizable_panel().child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .min_w_0()
-                                .when_some(panel_header, |this, panel_header| {
-                                    this.child(panel_header)
-                                })
-                                .child(content_panel),
-                        ),
-                    ),
-            )
+            .child(div().flex_1().min_w_0().min_h_0().child(workspace_panels))
             .into_any_element()
     }
 }

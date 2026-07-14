@@ -3,7 +3,7 @@
 //! 该模块定义主窗口中最外层的业务视图，运行器会将其嵌入 `gpui_component::Root`。
 
 use crate::{
-    auth,
+    auth, config,
     features::{
         FeatureChildItem, FeatureId, FeatureItem, feature_catalog, home::HomeFeature,
         login::LoginFeature, projects::ProjectsFeature, tasks::TasksFeature,
@@ -13,10 +13,9 @@ use crate::{
 use actions::account::{
     self as account_actions, AccountActionKind, OpenAccountProfile, SignInAccount, SignOutAccount,
 };
-use actions::settings::OpenSettings;
 use gpui::{
     Anchor, AnyElement, Context, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
-    Window, div, prelude::*, px, rems,
+    Window, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
@@ -26,8 +25,7 @@ use gpui_component::{
     h_flex,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
     sidebar::{
-        Sidebar, SidebarCollapsible, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu,
-        SidebarMenuItem,
+        Sidebar, SidebarCollapsible, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuItem,
     },
     tab::{Tab, TabBar},
 };
@@ -84,6 +82,40 @@ impl RootView {
             home_feature: HomeFeature::default(),
             virtual_scroll_feature: VirtualScrollFeature::default(),
         }
+    }
+
+    /// 创建一个恢复了指定置顶标签的根视图。
+    ///
+    /// 该构造器用于应用启动时把用户配置中的置顶标签重新放回标签栏左侧；首页仍保持为默认
+    /// 激活页面，避免恢复置顶状态时强行切走用户的启动落点。
+    pub fn with_pinned_tabs(pinned_tabs: Vec<FeatureId>) -> Self {
+        let mut view = Self::new();
+        view.pinned_tabs = pinned_tabs
+            .into_iter()
+            .fold(Vec::new(), |mut tabs, feature| {
+                if !tabs.contains(&feature) {
+                    tabs.push(feature);
+                }
+                tabs
+            });
+
+        for feature in view.pinned_tabs.iter().copied() {
+            if !view.opened_tabs.contains(&feature) {
+                view.opened_tabs.push(feature);
+            }
+        }
+
+        view.reorder_tabs_by_pin();
+        view
+    }
+
+    /// 初始化需要窗口上下文的 feature 状态。
+    ///
+    /// `DataTable` 的状态属于对应 feature 的生命周期，但必须在根视图构造阶段创建；这样
+    /// 后续 `render` 只读取既有 Entity，不会引入长期渲染副作用。
+    pub fn initialize_feature_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.home_feature.initialize(window, cx);
+        self.virtual_scroll_feature.initialize(window, cx);
     }
 
     /// 返回当前选中的功能区。
@@ -397,6 +429,10 @@ impl RootView {
         }
     }
 
+    fn persist_pinned_tabs(&self, cx: &mut Context<Self>) {
+        config::persist_pinned_tabs(self.pinned_tabs(), cx);
+    }
+
     fn navigate_to_feature(&mut self, feature: FeatureId, record_history: bool) {
         self.open_feature_tab(feature);
 
@@ -424,76 +460,97 @@ impl RootView {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let navigation_groups = feature_catalog()
+        let primary_items = feature_catalog()
             .iter()
-            .map(|item| item.section())
-            .fold(Vec::new(), |mut sections, section| {
-                if !sections.contains(&section) {
-                    sections.push(section);
-                }
-                sections
-            })
-            .into_iter()
-            .map(|section| self.render_nav_group(section, cx))
+            .copied()
+            .filter(|item| item.section() == "工作台")
+            .map(|item| self.render_nav_item(item, cx))
             .collect::<Vec<_>>();
+        let extension_items = feature_catalog()
+            .iter()
+            .copied()
+            .filter(|item| item.section() == "扩展示例")
+            .map(|item| self.render_nav_item(item, cx))
+            .collect::<Vec<_>>();
+        let extension_active = feature_catalog()
+            .iter()
+            .copied()
+            .any(|item| item.section() == "扩展示例" && item.contains(self.active_feature()));
         let theme = cx.theme();
+        let sidebar_border = theme.sidebar_border;
+        let navigation_menus = [
+            SidebarMenu::new().children(primary_items),
+            SidebarMenu::new()
+                .pt_3()
+                .border_t_1()
+                .border_color(theme.sidebar_border)
+                .child(
+                    SidebarMenuItem::new("更多功能")
+                        .icon(IconName::Frame)
+                        .default_open(extension_active)
+                        .click_to_toggle(true)
+                        .children(extension_items),
+                ),
+        ];
 
         Sidebar::new("console-sidebar")
-            .w_full()
+            .size_full()
             .collapsible(SidebarCollapsible::None)
             .header(
-                div()
-                    .relative()
-                    .w_full()
+                SidebarHeader::new()
+                    .p_0()
+                    .py_1()
                     .pb_3()
+                    .border_b_1()
+                    .border_color(sidebar_border)
                     .child(
-                        SidebarHeader::new().child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size_8()
-                                        .flex_shrink_0()
-                                        .rounded_md()
-                                        .bg(theme.tokens.sidebar_primary)
-                                        .text_color(theme.sidebar_primary_foreground)
-                                        .font_bold()
-                                        .child("X"),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_bold()
-                                                .text_color(theme.sidebar_foreground)
-                                                .child("Xuwe Console"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .child("桌面应用模板"),
-                                        ),
-                                ),
-                        ),
-                    )
-                    .child(full_bleed_sidebar_separator(
-                        SidebarSeparatorEdge::Bottom,
-                        theme,
-                    )),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size_7()
+                                    .flex_shrink_0()
+                                    .rounded_sm()
+                                    .bg(theme.tokens.sidebar_primary)
+                                    .text_color(theme.sidebar_primary_foreground)
+                                    .child(Icon::new(IconName::ChartPie).size_4()),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_semibold()
+                                            .text_color(theme.sidebar_accent_foreground)
+                                            .child("Xuwe Console"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.sidebar_foreground.opacity(0.66))
+                                            .child("Desktop workspace"),
+                                    ),
+                            ),
+                    ),
             )
-            .children(navigation_groups)
-            .footer(self.render_account_footer(cx))
+            .children(navigation_menus)
+            .footer(
+                div()
+                    .w_full()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(sidebar_border)
+                    .child(self.render_account_footer(cx)),
+            )
             .into_any_element()
     }
 
@@ -505,7 +562,6 @@ impl RootView {
             account_actions::signed_out_menu_actions()
         };
         let action_context = cx.focus_handle();
-        let theme = cx.theme();
         let display_name = snapshot.display_name.clone();
         let avatar = if let Some(avatar_url) = snapshot.avatar_url.clone() {
             Avatar::new()
@@ -515,62 +571,45 @@ impl RootView {
         } else {
             Avatar::new().name(display_name.clone()).small()
         };
-        let status = snapshot.status.clone();
 
-        div()
-            .relative()
+        SidebarFooter::new()
             .w_full()
-            .pt_3()
             .child(
-                SidebarFooter::new()
-                    .justify_between()
-                    .child(
-                        h_flex().gap_2().child(avatar).child(
-                            div().flex().flex_col().min_w_0().child(display_name).child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(status),
-                            ),
-                        ),
-                    )
-                    .child(Icon::new(IconName::ChevronsUpDown).size_4())
-                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-                        menu_items.iter().cloned().fold(
-                            menu.action_context(action_context.clone()).min_w(220.),
-                            |menu, item| {
-                                let menu_item =
-                                    gpui_component::menu::PopupMenuItem::new(item.label())
-                                        .icon(account_icon(item.kind()));
-                                let menu_item = match item.kind() {
-                                    AccountActionKind::SignIn => menu_item.on_click(|_, _, cx| {
-                                        eprintln!("Console OIDC: 登录菜单已点击");
-                                        if let Err(error) = auth::start_login(cx) {
-                                            eprintln!("Console OIDC: 无法开始登录: {error}");
-                                            auth::complete_login(Err(error), cx);
-                                        }
-                                    }),
-                                    AccountActionKind::SignOut => {
-                                        menu_item.on_click(|_, _, cx| auth::sign_out(cx))
-                                    }
-                                    AccountActionKind::Settings => {
-                                        menu_item.on_click(|_, window, cx| {
-                                            window.dispatch_action(Box::new(OpenSettings), cx);
-                                        })
-                                    }
-                                    AccountActionKind::Profile => {
-                                        menu_item.action(item.to_action())
-                                    }
-                                };
-                                menu.item(menu_item)
-                            },
-                        )
-                    }),
+                h_flex().flex_1().min_w_0().gap_2().child(avatar).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .truncate()
+                        .child(display_name),
+                ),
             )
-            .child(full_bleed_sidebar_separator(
-                SidebarSeparatorEdge::Top,
-                theme,
-            ))
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+                menu_items.iter().cloned().fold(
+                    menu.action_context(action_context.clone()).min_w(220.),
+                    |menu, item| {
+                        let menu_item = gpui_component::menu::PopupMenuItem::new(item.label())
+                            .icon(account_icon(item.kind()));
+                        let menu_item = match item.kind() {
+                            AccountActionKind::SignIn => menu_item.on_click(|_, _, cx| {
+                                eprintln!("Console OIDC: 登录菜单已点击");
+                                if let Err(error) = auth::start_login(cx) {
+                                    eprintln!("Console OIDC: 无法开始登录: {error}");
+                                    auth::complete_login(Err(error), cx);
+                                }
+                            }),
+                            AccountActionKind::SignOut => {
+                                menu_item.on_click(|_, _, cx| auth::sign_out(cx))
+                            }
+                            AccountActionKind::Profile | AccountActionKind::Settings => {
+                                menu_item.action(item.to_action())
+                            }
+                        };
+                        menu.item(menu_item)
+                    },
+                )
+            })
     }
 
     fn open_account_profile(
@@ -594,21 +633,6 @@ impl RootView {
         cx.notify();
     }
 
-    fn render_nav_group(
-        &self,
-        section: &'static str,
-        cx: &mut Context<Self>,
-    ) -> SidebarGroup<SidebarMenu> {
-        let items = feature_catalog()
-            .iter()
-            .copied()
-            .filter(|item| item.section() == section)
-            .map(|item| self.render_nav_item(item, cx))
-            .collect::<Vec<_>>();
-
-        SidebarGroup::new(section).child(SidebarMenu::new().children(items))
-    }
-
     fn render_nav_item(&self, item: FeatureItem, cx: &mut Context<Self>) -> SidebarMenuItem {
         let feature = item.id();
         let children = item
@@ -623,7 +647,6 @@ impl RootView {
         let menu_item = SidebarMenuItem::new(feature.title())
             .icon(feature_icon(feature))
             .active(active)
-            .suffix(move |_, _| div().text_xs().child(nav_badge(feature)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_feature(feature);
                 cx.notify();
@@ -631,7 +654,7 @@ impl RootView {
 
         if has_children {
             menu_item
-                .default_open(true)
+                .default_open(item.contains(self.active_feature()))
                 .click_to_toggle(true)
                 .children(children)
         } else {
@@ -655,7 +678,7 @@ impl RootView {
         let action_root = root_view.clone();
         let context_root = root_view.clone();
         let action = if is_pinned {
-            Toggle::new(format!("pin-tab-{}", nav_badge(feature)))
+            Toggle::new(format!("pin-tab-{}", feature.id()))
                 .xsmall()
                 .checked(true)
                 .icon(IconName::StarFill)
@@ -664,12 +687,13 @@ impl RootView {
                     cx.stop_propagation();
                     _ = action_root.update(cx, |this, cx| {
                         this.toggle_pin_tab(feature);
+                        this.persist_pinned_tabs(cx);
                         cx.notify();
                     });
                 })
                 .into_any_element()
         } else {
-            Button::new(format!("close-tab-{}", nav_badge(feature)))
+            Button::new(format!("close-tab-{}", feature.id()))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Close)
@@ -678,6 +702,7 @@ impl RootView {
                     cx.stop_propagation();
                     _ = action_root.update(cx, |this, cx| {
                         this.close_tab(feature);
+                        this.persist_pinned_tabs(cx);
                         cx.notify();
                     });
                 })
@@ -900,6 +925,7 @@ impl RootView {
                                     move |_, _, cx| {
                                         _ = root_view.update(cx, |this, cx| {
                                             this.close_tab(feature);
+                                            this.persist_pinned_tabs(cx);
                                             cx.notify();
                                         });
                                     }
@@ -959,6 +985,7 @@ impl RootView {
                                         move |_, _, cx| {
                                             _ = root_view.update(cx, |this, cx| {
                                                 this.toggle_pin_tab(feature);
+                                                this.persist_pinned_tabs(cx);
                                                 cx.notify();
                                             });
                                         }
@@ -1014,19 +1041,20 @@ impl RootView {
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.toggle_pin_tab(active_feature);
+                    this.persist_pinned_tabs(cx);
                     cx.notify();
                 })),
         )
     }
 
-    fn render_active_feature(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_active_feature(&mut self, cx: &mut Context<Self>) -> AnyElement {
         match self.active_feature() {
-            FeatureId::Home => self.home_feature.render(window, cx),
+            FeatureId::Home => self.home_feature.render(cx),
             FeatureId::Projects | FeatureId::ProjectTemplates | FeatureId::ProjectEnvironments => {
                 ProjectsFeature::render(cx)
             }
             FeatureId::Tasks => TasksFeature::render(cx),
-            FeatureId::VirtualScroll => self.virtual_scroll_feature.render(window, cx),
+            FeatureId::VirtualScroll => self.virtual_scroll_feature.render(cx),
             FeatureId::Reports
             | FeatureId::Analytics
             | FeatureId::Releases
@@ -1085,7 +1113,7 @@ impl Render for RootView {
         let title_bar_content = self.render_title_bar_content(cx);
         let panel_header = self.render_panel_header(cx);
         let content_scrollable = self.active_feature() != FeatureId::VirtualScroll;
-        let active_feature = self.render_active_feature(window, cx);
+        let active_feature = self.render_active_feature(cx);
 
         div()
             .key_context(account_actions::CONTEXT)
@@ -1095,6 +1123,8 @@ impl Render for RootView {
             .size_full()
             .child(
                 WorkspaceLayout::new(sidebar, title_bar_content, active_feature)
+                    .with_sidebar_width(px(224.0))
+                    .with_sidebar_width_range(px(208.0)..px(300.0))
                     .with_panel_header(panel_header)
                     .with_content_scrollable(content_scrollable)
                     .render(window, cx),
@@ -1123,29 +1153,6 @@ fn feature_breadcrumb_path(feature: FeatureId) -> Vec<(&'static str, Option<Feat
     }
     path.push((feature.title(), None));
     path
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidebarSeparatorEdge {
-    Top,
-    Bottom,
-}
-
-fn full_bleed_sidebar_separator(
-    edge: SidebarSeparatorEdge,
-    theme: &gpui_component::Theme,
-) -> impl IntoElement {
-    let separator = div()
-        .absolute()
-        .left(rems(-0.75))
-        .right(rems(-0.75))
-        .h(px(1.0))
-        .bg(theme.sidebar_border);
-
-    match edge {
-        SidebarSeparatorEdge::Top => separator.top_0(),
-        SidebarSeparatorEdge::Bottom => separator.bottom_0(),
-    }
 }
 
 fn account_icon(kind: AccountActionKind) -> IconName {
@@ -1177,26 +1184,5 @@ fn feature_icon(feature: FeatureId) -> IconName {
         FeatureId::Billing => IconName::Building2,
         FeatureId::HelpCenter => IconName::Info,
         FeatureId::Experiments => IconName::Palette,
-    }
-}
-
-fn nav_badge(feature: FeatureId) -> &'static str {
-    match feature {
-        FeatureId::Home => "01",
-        FeatureId::Projects | FeatureId::ProjectTemplates | FeatureId::ProjectEnvironments => "02",
-        FeatureId::Tasks => "03",
-        FeatureId::VirtualScroll => "04",
-        FeatureId::Reports => "05",
-        FeatureId::Analytics => "06",
-        FeatureId::Releases => "07",
-        FeatureId::Secrets => "08",
-        FeatureId::Integrations => "09",
-        FeatureId::AuditLogs => "10",
-        FeatureId::Team => "11",
-        FeatureId::Automation => "12",
-        FeatureId::Notifications => "13",
-        FeatureId::Billing => "14",
-        FeatureId::HelpCenter => "15",
-        FeatureId::Experiments => "16",
     }
 }

@@ -1,5 +1,5 @@
 use gpui::TestAppContext;
-use gpui_component::{Theme, ThemeMode, ThemeSet};
+use gpui_component::{Size, Theme, ThemeMode, ThemeSet};
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
 const XUWE_THEME_SET: &str = include_str!("../themes/xuwe.json");
@@ -63,5 +63,32 @@ fn theme_global_initializes_and_switches_inside_gpui(cx: &mut TestAppContext) {
 
         assert_eq!(theme::selection(cx).color_scheme(), ColorScheme::Dark);
         assert_eq!(Theme::global(cx).mode, ThemeMode::Dark);
+    });
+}
+
+#[gpui::test]
+fn font_size_updates_theme_and_survives_color_scheme_changes(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        theme::init(cx);
+
+        theme::set_font_size(18, cx);
+        theme::set_color_scheme(ColorScheme::Dark, cx);
+
+        assert_eq!(theme::font_size(cx), 18);
+        assert_eq!(Theme::global(cx).font_size, gpui::px(18.0));
+    });
+}
+
+#[gpui::test]
+fn component_size_survives_color_scheme_changes(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        theme::init(cx);
+
+        theme::set_component_size(Size::Large, cx);
+        theme::set_color_scheme(ColorScheme::Dark, cx);
+
+        assert_eq!(theme::component_size(cx), Size::Large);
     });
 }

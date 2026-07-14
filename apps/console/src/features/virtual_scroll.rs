@@ -10,7 +10,7 @@ use gpui::{
     prelude::*,
 };
 use gpui_component::{
-    ActiveTheme as _, Sizable as _, Size, StyleSized as _, StyledExt as _,
+    ActiveTheme as _, Sizable as _, StyleSized as _, StyledExt as _,
     table::{Column, ColumnFixed, ColumnGroup, ColumnSort, DataTable, TableDelegate, TableState},
 };
 use ui::Card;
@@ -113,15 +113,47 @@ pub struct VirtualScrollFeature {
 }
 
 impl VirtualScrollFeature {
+    /// 创建虚拟滚动表格使用的长期状态。
+    ///
+    /// 该方法必须在所属根视图的构造阶段调用，确保 `render` 不会创建 Entity 或引入其他
+    /// 长期副作用。
+    pub fn initialize<T>(&mut self, window: &mut Window, cx: &mut Context<T>)
+    where
+        T: 'static,
+    {
+        self.table.get_or_insert_with(|| {
+            cx.new(|cx| {
+                TableState::new(StockTableDelegate::new(DEFAULT_ROW_COUNT), window, cx)
+                    .loop_selection(true)
+                    .col_resizable(true)
+                    .col_movable(true)
+                    .sortable(true)
+                    .col_selectable(true)
+                    .row_selectable(true)
+                    .cell_selectable(false)
+                    .row_header(false)
+            })
+        });
+    }
+
     /// 渲染虚拟滚动股票数据表。
     ///
     /// 页面展示标题、当前表格规模摘要和 `DataTable` 主体，表格本身支持行列虚拟滚动、固定列、
     /// 列调整、列拖拽排序和点击表头排序。
-    pub fn render<T>(&mut self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
+    ///
+    /// # Panics
+    ///
+    /// 如果所属 [`RootView`](crate::features::root::RootView) 未在构造阶段调用
+    /// `initialize_feature_state`，虚拟滚动表格状态尚未创建时会 panic。
+    pub fn render<T>(&self, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
-        let table = self.table(window, cx);
+        let table = self
+            .table
+            .as_ref()
+            .expect("虚拟滚动表格状态必须在 RootView 初始化阶段创建");
+        let component_size = theme::component_size(cx);
         let table_state = table.read(cx);
         let delegate = table_state.delegate();
         let theme = cx.theme();
@@ -190,38 +222,13 @@ impl VirtualScrollFeature {
                     .min_h_0()
                     .w_full()
                     .child(
-                        DataTable::new(&table)
-                            .with_size(Size::Medium)
+                        DataTable::new(table)
+                            .with_size(component_size)
                             .stripe(true)
                             .scrollbar_visible(true, true),
                     ),
             )
             .into_any_element()
-    }
-
-    fn table<T>(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<T>,
-    ) -> Entity<TableState<StockTableDelegate>>
-    where
-        T: 'static,
-    {
-        self.table
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    TableState::new(StockTableDelegate::new(DEFAULT_ROW_COUNT), window, cx)
-                        .loop_selection(true)
-                        .col_resizable(true)
-                        .col_movable(true)
-                        .sortable(true)
-                        .col_selectable(true)
-                        .row_selectable(true)
-                        .cell_selectable(false)
-                        .row_header(false)
-                })
-            })
-            .clone()
     }
 }
 
@@ -328,7 +335,6 @@ impl Stock {
 struct StockTableDelegate {
     stocks: Vec<Stock>,
     columns: Vec<Column>,
-    size: Size,
     visible_rows: Range<usize>,
     visible_cols: Range<usize>,
 }
@@ -338,7 +344,6 @@ impl StockTableDelegate {
         Self {
             stocks: (0..size).map(Stock::generated).collect(),
             columns: stock_columns(),
-            size: Size::Medium,
             visible_rows: Range::default(),
             visible_cols: Range::default(),
         }
@@ -349,11 +354,11 @@ impl StockTableDelegate {
 
         div()
             .h_full()
-            .table_cell_size(self.size)
+            .flex()
+            .items_center()
+            .table_cell_size(theme::component_size(cx))
             .child(format!("{value:.3}"))
-            .when(col.align == TextAlign::Right, |this| {
-                this.flex().items_center().justify_end()
-            })
+            .when(col.align == TextAlign::Right, |this| this.justify_end())
             .when(bucket == 0, |this| {
                 this.text_color(cx.theme().red)
                     .bg(cx.theme().red_light.alpha(0.05))
@@ -370,11 +375,11 @@ impl StockTableDelegate {
 
         div()
             .h_full()
-            .table_cell_size(self.size)
+            .flex()
+            .items_center()
+            .table_cell_size(theme::component_size(cx))
             .child(format!("{:.2}%", value * 100.0))
-            .when(col.align == TextAlign::Right, |this| {
-                this.flex().items_center().justify_end()
-            })
+            .when(col.align == TextAlign::Right, |this| this.justify_end())
             .when(bucket == 0, |this| {
                 this.text_color(cx.theme().red)
                     .bg(cx.theme().red_light.alpha(0.05))
@@ -389,15 +394,13 @@ impl StockTableDelegate {
     fn render_plain(&self, col: &Column, value: impl IntoElement, cx: &App) -> AnyElement {
         div()
             .h_full()
-            .table_cell_size(self.size)
+            .flex()
+            .items_center()
+            .table_cell_size(theme::component_size(cx))
             .text_color(cx.theme().foreground)
             .child(value)
-            .when(col.align == TextAlign::Center, |this| {
-                this.flex().items_center().justify_center()
-            })
-            .when(col.align == TextAlign::Right, |this| {
-                this.flex().items_center().justify_end()
-            })
+            .when(col.align == TextAlign::Center, |this| this.justify_center())
+            .when(col.align == TextAlign::Right, |this| this.justify_end())
             .into_any_element()
     }
 
@@ -490,7 +493,9 @@ impl TableDelegate for StockTableDelegate {
             "id" => self.render_plain(col, stock.id.to_string(), cx),
             "market" => div()
                 .h_full()
-                .table_cell_size(self.size)
+                .flex()
+                .items_center()
+                .table_cell_size(theme::component_size(cx))
                 .text_color(if stock.seed.market() == "US" {
                     cx.theme().blue
                 } else {

@@ -28,14 +28,43 @@ pub struct HomeFeature {
 }
 
 impl HomeFeature {
-    /// 渲染首页概览内容。
+    /// 创建首页使用的长期表格状态。
     ///
-    /// 页面包含模板状态、关键指标、建议的下一步操作和虚拟表单数据表，用于展示完整桌面应用的首页组织方式。
-    pub fn render<T>(&mut self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
+    /// 该方法必须在所属根视图的构造阶段调用，避免在 `render` 中创建 Entity，导致渲染
+    /// 副作用与组件生命周期混在一起。
+    pub fn initialize<T>(&mut self, window: &mut Window, cx: &mut Context<T>)
     where
         T: 'static,
     {
-        let table = self.table(window, cx);
+        self.table.get_or_insert_with(|| {
+            cx.new(|cx| {
+                TableState::new(VirtualFormTableDelegate::new(), window, cx)
+                    .cell_selectable(true)
+                    .row_header(false)
+                    .col_movable(true)
+                    .col_resizable(true)
+                    .sortable(true)
+            })
+        });
+    }
+
+    /// 渲染首页概览内容。
+    ///
+    /// 页面包含模板状态、关键指标、建议的下一步操作和虚拟表单数据表，用于展示完整桌面应用的首页组织方式。
+    ///
+    /// # Panics
+    ///
+    /// 如果所属 [`RootView`](crate::features::root::RootView) 未在构造阶段调用
+    /// `initialize_feature_state`，首页表格状态尚未创建时会 panic。
+    pub fn render<T>(&self, cx: &mut Context<T>) -> AnyElement
+    where
+        T: 'static,
+    {
+        let table = self
+            .table
+            .as_ref()
+            .expect("首页表格状态必须在 RootView 初始化阶段创建");
+        let component_size = theme::component_size(cx);
         let theme = cx.theme();
 
         div()
@@ -102,30 +131,8 @@ impl HomeFeature {
                             .child(capability("macOS 打包", "CLI 已支持 .app、DMG、签名、公证和校验文件", theme)),
                     ),
             )
-            .child(virtual_form_panel(&table, theme))
+            .child(virtual_form_panel(table, component_size, theme))
             .into_any_element()
-    }
-
-    fn table<T>(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<T>,
-    ) -> Entity<TableState<VirtualFormTableDelegate>>
-    where
-        T: 'static,
-    {
-        self.table
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    TableState::new(VirtualFormTableDelegate::new(), window, cx)
-                        .cell_selectable(true)
-                        .row_header(false)
-                        .col_movable(true)
-                        .col_resizable(true)
-                        .sortable(true)
-                })
-            })
-            .clone()
     }
 }
 
@@ -279,6 +286,7 @@ fn panel(title: &'static str) -> GroupBox {
 
 fn virtual_form_panel(
     table: &Entity<TableState<VirtualFormTableDelegate>>,
+    component_size: gpui_component::Size,
     theme: &Theme,
 ) -> AnyElement {
     panel("虚拟表单")
@@ -312,7 +320,7 @@ fn virtual_form_panel(
         .child(
             div().h(px(320.)).w_full().child(
                 DataTable::new(table)
-                    .with_size(gpui_component::Size::Small)
+                    .with_size(component_size)
                     .stripe(true)
                     .scrollbar_visible(true, true),
             ),
@@ -483,17 +491,18 @@ impl VirtualFormTableDelegate {
             return "--".into_any_element();
         };
         let text = self.row_text(row_ix, col.key.as_ref());
+        let component_size = theme::component_size(cx);
         let theme = cx.theme();
 
         div()
             .h_full()
-            .table_cell_size(gpui_component::Size::Small)
+            .flex()
+            .items_center()
+            .table_cell_size(component_size)
             .text_color(theme.muted_foreground)
-            .when(col.align == TextAlign::Center, |this| {
-                this.flex().items_center().justify_center()
-            })
+            .when(col.align == TextAlign::Center, |this| this.justify_center())
             .when(col.align == TextAlign::Right, |this| {
-                this.flex().items_center().justify_end().font_medium()
+                this.justify_end().font_medium()
             })
             .when(col.key.as_ref() == "id", |this| {
                 this.font_medium().text_color(theme.foreground)

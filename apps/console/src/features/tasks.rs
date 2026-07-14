@@ -25,6 +25,7 @@ impl TasksFeature {
     where
         T: 'static,
     {
+        let component_size = theme::component_size(cx);
         let theme = cx.theme();
         let rows = task_rows()
             .iter()
@@ -70,6 +71,7 @@ impl TasksFeature {
             )
             .child(
                 Table::new()
+                    .with_size(component_size)
                     .rounded_lg()
                     .border_1()
                     .border_color(theme.border)

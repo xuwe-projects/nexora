@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPUI 框架开发"
+  short_description: "提供 GPUI 状态、异步、布局、事件、焦点与测试实践指南"
+  default_prompt: "使用 $gpui 实现或审查当前项目中的 GPUI 框架代码。"

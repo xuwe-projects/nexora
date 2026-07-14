@@ -48,6 +48,59 @@ pub enum FeatureId {
 }
 
 impl FeatureId {
+    /// 返回用于用户偏好持久化的稳定功能区标识。
+    ///
+    /// 该标识不会使用展示标题，避免界面文案调整后已保存的置顶标签失效。
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Projects => "projects",
+            Self::ProjectTemplates => "project-templates",
+            Self::ProjectEnvironments => "project-environments",
+            Self::Tasks => "tasks",
+            Self::VirtualScroll => "virtual-scroll",
+            Self::Reports => "reports",
+            Self::Analytics => "analytics",
+            Self::Releases => "releases",
+            Self::Secrets => "secrets",
+            Self::Integrations => "integrations",
+            Self::AuditLogs => "audit-logs",
+            Self::Team => "team",
+            Self::Automation => "automation",
+            Self::Notifications => "notifications",
+            Self::Billing => "billing",
+            Self::HelpCenter => "help-center",
+            Self::Experiments => "experiments",
+        }
+    }
+
+    /// 根据用户偏好中的稳定标识恢复功能区。
+    ///
+    /// 已被新版本移除或无法识别的标识返回 `None`，调用方可以忽略过期的置顶记录。
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "home" => Some(Self::Home),
+            "projects" => Some(Self::Projects),
+            "project-templates" => Some(Self::ProjectTemplates),
+            "project-environments" => Some(Self::ProjectEnvironments),
+            "tasks" => Some(Self::Tasks),
+            "virtual-scroll" => Some(Self::VirtualScroll),
+            "reports" => Some(Self::Reports),
+            "analytics" => Some(Self::Analytics),
+            "releases" => Some(Self::Releases),
+            "secrets" => Some(Self::Secrets),
+            "integrations" => Some(Self::Integrations),
+            "audit-logs" => Some(Self::AuditLogs),
+            "team" => Some(Self::Team),
+            "automation" => Some(Self::Automation),
+            "notifications" => Some(Self::Notifications),
+            "billing" => Some(Self::Billing),
+            "help-center" => Some(Self::HelpCenter),
+            "experiments" => Some(Self::Experiments),
+            _ => None,
+        }
+    }
+
     /// 返回功能区在导航和标题区域展示的名称。
     ///
     /// 该名称应保持短小，适合放在侧边栏和页面标题中。

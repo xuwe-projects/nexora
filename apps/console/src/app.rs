@@ -81,6 +81,8 @@ impl Application for Console {
     fn initialize(&mut self, cx: &mut App) {
         config::init(cx);
         theme::set_selection(config::theme_selection(cx), cx);
+        theme::set_font_size(config::font_size(cx), cx);
+        theme::set_component_size(config::component_size(cx), cx);
         self.options.startup_display_uuid = config::startup_display_uuid(cx).map(ToOwned::to_owned);
     }
 
@@ -88,7 +90,7 @@ impl Application for Console {
     ///
     /// 当前实现创建 `features::root::RootView`，该实体会由桌面运行器包裹进
     /// `gpui_component::Root` 后作为窗口根节点。
-    fn build_root_view(&mut self, _window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
+    fn build_root_view(&mut self, window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
         gpui_component::set_locale("zh-CN");
         actions::init();
         account_actions::bind_keys(cx);
@@ -96,7 +98,12 @@ impl Application for Console {
         initialize_auth(cx);
         settings_feature::init(console_updater_config(), cx);
         window_actions::init("Xuwe Console", cx);
-        cx.new(|_| RootView::new())
+        let pinned_tabs = config::pinned_tabs(cx);
+        cx.new(|cx| {
+            let mut root = RootView::with_pinned_tabs(pinned_tabs);
+            root.initialize_feature_state(window, cx);
+            root
+        })
     }
 }
 

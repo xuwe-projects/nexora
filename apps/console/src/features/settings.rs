@@ -8,14 +8,17 @@ use crate::config;
 use actions::settings::OpenSettings;
 use changelog::{ChangelogEntry, ChangelogError, EmbeddedChangelogRepository};
 use gpui::{
-    AnyElement, App, Axis, Context, Global, IntoElement, ParentElement as _, Render, SharedString,
-    StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div, prelude::*, px, size,
+    AnyElement, App, Axis, Context, Entity, Global, IntoElement, ParentElement as _, Render,
+    SharedString, StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div,
+    prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, TitleBar,
+    ActiveTheme as _, Icon, IconName, Sizable as _, Size, TitleBar,
     button::{Button, ButtonVariants as _},
     group_box::GroupBoxVariant,
+    h_flex,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
     tag::Tag,
     text::TextView,
 };
@@ -125,7 +128,7 @@ impl SettingsFeature {
     ///
     /// 页面首先展示可立即生效的主题设置与新窗口默认显示器，随后展示版本信息和本次更新内容。
     /// 用户偏好从应用级内存状态读取，交互变更会立即写入当前操作系统用户的本地配置文件。
-    pub fn render<T>(cx: &mut Context<T>) -> AnyElement
+    pub fn render<T>(font_size_slider: &Entity<SliderState>, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
@@ -133,10 +136,11 @@ impl SettingsFeature {
         let updater_config = cx.global::<SettingsWindowState>().updater_config.clone();
 
         Settings::new("console-settings")
+            .with_size(theme::component_size(cx))
             .header_style(&header_style)
             .with_group_variant(GroupBoxVariant::Outline)
             .pages(
-                std::iter::once(theme_setting_page())
+                std::iter::once(theme_setting_page(font_size_slider.clone()))
                     .chain(std::iter::once(window_setting_page(cx)))
                     .chain(std::iter::once(update_setting_page(updater_config))),
             )
@@ -149,14 +153,46 @@ impl SettingsFeature {
 /// 该视图只负责为 `SettingsFeature` 提供全窗口尺寸和主题背景，设置项本身仍由 feature 模块维护，
 /// 并继续使用 `gpui-component` 的 `Settings`、`SettingPage` 和 `SettingField` 组件。
 pub struct SettingsWindow {
+    font_size_slider: Entity<SliderState>,
     _preferences_subscription: Subscription,
+    _font_size_subscription: Subscription,
 }
 
 impl SettingsWindow {
     /// 创建独立设置窗口视图，并观察后续用户偏好变化以局部刷新当前窗口。
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let current_font_size = config::font_size(cx);
+        let font_size_slider = cx.new(|_| {
+            SliderState::new()
+                .min(f32::from(theme::MIN_FONT_SIZE))
+                .max(f32::from(theme::MAX_FONT_SIZE))
+                .default_value(f32::from(current_font_size))
+                .step(1.0)
+        });
+        let font_size_subscription =
+            cx.subscribe(&font_size_slider, |_, _, event: &SliderEvent, cx| {
+                let font_size = match event {
+                    SliderEvent::Change(value) => {
+                        let font_size = font_size_from_slider(value);
+                        theme::set_font_size(font_size, cx);
+                        font_size
+                    }
+                    SliderEvent::Release(value) => {
+                        let font_size = font_size_from_slider(value);
+                        theme::set_font_size(font_size, cx);
+                        config::persist_font_size(font_size, cx);
+                        font_size
+                    }
+                };
+                if font_size != config::font_size(cx) {
+                    cx.notify();
+                }
+            });
+
         Self {
+            font_size_slider,
             _preferences_subscription: config::observe_preferences(cx),
+            _font_size_subscription: font_size_subscription,
         }
     }
 }
@@ -168,7 +204,7 @@ impl Render for SettingsWindow {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .child(SettingsFeature::render(cx));
+            .child(SettingsFeature::render(&self.font_size_slider, cx));
 
         if cfg!(target_os = "macos") {
             return div()
@@ -232,11 +268,11 @@ pub fn current_console_changelog() -> Result<Option<ChangelogEntry>, ChangelogEr
         .cloned())
 }
 
-fn theme_setting_page() -> SettingPage {
+fn theme_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage {
     SettingPage::new("外观")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::Palette))
-        .description("切换应用主题预设与浅色、深色显示模式。")
+        .description("切换应用主题预设、显示模式、文字大小与组件密度。")
         .default_open(true)
         .resettable(true)
         .group(
@@ -289,6 +325,94 @@ fn theme_setting_page() -> SettingPage {
                 .description("跟随系统会在操作系统外观变化时自动切换浅色或深色主题。"),
             ]),
         )
+        .group(
+            SettingGroup::new()
+                .title("文字")
+                .item(font_size_setting_item(font_size_slider)),
+        )
+        .group(
+            SettingGroup::new()
+                .title("组件")
+                .item(component_size_setting_item()),
+        )
+}
+
+fn font_size_setting_item(font_size_slider: Entity<SliderState>) -> SettingItem {
+    let slider_for_render = font_size_slider.clone();
+    let slider_for_reset = font_size_slider;
+
+    SettingItem::new(
+        "文字大小",
+        SettingField::render(move |options, _window, cx| {
+            let font_size = theme::font_size(cx);
+
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(160.0))
+                        .child(Slider::new(&slider_for_render).disabled(options.disabled)),
+                )
+                .child(
+                    div()
+                        .w(px(48.0))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{font_size}px")),
+                )
+        })
+        .on_reset(
+            |cx| {
+                theme::font_size(cx) != theme::DEFAULT_FONT_SIZE
+                    || config::font_size(cx) != theme::DEFAULT_FONT_SIZE
+            },
+            move |window, cx| {
+                theme::set_font_size(theme::DEFAULT_FONT_SIZE, cx);
+                config::persist_font_size(theme::DEFAULT_FONT_SIZE, cx);
+                slider_for_reset.update(cx, |slider, cx| {
+                    slider.set_value(f32::from(theme::DEFAULT_FONT_SIZE), window, cx);
+                });
+            },
+        ),
+    )
+    .layout(Axis::Vertical)
+    .description("调整应用界面的基础字号。")
+    .keywords(["字号", "字体", "font size"])
+}
+
+fn font_size_from_slider(value: &SliderValue) -> u16 {
+    value.start().round() as u16
+}
+
+fn component_size_setting_item() -> SettingItem {
+    let options = [
+        (Size::XSmall, "超紧凑"),
+        (Size::Small, "紧凑"),
+        (Size::Medium, "标准"),
+        (Size::Large, "宽松"),
+    ]
+    .into_iter()
+    .map(|(size, label)| (SharedString::from(size.as_str()), SharedString::from(label)))
+    .collect();
+
+    SettingItem::new(
+        "组件尺寸",
+        SettingField::dropdown(
+            options,
+            |cx: &App| SharedString::from(theme::component_size(cx).as_str()),
+            |value: SharedString, cx: &mut App| {
+                let size = Size::from_str(value.as_ref());
+                theme::set_component_size(size, cx);
+                config::persist_component_size(size, cx);
+            },
+        )
+        .default_value(SharedString::from(theme::DEFAULT_COMPONENT_SIZE.as_str())),
+    )
+    .description("统一调整表格、设置控件等支持尺寸语义的组件密度。")
+    .keywords(["组件尺寸", "界面密度", "size", "density"])
 }
 
 fn window_setting_page(cx: &App) -> SettingPage {

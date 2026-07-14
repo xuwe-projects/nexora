@@ -25,6 +25,7 @@ impl ProjectsFeature {
     where
         T: 'static,
     {
+        let component_size = theme::component_size(cx);
         let theme = cx.theme();
         let rows = project_rows()
             .iter()
@@ -42,6 +43,7 @@ impl ProjectsFeature {
             ))
             .child(
                 Table::new()
+                    .with_size(component_size)
                     .rounded_lg()
                     .border_1()
                     .border_color(theme.border)

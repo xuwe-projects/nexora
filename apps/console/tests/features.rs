@@ -8,7 +8,7 @@ use actions::account::AccountActionKind;
 use configuration::UserConfigStore;
 use desktop::{Application as _, centered_window_bounds};
 use gpui::{AppContext as _, Axis, TestAppContext, px, size};
-use gpui_component::setting::SettingItem;
+use gpui_component::{Size, setting::SettingItem};
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/auth.rs"]
@@ -148,7 +148,7 @@ fn console_preferences_keep_theme_selection() {
 }
 
 #[test]
-fn console_preferences_round_trip_theme_and_startup_display() {
+fn console_preferences_round_trip_theme_display_font_size_component_size_and_pinned_tabs() {
     let directory = temporary_directory("preferences");
     let path = directory.join("settings.toml");
     let store = UserConfigStore::<ConsolePreferences>::at_path(&path);
@@ -156,6 +156,9 @@ fn console_preferences_round_trip_theme_and_startup_display() {
     let selection = ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark);
     preferences.set_theme_selection(selection);
     preferences.set_startup_display_uuid(Some("display-uuid".to_owned()));
+    preferences.set_font_size(18);
+    preferences.set_component_size(Size::Large);
+    preferences.set_pinned_tabs(&[FeatureId::Projects, FeatureId::Tasks]);
 
     store.save(&preferences).expect("用户偏好应当可以保存");
     let loaded = store
@@ -164,6 +167,12 @@ fn console_preferences_round_trip_theme_and_startup_display() {
 
     assert_eq!(loaded.theme_selection(), selection);
     assert_eq!(loaded.startup_display_uuid(), Some("display-uuid"));
+    assert_eq!(loaded.font_size(), 18);
+    assert_eq!(loaded.component_size(), Size::Large);
+    assert_eq!(
+        loaded.pinned_tabs(),
+        vec![FeatureId::Projects, FeatureId::Tasks]
+    );
     _ = fs::remove_dir_all(directory);
 }
 
@@ -184,9 +193,35 @@ fn version_one_preferences_default_to_system_primary_display() {
         .expect("旧版用户偏好应当使用新字段默认值加载");
 
     assert_eq!(loaded.startup_display_uuid(), None);
+    assert_eq!(loaded.font_size(), theme::DEFAULT_FONT_SIZE);
+    assert_eq!(loaded.component_size(), theme::DEFAULT_COMPONENT_SIZE);
+    assert!(loaded.pinned_tabs().is_empty());
     assert_eq!(
         loaded.theme_selection(),
         ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark)
+    );
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn console_preferences_ignore_unknown_and_duplicate_pinned_tabs() {
+    let directory = temporary_directory("unknown-pinned-tabs");
+    let path = directory.join("settings.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试配置目录");
+    fs::write(
+        &path,
+        "schema_version = 3\n\n[workspace]\npinned_tabs = [\"projects\", \"removed-feature\", \"projects\", \"tasks\"]\n",
+    )
+    .expect("应当可以写入包含过期标签的用户配置");
+    let store = UserConfigStore::<ConsolePreferences>::at_path(&path);
+
+    let loaded = store
+        .load_versioned_or_default()
+        .expect("过期标签标识不应阻止其他偏好加载");
+
+    assert_eq!(
+        loaded.pinned_tabs(),
+        vec![FeatureId::Projects, FeatureId::Tasks]
     );
     _ = fs::remove_dir_all(directory);
 }
@@ -543,6 +578,18 @@ fn root_view_toggles_pinned_tabs_at_the_front() {
         &[FeatureId::Tasks, FeatureId::VirtualScroll, FeatureId::Home]
     );
     assert_eq!(view.pinned_tabs(), &[FeatureId::Tasks]);
+}
+
+#[test]
+fn root_view_restores_pinned_tabs_at_startup() {
+    let view = RootView::with_pinned_tabs(vec![FeatureId::Tasks, FeatureId::Projects]);
+
+    assert_eq!(view.pinned_tabs(), &[FeatureId::Tasks, FeatureId::Projects]);
+    assert_eq!(
+        view.opened_tabs(),
+        &[FeatureId::Tasks, FeatureId::Projects, FeatureId::Home]
+    );
+    assert_eq!(view.active_feature(), FeatureId::Home);
 }
 
 #[test]

@@ -3,13 +3,21 @@
 //! 该 crate 负责注册应用内置主题、保存当前主题选择，并通过 `gpui-component`
 //! 的全局 `Theme` 与 `ThemeRegistry` 统一应用浅色、深色和跟随系统外观模式。
 
-use gpui::{App, Global, Window};
-use gpui_component::{Theme, ThemeMode, ThemeRegistry, scroll::ScrollbarShow};
+use gpui::{App, Global, Window, px};
+use gpui_component::{Size, Theme, ThemeMode, ThemeRegistry, scroll::ScrollbarShow};
 use serde::{Deserialize, Serialize};
 
 const XUWE_THEME_SET: &str = include_str!("../themes/xuwe.json");
 const XUWE_LIGHT_THEME_NAME: &str = "Xuwe Light";
 const XUWE_DARK_THEME_NAME: &str = "Xuwe Dark";
+/// 应用界面默认基础字号，单位为逻辑像素。
+pub const DEFAULT_FONT_SIZE: u16 = 14;
+/// 应用设置允许选择的最小基础字号，单位为逻辑像素。
+pub const MIN_FONT_SIZE: u16 = 12;
+/// 应用设置允许选择的最大基础字号，单位为逻辑像素。
+pub const MAX_FONT_SIZE: u16 = 20;
+/// 支持 `with_size` 的应用组件默认使用标准尺寸。
+pub const DEFAULT_COMPONENT_SIZE: Size = Size::Medium;
 
 /// 应用颜色模式。
 ///
@@ -124,9 +132,21 @@ impl ThemeSelection {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct ThemeState {
     selection: ThemeSelection,
+    font_size: u16,
+    component_size: Size,
+}
+
+impl ThemeState {
+    fn new() -> Self {
+        Self {
+            selection: ThemeSelection::default(),
+            font_size: DEFAULT_FONT_SIZE,
+            component_size: DEFAULT_COMPONENT_SIZE,
+        }
+    }
 }
 
 impl Global for ThemeState {}
@@ -147,7 +167,7 @@ pub fn init(cx: &mut App) {
         .expect("内置 Xuwe 主题必须符合 gpui-component ThemeSet 格式");
 
     if !cx.has_global::<ThemeState>() {
-        cx.set_global(ThemeState::default());
+        cx.set_global(ThemeState::new());
     }
 
     apply_active_theme(None, cx);
@@ -183,6 +203,24 @@ pub fn attach_window(window: &mut Window, cx: &mut App) {
 /// 在 [`init`] 之前调用时会因为全局主题状态尚未创建而 panic。
 pub fn selection(cx: &App) -> ThemeSelection {
     cx.global::<ThemeState>().selection
+}
+
+/// 返回当前应用界面的基础字号，单位为逻辑像素。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为全局主题状态尚未创建而 panic。
+pub fn font_size(cx: &App) -> u16 {
+    cx.global::<ThemeState>().font_size
+}
+
+/// 返回支持 `with_size` 的应用组件当前应使用的统一尺寸。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为全局主题状态尚未创建而 panic。
+pub fn component_size(cx: &App) -> Size {
+    cx.global::<ThemeState>().component_size
 }
 
 /// 一次性更新主题预设与颜色模式并刷新全部窗口。
@@ -225,6 +263,41 @@ pub fn set_color_scheme(color_scheme: ColorScheme, cx: &mut App) {
     set_selection(ThemeSelection::new(current.preset(), color_scheme), cx);
 }
 
+/// 更新应用界面的基础字号，并刷新所有窗口。
+///
+/// 传入值会被限制在 [`MIN_FONT_SIZE`] 和 [`MAX_FONT_SIZE`] 之间。该设置只修改当前
+/// 运行时主题状态，调用方需要自行决定是否持久化到用户配置。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为全局主题状态尚未创建而 panic。
+pub fn set_font_size(new_font_size: u16, cx: &mut App) {
+    let new_font_size = new_font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+    if font_size(cx) == new_font_size {
+        return;
+    }
+
+    cx.global_mut::<ThemeState>().font_size = new_font_size;
+    apply_font_size(cx);
+    cx.refresh_windows();
+}
+
+/// 更新支持 `with_size` 的应用组件统一尺寸，并刷新所有窗口。
+///
+/// 该设置只修改当前运行时主题状态，调用方需要自行决定是否持久化到用户配置。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为全局主题状态尚未创建而 panic。
+pub fn set_component_size(new_component_size: Size, cx: &mut App) {
+    if component_size(cx) == new_component_size {
+        return;
+    }
+
+    cx.global_mut::<ThemeState>().component_size = new_component_size;
+    cx.refresh_windows();
+}
+
 fn apply_active_theme(window: Option<&mut Window>, cx: &mut App) {
     let selection = selection(cx);
     let (light_theme, dark_theme) = {
@@ -259,5 +332,10 @@ fn apply_active_theme(window: Option<&mut Window>, cx: &mut App) {
     }
 
     Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+    apply_font_size(cx);
     cx.refresh_windows();
+}
+
+fn apply_font_size(cx: &mut App) {
+    Theme::global_mut(cx).font_size = px(f32::from(font_size(cx)));
 }

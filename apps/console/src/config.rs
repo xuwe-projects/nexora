@@ -1,12 +1,14 @@
 //! Console 桌面应用用户偏好配置。
 
+use crate::features::FeatureId;
 use configuration::{ConfigurationError, UserConfigStore, VersionedConfiguration};
 use gpui::{App, Context, Global, Subscription, UpdateGlobal as _};
+use gpui_component::Size;
 use serde::{Deserialize, Serialize};
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
 /// Console 用户配置当前 schema 版本。
-const CONSOLE_SCHEMA_VERSION: u32 = 2;
+const CONSOLE_SCHEMA_VERSION: u32 = 3;
 
 /// Console 用户偏好的跨平台配置存储类型。
 pub type ConsolePreferencesStore = UserConfigStore<ConsolePreferences>;
@@ -24,6 +26,8 @@ pub struct ConsolePreferences {
     appearance: AppearancePreferences,
     /// 窗口创建和启动位置相关用户选择。
     window: WindowPreferences,
+    /// 工作区标签和导航相关用户选择。
+    workspace: WorkspacePreferences,
 }
 
 impl Default for ConsolePreferences {
@@ -33,6 +37,7 @@ impl Default for ConsolePreferences {
             schema_version: CONSOLE_SCHEMA_VERSION,
             appearance: AppearancePreferences::default(),
             window: WindowPreferences::default(),
+            workspace: WorkspacePreferences::default(),
         }
     }
 }
@@ -50,6 +55,30 @@ impl ConsolePreferences {
         self.appearance.color_scheme = selection.color_scheme();
     }
 
+    /// 返回应用界面的基础字体大小，单位为逻辑像素。
+    pub fn font_size(&self) -> u16 {
+        self.appearance
+            .font_size
+            .clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE)
+    }
+
+    /// 更新应用界面的基础字体大小，并限制在设置页允许的范围内。
+    pub fn set_font_size(&mut self, font_size: u16) {
+        self.schema_version = CONSOLE_SCHEMA_VERSION;
+        self.appearance.font_size = font_size.clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE);
+    }
+
+    /// 返回支持 `with_size` 的组件应使用的统一尺寸语义。
+    pub fn component_size(&self) -> Size {
+        self.appearance.component_size
+    }
+
+    /// 更新支持 `with_size` 的组件应使用的统一尺寸语义。
+    pub fn set_component_size(&mut self, component_size: Size) {
+        self.schema_version = CONSOLE_SCHEMA_VERSION;
+        self.appearance.component_size = component_size;
+    }
+
     /// 返回主窗口启动及后续新窗口优先使用的显示器稳定 UUID。
     ///
     /// 返回 `None` 表示跟随操作系统当前主显示器。
@@ -64,6 +93,34 @@ impl ConsolePreferences {
         self.schema_version = CONSOLE_SCHEMA_VERSION;
         self.window.startup_display_uuid = display_uuid;
     }
+
+    /// 返回配置中仍能识别的置顶标签，并按保存顺序去除重复项。
+    pub fn pinned_tabs(&self) -> Vec<FeatureId> {
+        self.workspace
+            .pinned_tabs
+            .iter()
+            .filter_map(|id| FeatureId::from_id(id))
+            .fold(Vec::new(), |mut tabs, feature| {
+                if !tabs.contains(&feature) {
+                    tabs.push(feature);
+                }
+                tabs
+            })
+    }
+
+    /// 使用当前标签顺序更新需要在下次启动时恢复的置顶功能区。
+    pub fn set_pinned_tabs(&mut self, pinned_tabs: &[FeatureId]) {
+        self.schema_version = CONSOLE_SCHEMA_VERSION;
+        self.workspace.pinned_tabs = pinned_tabs
+            .iter()
+            .map(|feature| feature.id().to_owned())
+            .fold(Vec::new(), |mut ids, id| {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+                ids
+            });
+    }
 }
 
 impl VersionedConfiguration for ConsolePreferences {
@@ -75,13 +132,28 @@ impl VersionedConfiguration for ConsolePreferences {
 }
 
 /// Console 外观类用户偏好。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 struct AppearancePreferences {
     /// 当前选择的主题预设。
     theme_preset: ThemePreset,
     /// 当前选择的浅色、深色或跟随系统模式。
     color_scheme: ColorScheme,
+    /// 应用界面的基础字体大小，单位为逻辑像素。
+    font_size: u16,
+    /// 支持 `with_size` 的组件统一使用的尺寸语义。
+    component_size: Size,
+}
+
+impl Default for AppearancePreferences {
+    fn default() -> Self {
+        Self {
+            theme_preset: ThemePreset::default(),
+            color_scheme: ColorScheme::default(),
+            font_size: theme::DEFAULT_FONT_SIZE,
+            component_size: theme::DEFAULT_COMPONENT_SIZE,
+        }
+    }
 }
 
 /// Console 窗口类用户偏好。
@@ -90,6 +162,14 @@ struct AppearancePreferences {
 struct WindowPreferences {
     /// 主窗口启动及后续新窗口使用的显示器稳定 UUID；为空时跟随系统主显示器。
     startup_display_uuid: Option<String>,
+}
+
+/// Console 工作区标签相关用户偏好。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct WorkspacePreferences {
+    /// 按标签栏展示顺序保存的置顶功能区稳定标识。
+    pinned_tabs: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -133,6 +213,27 @@ pub fn theme_selection(cx: &App) -> ThemeSelection {
         .theme_selection()
 }
 
+/// 返回当前内存中恢复的应用基础字体大小。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn font_size(cx: &App) -> u16 {
+    cx.global::<PreferencesState>().preferences.font_size()
+}
+
+/// 返回当前内存中恢复的统一组件尺寸。
+///
+/// 表格、设置控件等支持 `gpui-component::Sizable` 的组件应把该值传给 `with_size`，
+/// 避免各页面分别维护密度常量。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn component_size(cx: &App) -> Size {
+    cx.global::<PreferencesState>().preferences.component_size()
+}
+
 /// 返回主窗口启动及后续新窗口优先使用的显示器稳定 UUID。
 ///
 /// `None` 表示跟随操作系统主显示器；返回值来自启动时加载的内存状态，不会在渲染期间访问文件。
@@ -144,6 +245,15 @@ pub fn startup_display_uuid(cx: &App) -> Option<&str> {
     cx.global::<PreferencesState>()
         .preferences
         .startup_display_uuid()
+}
+
+/// 返回启动时恢复且仍然有效的置顶标签列表。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn pinned_tabs(cx: &App) -> Vec<FeatureId> {
+    cx.global::<PreferencesState>().preferences.pinned_tabs()
 }
 
 /// 观察用户偏好变化，并在变化时通知当前 Entity 局部重渲染。
@@ -174,6 +284,47 @@ pub fn persist_theme_selection(selection: ThemeSelection, cx: &mut App) {
     });
 }
 
+/// 更新应用基础字体大小并立即保存到当前用户的本地配置文件。
+///
+/// 字号会被限制在设置页允许的范围内；保存失败时仍保留本次运行中的选择。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn persist_font_size(font_size: u16, cx: &mut App) {
+    PreferencesState::update_global(cx, |state, _| {
+        state.preferences.set_font_size(font_size);
+        if let Some(store) = state.store.as_ref()
+            && let Err(error) = store.save(&state.preferences)
+        {
+            eprintln!("无法保存 Console 字体大小配置: {error}");
+        }
+    });
+}
+
+/// 更新统一组件尺寸并立即保存到当前用户的本地配置文件。
+///
+/// 该函数只负责更新持久化偏好；调用方应先通过 `theme::set_component_size` 应用运行时状态。
+/// 保存失败时仍保留本次运行中的选择。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn persist_component_size(new_component_size: Size, cx: &mut App) {
+    if component_size(cx) == new_component_size {
+        return;
+    }
+
+    PreferencesState::update_global(cx, |state, _| {
+        state.preferences.set_component_size(new_component_size);
+        if let Some(store) = state.store.as_ref()
+            && let Err(error) = store.save(&state.preferences)
+        {
+            eprintln!("无法保存 Console 组件尺寸配置: {error}");
+        }
+    });
+}
+
 /// 更新窗口默认显示器并立即保存到当前用户的本地配置文件。
 ///
 /// 传入 `None` 表示改为跟随系统主显示器。文件保存失败时保留本次运行中的选择，
@@ -189,6 +340,24 @@ pub fn persist_startup_display_uuid(display_uuid: Option<String>, cx: &mut App) 
             && let Err(error) = store.save(&state.preferences)
         {
             eprintln!("无法保存 Console 启动显示器配置: {error}");
+        }
+    });
+}
+
+/// 更新置顶标签顺序并立即保存到当前用户的本地配置文件。
+///
+/// 保存失败时仍保留本次运行中的置顶状态，后续标签操作可以再次尝试写入。
+///
+/// # Panics
+///
+/// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
+pub fn persist_pinned_tabs(pinned_tabs: &[FeatureId], cx: &mut App) {
+    PreferencesState::update_global(cx, |state, _| {
+        state.preferences.set_pinned_tabs(pinned_tabs);
+        if let Some(store) = state.store.as_ref()
+            && let Err(error) = store.save(&state.preferences)
+        {
+            eprintln!("无法保存 Console 置顶标签配置: {error}");
         }
     });
 }
