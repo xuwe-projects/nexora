@@ -1,5 +1,6 @@
 //! 控制台桌面应用入口。
 
+mod account_api;
 mod app;
 mod auth;
 mod config;

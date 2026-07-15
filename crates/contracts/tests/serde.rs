@@ -4,7 +4,6 @@ use contracts::{
     patch::PatchField,
 };
 use serde_json::json;
-use uuid::Uuid;
 
 #[test]
 fn update_role_request_preserves_missing_null_and_value_states() {
@@ -39,10 +38,8 @@ fn update_role_request_preserves_missing_null_and_value_states() {
 fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let now = 1_784_044_800;
     let response = UserResponse {
-        id: Uuid::parse_str("019f6046-8e3b-73d2-86c8-c56155c84259")
-            .expect("固定测试 UUID 应当有效"),
-        issuer: "https://id.example.com/".to_owned(),
-        subject: "user-1".to_owned(),
+        id: "Ab3xY9qP".to_owned(),
+        identity_id: "user-1".to_owned(),
         email: Some("user@example.com".to_owned()),
         display_name: "测试用户".to_owned(),
         avatar_url: None,
@@ -54,7 +51,9 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     };
 
     let json = serde_json::to_value(&response).expect("用户响应应当可以序列化");
+    assert_eq!(json["id"], "Ab3xY9qP");
     assert_eq!(json["status"], "suspended");
+    assert_eq!(json["identity_id"], "user-1");
     assert_eq!(json["is_super_admin"], false);
     assert_eq!(json["created_at"], now);
     assert!(json["created_at"].is_i64());
@@ -64,16 +63,23 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     assert_eq!(decoded, response);
 
     let role = RoleResponse {
-        id: Uuid::now_v7(),
+        id: 42,
         key: "project_manager".to_owned(),
         name: "项目管理员".to_owned(),
         description: None,
         is_system: false,
-        permissions: Vec::<PermissionResponse>::new(),
+        permissions: vec![PermissionResponse {
+            id: 7,
+            key: "users:read".to_owned(),
+            name: "查看用户".to_owned(),
+            description: None,
+        }],
         created_at: now,
         updated_at: now,
     };
     let json = serde_json::to_value(role).expect("角色响应应当可以序列化");
+    assert_eq!(json["id"], 42);
+    assert_eq!(json["permissions"][0]["id"], 7);
     assert_eq!(json["created_at"], now);
     assert_eq!(json["updated_at"], now);
     assert!(json["created_at"].is_i64());

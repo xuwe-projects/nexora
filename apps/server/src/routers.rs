@@ -6,6 +6,8 @@ use axum::{Json, Router, extract::State, routing::get};
 use contracts::health::{HealthResponse, HealthStatus};
 use sqlx::PgPool;
 
+use crate::setup;
+
 /// 服务端边界最终注入的应用 State。
 ///
 /// 业务模块不会依赖该具体类型；每个模块先注入自己的 State，再返回可与
@@ -22,10 +24,15 @@ impl AppState {
 }
 
 /// 合并健康检查和账号模块，并挂载统一 HTTP 中间件。
-pub(crate) fn initialize(account: Account) -> Router<AppState> {
+pub(crate) fn initialize(
+    account: Account,
+    directory: account::directory::ZitadelUserDirectory,
+    setup_secret: &str,
+) -> Router<AppState> {
     with_http_layers(
         Router::new()
             .route("/health", get(health))
+            .merge(setup::routes(account.clone(), directory, setup_secret))
             .merge(account.routers::<AppState>()),
     )
 }

@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package zitadel.user.v2;
+
+// ZITADEL UserService v2 中 setup 用户目录所需的最小线上契约。
+// 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的字段由 Protobuf 兼容机制忽略。
+service UserService {
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}
+
+message ListQuery {
+  uint64 offset = 1;
+  uint32 limit = 2;
+  bool asc = 3;
+}
+
+message ListDetails {
+  uint64 total_result = 1;
+}
+
+enum UserFieldName {
+  USER_FIELD_NAME_UNSPECIFIED = 0;
+  USER_FIELD_NAME_USER_NAME = 1;
+  USER_FIELD_NAME_FIRST_NAME = 2;
+  USER_FIELD_NAME_LAST_NAME = 3;
+  USER_FIELD_NAME_NICK_NAME = 4;
+  USER_FIELD_NAME_DISPLAY_NAME = 5;
+  USER_FIELD_NAME_EMAIL = 6;
+  USER_FIELD_NAME_STATE = 7;
+  USER_FIELD_NAME_TYPE = 8;
+  USER_FIELD_NAME_CREATION_DATE = 9;
+}
+
+enum UserState {
+  USER_STATE_UNSPECIFIED = 0;
+  USER_STATE_ACTIVE = 1;
+  USER_STATE_INACTIVE = 2;
+  USER_STATE_DELETED = 3;
+  USER_STATE_LOCKED = 4;
+  USER_STATE_INITIAL = 5;
+}
+
+enum Type {
+  TYPE_UNSPECIFIED = 0;
+  TYPE_HUMAN = 1;
+  TYPE_MACHINE = 2;
+}
+
+message StateQuery {
+  UserState state = 1;
+}
+
+message TypeQuery {
+  Type type = 1;
+}
+
+message InUserIDQuery {
+  repeated string user_ids = 1;
+}
+
+message SearchQuery {
+  oneof query {
+    StateQuery state_query = 7;
+    TypeQuery type_query = 8;
+    InUserIDQuery in_user_ids_query = 10;
+  }
+}
+
+message HumanProfile {
+  optional string display_name = 4;
+  string avatar_url = 7;
+}
+
+message HumanEmail {
+  string email = 1;
+}
+
+message HumanUser {
+  HumanProfile profile = 6;
+  HumanEmail email = 7;
+}
+
+message MachineUser {}
+
+message User {
+  string user_id = 1;
+  UserState state = 2;
+  string username = 3;
+  repeated string login_names = 4;
+  string preferred_login_name = 5;
+  oneof type {
+    HumanUser human = 6;
+    MachineUser machine = 7;
+  }
+}
+
+message ListUsersRequest {
+  ListQuery query = 1;
+  UserFieldName sorting_column = 2;
+  repeated SearchQuery queries = 3;
+}
+
+message ListUsersResponse {
+  ListDetails details = 1;
+  UserFieldName sorting_column = 2;
+  repeated User result = 3;
+}

@@ -19,6 +19,10 @@ pub enum FeatureId {
     ProjectEnvironments,
     /// 任务功能区，用于展示构建、打包、发布等后台任务。
     Tasks,
+    /// 用户管理功能区，用于维护本地用户状态并绑定角色。
+    Users,
+    /// 角色管理功能区，用于维护角色及其直接权限。
+    Roles,
     /// 虚拟滚动功能区，用于演示大规模数据表的行列虚拟滚动。
     VirtualScroll,
     /// 报表功能区，用于演示导航很多时的滚动列表入口。
@@ -58,6 +62,8 @@ impl FeatureId {
             Self::ProjectTemplates => "project-templates",
             Self::ProjectEnvironments => "project-environments",
             Self::Tasks => "tasks",
+            Self::Users => "users",
+            Self::Roles => "roles",
             Self::VirtualScroll => "virtual-scroll",
             Self::Reports => "reports",
             Self::Analytics => "analytics",
@@ -84,6 +90,8 @@ impl FeatureId {
             "project-templates" => Some(Self::ProjectTemplates),
             "project-environments" => Some(Self::ProjectEnvironments),
             "tasks" => Some(Self::Tasks),
+            "users" => Some(Self::Users),
+            "roles" => Some(Self::Roles),
             "virtual-scroll" => Some(Self::VirtualScroll),
             "reports" => Some(Self::Reports),
             "analytics" => Some(Self::Analytics),
@@ -111,6 +119,8 @@ impl FeatureId {
             Self::ProjectTemplates => "模板项目",
             Self::ProjectEnvironments => "运行环境",
             Self::Tasks => "任务",
+            Self::Users => "用户管理",
+            Self::Roles => "角色管理",
             Self::VirtualScroll => "虚拟滚动",
             Self::Reports => "报表",
             Self::Analytics => "数据分析",
@@ -226,10 +236,12 @@ pub fn feature_catalog() -> &'static [FeatureItem] {
         FeatureChildItem::new(FeatureId::ProjectTemplates, "模板项目"),
         FeatureChildItem::new(FeatureId::ProjectEnvironments, "运行环境"),
     ];
-    static CATALOG: [FeatureItem; 16] = [
+    static CATALOG: [FeatureItem; 18] = [
         FeatureItem::new(FeatureId::Home, "工作台"),
         FeatureItem::with_children(FeatureId::Projects, "工作台", &PROJECT_CHILDREN),
         FeatureItem::new(FeatureId::Tasks, "工作台"),
+        FeatureItem::new(FeatureId::Users, "访问控制"),
+        FeatureItem::new(FeatureId::Roles, "访问控制"),
         FeatureItem::new(FeatureId::VirtualScroll, "扩展示例"),
         FeatureItem::new(FeatureId::Reports, "扩展示例"),
         FeatureItem::new(FeatureId::Analytics, "扩展示例"),
@@ -260,6 +272,10 @@ pub mod login;
 #[path = "features/projects.rs"]
 pub mod projects;
 
+/// 角色与权限管理功能模块。
+#[path = "features/roles.rs"]
+pub mod roles;
+
 /// 根视图功能模块。
 #[path = "features/root.rs"]
 pub mod root;
@@ -271,6 +287,10 @@ pub mod settings;
 /// 任务管理功能模块。
 #[path = "features/tasks.rs"]
 pub mod tasks;
+
+/// 用户与用户角色管理功能模块。
+#[path = "features/users.rs"]
+pub mod users;
 
 /// 虚拟滚动数据表功能模块。
 #[path = "features/virtual_scroll.rs"]

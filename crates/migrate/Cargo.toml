@@ -3,7 +3,12 @@ name = "migrate"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+database-tests = []
+
 [dependencies]
+clap = { workspace = true }
 configuration = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["macros", "migrate"] }

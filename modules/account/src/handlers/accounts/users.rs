@@ -9,17 +9,18 @@ use contracts::{
     },
     pagination::PageQuery,
 };
-use uuid::Uuid;
 
 use crate::{
-    AccountState, ApiError,
+    AccountError, AccountState, ApiError, StoreError,
     authorization::{
         Authorized,
         accounts::{ReadUsers, WriteUserRoles, WriteUserStatus},
     },
-    models::account::{
-        access_profile_response, domain_user_status, user_page_response, user_response,
+    handlers::accounts::{
+        access_profile_response, page_request, user_page_response, user_response, user_role_ids,
+        user_status,
     },
+    stores,
 };
 
 /// 分页返回用户集合。
@@ -28,10 +29,10 @@ pub(crate) async fn list_users(
     State(state): State<AccountState>,
     ApiQuery(query): ApiQuery<PageQuery>,
 ) -> Result<Json<UserPageResponse>, ApiError> {
-    let page = state
-        .application()
-        .list_users(query.page, query.page_size)
-        .await?;
+    let request = page_request(query.page, query.page_size)?;
+    let page = stores::users::query_page(request, state.pool())
+        .await
+        .map_err(StoreError::from)?;
     Ok(Json(user_page_response(page)))
 }
 
@@ -39,24 +40,24 @@ pub(crate) async fn list_users(
 pub(crate) async fn get_user(
     _authorization: Authorized<ReadUsers>,
     State(state): State<AccountState>,
-    ApiPath(user_id): ApiPath<Uuid>,
+    ApiPath(user_id): ApiPath<String>,
 ) -> Result<Json<AccessProfileResponse>, ApiError> {
-    Ok(Json(access_profile_response(
-        state.application().user_access(user_id).await?,
-    )))
+    let profile = stores::users::query_access_profile(user_id.as_str(), state.pool())
+        .await?
+        .ok_or(AccountError::NotFound("用户"))?;
+    Ok(Json(access_profile_response(profile)))
 }
 
 /// 修改指定用户的访问状态。
 pub(crate) async fn update_user_status(
     _authorization: Authorized<WriteUserStatus>,
     State(state): State<AccountState>,
-    ApiPath(user_id): ApiPath<Uuid>,
+    ApiPath(user_id): ApiPath<String>,
     ApiJson(request): ApiJson<UpdateUserStatusRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let user = state
-        .application()
-        .set_user_status(user_id, domain_user_status(request.status))
-        .await?;
+    let user =
+        stores::users::update_status(user_id.as_str(), user_status(request.status), state.pool())
+            .await?;
     Ok(Json(user_response(user)))
 }
 
@@ -64,12 +65,16 @@ pub(crate) async fn update_user_status(
 pub(crate) async fn replace_user_roles(
     authorization: Authorized<WriteUserRoles>,
     State(state): State<AccountState>,
-    ApiPath(user_id): ApiPath<Uuid>,
+    ApiPath(user_id): ApiPath<String>,
     ApiJson(request): ApiJson<ReplaceUserRolesRequest>,
 ) -> Result<Json<AccessProfileResponse>, ApiError> {
-    let profile = state
-        .application()
-        .replace_user_roles(user_id, request.role_ids, authorization.profile().user.id)
-        .await?;
+    let role_ids = user_role_ids(request.role_ids)?;
+    let profile = stores::users::replace_roles(
+        user_id.as_str(),
+        &role_ids,
+        authorization.profile().user.id.as_str(),
+        state.pool(),
+    )
+    .await?;
     Ok(Json(access_profile_response(profile)))
 }

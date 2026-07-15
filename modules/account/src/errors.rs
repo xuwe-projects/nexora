@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use kernel::ValidationError;
 
-use crate::authentication::VerificationError;
+use crate::{PermissionKey, authentication::VerificationError};
 
 /// Store 在执行持久化操作时返回的结构化错误。
 #[derive(Debug, Error)]
@@ -18,6 +18,15 @@ pub enum StoreError {
         #[from]
         sqlx::Error,
     ),
+    /// PostgreSQL 操作在已知业务阶段失败。
+    #[error("数据库操作失败（阶段: {stage}）")]
+    DatabaseOperation {
+        /// 可稳定检索的数据库操作阶段，不包含 SQL、参数或用户隐私字段。
+        stage: &'static str,
+        /// SQLx 返回的底层错误，仅供服务日志和错误链诊断使用。
+        #[source]
+        source: sqlx::Error,
+    },
     /// 指定资源不存在。
     #[error("{0}不存在")]
     NotFound(
@@ -39,12 +48,9 @@ pub enum StoreError {
     /// 当前操作试图修改唯一内置超级管理员的身份、状态或角色。
     #[error("内置超级管理员账号不可修改或删除")]
     SuperAdministratorImmutable,
-    /// 数据库已经绑定了另一个超级管理员身份。
-    #[error("系统已经绑定超级管理员")]
-    SuperAdministratorAlreadyBound,
-    /// 当前操作试图把保留的超级管理员角色授予普通用户。
-    #[error("超级管理员角色只能属于内置超级管理员账号")]
-    SuperAdministratorRoleReserved,
+    /// 系统已经完成一次性初始化。
+    #[error("系统已经完成初始化")]
+    SystemAlreadyInitialized,
     /// 数据库中的值不符合当前领域模型约束。
     #[error("数据库中的{0}无效")]
     InvalidData(
@@ -53,22 +59,31 @@ pub enum StoreError {
     ),
 }
 
+impl StoreError {
+    pub(crate) fn database_operation(stage: &'static str, source: sqlx::Error) -> Self {
+        Self::DatabaseOperation { stage, source }
+    }
+}
+
 /// 账号与授权用例向 API 层返回的领域错误。
 #[derive(Debug, Error)]
 pub enum AccountError {
-    /// 外部身份缺少稳定 issuer 或 subject。
+    /// 外部身份缺少稳定的 identity ID。
     #[error("认证身份不完整")]
     InvalidIdentity,
     /// 当前用户已被停用。
     #[error("当前用户已被停用")]
     UserSuspended,
+    /// 认证身份尚未在本地账号模块中创建对应用户。
+    #[error("当前账号尚未在系统中开通")]
+    UserNotRegistered,
     /// 当前用户没有执行操作所需权限。
     #[error("缺少权限: {0}")]
     Forbidden(
         /// 被拒绝操作要求的稳定权限键。
-        &'static str,
+        PermissionKey,
     ),
-    /// 请求字段没有通过 application 层校验。
+    /// 请求字段没有通过账号模块校验。
     #[error(transparent)]
     InvalidInput(
         /// 跨业务模块共享的字段校验详情。
@@ -115,15 +130,11 @@ impl From<StoreError> for AccountError {
             },
             StoreError::SuperAdministratorImmutable => Self::Conflict {
                 code: "super_administrator_immutable",
-                message: "内置超级管理员账号不可修改、停用、删除或更换角色",
+                message: "超级管理员账号不可修改、停用、删除或挂载角色",
             },
-            StoreError::SuperAdministratorAlreadyBound => Self::Conflict {
-                code: "super_administrator_already_bound",
-                message: "系统已经绑定另一个超级管理员",
-            },
-            StoreError::SuperAdministratorRoleReserved => Self::Conflict {
-                code: "super_administrator_role_reserved",
-                message: "超级管理员角色只能属于内置超级管理员账号",
+            StoreError::SystemAlreadyInitialized => Self::Conflict {
+                code: "system_already_initialized",
+                message: "系统已经完成初始化",
             },
             other => Self::Store(other),
         }
@@ -140,6 +151,11 @@ impl From<AccountError> for ApiError {
                 StatusCode::FORBIDDEN,
                 "account_suspended",
                 "当前用户已被停用",
+            ),
+            AccountError::UserNotRegistered => Self::new(
+                StatusCode::FORBIDDEN,
+                "account_not_registered",
+                "当前账号尚未在系统中开通，禁止登录",
             ),
             AccountError::Forbidden(_) => Self::new(
                 StatusCode::FORBIDDEN,
@@ -167,6 +183,12 @@ impl From<AccountError> for ApiError {
                 )
             }
         }
+    }
+}
+
+impl From<StoreError> for ApiError {
+    fn from(error: StoreError) -> Self {
+        Self::from(AccountError::from(error))
     }
 }
 

@@ -1,14 +1,22 @@
 use std::{
     fs,
+    io::{Read as _, Write as _},
+    net::TcpListener,
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    thread::{self, JoinHandle},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use actions::account::{AccountActionKind, SignInAccount};
 use configuration::UserConfigStore;
 use desktop::{Application as _, centered_window_bounds};
-use gpui::{AppContext as _, Axis, TestAppContext, px, size};
-use gpui_component::{Size, setting::SettingItem};
+use gpui::{
+    AppContext as _, Axis, Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window,
+    px, size,
+};
+use gpui_component::{Size, notification::NotificationList, setting::SettingItem};
+#[path = "../src/account_api.rs"]
+mod account_api;
 #[path = "../src/app.rs"]
 mod app;
 #[path = "../src/auth.rs"]
@@ -31,6 +39,16 @@ use features::{
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
+struct NotificationTestRoot {
+    notifications: Entity<NotificationList>,
+}
+
+impl Render for NotificationTestRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.notifications.clone()
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_keychain_errors_expose_actionable_messages() {
@@ -52,12 +70,7 @@ fn macos_keychain_errors_expose_actionable_messages() {
 
 #[gpui::test]
 fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
-    let config = oidc::OidcConfig::with_default_scopes(
-        "https://id.example.com",
-        "console",
-        "http://127.0.0.1:0/auth/callback",
-    )
-    .unwrap();
+    let config = test_auth_config();
     let session = oidc::OidcSession::from_token_cache(oidc::OidcTokenCache {
         access_token: "access-token".to_owned(),
         profile: Some(oidc::OidcUserProfile {
@@ -72,7 +85,7 @@ fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
 
     cx.update(|cx| {
         auth::init(Some(config), None, cx);
-        auth::complete_login(Ok(session), cx);
+        auth::apply_session(session, None, cx);
         let snapshot = auth::snapshot(cx);
         assert!(snapshot.authenticated);
         assert_eq!(
@@ -101,12 +114,7 @@ fn sign_in_action_is_reachable_without_a_window_or_focus(cx: &mut TestAppContext
 
 #[gpui::test]
 fn sign_in_action_does_not_restart_an_authenticated_session(cx: &mut TestAppContext) {
-    let config = oidc::OidcConfig::with_default_scopes(
-        "https://id.example.com",
-        "console",
-        "http://127.0.0.1:0/auth/callback",
-    )
-    .unwrap();
+    let config = test_auth_config();
     let session = oidc::OidcSession::from_token_cache(oidc::OidcTokenCache {
         access_token: "access-token".to_owned(),
         profile: Some(oidc::OidcUserProfile {
@@ -119,7 +127,7 @@ fn sign_in_action_does_not_restart_an_authenticated_session(cx: &mut TestAppCont
 
     cx.update(|cx| {
         auth::init(Some(config), None, cx);
-        auth::complete_login(Ok(session), cx);
+        auth::apply_session(session, None, cx);
         app::register_account_actions(cx);
 
         cx.dispatch_action(&SignInAccount);
@@ -129,6 +137,408 @@ fn sign_in_action_does_not_restart_an_authenticated_session(cx: &mut TestAppCont
         assert!(!snapshot.busy);
         assert_eq!(snapshot.status.as_ref(), "已登录");
     });
+}
+
+#[test]
+fn desktop_login_validates_access_through_real_me_endpoint() {
+    let body = r#"{
+        "user": {
+            "id": "User0001",
+            "identity_id": "user-1",
+            "email": "user@example.com",
+            "display_name": "测试用户",
+            "avatar_url": null,
+            "status": "active",
+            "is_super_admin": false,
+            "created_at": 1,
+            "updated_at": 2,
+            "last_login_at": 3
+        },
+        "roles": [],
+        "permissions": []
+    }"#;
+    let (base_url, server) = serve_single_api_response("200 OK", body);
+    let config = auth::AuthConfig::new(test_oidc_config(), base_url.as_str())
+        .expect("loopback 业务 API 配置应当有效");
+
+    let profile = auth::validate_session_access(&config, &test_oidc_session())
+        .expect("已有本地用户应当通过业务登录门禁");
+    let request = server.join().expect("测试业务服务线程应当结束");
+
+    assert_eq!(profile.user.id, "User0001");
+    assert!(request.starts_with("GET /me HTTP/1.1\r\n"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer access-token\r\n")
+    );
+}
+
+#[test]
+fn desktop_login_preserves_account_not_registered_error() {
+    let body = r#"{
+        "error": {
+            "code": "account_not_registered",
+            "message": "当前账号尚未在系统中开通，禁止登录",
+            "details": {},
+            "request_id": "req_test_unknown_user"
+        }
+    }"#;
+    let (base_url, server) = serve_single_api_response("403 Forbidden", body);
+    let config = auth::AuthConfig::new(test_oidc_config(), base_url.as_str())
+        .expect("loopback 业务 API 配置应当有效");
+
+    let error = auth::validate_session_access(&config, &test_oidc_session())
+        .expect_err("不存在的本地用户必须被拒绝");
+    _ = server.join().expect("测试业务服务线程应当结束");
+
+    assert!(matches!(
+        error,
+        auth::AuthError::ApiRejected {
+            status: 403,
+            ref code,
+            ref request_id,
+            ..
+        } if code == "account_not_registered" && request_id == "req_test_unknown_user"
+    ));
+}
+
+#[gpui::test]
+fn login_failure_request_id_copy_action_does_not_reenter_notification(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (root, cx) = cx.add_window_view(|window, cx| NotificationTestRoot {
+        notifications: cx.new(|cx| NotificationList::new(window, cx)),
+    });
+    let notifications = root.read_with(cx, |root, _| root.notifications.clone());
+    let error = auth::AuthError::ApiRejected {
+        status: 403,
+        code: "account_not_registered".to_owned(),
+        message: "当前账号尚未在系统中开通，禁止登录".to_owned(),
+        request_id: "req_test_copy_request_id".to_owned(),
+    };
+
+    notifications.update_in(cx, |notifications, window, cx| {
+        notifications.push(auth::login_failure_notification(&error), window, cx);
+    });
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let copy_button = cx
+        .debug_bounds("copy-login-request-id")
+        .expect("登录失败通知应当渲染请求 ID 复制按钮");
+
+    cx.simulate_click(copy_button.center(), Modifiers::none());
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("req_test_copy_request_id".to_owned())
+    );
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+}
+
+#[test]
+fn desktop_login_rejects_insecure_remote_api() {
+    let error = auth::AuthConfig::new(test_oidc_config(), "http://api.example.com")
+        .expect_err("远程业务 API 必须使用 HTTPS");
+
+    assert!(error.to_string().contains("必须使用 HTTPS"));
+}
+
+#[test]
+fn account_api_lists_users_with_bearer_auth_and_pagination() {
+    let body = r#"{
+        "items": [{
+            "id": "User0001",
+            "identity_id": "identity-1",
+            "email": "user@example.com",
+            "display_name": "测试用户",
+            "avatar_url": null,
+            "status": "active",
+            "is_super_admin": false,
+            "created_at": 1,
+            "updated_at": 2,
+            "last_login_at": 3
+        }],
+        "page": { "number": 2, "size": 25, "total": 30 }
+    }"#;
+    let (base_url, server) = serve_single_api_response("200 OK", body);
+    let api = test_account_api(base_url.as_str());
+
+    let page = api.list_users(2, 25).expect("用户分页请求应当成功");
+    let request = server.join().expect("测试业务服务线程应当结束");
+
+    assert_eq!(page.items[0].id, "User0001");
+    assert_eq!(page.page.total, 30);
+    assert!(request.starts_with("GET /users?page=2&page_size=25 HTTP/1.1\r\n"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer access-token\r\n")
+    );
+}
+
+#[test]
+fn account_api_replaces_user_roles_through_real_resource_endpoint() {
+    let body = r#"{
+        "user": {
+            "id": "User0001",
+            "identity_id": "identity-1",
+            "email": "user@example.com",
+            "display_name": "测试用户",
+            "avatar_url": null,
+            "status": "active",
+            "is_super_admin": false,
+            "created_at": 1,
+            "updated_at": 2,
+            "last_login_at": 3
+        },
+        "roles": [],
+        "permissions": []
+    }"#;
+    let (base_url, server) = serve_single_api_response("200 OK", body);
+    let api = test_account_api(base_url.as_str());
+
+    api.replace_user_roles(
+        "User0001",
+        &contracts::account::ReplaceUserRolesRequest {
+            role_ids: vec![1, 3],
+        },
+    )
+    .expect("用户角色替换请求应当成功");
+    let request = server.join().expect("测试业务服务线程应当结束");
+
+    assert!(request.starts_with("PUT /users/User0001/roles HTTP/1.1\r\n"));
+    assert!(request.contains(r#"{"role_ids":[1,3]}"#));
+}
+
+#[test]
+fn account_api_replaces_role_permissions_through_real_resource_endpoint() {
+    let body = r#"{
+        "id": 7,
+        "key": "project_manager",
+        "name": "项目经理",
+        "description": null,
+        "is_system": false,
+        "permissions": [],
+        "created_at": 1,
+        "updated_at": 2
+    }"#;
+    let (base_url, server) = serve_single_api_response("200 OK", body);
+    let api = test_account_api(base_url.as_str());
+
+    api.replace_role_permissions(
+        7,
+        &contracts::account::ReplaceRolePermissionsRequest {
+            permission_ids: vec![2, 5],
+        },
+    )
+    .expect("角色权限替换请求应当成功");
+    let request = server.join().expect("测试业务服务线程应当结束");
+
+    assert!(request.starts_with("PUT /roles/7/permissions HTTP/1.1\r\n"));
+    assert!(request.contains(r#"{"permission_ids":[2,5]}"#));
+}
+
+#[test]
+fn account_api_updates_user_status_and_creates_custom_role() {
+    let user_body = r#"{
+        "id": "User0001",
+        "identity_id": "identity-1",
+        "email": null,
+        "display_name": "测试用户",
+        "avatar_url": null,
+        "status": "suspended",
+        "is_super_admin": false,
+        "created_at": 1,
+        "updated_at": 2,
+        "last_login_at": 3
+    }"#;
+    let (base_url, status_server) = serve_single_api_response("200 OK", user_body);
+    let api = test_account_api(base_url.as_str());
+    api.update_user_status(
+        "User0001",
+        &contracts::account::UpdateUserStatusRequest {
+            status: contracts::account::UserStatus::Suspended,
+        },
+    )
+    .expect("用户状态更新请求应当成功");
+    let status_request = status_server.join().expect("测试业务服务线程应当结束");
+    assert!(status_request.starts_with("PATCH /users/User0001 HTTP/1.1\r\n"));
+    assert!(status_request.contains(r#"{"status":"suspended"}"#));
+
+    let role_body = r#"{
+        "id": 8,
+        "key": "auditor",
+        "name": "审计员",
+        "description": "只读审计角色",
+        "is_system": false,
+        "permissions": [],
+        "created_at": 1,
+        "updated_at": 2
+    }"#;
+    let (base_url, role_server) = serve_single_api_response("201 Created", role_body);
+    let api = test_account_api(base_url.as_str());
+    api.create_role(&contracts::account::CreateRoleRequest {
+        key: "auditor".to_owned(),
+        name: "审计员".to_owned(),
+        description: Some("只读审计角色".to_owned()),
+        permission_ids: Vec::new(),
+    })
+    .expect("自定义角色创建请求应当成功");
+    let role_request = role_server.join().expect("测试业务服务线程应当结束");
+    assert!(role_request.starts_with("POST /roles HTTP/1.1\r\n"));
+    assert!(role_request.contains(r#""key":"auditor""#));
+}
+
+#[test]
+fn account_api_updates_and_deletes_custom_role() {
+    let role_body = r#"{
+        "id": 8,
+        "key": "auditor",
+        "name": "高级审计员",
+        "description": "负责安全审计",
+        "is_system": false,
+        "permissions": [],
+        "created_at": 1,
+        "updated_at": 3
+    }"#;
+    let (base_url, update_server) = serve_single_api_response("200 OK", role_body);
+    let api = test_account_api(base_url.as_str());
+    api.update_role(
+        8,
+        &contracts::account::UpdateRoleRequest {
+            name: Some("高级审计员".to_owned()),
+            description: contracts::patch::PatchField::Value("负责安全审计".to_owned()),
+        },
+    )
+    .expect("自定义角色更新请求应当成功");
+    let update_request = update_server.join().expect("测试业务服务线程应当结束");
+    assert!(update_request.starts_with("PATCH /roles/8 HTTP/1.1\r\n"));
+    assert!(update_request.contains(r#""name":"高级审计员""#));
+    assert!(update_request.contains(r#""description":"负责安全审计""#));
+
+    let (base_url, delete_server) = serve_single_api_response("204 No Content", "");
+    let api = test_account_api(base_url.as_str());
+    api.delete_role(8).expect("自定义角色删除请求应当成功");
+    let delete_request = delete_server.join().expect("测试业务服务线程应当结束");
+    assert!(delete_request.starts_with("DELETE /roles/8 HTTP/1.1\r\n"));
+}
+
+#[test]
+fn account_api_loads_role_and_permission_catalogs() {
+    let roles_body = r#"{
+        "items": [{
+            "id": 1,
+            "key": "admin",
+            "name": "管理员",
+            "description": "系统内置管理员",
+            "is_system": true,
+            "permissions": [],
+            "created_at": 1,
+            "updated_at": 2
+        }]
+    }"#;
+    let (base_url, roles_server) = serve_single_api_response("200 OK", roles_body);
+    let api = test_account_api(base_url.as_str());
+    let roles = api.list_roles().expect("角色目录请求应当成功");
+    let roles_request = roles_server.join().expect("测试业务服务线程应当结束");
+    assert_eq!(roles[0].key, "admin");
+    assert!(roles[0].is_system);
+    assert!(roles_request.starts_with("GET /roles HTTP/1.1\r\n"));
+
+    let permissions_body = r#"{
+        "items": [{
+            "id": 1,
+            "key": "users:read",
+            "name": "查看用户",
+            "description": "查看用户列表与详情"
+        }]
+    }"#;
+    let (base_url, permissions_server) = serve_single_api_response("200 OK", permissions_body);
+    let api = test_account_api(base_url.as_str());
+    let permissions = api.list_permissions().expect("权限目录请求应当成功");
+    let permissions_request = permissions_server.join().expect("测试业务服务线程应当结束");
+    assert_eq!(permissions[0].key, "users:read");
+    assert!(permissions_request.starts_with("GET /permissions HTTP/1.1\r\n"));
+}
+
+fn test_auth_config() -> auth::AuthConfig {
+    test_auth_config_for_base_url("http://127.0.0.1:3000")
+}
+
+fn test_auth_config_for_base_url(base_url: &str) -> auth::AuthConfig {
+    auth::AuthConfig::new(test_oidc_config(), base_url).expect("业务 API 测试配置应当有效")
+}
+
+fn test_account_api(base_url: &str) -> account_api::AccountApi {
+    let config = test_auth_config_for_base_url(base_url);
+    account_api::AccountApi::new(config.api_session("access-token"))
+        .expect("测试账号 API 客户端应当创建成功")
+}
+
+fn test_oidc_config() -> oidc::OidcConfig {
+    oidc::OidcConfig::with_default_scopes(
+        "https://id.example.com",
+        "console",
+        "http://127.0.0.1:0/auth/callback",
+    )
+    .expect("OIDC 测试配置应当有效")
+}
+
+fn test_oidc_session() -> oidc::OidcSession {
+    oidc::OidcSession::from_token_cache(oidc::OidcTokenCache {
+        access_token: "access-token".to_owned(),
+        profile: Some(oidc::OidcUserProfile {
+            subject: "user-1".to_owned(),
+            ..oidc::OidcUserProfile::default()
+        }),
+        ..oidc::OidcTokenCache::default()
+    })
+    .expect("OIDC 测试会话应当有效")
+}
+
+fn serve_single_api_response(status: &str, body: &str) -> (String, JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("应当可以监听 loopback 测试端口");
+    let address = listener.local_addr().expect("测试端口应当有本地地址");
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nx-request-id: req_test_unknown_user\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("测试业务服务应当收到连接");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2_048];
+        while !http_request_complete(&request) {
+            let read = stream.read(&mut buffer).expect("应当可以读取测试请求");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        stream
+            .write_all(response.as_bytes())
+            .expect("应当可以写入测试响应");
+        String::from_utf8(request).expect("HTTP 测试请求应当是 UTF-8")
+    });
+    (format!("http://{address}"), server)
+}
+
+fn http_request_complete(request: &[u8]) -> bool {
+    let Some(header_end) = request.windows(4).position(|value| value == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&request[..header_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    request.len() >= header_end + 4 + content_length
 }
 
 #[test]
@@ -144,6 +554,8 @@ fn feature_catalog_has_stable_navigation_order() {
             FeatureId::Home,
             FeatureId::Projects,
             FeatureId::Tasks,
+            FeatureId::Users,
+            FeatureId::Roles,
             FeatureId::VirtualScroll,
             FeatureId::Reports,
             FeatureId::Analytics,
@@ -165,7 +577,24 @@ fn feature_catalog_has_stable_navigation_order() {
 fn feature_ids_expose_display_metadata() {
     assert_eq!(FeatureId::default(), FeatureId::Home);
     assert_eq!(FeatureId::Projects.title(), "项目");
+    assert_eq!(FeatureId::Users.id(), "users");
+    assert_eq!(FeatureId::Users.title(), "用户管理");
+    assert_eq!(FeatureId::Roles.id(), "roles");
+    assert_eq!(FeatureId::Roles.title(), "角色管理");
+    assert_eq!(FeatureId::from_id("users"), Some(FeatureId::Users));
+    assert_eq!(FeatureId::from_id("roles"), Some(FeatureId::Roles));
     assert_eq!(FeatureId::VirtualScroll.title(), "虚拟滚动");
+}
+
+#[test]
+fn access_control_navigation_contains_user_and_role_management() {
+    let access_control_ids = feature_catalog()
+        .iter()
+        .filter(|feature| feature.section() == "访问控制")
+        .map(|feature| feature.id())
+        .collect::<Vec<_>>();
+
+    assert_eq!(access_control_ids, vec![FeatureId::Users, FeatureId::Roles]);
 }
 
 #[test]

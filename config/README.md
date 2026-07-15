@@ -11,10 +11,11 @@
 cp config/example.server.toml config/server.toml
 ```
 
-服务端和迁移程序默认读取该文件，也可以把其他配置路径作为第一个参数传入：
+服务端和迁移程序默认读取该文件，也可以把其他配置路径作为位置参数传入。首次安装空数据库
+必须显式添加 `--initialize-empty-database`：
 
 ```bash
-cargo run -p migrate -- /path/to/server.toml
+cargo run -p migrate -- --initialize-empty-database /path/to/server.toml
 cargo run -p server -- /path/to/server.toml
 ```
 
@@ -34,13 +35,12 @@ SERVER__HOST=0.0.0.0
 SERVER__PORT=8080
 DATABASE__URL=postgres://xuwe:secret@postgres:5432/xuwe
 DATABASE__MAX_CONNECTIONS=20
+SETUP__SECRET=long-random-setup-secret
 OIDC__ISSUER_URL=https://id.example.com
 OIDC__AUDIENCE=api-application-client-id
+OIDC__PROJECT_ID=zitadel-project-id
 OIDC__PERSONAL_ACCESS_TOKEN=zitadel-service-account-pat
-OIDC__SUPER_ADMIN_SUBJECT=zitadel-human-user-id
 ```
-
-`OIDC__SUPER_ADMIN_SUBJECT` 只在非交互首次绑定时必须设置；subject 两侧空白会在加载时去除。
 
 只验证配置文件和环境变量而不连接外部服务时，使用：
 
@@ -56,58 +56,72 @@ PostgreSQL 保存用户、角色、权限及关联关系。API 只接受 `Author
 HTTPS，仅 `localhost`、loopback IPv4/IPv6 开发地址允许 HTTP。Provider 必须签发可通过 JWKS
 验证的 JWT access token；当前实现不接受 opaque token。
 
-数据库迁移与服务启动相互独立。部署时先通过 `migrate` 程序应用
-`crates/migrate/migrations`，再启动服务端；服务端不会隐式修改 schema：
+数据库迁移与服务启动相互独立。首次安装使用显式空库初始化参数；后续部署只运行普通向前
+升级命令。普通升级遇到空库、缺失迁移历史或核心表丢失会失败，不会自动重建 schema：
 
 ```bash
+cargo run -p migrate -- --initialize-empty-database config/server.toml # 仅首次安装
 cargo run -p migrate -- config/server.toml
 cargo run -p server -- config/server.toml
 ```
 
-### 首次启动的内置超级管理员
+### 一次性系统初始化与超级管理员
 
-数据库尚未绑定超级管理员时，服务会调用与 OIDC issuer 同域的 ZITADEL User v2 API，
-只列出启用状态的人类用户，机器用户不会进入候选列表。PAT 配置在 `[oidc]` 下：
+数据库的 `account.system_initialization` 单例记录用于判断系统是否已完成初始化。
+系统未初始化时，服务端会记录 `/setup` 访问地址。先输入 `[setup].secret`，再由
+服务端使用 PAT 通过 ZITADEL UserService v2 gRPC 读取启用状态的人类用户；服务账户不会进入
+候选列表。提交所选用户后，服务端再通过 ProjectService v2 gRPC 把全部本地系统角色创建到
+配置的 Project。所有调用使用 gRPC 官方 Rust `grpc` 库；这些 RPC 已受 ZITADEL 支持，因此不
+提供 REST 回退。
 
 ```toml
+[setup]
+secret = "long-random-setup-secret"
+
 [oidc]
+project_id = "zitadel-project-id"
 personal_access_token = "zitadel-service-account-pat"
 ```
 
 推荐通过嵌套环境变量和部署平台的密钥管理系统注入：
 
 ```bash
-OIDC__PERSONAL_ACCESS_TOKEN=zitadel-service-account-pat cargo run -p server
+SETUP__SECRET=long-random-setup-secret \
+OIDC__PROJECT_ID=zitadel-project-id \
+OIDC__PERSONAL_ACCESS_TOKEN=zitadel-service-account-pat \
+cargo run -p server
 ```
 
-PAT 必须由 ZITADEL 服务账号创建。进入 Console 的 `Service Accounts`，创建或选择服务账号，
+`project_id` 必须填写承载本系统角色的 ZITADEL Project ID，不能用 API Application Client ID
+替代。PAT 必须由 ZITADEL 服务账号创建。进入 Console 的 `Service Accounts`，创建或选择服务账号，
 在 `Personal Access Tokens` 中创建令牌、设置有效期并立即复制；令牌只显示一次。服务账号还需
-获得调用目标 ZITADEL API 所要求的管理员角色。服务要管理实例级全部资源时可以授予
+具备 `project.role.write`，并能读取 setup 候选用户。服务要管理实例级全部资源时可以授予
 `IAM_OWNER`，但最高权限 PAT 一旦泄露也会暴露整个实例，必须放在密钥管理系统中并制定轮换、
 吊销与审计策略。
 
-PAT 是运行期必填配置，不再是绑定完成即可移除的一次性引导密钥。首次管理员目录读取，以及
-计划中把本地角色创建、修改等操作同步到 ZITADEL，都会复用 `[oidc]` 下这一身份提供方凭据。
-终端首次启动会要求选择用户并输入 `BIND` 二次确认。绑定是不可替换的安全操作：该账号不能
-删除、停用、更换 OIDC 身份或修改角色，并始终拥有权限表中的全部当前及未来权限。
+PAT 是运行期必填配置，不是 setup secret。初始化用户目录读取与 Project 角色创建都会使用
+`[oidc]` 下这一凭据。
+setup secret 只用于换取内存中 15 分钟有效的一次性页面令牌，不会写入 URL、数据库或日志。
+setup 会先幂等确保 `admin`、`auditor`、`member` 等全部本地系统角色存在于 Project；已存在
+的角色键视为成功。全部角色成功后，初始化事务才会把所选目录用户写入
+`account.users.identity_id`，清空其角色、标记为超级管理员并完成初始化状态。任一角色 gRPC
+调用失败时系统保持未初始化，可修复权限或网络后重试。完成后 `/setup` 的 GET 和 POST 均永久
+返回 404。
 
-容器、systemd 和 CI 等无终端部署必须显式指定 ZITADEL `userId`：
+升级前已经完成初始化的实例不会重新开放 `/setup`。服务启动时会执行同一套幂等检查，补齐
+缺失的系统角色；如果 ProjectService gRPC 调用失败，服务拒绝以角色目录不完整的状态启动，并
+在错误链中记录 Project ID、角色键、gRPC code 和 message。
 
-```bash
-OIDC__PERSONAL_ACCESS_TOKEN=zitadel-service-account-pat \
-OIDC__SUPER_ADMIN_SUBJECT=zitadel-human-user-id \
-cargo run -p server -- config/server.toml
-```
-
-如果数据库已有超级管理员，`super_admin_subject` 不再参与启动；PAT 仍保留给运行期 ZITADEL
-交互。`--check-config` 只验证配置，既不连接数据库，也不调用 ZITADEL。
+超级管理员是普通用户记录上的系统级标记，不挂载任何角色或权限。授权边界检测到该标记后
+直接放行，因此新增未知权限也不需要补授。该用户不能停用、删除、替换 identity ID 或挂载角色。
+`--check-config` 只验证配置，既不连接数据库，也不调用认证授权服务。
 
 ### 普通管理员与 RBAC
 
-服务端不再通过配置中的 subject 名单隐式授予普通管理员。所有新用户首次登录只自动获得
-`member`；普通管理员和自定义角色必须由已经授权的账号通过 API 显式管理。系统还预置只读
-`auditor` 和仅供内置账号使用的 `super-administrator`。四个系统角色均不可修改或删除。
-Store 会在事务中保护最后一个启用管理员，避免通过停用或角色替换造成永久锁死；数据库触发器
+所有新用户首次登录只自动获得 `member`；普通管理员和自定义角色必须由已经授权的账号通过 API
+显式管理。普通管理员本质上是关联内置 `admin` 角色的普通用户，仍然完整执行 RBAC 权限校验。
+`admin`、`member` 和 `auditor` 三个系统角色均不可修改或删除。
+账号数据访问函数会在事务中保护最后一个启用管理员，避免通过停用或角色替换造成永久锁死；数据库触发器
 同时保护超级管理员，防止绕过应用直接破坏不变量。
 
 预置权限如下：
@@ -166,7 +180,14 @@ OIDC_ISSUER_URL=https://id.example.com
 OIDC_CLIENT_ID=console-native-client-id
 OIDC_SCOPES="openid profile email offline_access"
 OIDC_REDIRECT_URI=http://127.0.0.1:0/auth/callback
+API_BASE_URL=http://127.0.0.1:3000
 ```
+
+`API_BASE_URL` 必须指向服务端根地址。Console 完成 OIDC Authorization Code + PKCE 后不会立即
+进入工作区，而是携带 access token 请求 `GET /me`。只有服务端确认 `account.users` 中已存在
+对应 `identity_id` 且用户未停用时才保存 refresh token 并进入已登录状态；未开通账号返回
+`403 account_not_registered`，Console 会保持未登录并清理旧凭据。应用启动恢复会话和自动续期
+同样重新调用 `/me`，不会仅凭本地 refresh token 绕过账号门禁。
 
 `desktop-build.env.example` 是供 shell、CI 和发布机构建桌面安装包时参考的 dotenv 风格文件，
 其中还包含签名、公证和更新发布变量。`config-rs` 的文件源不会把这种 `KEY=value` 文件当作

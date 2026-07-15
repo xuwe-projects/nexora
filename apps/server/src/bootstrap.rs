@@ -5,15 +5,12 @@ use std::{sync::Arc, time::Duration};
 use account::{
     Account,
     authentication::{OidcAccessTokenVerifier, VerificationError},
+    directory::{DirectoryError, ZitadelUserDirectory},
 };
 use sqlx::postgres::PgPoolOptions;
 use thiserror::Error;
 
-use crate::{
-    config::ServerConfig,
-    routers::AppState,
-    super_admin::{self, SuperAdminSetupError},
-};
+use crate::{config::ServerConfig, routers::AppState};
 
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -21,6 +18,8 @@ const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) struct InitializedServer {
     pub(crate) state: AppState,
     pub(crate) account: Account,
+    pub(crate) directory: ZitadelUserDirectory,
+    pub(crate) system_initialized: bool,
 }
 
 /// 创建唯一 PostgreSQL 连接池、初始化 OIDC verifier 并装配账号模块。
@@ -29,7 +28,7 @@ pub(crate) struct InitializedServer {
 ///
 /// # Errors
 ///
-/// PostgreSQL 连接、OIDC discovery 或首次超级管理员绑定失败时返回 [`BootstrapError`]。
+/// PostgreSQL 连接、OIDC discovery、用户目录或初始化状态读取失败时返回 [`BootstrapError`]。
 pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, BootstrapError> {
     let pool = PgPoolOptions::new()
         .max_connections(config.database.max_connections)
@@ -43,11 +42,38 @@ pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, Boot
     )
     .await?;
     let account = Account::new(pool.clone(), Arc::new(verifier));
-    super_admin::ensure_super_admin(&account, config).await?;
+    let system_initialized = account.is_system_initialized().await?;
+    let directory = ZitadelUserDirectory::new(
+        &config.oidc.issuer_url,
+        config.oidc.personal_access_token(),
+        config.oidc.project_id(),
+    )?;
+    if system_initialized {
+        let system_roles = account.system_roles().await?;
+        tracing::info!(
+            business_operation = "system_role_reconciliation",
+            stage = "synchronize_initialized_system_roles",
+            role_count = system_roles.len(),
+            outcome = "started",
+            "开始为已初始化系统补齐认证授权 Project 角色"
+        );
+        directory
+            .ensure_project_roles(system_roles.as_slice())
+            .await?;
+        tracing::info!(
+            business_operation = "system_role_reconciliation",
+            stage = "synchronize_initialized_system_roles",
+            role_count = system_roles.len(),
+            outcome = "succeeded",
+            "已初始化系统的认证授权 Project 角色已全部存在"
+        );
+    }
 
     Ok(InitializedServer {
         state: AppState::new(pool),
         account,
+        directory,
+        system_initialized,
     })
 }
 
@@ -68,11 +94,18 @@ pub enum BootstrapError {
         #[from]
         VerificationError,
     ),
-    /// 首次启动超级管理员引导失败。
-    #[error(transparent)]
-    SuperAdmin(
-        /// 超级管理员选择、目录读取或持久化错误。
+    /// 认证授权 gRPC 配置、channel 或系统角色同步失败。
+    #[error("认证授权 gRPC 客户端初始化或系统角色同步失败")]
+    Directory(
+        /// 用户目录或 Project 角色同步返回的底层错误。
         #[from]
-        SuperAdminSetupError,
+        DirectoryError,
+    ),
+    /// 账号模块无法读取系统初始化状态。
+    #[error("无法读取系统初始化状态")]
+    Account(
+        /// 账号领域返回的底层错误。
+        #[from]
+        account::AccountError,
     ),
 }

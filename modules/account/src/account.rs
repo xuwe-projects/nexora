@@ -1,40 +1,35 @@
 //! 用户、角色、权限、OIDC 认证与 RBAC HTTP 能力。
 //!
 //! 模块通过 [`AccountState`] 直接持有服务端创建的共享 [`sqlx::PgPool`] 句柄，内部完成
-//! HTTP、应用用例和 PostgreSQL store 的装配；宿主服务只负责创建外部依赖并合并路由。
+//! HTTP 与 PostgreSQL store 的装配；宿主服务只负责创建外部依赖并合并路由。
 
 use std::sync::Arc;
 
 use axum::Router;
 use sqlx::PgPool;
 
-mod application;
 /// 提供 Bearer access token 验证端口及 OIDC/JWKS 实现。
 pub mod authentication;
 mod authorization;
 /// 提供账号首次引导所需的外部身份目录适配器。
 pub mod directory;
-mod domain;
 mod entities;
 mod errors;
+mod generated;
 mod handlers;
-mod models;
 mod routers;
 mod stores;
 
 pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;
 
-pub use application::AccountApplication;
-pub use domain::account::{
-    AccessProfile, CreateRole, ExternalIdentity, Permission, Role, UpdateRole, User, UserStatus,
-    permission,
+pub use entities::account::{
+    AccessProfile, ExternalIdentity, Permission, PermissionKey, Role, SystemRole, User, UserStatus,
 };
 pub use errors::{AccountError, StoreError};
-pub use kernel::{Page, PageRequest};
-pub use stores::accounts::{AccountsStore, PostgresAccountsStore};
 
 /// 可由服务端装配并合并进顶层 Router 的账号业务模块。
+#[derive(Clone)]
 pub struct Account {
     state: AccountState,
 }
@@ -46,7 +41,6 @@ pub struct Account {
 #[derive(Clone)]
 pub(crate) struct AccountState {
     pool: PgPool,
-    application: AccountApplication,
     token_verifier: Arc<dyn AccessTokenVerifier>,
 }
 
@@ -55,52 +49,46 @@ impl Account {
     ///
     /// 该构造函数只装配内存对象，不连接数据库、不执行迁移，也不会发起 OIDC 网络请求。
     pub fn new(pool: PgPool, token_verifier: Arc<dyn AccessTokenVerifier>) -> Self {
-        let store = Arc::new(PostgresAccountsStore::new(pool.clone()));
-        Self::with_store(pool, store, token_verifier)
-    }
-
-    /// 使用调用方提供的持久化端口构造账号模块。
-    ///
-    /// 该入口适用于集成测试或替换 PostgreSQL store 的部署，同时仍要求提供服务端共享的
-    /// `PgPool`，确保模块 State 形状与生产环境一致。
-    pub fn with_store(
-        pool: PgPool,
-        store: Arc<dyn AccountsStore>,
-        token_verifier: Arc<dyn AccessTokenVerifier>,
-    ) -> Self {
         Self {
             state: AccountState {
                 pool,
-                application: AccountApplication::new(store),
                 token_verifier,
             },
         }
     }
 
-    /// 返回账号模块持有的共享 PostgreSQL 连接池句柄。
-    pub fn pool(&self) -> &PgPool {
-        &self.state.pool
-    }
-
-    /// 返回当前唯一内置超级管理员；首次引导尚未完成时返回 `None`。
+    /// 返回系统是否已完成一次性初始化。
     ///
     /// # Errors
     ///
-    /// 数据库不可访问或持久化数据无效时返回 [`AccountError`]。
-    pub async fn super_admin(&self) -> Result<Option<User>, AccountError> {
-        self.state.application.super_admin().await
+    /// 数据库不可访问或初始化状态记录无效时返回 [`AccountError`]。
+    pub async fn is_system_initialized(&self) -> Result<bool, AccountError> {
+        Ok(stores::system_initialization::query(&self.state.pool).await?)
     }
 
-    /// 把经过身份目录确认的用户绑定为唯一内置超级管理员。
+    /// 返回首次初始化时必须同步到认证授权 Project 的全部本地系统角色。
     ///
     /// # Errors
     ///
-    /// 身份字段无效、系统已绑定其他超级管理员或数据库事务失败时返回 [`AccountError`]。
-    pub async fn bind_super_admin(
+    /// 数据库不可访问或系统角色目录为空时返回 [`AccountError`]。
+    pub async fn system_roles(&self) -> Result<Vec<SystemRole>, AccountError> {
+        Ok(stores::roles::query_system(&self.state.pool).await?)
+    }
+
+    /// 把经过身份目录确认的用户设为唯一超级管理员并完成系统初始化。
+    ///
+    /// # Errors
+    ///
+    /// 身份字段无效、系统已完成初始化或数据库事务失败时返回 [`AccountError`]。
+    pub async fn initialize_super_admin(
         &self,
         identity: &ExternalIdentity,
     ) -> Result<User, AccountError> {
-        self.state.application.bind_super_admin(identity).await
+        let identity = identity.normalized()?;
+        Ok(
+            stores::system_initialization::initialize_super_admin(&identity, &self.state.pool)
+                .await?,
+        )
     }
 
     /// 注入账号模块自己的 State，并返回仍等待宿主 State `S` 的路由。
@@ -112,8 +100,8 @@ impl Account {
 }
 
 impl AccountState {
-    pub(crate) fn application(&self) -> &AccountApplication {
-        &self.application
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     pub(crate) fn token_verifier(&self) -> &dyn AccessTokenVerifier {

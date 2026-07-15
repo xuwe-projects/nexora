@@ -15,6 +15,11 @@ url = "postgres://xuwe:replace-me@127.0.0.1:5432/xuwe"
 # 此服务实例允许同时占用的最大数据库连接数；多副本部署时需同时考虑 PostgreSQL 总连接上限。
 max_connections = 10
 
+[setup]
+# 仅用于未初始化系统进入 /setup 页面。初始化完成后该页面永久返回 404。
+# 生产环境推荐删除本行并使用 SETUP__SECRET 从密钥管理系统注入。
+secret = "replace-with-a-long-random-setup-secret"
+
 [oidc]
 # ZITADEL 实例的 issuer，通常就是实例自定义域名或 ZITADEL Cloud 实例 URL。
 # 可从 ZITADEL Console 的实例 URL，或 `/.well-known/openid-configuration` 返回的 issuer 获取。
@@ -24,14 +29,13 @@ issuer_url = "https://id.example.com"
 # project/resource audience scope，实际 audience 也可能是 Project ID 或资源服务标识。
 # 应解码一枚真实 access token 核对 `aud`，再填写这里，而不是无条件假定它等于 Client ID。
 audience = "replace-with-api-application-client-id"
-# 服务端调用 ZITADEL API 使用的服务账号 PAT，是运行期必填项，不是一次性初始化密钥。
+# 初始化时通过 ProjectService v2 gRPC 创建本地系统角色所需的 Project ID。
+# Project ID 与 API Application Client ID 不是同一概念，必须从 ZITADEL Project 详情获取。
+# 生产环境也可使用 OIDC__PROJECT_ID 注入。
+project_id = "replace-with-zitadel-project-id"
+# 服务端通过 UserService v2 gRPC 调用 ZITADEL 使用的服务账号 PAT，是运行期必填项，不是一次性初始化密钥。
 # 获取方式：ZITADEL Console -> Service Accounts -> 创建/选择服务账号 -> Personal Access Tokens
 # -> New；设置有效期后立即复制，令牌只显示一次。再给服务账号授予服务实际需要的管理员角色；
 # 若确实要管理实例级全部资源可授予 IAM_OWNER，但该令牌泄露后的影响也等同实例最高权限。
 # 生产环境推荐删除本行并使用 OIDC__PERSONAL_ACCESS_TOKEN 从密钥管理系统注入。
 personal_access_token = "replace-with-zitadel-service-account-pat"
-# 首次启动要绑定为本地唯一超级管理员的人类用户 ID（OIDC subject）。
-# 可在 ZITADEL Console -> Users -> 选择目标用户后复制 User ID。
-# 不配置时，本机终端启动会用上面的 PAT 列出启用的人类用户供选择；容器、systemd、CI 等
-# 非交互环境必须配置本项或环境变量 OIDC__SUPER_ADMIN_SUBJECT。
-# super_admin_subject = "replace-with-zitadel-human-user-id"

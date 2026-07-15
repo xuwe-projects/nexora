@@ -10,9 +10,11 @@ icon = ["assets/logos/logo-icon.icns"]
 actions = { workspace = true }
 changelog = { workspace = true }
 configuration = { workspace = true }
+contracts = { workspace = true }
 desktop = { workspace = true }
 logging = { workspace = true }
 oidc = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 serde = { workspace = true }
 sha2 = { workspace = true }
 theme = { workspace = true }
@@ -20,6 +22,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 ui = { workspace = true }
 updater = { workspace = true }
+url = { workspace = true }
 
 gpui = { workspace = true }
 gpui-component = { workspace = true }

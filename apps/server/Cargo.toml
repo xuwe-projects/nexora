@@ -6,12 +6,14 @@ edition.workspace = true
 [dependencies]
 account = { workspace = true }
 api = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["form"] }
 clap = { workspace = true }
 configuration = { workspace = true }
 contracts = { workspace = true }
 logging = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }

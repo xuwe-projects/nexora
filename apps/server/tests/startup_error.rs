@@ -17,7 +17,11 @@ url = "postgres://secret-user:secret-password@127.0.0.1:1/unavailable"
 max_connections = 1
 
 [oidc]
+project_id = "startup-test-project-id"
 personal_access_token = "startup-test-personal-access-token"
+
+[setup]
+secret = "startup-test-setup-secret"
 "#,
     )
     .expect("应当可以写入数据库失败测试配置");

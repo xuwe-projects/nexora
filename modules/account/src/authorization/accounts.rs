@@ -1,6 +1,6 @@
 //! 账号、用户、角色与权限资源的权限标记。
 
-use crate::permission;
+use crate::PermissionKey;
 
 use super::RequiredPermission;
 
@@ -8,40 +8,40 @@ use super::RequiredPermission;
 pub struct ReadUsers;
 
 impl RequiredPermission for ReadUsers {
-    const KEY: &'static str = permission::USERS_READ;
+    const KEY: PermissionKey = PermissionKey::UsersRead;
 }
 
 /// 管理用户角色所需的权限标记。
 pub struct WriteUserRoles;
 
 impl RequiredPermission for WriteUserRoles {
-    const KEY: &'static str = permission::USERS_ROLES_WRITE;
+    const KEY: PermissionKey = PermissionKey::UsersRolesWrite;
 }
 
 /// 管理用户状态所需的权限标记。
 pub struct WriteUserStatus;
 
 impl RequiredPermission for WriteUserStatus {
-    const KEY: &'static str = permission::USERS_STATUS_WRITE;
+    const KEY: PermissionKey = PermissionKey::UsersStatusWrite;
 }
 
 /// 查看角色资源所需的权限标记。
 pub struct ReadRoles;
 
 impl RequiredPermission for ReadRoles {
-    const KEY: &'static str = permission::ROLES_READ;
+    const KEY: PermissionKey = PermissionKey::RolesRead;
 }
 
 /// 管理角色及角色权限所需的权限标记。
 pub struct WriteRoles;
 
 impl RequiredPermission for WriteRoles {
-    const KEY: &'static str = permission::ROLES_WRITE;
+    const KEY: PermissionKey = PermissionKey::RolesWrite;
 }
 
 /// 查看权限目录所需的权限标记。
 pub struct ReadPermissions;
 
 impl RequiredPermission for ReadPermissions {
-    const KEY: &'static str = permission::PERMISSIONS_READ;
+    const KEY: PermissionKey = PermissionKey::PermissionsRead;
 }

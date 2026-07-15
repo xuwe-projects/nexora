@@ -3,7 +3,7 @@
 mod bootstrap;
 mod config;
 mod routers;
-mod super_admin;
+mod setup;
 
 use std::{error::Error, path::PathBuf, process::ExitCode};
 
@@ -63,11 +63,31 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let initialized = bootstrap::initialize(&config).await?;
     let listener = TcpListener::bind(bind_address).await?;
     tracing::info!(address = %bind_address, "API 服务已启动");
-    let app = routers::initialize(initialized.account).with_state(initialized.state);
+    if !initialized.system_initialized {
+        tracing::warn!(
+            setup_url = %setup_url(bind_address),
+            "系统尚未初始化，请访问 setup 页面完成初始化"
+        );
+    }
+    let app = routers::initialize(
+        initialized.account,
+        initialized.directory,
+        config.setup.secret(),
+    )
+    .with_state(initialized.state);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn setup_url(address: std::net::SocketAddr) -> String {
+    let host = match address.ip() {
+        address if address.is_unspecified() => "127.0.0.1".to_owned(),
+        std::net::IpAddr::V4(address) => address.to_string(),
+        std::net::IpAddr::V6(address) => format!("[{address}]"),
+    };
+    format!("http://{host}:{}/setup", address.port())
 }
 
 async fn shutdown_signal() {

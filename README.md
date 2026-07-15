@@ -42,12 +42,15 @@ crates/migrate ──> crates/configuration + SQLx
 cp config/example.server.toml config/server.toml
 ```
 
-从 workspace 根目录执行迁移和服务端：
+首次安装空数据库时执行：
 
 ```bash
-cargo run -p migrate -- config/server.toml
+cargo run -p migrate -- --initialize-empty-database config/server.toml
 cargo run -p server -- config/server.toml
 ```
+
+以后发布升级只执行 `cargo run -p migrate -- config/server.toml`。普通升级命令拒绝空数据库和
+迁移历史与核心表不一致的目标，不会自动清库或重新初始化。
 
 服务端默认也会读取 `config/server.toml`，因此配置就位后可以省略路径。迁移程序与服务端都在
 文件配置之后加载环境变量，嵌套字段使用双下划线，例如 `DATABASE__URL`。

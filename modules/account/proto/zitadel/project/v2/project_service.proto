@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package zitadel.project.v2;
+
+// ZITADEL ProjectService v2 中初始化项目角色所需的最小线上契约。
+// 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的响应字段由 Protobuf 忽略。
+service ProjectService {
+  rpc AddProjectRole(AddProjectRoleRequest) returns (AddProjectRoleResponse);
+}
+
+message AddProjectRoleRequest {
+  // 角色所属 ZITADEL Project 的稳定唯一 ID。
+  string project_id = 1;
+  // ZITADEL token claim 和授权判断使用的稳定角色键。
+  string role_key = 2;
+  // 面向管理界面展示的角色名称。
+  string display_name = 3;
+  // 可选展示分组；当前初始化不设置。
+  optional string group = 4;
+}
+
+// 当前调用方只需确认创建成功，不读取创建时间。
+message AddProjectRoleResponse {}

@@ -6,3 +6,7 @@ issuer_url = "https://id.example.com"
 client_id = "console-native-client-id"
 scopes = "openid profile email offline_access"
 redirect_uri = "http://127.0.0.1:0/auth/callback"
+
+[api]
+# Console 完成 OIDC 登录后必须携带 access token 调用该服务的 GET /me。
+base_url = "http://127.0.0.1:3000"

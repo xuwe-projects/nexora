@@ -30,6 +30,8 @@ pub struct ServerConfig {
     pub database: DatabaseSettings,
     /// OIDC resource server 配置。
     pub oidc: OidcSettings,
+    /// 一次性系统初始化页面配置。
+    pub setup: SetupSettings,
 }
 
 impl fmt::Debug for ServerConfig {
@@ -39,6 +41,7 @@ impl fmt::Debug for ServerConfig {
             .field("server", &self.server)
             .field("database", &self.database)
             .field("oidc", &self.oidc)
+            .field("setup", &self.setup)
             .finish()
     }
 }
@@ -64,13 +67,14 @@ impl ServerConfig {
     ///
     /// # Errors
     ///
-    /// 端口、数据库连接 URL、OIDC issuer、audience、PAT 或管理员 subject 无效时返回错误。
+    /// 端口、数据库连接 URL、OIDC issuer、audience、PAT 或 setup secret 无效时返回错误。
     pub fn validate(&self) -> Result<(), ServerConfigError> {
         if self.server.port == 0 {
             return Err(ServerConfigError::Invalid("server.port 不能为 0"));
         }
         validate_database(&self.database)?;
         validate_oidc(&self.oidc)?;
+        validate_setup(&self.setup)?;
         Ok(())
     }
 
@@ -79,10 +83,7 @@ impl ServerConfig {
         SocketAddr::new(self.server.host, self.server.port)
     }
 
-    fn prepare(mut config: Self) -> Result<Self, ServerConfigError> {
-        if let Some(subject) = &mut config.oidc.super_admin_subject {
-            *subject = subject.trim().to_owned();
-        }
+    fn prepare(config: Self) -> Result<Self, ServerConfigError> {
         config.validate()?;
         Ok(config)
     }
@@ -176,14 +177,15 @@ pub struct OidcSettings {
     pub issuer_url: String,
     /// Access token 必须包含的 API audience。
     pub audience: String,
+    /// 保存并签发本系统角色的认证授权 Project ID。
+    ///
+    /// 该值与可能是 API Client ID 的 `audience` 含义不同，初始化时作为
+    /// ProjectService v2 gRPC 请求的 `project_id`。
+    pub project_id: String,
     /// 服务端调用 ZITADEL Management API 使用的服务账号 Personal Access Token。
     ///
     /// 生产环境应通过 `OIDC__PERSONAL_ACCESS_TOKEN` 或部署平台密钥注入，不应提交真实令牌。
     personal_access_token: String,
-    /// 首次启动时要绑定为本地唯一超级管理员的 ZITADEL 人类用户 subject。
-    ///
-    /// 留空时仅允许在终端中交互选择；非交互部署必须显式配置。
-    pub super_admin_subject: Option<String>,
 }
 
 impl fmt::Debug for OidcSettings {
@@ -192,8 +194,8 @@ impl fmt::Debug for OidcSettings {
             .debug_struct("OidcSettings")
             .field("issuer_url", &self.issuer_url)
             .field("audience", &self.audience)
+            .field("project_id", &self.project_id)
             .field("personal_access_token", &"[REDACTED]")
-            .field("super_admin_subject", &self.super_admin_subject)
             .finish()
     }
 }
@@ -204,16 +206,56 @@ impl Default for OidcSettings {
         Self {
             issuer_url: "https://id.example.com".to_owned(),
             audience: "xuwe-api".to_owned(),
+            project_id: String::new(),
             personal_access_token: String::new(),
-            super_admin_subject: None,
         }
     }
 }
 
+/// 一次性系统初始化页面配置。
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SetupSettings {
+    /// 进入 `/setup` 超级管理员选择步骤前必须提交的密钥。
+    ///
+    /// 生产环境应通过 `SETUP__SECRET` 或部署平台密钥注入。
+    secret: String,
+}
+
+impl fmt::Debug for SetupSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SetupSettings")
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Default for SetupSettings {
+    /// 创建不包含任何部署密钥的默认配置。
+    fn default() -> Self {
+        Self {
+            secret: String::new(),
+        }
+    }
+}
+
+impl SetupSettings {
+    /// 返回进入一次性初始化流程的密钥；调用方不得记录该值。
+    pub(crate) fn secret(&self) -> &str {
+        self.secret.as_str()
+    }
+}
+
 impl OidcSettings {
-    /// 返回调用 ZITADEL API 使用的 PAT；调用方不得记录该密钥。
+    /// 返回调用 ZITADEL UserService 与 ProjectService v2 gRPC 使用的 PAT；调用方不得记录该密钥。
     pub(crate) fn personal_access_token(&self) -> &str {
         self.personal_access_token.trim()
+    }
+
+    /// 返回初始化角色所属的认证授权 Project ID。
+    pub(crate) fn project_id(&self) -> &str {
+        self.project_id.trim()
     }
 }
 
@@ -249,18 +291,12 @@ fn validate_oidc(oidc: &OidcSettings) -> Result<(), ServerConfigError> {
     if oidc.audience.trim().is_empty() {
         return Err(ServerConfigError::Invalid("oidc.audience 不能为空"));
     }
+    if oidc.project_id().is_empty() {
+        return Err(ServerConfigError::Invalid("oidc.project_id 不能为空"));
+    }
     if oidc.personal_access_token().is_empty() {
         return Err(ServerConfigError::Invalid(
             "oidc.personal_access_token 不能为空",
-        ));
-    }
-    if oidc
-        .super_admin_subject
-        .as_deref()
-        .is_some_and(|subject| subject.trim().is_empty())
-    {
-        return Err(ServerConfigError::Invalid(
-            "oidc.super_admin_subject 不能为空",
         ));
     }
     let issuer = Url::parse(oidc.issuer_url.trim())
@@ -280,6 +316,18 @@ fn validate_oidc(oidc: &OidcSettings) -> Result<(), ServerConfigError> {
     if issuer.scheme() != "https" && !(issuer.scheme() == "http" && is_loopback(&issuer)) {
         return Err(ServerConfigError::Invalid(
             "oidc.issuer_url 必须使用 HTTPS；仅 loopback 开发地址允许 HTTP",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_setup(setup: &SetupSettings) -> Result<(), ServerConfigError> {
+    if setup.secret.trim().is_empty() {
+        return Err(ServerConfigError::Invalid("setup.secret 不能为空"));
+    }
+    if setup.secret.len() > 1_024 {
+        return Err(ServerConfigError::Invalid(
+            "setup.secret 长度不能超过 1024 字节",
         ));
     }
     Ok(())

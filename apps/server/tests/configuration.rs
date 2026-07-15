@@ -6,6 +6,8 @@ use std::{
 };
 
 const TEST_PERSONAL_ACCESS_TOKEN: &str = "test-personal-access-token";
+const TEST_PROJECT_ID: &str = "test-project-id";
+const TEST_SETUP_SECRET: &str = "test-setup-secret";
 
 #[test]
 fn server_uses_required_server_file_by_default() {
@@ -206,6 +208,51 @@ fn personal_access_token_is_required() {
 }
 
 #[test]
+fn project_id_is_required() {
+    let directory = temporary_directory("required-project-id");
+    let path = directory.join("server.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试目录");
+    fs::write(&path, "[server]\nport = 3200\n").expect("应当可以写入服务配置");
+
+    let output = clean_config_command(&directory)
+        .args([
+            "--check-config",
+            path.to_str().expect("测试路径应当是 UTF-8"),
+        ])
+        .env_remove("OIDC__PROJECT_ID")
+        .output()
+        .expect("应当可以启动测试服务端进程");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("oidc.project_id 不能为空"));
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn setup_secret_is_required_and_never_echoed() {
+    let directory = temporary_directory("required-setup-secret");
+    let path = directory.join("server.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试目录");
+    fs::write(&path, "[server]\nport = 3200\n").expect("应当可以写入服务配置");
+
+    let output = clean_config_command(&directory)
+        .args([
+            "--check-config",
+            path.to_str().expect("测试路径应当是 UTF-8"),
+        ])
+        .env_remove("SETUP__SECRET")
+        .output()
+        .expect("应当可以启动测试服务端进程");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("setup.secret 不能为空"));
+    assert!(!stderr.contains(TEST_SETUP_SECRET));
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn check_config_rejects_insecure_oidc_and_invalid_database_or_audience() {
     let cases = [
         (
@@ -271,8 +318,9 @@ fn clean_config_command(directory: &Path) -> Command {
         .env_remove("DATABASE__MAX_CONNECTIONS")
         .env_remove("OIDC__ISSUER_URL")
         .env_remove("OIDC__AUDIENCE")
+        .env("OIDC__PROJECT_ID", TEST_PROJECT_ID)
         .env("OIDC__PERSONAL_ACCESS_TOKEN", TEST_PERSONAL_ACCESS_TOKEN)
-        .env_remove("OIDC__SUPER_ADMIN_SUBJECT")
+        .env("SETUP__SECRET", TEST_SETUP_SECRET)
         .current_dir(directory);
     command
 }

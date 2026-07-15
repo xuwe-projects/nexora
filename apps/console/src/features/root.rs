@@ -6,14 +6,14 @@ use crate::{
     auth, config,
     features::{
         FeatureChildItem, FeatureId, FeatureItem, feature_catalog, home::HomeFeature,
-        login::LoginFeature, projects::ProjectsFeature, tasks::TasksFeature,
-        virtual_scroll::VirtualScrollFeature,
+        login::LoginFeature, projects::ProjectsFeature, roles::RolesFeature, tasks::TasksFeature,
+        users::UsersFeature, virtual_scroll::VirtualScrollFeature,
     },
 };
 use actions::account::{self as account_actions, AccountActionKind, SignOutAccount};
 use gpui::{
-    Anchor, AnyElement, Context, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
-    Window, div, prelude::*, px,
+    Anchor, AnyElement, Context, Entity, IntoElement, MouseButton, Render, ScrollHandle,
+    Subscription, WeakEntity, Window, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
@@ -52,6 +52,10 @@ pub struct RootView {
     navigation_history_index: usize,
     home_feature: HomeFeature,
     virtual_scroll_feature: VirtualScrollFeature,
+    users_feature: Option<Entity<UsersFeature>>,
+    roles_feature: Option<Entity<RolesFeature>>,
+    auth_identity: Option<String>,
+    _auth_subscription: Option<Subscription>,
 }
 
 impl Default for RootView {
@@ -79,6 +83,10 @@ impl RootView {
             navigation_history_index: 0,
             home_feature: HomeFeature::default(),
             virtual_scroll_feature: VirtualScrollFeature::default(),
+            users_feature: None,
+            roles_feature: None,
+            auth_identity: None,
+            _auth_subscription: None,
         }
     }
 
@@ -114,6 +122,43 @@ impl RootView {
     pub fn initialize_feature_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.home_feature.initialize(window, cx);
         self.virtual_scroll_feature.initialize(window, cx);
+        self.users_feature = Some(cx.new(|_| UsersFeature::new()));
+        self.roles_feature = Some(cx.new(|cx| RolesFeature::new(window, cx)));
+        self.auth_identity = auth::session_identity(cx);
+        self._auth_subscription = Some(auth::observe_session_in(window, cx, |this, window, cx| {
+            this.handle_auth_session_change(window, cx)
+        }));
+    }
+
+    fn handle_auth_session_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let identity = auth::session_identity(cx);
+        if identity == self.auth_identity {
+            return;
+        }
+
+        self.auth_identity = identity;
+        self.users_feature = Some(cx.new(|_| UsersFeature::new()));
+        self.roles_feature = Some(cx.new(|cx| RolesFeature::new(window, cx)));
+        if self.auth_identity.is_some() {
+            self.load_feature_if_needed(self.active_feature, cx);
+        }
+        cx.notify();
+    }
+
+    fn load_feature_if_needed(&self, feature: FeatureId, cx: &mut Context<Self>) {
+        match feature {
+            FeatureId::Users => {
+                if let Some(users) = &self.users_feature {
+                    users.update(cx, |users, cx| users.load_if_needed(cx));
+                }
+            }
+            FeatureId::Roles => {
+                if let Some(roles) = &self.roles_feature {
+                    roles.update(cx, |roles, cx| roles.load_if_needed(cx));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// 返回当前选中的功能区。
@@ -629,6 +674,7 @@ impl RootView {
             .active(active)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_feature(feature);
+                this.load_feature_if_needed(feature, cx);
                 cx.notify();
             }));
 
@@ -650,6 +696,7 @@ impl RootView {
             .active(active)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_feature(feature);
+                this.load_feature_if_needed(feature, cx);
                 cx.notify();
             }))
     }
@@ -755,6 +802,10 @@ impl RootView {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 cx.stop_propagation();
                                                 this.navigate_back();
+                                                this.load_feature_if_needed(
+                                                    this.active_feature(),
+                                                    cx,
+                                                );
                                                 cx.notify();
                                             })),
                                     )
@@ -768,6 +819,10 @@ impl RootView {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 cx.stop_propagation();
                                                 this.navigate_forward();
+                                                this.load_feature_if_needed(
+                                                    this.active_feature(),
+                                                    cx,
+                                                );
                                                 cx.notify();
                                             })),
                                     ),
@@ -794,6 +849,10 @@ impl RootView {
                                                 .on_click(cx.listener(
                                                     |this, index: &usize, _, cx| {
                                                         this.select_pinned_tab(*index);
+                                                        this.load_feature_if_needed(
+                                                            this.active_feature(),
+                                                            cx,
+                                                        );
                                                         cx.notify();
                                                     },
                                                 ))
@@ -828,6 +887,10 @@ impl RootView {
                                             })
                                             .on_click(cx.listener(|this, index: &usize, _, cx| {
                                                 this.select_regular_tab(*index);
+                                                this.load_feature_if_needed(
+                                                    this.active_feature(),
+                                                    cx,
+                                                );
                                                 cx.notify();
                                             }))
                                             .children(regular_tabs.iter().copied().map(
@@ -994,6 +1057,7 @@ impl RootView {
                     Some(target) => {
                         BreadcrumbItem::new(label).on_click(cx.listener(move |this, _, _, cx| {
                             this.select_feature(target);
+                            this.load_feature_if_needed(target, cx);
                             cx.notify();
                         }))
                     }
@@ -1034,6 +1098,16 @@ impl RootView {
                 ProjectsFeature::render(cx)
             }
             FeatureId::Tasks => TasksFeature::render(cx),
+            FeatureId::Users => self
+                .users_feature
+                .as_ref()
+                .map(|feature| feature.clone().into_any_element())
+                .unwrap_or_else(|| div().child("用户管理页面尚未初始化").into_any_element()),
+            FeatureId::Roles => self
+                .roles_feature
+                .as_ref()
+                .map(|feature| feature.clone().into_any_element())
+                .unwrap_or_else(|| div().child("角色管理页面尚未初始化").into_any_element()),
             FeatureId::VirtualScroll => self.virtual_scroll_feature.render(cx),
             FeatureId::Reports
             | FeatureId::Analytics
@@ -1151,6 +1225,8 @@ fn feature_icon(feature: FeatureId) -> IconName {
             IconName::FolderOpen
         }
         FeatureId::Tasks => IconName::SquareTerminal,
+        FeatureId::Users => IconName::User,
+        FeatureId::Roles => IconName::Asterisk,
         FeatureId::VirtualScroll => IconName::Frame,
         FeatureId::Reports => IconName::ChartPie,
         FeatureId::Analytics => IconName::Inspector,

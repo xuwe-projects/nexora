@@ -1,7 +1,6 @@
 //! 账号、角色、权限和授权快照的请求与响应契约。
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{pagination::PageResponse, patch::PatchField};
 
@@ -17,7 +16,7 @@ pub struct CreateRoleRequest {
     pub description: Option<String>,
     /// 创建时直接授予角色的权限 ID 集合。
     #[serde(default)]
-    pub permission_ids: Vec<Uuid>,
+    pub permission_ids: Vec<i64>,
 }
 
 /// 局部更新自定义角色元数据的请求正文。
@@ -36,7 +35,7 @@ pub struct UpdateRoleRequest {
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRolePermissionsRequest {
     /// 替换后角色应当直接包含的权限 ID 集合。
-    pub permission_ids: Vec<Uuid>,
+    pub permission_ids: Vec<i64>,
 }
 
 /// 完整替换用户直接角色集合的请求正文。
@@ -44,7 +43,7 @@ pub struct ReplaceRolePermissionsRequest {
 #[serde(deny_unknown_fields)]
 pub struct ReplaceUserRolesRequest {
     /// 替换后用户应当直接拥有的角色 ID 集合。
-    pub role_ids: Vec<Uuid>,
+    pub role_ids: Vec<i64>,
 }
 
 /// 用户是否允许访问受保护 API 的公开状态。
@@ -79,12 +78,10 @@ pub struct AccessProfileResponse {
 /// API 对外公开的用户表示。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct UserResponse {
-    /// 本地稳定用户 ID。
-    pub id: Uuid,
-    /// 身份提供方的规范 OIDC issuer。
-    pub issuer: String,
-    /// issuer 内稳定且唯一的 OIDC subject。
-    pub subject: String,
+    /// 本地生成的 8 位大小写字母与数字用户 ID。
+    pub id: String,
+    /// 认证授权服务中与用户对应的稳定唯一 ID。
+    pub identity_id: String,
     /// 可选展示邮箱。
     pub email: Option<String>,
     /// 用户展示名称。
@@ -106,8 +103,8 @@ pub struct UserResponse {
 /// API 对外公开的角色及其直接权限表示。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoleResponse {
-    /// 角色稳定 ID。
-    pub id: Uuid,
+    /// 数据库生成的 BIGSERIAL 角色 ID。
+    pub id: i64,
     /// 在授权判断中使用的稳定角色键。
     pub key: String,
     /// 面向管理界面展示的角色名称。
@@ -127,8 +124,8 @@ pub struct RoleResponse {
 /// API 对外公开的细粒度权限表示。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PermissionResponse {
-    /// 权限稳定 ID。
-    pub id: Uuid,
+    /// 数据库生成的 BIGSERIAL 权限 ID。
+    pub id: i64,
     /// 权限稳定键，例如 `users:read`。
     pub key: String,
     /// 面向管理界面展示的权限名称。
