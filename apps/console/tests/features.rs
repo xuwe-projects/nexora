@@ -29,7 +29,7 @@ mod features;
 use app::Console;
 use config::ConsolePreferences;
 use features::{
-    FeatureId, feature_catalog,
+    FeatureId, feature_catalog, feature_catalog_sections,
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
     root::RootView,
@@ -587,14 +587,20 @@ fn feature_ids_expose_display_metadata() {
 }
 
 #[test]
-fn access_control_navigation_contains_user_and_role_management() {
-    let access_control_ids = feature_catalog()
-        .iter()
-        .filter(|feature| feature.section() == "访问控制")
-        .map(|feature| feature.id())
+fn sidebar_navigation_groups_include_access_control() {
+    let sections = feature_catalog_sections()
+        .map(|(section, items)| {
+            (
+                section,
+                items.iter().map(|feature| feature.id()).collect::<Vec<_>>(),
+            )
+        })
         .collect::<Vec<_>>();
 
-    assert_eq!(access_control_ids, vec![FeatureId::Users, FeatureId::Roles]);
+    assert_eq!(
+        sections[1],
+        ("访问控制", vec![FeatureId::Users, FeatureId::Roles])
+    );
 }
 
 #[test]

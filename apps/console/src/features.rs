@@ -260,6 +260,15 @@ pub fn feature_catalog() -> &'static [FeatureItem] {
     &CATALOG
 }
 
+/// 按目录中的连续分组返回侧边栏功能项。
+///
+/// 侧边栏通过该迭代器生成分组，确保新增 section 后不需要再同步维护一份硬编码筛选列表。
+pub fn feature_catalog_sections() -> impl Iterator<Item = (&'static str, &'static [FeatureItem])> {
+    feature_catalog()
+        .chunk_by(|current, next| current.section() == next.section())
+        .filter_map(|items| items.first().map(|first| (first.section(), items)))
+}
+
 /// 首页功能模块。
 #[path = "features/home.rs"]
 pub mod home;

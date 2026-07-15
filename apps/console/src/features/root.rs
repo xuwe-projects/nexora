@@ -5,9 +5,9 @@
 use crate::{
     auth, config,
     features::{
-        FeatureChildItem, FeatureId, FeatureItem, feature_catalog, home::HomeFeature,
-        login::LoginFeature, projects::ProjectsFeature, roles::RolesFeature, tasks::TasksFeature,
-        users::UsersFeature, virtual_scroll::VirtualScrollFeature,
+        FeatureChildItem, FeatureId, FeatureItem, feature_catalog, feature_catalog_sections,
+        home::HomeFeature, login::LoginFeature, projects::ProjectsFeature, roles::RolesFeature,
+        tasks::TasksFeature, users::UsersFeature, virtual_scroll::VirtualScrollFeature,
     },
 };
 use actions::account::{self as account_actions, AccountActionKind, SignOutAccount};
@@ -503,38 +503,46 @@ impl RootView {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let primary_items = feature_catalog()
-            .iter()
-            .copied()
-            .filter(|item| item.section() == "工作台")
-            .map(|item| self.render_nav_item(item, cx))
+        let sidebar_border = cx.theme().sidebar_border;
+        let mut sections = feature_catalog_sections().filter(|(section, _)| *section != "扩展示例");
+        let mut navigation_menus = sections
+            .next()
+            .map(|(_, items)| self.render_nav_menu(items, cx))
+            .into_iter()
             .collect::<Vec<_>>();
-        let extension_items = feature_catalog()
+        navigation_menus.extend(sections.map(|(_, items)| {
+            self.render_nav_menu(items, cx)
+                .pt_3()
+                .border_t_1()
+                .border_color(sidebar_border)
+        }));
+        let extension_items = feature_catalog_sections()
+            .find(|(section, _)| *section == "扩展示例")
+            .map(|(_, items)| items)
+            .unwrap_or_default();
+        let extension_active = extension_items
             .iter()
             .copied()
-            .filter(|item| item.section() == "扩展示例")
-            .map(|item| self.render_nav_item(item, cx))
-            .collect::<Vec<_>>();
-        let extension_active = feature_catalog()
-            .iter()
-            .copied()
-            .any(|item| item.section() == "扩展示例" && item.contains(self.active_feature()));
-        let theme = cx.theme();
-        let sidebar_border = theme.sidebar_border;
-        let navigation_menus = [
-            SidebarMenu::new().children(primary_items),
+            .any(|item| item.contains(self.active_feature()));
+        navigation_menus.push(
             SidebarMenu::new()
                 .pt_3()
                 .border_t_1()
-                .border_color(theme.sidebar_border)
+                .border_color(sidebar_border)
                 .child(
                     SidebarMenuItem::new("更多功能")
                         .icon(IconName::Frame)
                         .default_open(extension_active)
                         .click_to_toggle(true)
-                        .children(extension_items),
+                        .children(
+                            extension_items
+                                .iter()
+                                .copied()
+                                .map(|item| self.render_nav_item(item, cx)),
+                        ),
                 ),
-        ];
+        );
+        let theme = cx.theme();
 
         Sidebar::new("console-sidebar")
             .size_full()
@@ -595,6 +603,15 @@ impl RootView {
                     .child(self.render_account_footer(cx)),
             )
             .into_any_element()
+    }
+
+    fn render_nav_menu(&self, items: &[FeatureItem], cx: &mut Context<Self>) -> SidebarMenu {
+        SidebarMenu::new().children(
+            items
+                .iter()
+                .copied()
+                .map(|item| self.render_nav_item(item, cx)),
+        )
     }
 
     fn render_account_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
