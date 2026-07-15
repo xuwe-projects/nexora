@@ -1,6 +1,6 @@
 ---
 name: api-interface-design
-description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模、REST URI、HTTP 方法、状态码、请求响应模型、分页筛选、错误格式、版本管理和接口测试。服务端渲染 HTML 的页面路由不强制套用本规范；非 SSR API 默认按资源导向的 REST 方式设计。
+description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模、REST URI、HTTP 方法、状态码、请求响应模型、snake_case wire 命名、Unix 秒时间戳、枚举格式、分页筛选、错误格式、版本管理和接口测试。服务端渲染 HTML 的页面路由不强制套用本规范；非 SSR API 默认按资源导向的 REST 方式设计。
 ---
 
 # API 接口规范
@@ -23,12 +23,12 @@ description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模
 ## 资源与 URI
 
 - URI 使用名词表达资源，不要把动作动词放进普通资源路径。
-- 集合资源使用复数名词，例如 `/api/v1/projects`；单个资源使用稳定标识，例如 `/api/v1/projects/{project_id}`。
-- 只有存在明确从属关系时才使用子资源，例如 `/api/v1/projects/{project_id}/tasks`。
+- 集合资源使用复数名词，例如 `/projects`；单个资源使用稳定标识，例如 `/projects/{project_id}`。
+- 只有存在明确从属关系时才使用子资源，例如 `/projects/{project_id}/tasks`。
 - 路径层级保持简短，通常不要超过三层资源关系；复杂查询使用 query 参数，不要无限嵌套 URI。
-- 路径使用小写和连字符，JSON 字段使用 `snake_case`，同一 API 内保持一致。
+- URI 静态路径段使用小写和连字符；path 参数占位符使用 `snake_case`，例如 `/project-members/{user_id}`。
 - 禁止 `/getProjects`、`/createProject`、`/projects/delete`、`/projects?action=list` 等动作式资源路径。
-- 无法自然表示为资源状态变化的命令，才使用显式 action 子资源，例如 `POST /api/v1/projects/{project_id}/actions/archive`，并说明不能使用普通资源方法的原因。
+- 无法自然表示为资源状态变化的命令，才使用显式 action 子资源，例如 `POST /projects/{project_id}/actions/archive`，并说明不能使用普通资源方法的原因。
 
 ## HTTP 方法
 
@@ -55,7 +55,26 @@ description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模
 - 创建请求不包含由服务端生成的 ID、时间戳或审计字段。
 - 请求 DTO、响应 DTO、数据库实体和内部领域模型按职责分离，不要直接把数据库行结构暴露为公开 API。
 - 多端共享的请求与响应模型放入轻量 `contracts`、`models` 或具体业务 crate，避免客户端依赖整个 API 服务 crate。
-- 时间统一使用带时区的 RFC 3339 表示；金额、精度敏感数字和枚举值使用不会丢失语义的稳定格式。
+- 所有 HTTP 请求和响应时间字段使用有符号 Unix 秒时间戳，以 JSON integer 传输；禁止使用 RFC 3339 字符串或毫秒、微秒、纳秒时间戳。
+- 金额和精度敏感数字使用不会丢失语义的稳定格式，不要用浮点数表达货币金额。
+
+## Wire 命名、时间与枚举
+
+- JSON 字段、query 参数、path 参数和 form 字段统一使用 `snake_case`，例如 `user_id`、`page_size`、`created_at`；禁止使用 `userId`、`UserID` 或 `user-id` 作为参数名。
+- 标准 HTTP header 名称遵循协议既有写法，不强制改成 `snake_case`。
+- HTTP 枚举值统一使用小写 `snake_case`，例如 `pending_review`、`in_progress`；禁止直接暴露 Rust 的 `PendingReview` 或使用数字魔法值。
+- 时间戳统一使用 `i64` 语义，单位固定为秒；服务端接收时间戳时校验合法范围，响应时从内部时间类型显式转换，禁止根据数值大小猜测单位。
+- 时间字段按业务语义命名为 `created_at`、`updated_at`、`expires_at`、`scheduled_at`；不使用 `created_at_ms`，也不使用含糊的 `time`。
+
+请求与响应示例：
+
+```json
+{
+  "user_id": "019f6046-8e3b-73d2-86c8-c56155c84259",
+  "status": "pending_review",
+  "expires_at": 1784044800
+}
+```
 
 集合响应示例：
 
@@ -97,7 +116,8 @@ description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模
 
 ## 版本与兼容
 
-- API 版本策略在项目内保持一致；使用路径版本时采用 `/api/v1` 形式。
+- 本项目默认不使用路径版本前缀，资源直接从 `/projects`、`/accounts` 等根路径提供；不要自行添加 `/api/v1`。
+- 只有出现真实的公开兼容需求、迁移方案和旧版本下线计划后，才引入统一版本策略。若未来选择路径版本，必须整体设计和迁移，不能只给个别接口临时加前缀。
 - 新增可选字段通常保持向后兼容；删除字段、修改字段类型、改变状态码或收紧已有输入属于破坏性变更。
 - 破坏性变更进入新版本，并明确迁移方式和旧版本下线计划。
 - 不要把内部 crate 版本、数据库版本或部署版本直接当作公开 API 版本。
@@ -114,6 +134,7 @@ description: 用于设计、实现或审查非 SSR HTTP API，规范资源建模
 - 为每个接口记录方法、路径、鉴权、请求模型、响应模型、错误码和示例。
 - 同步维护机器可读接口文档，例如 OpenAPI；实现变更时一并更新契约。
 - 测试至少覆盖成功、认证失败、权限不足、参数校验、资源不存在、状态冲突和分页边界。
+- 契约测试必须断言时间字段是 Unix 秒整数，并覆盖多单词枚举值与 `user_id` 一类参数的 `snake_case` 序列化结果。
 - 审查接口时先检查资源与方法语义，再检查字段命名和实现代码，避免从现有 handler 反推不合理契约。
 
 ## 参考

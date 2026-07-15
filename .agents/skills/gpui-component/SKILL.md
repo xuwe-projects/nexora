@@ -45,8 +45,8 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 | 组件 | 导入路径 | 说明 |
 |------|----------|------|
 | `Input` | `input::{Input, InputState}` | 有状态。支持文本、密码、掩码和校验 |
-| `NumberInput` | `number_input::{NumberInput, NumberInputState}` | 有状态。支持步进的数值输入 |
-| `OtpInput` | `otp_input::{OtpInput, OtpInputState}` | 有状态。一次性密码输入 |
+| `NumberInput` | `input::{NumberInput, InputState}` | 有状态。绑定 `Entity<InputState>` 的步进数值输入 |
+| `OtpInput` | `input::{OtpInput, OtpState}` | 有状态。绑定 `Entity<OtpState>` 的一次性密码输入 |
 | `Select` | `select::{Select, SelectState}` | 有状态。下拉选择器 |
 | `Combobox` | `combobox::{Combobox, ComboboxState}` | 有状态。可搜索选择器 |
 | `Checkbox` | `checkbox::Checkbox` | 无状态。使用 `on_click(|&bool, ...|)` |
@@ -74,7 +74,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 | `Alert` | `alert::Alert` | 无状态。信息/成功/警告/错误提示 |
 | `Spinner` | `spinner::Spinner` | 无状态。加载指示器 |
 | `Skeleton` | `skeleton::Skeleton` | 无状态。加载占位符 |
-| `Progress` | `progress::{ProgressBar, ProgressCircle}` | 无状态。进度条或进度环 |
+| `Progress` | `progress::{Progress, ProgressCircle}` | 无状态。进度条或进度环 |
 | `Tooltip` | `tooltip::Tooltip` | 通过元素的 `.tooltip()` 使用 |
 | `HoverCard` | `hover_card::{HoverCard, HoverCardState}` | 有状态。悬停卡片 |
 | `Image` | `image::Image` | 无状态。图像 |
@@ -84,7 +84,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 
 | 组件 | 导入路径 | 说明 |
 |------|----------|------|
-| `Dialog` | `dialog::Dialog` + `WindowExt` | 通过 `window.open_modal(...)` 打开 |
+| `Dialog` | `dialog::Dialog` + `WindowExt` | 通过 `window.open_dialog(...)` 打开，使用 `close_dialog(...)` 关闭 |
 | `AlertDialog` | `WindowExt` | 通过 `window.open_alert_dialog(...)` 打开 |
 | `Sheet` | `sheet::Sheet` + `WindowExt` | 侧边面板，通过 `window.open_sheet(...)` 打开 |
 | `Notification` | `notification::Notification` + `WindowExt` | 通过 `window.push_notification(...)` 推送 |

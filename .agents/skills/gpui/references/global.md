@@ -24,13 +24,13 @@ struct AppSettings {
 impl Global for AppSettings {}
 ```
 
-### 设置和访问全局状态
+### 初始化和访问全局状态
 
 ```rust
 fn main() {
     let app = Application::new();
     app.run(|cx: &mut App| {
-        // 设置全局状态
+        // 仅在启动阶段初始化一次
         cx.set_global(AppSettings {
             theme: Theme::Dark,
             language: "en".to_string(),
@@ -44,6 +44,8 @@ fn main() {
 ```
 
 ### 更新全局状态
+
+全局值已经存在后，统一通过 `update_global` 原地修改。不要读取、克隆整个值后再次调用 `set_global` 替换；那会绕过集中更新逻辑，并容易丢失并发发生的字段变化。
 
 ```rust
 impl MyComponent {
@@ -59,6 +61,8 @@ impl MyComponent {
 }
 ```
 
+`set_global` 只用于首次注册；`update_global` 只用于已注册的类型，调用前必须确保启动流程已完成初始化。
+
 ## 常见用例
 
 ### 1. 应用配置
@@ -73,7 +77,7 @@ struct AppConfig {
 
 impl Global for AppConfig {}
 
-// 启动时设置一次
+// 启动时首次注册；后续修改使用 update_global
 cx.set_global(AppConfig {
     api_endpoint: "https://api.example.com".to_string(),
     max_retries: 3,
@@ -180,6 +184,20 @@ cx.set_global(CheckoutState { ... });
 
 // ✅ 合适：组件状态使用 Entity
 let user_entity = cx.new(|_| UserState { ... });
+```
+
+### ❌ 不要：用 set_global 覆盖已有值
+
+```rust
+// ❌ 错误：已有全局值的更新不应重新注册
+let mut settings = cx.global::<AppSettings>().clone();
+settings.theme = Theme::Light;
+cx.set_global(settings);
+
+// ✅ 正确：在 GPUI 更新边界内原地修改
+cx.update_global::<AppSettings, _>(|settings, _cx| {
+    settings.theme = Theme::Light;
+});
 ```
 
 ## 使用时机

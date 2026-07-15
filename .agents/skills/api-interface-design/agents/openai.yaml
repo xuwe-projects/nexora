@@ -1,4 +1,4 @@
 interface:
   display_name: "API 接口规范"
-  short_description: "规范非 SSR REST API 的资源、路由、状态码与错误契约"
+  short_description: "规范 REST 资源、snake_case、秒时间戳与错误契约"
   default_prompt: "使用 $api-interface-design 设计或审查当前项目的非 SSR API 接口。"

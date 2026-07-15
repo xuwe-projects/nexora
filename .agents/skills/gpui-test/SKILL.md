@@ -1,13 +1,15 @@
 ---
 name: gpui-test
 description: >-
-  用于在 Zed 中编写、调试或复现 GPUI 测试，包括 gpui::test 参数、
-  TestAppContext 参数、调度器种子、ITERATIONS/SEED 复现、禁止停驻失败和待处理任务追踪。
+  用于在 Xuwe workspace 中编写、调试或复现确定性 GPUI 测试，包括 gpui::test 参数、
+  TestAppContext、VisualTestContext、调度器种子、ITERATIONS/SEED、禁止停驻失败和待处理任务追踪。
 ---
 
 # GPUI 测试调试
 
 当用户询问 `#[gpui::test]`、GPUI 测试种子或迭代次数、确定性调度器故障、停驻或待处理任务故障，或者如何复现不稳定的 GPUI 测试时，使用此技能。
+
+本 Skill 负责基于模拟平台的确定性行为测试：无窗口状态使用 `TestAppContext`，模拟窗口交互使用 `VisualTestContext`。真实平台像素输出由专用视觉测试 runner 和 `VisualTestAppContext` 负责；不要把两类上下文混用，也不要用截图测试替代可确定复现的状态与交互测试。
 
 ## `#[gpui::test]` 的作用
 
@@ -61,7 +63,7 @@ description: >-
 
 - `RUST_BACKTRACE=1` 或 `RUST_BACKTRACE=full`：显示 panic 回溯。
 - `RUST_LOG=<filter>`：当测试已初始化日志系统时启用日志。
-- `ZED_HEADLESS=1`：强制 GPUI 在平台推断时倾向无头模式；适用于原本会与平台或窗口初始化交互的测试。
+- `ZED_HEADLESS=1`：GPUI 上游保留的环境变量名，用于让平台推断倾向无头模式；名称来自上游，但在 Xuwe 测试中仍按该原名设置。
 
 缩小复现范围时，优先使用环境变量，不要修改测试代码。
 
@@ -155,6 +157,7 @@ description: >-
 ## 编写 GPUI 测试
 
 - 需要 `TestAppContext`、确定性执行器、模拟时间或调度器交错覆盖时，优先使用 `#[gpui::test]`。
+- 需要模拟窗口的事件、焦点、布局或绘制流程时，从测试窗口创建 `VisualTestContext`；只有真实平台截图/像素测试才使用 `VisualTestAppContext`。
 - 测试需要有意检查任务交错时，添加 `iterations = N`。
 - 随机测试数据需要与调度器使用同一种子时，将 `StdRng` 用作测试参数。
 - 在 GPUI 测试中使用 `cx.background_executor().timer(duration).await` 实现延迟或超时。

@@ -1,9 +1,9 @@
 ---
 name: desktop-ui-component-selection
-description: Use when building, modifying, or reviewing GPUI desktop application interactions with gpui-component, especially navigation, forms, overlays, tables, settings, shell layout, feedback states, and any UI that might already have an official component.
+description: 用于构建、修改或审查 Xuwe 的 GPUI 桌面交互，并优先从 gpui-component 选择现有组件。适用于导航、表单、弹层、表格、设置、应用壳、反馈状态，以及任何可能已有官方组件的界面。
 ---
 
-# Desktop UI Component Selection
+# 桌面 UI 组件选择
 
 ## 核心原则
 

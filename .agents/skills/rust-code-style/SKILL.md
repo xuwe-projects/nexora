@@ -45,7 +45,7 @@ description: 用于编写、修改、审查或生成本仓库 Rust 代码与 Car
 ```rust
 use crate::{
     error::AppError,
-    repository::{FileRepository, Repository},
+    store::{FileStore, Store},
 };
 ```
 
@@ -53,8 +53,8 @@ use crate::{
 
 ```rust
 use crate::error::AppError;
-use crate::repository::FileRepository;
-use crate::repository::Repository;
+use crate::store::FileStore;
+use crate::store::Store;
 ```
 
 ## 实现范围

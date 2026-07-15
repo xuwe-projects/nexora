@@ -33,7 +33,8 @@ fn main() {
 }
 ```
 
-每个窗口的第一层子元素都**必须使用 `Root`**，它负责启用 Dialog、Sheet 和 Notification。
+每个窗口的第一层子元素都**必须使用 `Root`**。`Root` 保存 Dialog、Sheet 和 Notification
+状态，但不会自动把遮罩层加入业务元素树；业务根视图仍须按本文“遮罩层”章节显式渲染。
 
 ---
 
@@ -49,7 +50,7 @@ use gpui_component::button::Button;
 impl Render for MyView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Button::new("btn").primary().label("Submit")
-            .on_click(|_, _, _| println!("clicked"))
+            .on_click(|_, _, _| tracing::debug!("按钮已点击"))
     }
 }
 ```
@@ -196,17 +197,17 @@ Icon::new(IconName::Plus).large().text_color(cx.theme().primary)
 ### Dialog
 
 ```rust
-use gpui_component::dialog::Dialog;
+use gpui_component::WindowExt as _;
 
 // 从窗口上下文打开
-window.open_modal(cx, |modal, _, cx| {
-    modal
+window.open_dialog(cx, |dialog, _, cx| {
+    dialog
         .title("确认")
         .child(div().child("确定要继续吗？"))
         .footer(|this, _, cx| {
             this.child(Button::new("cancel").label("取消"))
                 .child(Button::new("ok").primary().label("确定")
-                    .on_click(|_, window, cx| { window.close_modal(cx); }))
+                    .on_click(|_, window, cx| { window.close_dialog(cx); }))
         })
 });
 ```
@@ -352,9 +353,9 @@ impl Render for MyApp {
         div()
             .size_full()
             .child(self.main_content(window, cx))
-            .children(Root::render_dialog_layer(cx))
-            .children(Root::render_sheet_layer(cx))
-            .children(Root::render_notification_layer(cx))
+            .children(Root::render_sheet_layer(window, cx))
+            .children(Root::render_dialog_layer(window, cx))
+            .children(Root::render_notification_layer(window, cx))
     }
 }
 ```

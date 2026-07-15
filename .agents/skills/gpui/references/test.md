@@ -1,11 +1,12 @@
 
 ## 概述
 
-GPUI 提供完整的测试框架，可用于测试界面组件、异步操作和分布式系统。测试在单线程执行器上运行，从而提供确定性执行，并支持测试复杂异步场景。GPUI 测试使用 `#[gpui::test]` 属性；基础测试使用 `TestAppContext`，依赖窗口的测试使用 `VisualTestContext`。
+GPUI 提供完整的测试框架，可用于测试界面组件和异步操作。测试在确定性执行器上运行，并支持复现复杂调度场景。`#[gpui::test]` 注入 `TestAppContext`；需要模拟窗口交互时，从测试窗口创建 `VisualTestContext`。需要真实平台渲染和像素输出时，才单独创建 `VisualTestAppContext`。
 
 ### 规则
 
 - 如果测试不需要窗口或渲染，无需使用 `#[gpui::test]` 和 `TestAppContext`，直接编写普通 Rust 测试。
+- `VisualTestContext` 与 `VisualTestAppContext` 不是新旧名称，也不能互换：前者属于确定性测试环境中的单窗口上下文，后者拥有真实平台级应用上下文。
 
 ## 核心测试基础设施
 
@@ -64,7 +65,7 @@ fn test_entity_operations(cx: &mut TestAppContext) {
 
 #### VisualTestContext
 
-`VisualTestContext` 在 `TestAppContext` 基础上增加窗口支持：
+`VisualTestContext` 绑定由 `TestAppContext` 创建的模拟窗口，用于事件分发、焦点、布局和绘制流程测试。它仍属于 `#[gpui::test]` 的确定性测试环境：
 
 ```rust
 #[gpui::test]
@@ -83,6 +84,15 @@ fn test_with_window(cx: &mut TestAppContext) {
     let component = window.root(&mut cx).unwrap();
 }
 ```
+
+#### VisualTestAppContext
+
+`VisualTestAppContext` 使用真实平台实现来产生实际渲染输出，适合截图、像素和真实平台集成测试。它不是 `#[gpui::test]` 注入参数，也不是从测试窗口转换出的 `VisualTestContext`。
+
+- 仅在确实验证真实像素或平台行为时使用；普通组件行为仍使用 `TestAppContext`/`VisualTestContext`。
+- 按当前 GPUI 平台要求在主线程创建；当前真实视觉测试能力主要面向 macOS。
+- 由专用视觉测试 runner 负责平台、资源、窗口和截图生命周期，不把它混入普通单元测试。
+- 不要把 `VisualTestContext::from_window(...)` 示例改写成 `VisualTestAppContext`。
 
 ## 其他资源
 
