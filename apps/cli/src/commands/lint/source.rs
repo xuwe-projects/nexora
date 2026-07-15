@@ -475,11 +475,20 @@ impl<'a> SourceRuleVisitor<'a> {
             return;
         };
         let path = path.value();
-        let invalid_case = path.chars().any(char::is_uppercase) || path.contains('_');
+        let invalid_case = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .any(|segment| {
+                path_parameter_name(segment).map_or_else(
+                    || segment.chars().any(char::is_uppercase) || segment.contains('_'),
+                    |parameter| !is_snake_case_parameter(parameter),
+                )
+            });
         let action_query = path.contains("?action=") || path.contains("&action=");
         let action_segment = path
             .split('/')
             .filter(|segment| !segment.is_empty())
+            .filter(|segment| path_parameter_name(segment).is_none())
             .any(|segment| {
                 let segment = segment.to_ascii_lowercase();
                 ["create", "delete", "get", "list", "update"]
@@ -498,9 +507,13 @@ impl<'a> SourceRuleVisitor<'a> {
             .warning(
                 "xuwe::non_rest_route",
                 literal.span(),
-                format!("Axum 路由 `{path}` 使用了动作式、非小写或下划线路径"),
+                format!(
+                    "Axum 路由 `{path}` 使用了动作式路径、非小写静态段或非 snake_case 参数"
+                ),
             )
-            .with_help("普通 API 使用复数资源名和 HTTP 方法表达动作，例如 GET /api/v1/projects");
+            .with_help(
+                "静态路径段使用小写连字符，参数使用 snake_case，例如 GET /project-members/{user_id}",
+            );
         self.push(diagnostic, literal.span());
     }
 
@@ -892,6 +905,22 @@ impl<'a> SourceRuleVisitor<'a> {
             .with_help("把测试移动到对应 crate 的 tests/ 集成测试目录");
         self.push(diagnostic, attribute.span());
     }
+}
+
+fn path_parameter_name(segment: &str) -> Option<&str> {
+    segment.strip_prefix('{')?.strip_suffix('}')
+}
+
+fn is_snake_case_parameter(parameter: &str) -> bool {
+    parameter
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_lowercase())
+        && !parameter.ends_with('_')
+        && !parameter.contains("__")
+        && parameter.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        })
 }
 
 impl<'ast> Visit<'ast> for SourceRuleVisitor<'_> {

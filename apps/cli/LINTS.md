@@ -60,7 +60,7 @@ xuwecli lint --format json
 | --- | --- | --- |
 | `xuwe::database_entity_in_contract` | warning | contracts/models 不暴露 `FromRow` 或 SQLx 映射属性。 |
 | `xuwe::dynamic_sql_concatenation` | error | 禁止把 `format!` 或字符串加法产生的 SQL 传给 SQLx 查询和 `QueryBuilder::push`。 |
-| `xuwe::non_rest_route` | warning | Axum 路由不使用动作式、大小写混合或下划线路径。 |
+| `xuwe::non_rest_route` | warning | Axum 路由不使用动作式路径；静态段使用小写连字符，路径参数使用 `snake_case`。 |
 | `xuwe::raw_axum_request` | warning | handler 优先使用 `Path`、`Query`、`Json`、`Form`、`Multipart`、`State` 或自定义 extractor。 |
 | `xuwe::unbounded_request_body` | warning | 消费原始正文或上传的 handler 必须配置 `DefaultBodyLimit`。 |
 

@@ -394,6 +394,71 @@ edition.workspace = true
     assert!(stdout.contains("xuwe::modified_migration"));
 }
 
+#[test]
+fn rest_routes_require_snake_case_path_parameters() {
+    let fixture = Fixture::new("rest-path-parameters");
+    fixture.write(
+        "Cargo.toml",
+        r#"[workspace]
+resolver = "3"
+members = ["crates/api"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+axum = "0.8"
+"#,
+    );
+    fixture.write(
+        "crates/api/Cargo.toml",
+        r#"[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+"#,
+    );
+    fixture.write(
+        "crates/api/src/lib.rs",
+        r#"//! 使用合规资源路径的 API。
+
+fn routes() {
+    Router::new().route("/project-members/{user_id}", get(handler));
+}
+
+async fn handler() {}
+"#,
+    );
+
+    let valid = fixture.run(&["--deny-warnings"]);
+    assert!(
+        valid.status.success(),
+        "snake_case 参数不应触发 REST 路由警告：\n{}",
+        String::from_utf8_lossy(&valid.stdout),
+    );
+
+    fixture.write(
+        "crates/api/src/lib.rs",
+        r#"//! 使用不合规路径参数的 API。
+
+fn routes() {
+    Router::new().route("/project-members/{user-id}", get(handler));
+}
+
+async fn handler() {}
+"#,
+    );
+    let invalid = fixture.run(&["--deny-warnings"]);
+    let stdout = String::from_utf8_lossy(&invalid.stdout);
+    assert!(!invalid.status.success());
+    assert!(stdout.contains("xuwe::non_rest_route"));
+    assert!(stdout.contains("{user-id}"));
+}
+
 fn valid_workspace(name: &str) -> Fixture {
     let fixture = Fixture::new(name);
     fixture.write(
