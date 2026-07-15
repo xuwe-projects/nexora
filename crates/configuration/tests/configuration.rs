@@ -82,6 +82,28 @@ fn layered_loader_reads_toml_file() {
 }
 
 #[test]
+fn later_configuration_file_overrides_earlier_file() {
+    let directory = temporary_directory("layered-files");
+    let base_path = directory.join("base.toml");
+    let override_path = directory.join("override.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试目录");
+    fs::write(&base_path, "[server]\nhost = \"127.0.0.1\"\nport = 3000\n")
+        .expect("应当可以写入基础配置");
+    fs::write(&override_path, "[server]\nport = 8080\n").expect("应当可以写入覆盖配置");
+
+    let config = LayeredConfigLoader::<ServiceConfig>::new()
+        .with_required_file(&base_path)
+        .with_required_file(&override_path)
+        .without_environment()
+        .load()
+        .expect("后加载的配置文件应当可以覆盖基础配置");
+
+    assert_eq!(config.server.host, "127.0.0.1");
+    assert_eq!(config.server.port, 8080);
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn user_store_round_trips_toml_atomically() {
     let directory = temporary_directory("store");
     let path = directory.join("settings.toml");

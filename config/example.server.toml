@@ -1,0 +1,37 @@
+# 服务端配置示例。复制为 config/server.toml 后按实际部署修改。
+# config/server.toml 已被 Git 忽略；本示例只能保存占位值，真实密码和 PAT 应由密钥系统注入。
+
+[server]
+# HTTP 监听地址。127.0.0.1 仅允许本机访问；容器或反向代理部署通常使用 0.0.0.0。
+host = "127.0.0.1"
+# HTTP 监听端口。应与反向代理、容器端口映射和防火墙配置一致。
+port = 3000
+
+[database]
+# PostgreSQL 连接 URL：postgres://用户名:密码@主机:端口/数据库名。
+# 先在 PostgreSQL 中创建数据库和账号，并授予该账号应用 schema 的读写权限。
+# 生产环境推荐通过 DATABASE__URL 注入，避免把密码写入 TOML。
+url = "postgres://xuwe:replace-me@127.0.0.1:5432/xuwe"
+# 此服务实例允许同时占用的最大数据库连接数；多副本部署时需同时考虑 PostgreSQL 总连接上限。
+max_connections = 10
+
+[oidc]
+# ZITADEL 实例的 issuer，通常就是实例自定义域名或 ZITADEL Cloud 实例 URL。
+# 可从 ZITADEL Console 的实例 URL，或 `/.well-known/openid-configuration` 返回的 issuer 获取。
+issuer_url = "https://id.example.com"
+# 服务端要求 access token 的 `aud` claim 包含此值。
+# 常见的单应用配置可先使用 ZITADEL API Application 的 Client ID；如果授权请求添加了
+# project/resource audience scope，实际 audience 也可能是 Project ID 或资源服务标识。
+# 应解码一枚真实 access token 核对 `aud`，再填写这里，而不是无条件假定它等于 Client ID。
+audience = "replace-with-api-application-client-id"
+# 服务端调用 ZITADEL API 使用的服务账号 PAT，是运行期必填项，不是一次性初始化密钥。
+# 获取方式：ZITADEL Console -> Service Accounts -> 创建/选择服务账号 -> Personal Access Tokens
+# -> New；设置有效期后立即复制，令牌只显示一次。再给服务账号授予服务实际需要的管理员角色；
+# 若确实要管理实例级全部资源可授予 IAM_OWNER，但该令牌泄露后的影响也等同实例最高权限。
+# 生产环境推荐删除本行并使用 OIDC__PERSONAL_ACCESS_TOKEN 从密钥管理系统注入。
+personal_access_token = "replace-with-zitadel-service-account-pat"
+# 首次启动要绑定为本地唯一超级管理员的人类用户 ID（OIDC subject）。
+# 可在 ZITADEL Console -> Users -> 选择目标用户后复制 User ID。
+# 不配置时，本机终端启动会用上面的 PAT 列出启用的人类用户供选择；容器、systemd、CI 等
+# 非交互环境必须配置本项或环境变量 OIDC__SUPER_ADMIN_SUBJECT。
+# super_admin_subject = "replace-with-zitadel-human-user-id"

@@ -10,6 +10,7 @@ gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
 reqwest_client = { workspace = true }
 theme = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

@@ -7,9 +7,10 @@ edition.workspace = true
 async-channel = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }

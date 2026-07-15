@@ -8,6 +8,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,9 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{UpdateChannel, UpdateManifest, UpdateRelease, UpdateTarget, macos};
+
+const MAX_APP_ID_BYTES: usize = 255;
+const STALE_STAGING_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// 启动一次更新检查所需的应用配置。
 ///
@@ -39,12 +43,13 @@ pub struct UpdateConfig {
 impl UpdateConfig {
     /// 创建应用更新配置。
     ///
-    /// `manifest_url` 指向当前通道的 `latest.json`；`app_id` 必须和清单一致；
+    /// `manifest_url` 指向当前通道的 `latest.json`；`app_id` 必须和清单一致，并且是由
+    /// ASCII 字母、数字、点、连字符或下划线组成的安全路径分量；
     /// `current_version` 使用 SemVer；`current_bundle_version` 是当前安装包构建号。
     ///
     /// # Errors
     ///
-    /// 当清单地址不是有效 URL，或当前版本不是有效 SemVer 时返回错误。
+    /// 当清单地址不是有效 URL、应用标识不安全，或当前版本不是有效 SemVer 时返回错误。
     pub fn new(
         manifest_url: impl AsRef<str>,
         app_id: impl Into<String>,
@@ -52,10 +57,15 @@ impl UpdateConfig {
         current_bundle_version: u64,
         channel: UpdateChannel,
     ) -> Result<Self, UpdateError> {
+        let app_id = app_id.into();
+        if !valid_app_id(&app_id) {
+            return Err(UpdateError::InvalidAppId);
+        }
+
         Ok(Self {
             manifest_url: Url::parse(manifest_url.as_ref())
                 .map_err(|error| UpdateError::InvalidUrl(error.to_string()))?,
-            app_id: app_id.into(),
+            app_id,
             current_version: Version::parse(current_version.as_ref())?,
             current_bundle_version,
             channel,
@@ -204,7 +214,36 @@ pub struct StagedUpdate {
     release: UpdateRelease,
     staged_app: PathBuf,
     current_app: PathBuf,
+    cleanup: Arc<StagingCleanup>,
+}
+
+#[derive(Debug)]
+struct StagingCleanup {
     staging_root: PathBuf,
+    installer_started: AtomicBool,
+    cleanup_sender: Option<mpsc::Sender<PathBuf>>,
+}
+
+impl Drop for StagingCleanup {
+    fn drop(&mut self) {
+        if self.installer_started.load(Ordering::Acquire) {
+            return;
+        }
+
+        let Some(sender) = &self.cleanup_sender else {
+            tracing::warn!(
+                path = %self.staging_root.display(),
+                "更新暂存目录清理线程不可用，将由后续启动回收"
+            );
+            return;
+        };
+        if sender.send(self.staging_root.clone()).is_err() {
+            tracing::warn!(
+                path = %self.staging_root.display(),
+                "无法提交更新暂存目录清理任务，将由后续启动回收"
+            );
+        }
+    }
 }
 
 impl StagedUpdate {
@@ -220,18 +259,24 @@ impl StagedUpdate {
     ///
     /// # Errors
     ///
-    /// 当 helper 文件无法创建或子进程无法启动时返回错误。
+    /// 当 helper 已经启动、helper 文件无法创建或子进程无法启动时返回错误。
     pub fn prepare_restart(&self) -> Result<(), UpdateError> {
-        macos::spawn_install_helper(
+        self.cleanup
+            .installer_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| UpdateError::InstallerAlreadyStarted)?;
+        let result = macos::spawn_install_helper(
             std::process::id(),
             &self.current_app,
             &self.staged_app,
-            &self.staging_root,
-        )
-    }
-
-    pub(crate) fn discard(&self) {
-        _ = fs::remove_dir_all(&self.staging_root);
+            &self.cleanup.staging_root,
+        );
+        if result.is_err() {
+            self.cleanup
+                .installer_started
+                .store(false, Ordering::Release);
+        }
+        result
     }
 }
 
@@ -273,7 +318,9 @@ impl Updater {
 }
 
 fn run_update(config: UpdateConfig, cancellation: CancellationToken, sender: Sender<UpdateEvent>) {
-    let result = run_update_inner(&config, &cancellation, &sender);
+    let cleanup_sender = start_staging_cleanup_worker();
+    cleanup_stale_staging_roots(&config);
+    let result = run_update_inner(&config, &cancellation, &sender, cleanup_sender);
     if let Err(error) = result {
         let event = if matches!(error, UpdateError::Cancelled) {
             UpdateEvent::Cancelled
@@ -288,6 +335,7 @@ fn run_update_inner(
     config: &UpdateConfig,
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
+    cleanup_sender: Option<mpsc::Sender<PathBuf>>,
 ) -> Result<(), UpdateError> {
     send_event(sender, UpdateEvent::Checking)?;
     cancellation.ensure_active()?;
@@ -314,7 +362,14 @@ fn run_update_inner(
     };
 
     send_event(sender, UpdateEvent::UpdateAvailable(release.clone()))?;
-    let staged = download_and_stage(&client, config, release, cancellation, sender)?;
+    let staged = download_and_stage(
+        &client,
+        config,
+        release,
+        cancellation,
+        sender,
+        cleanup_sender,
+    )?;
     send_event(sender, UpdateEvent::ReadyToRestart(staged))
 }
 
@@ -324,6 +379,7 @@ fn download_and_stage(
     release: UpdateRelease,
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
+    cleanup_sender: Option<mpsc::Sender<PathBuf>>,
 ) -> Result<StagedUpdate, UpdateError> {
     let staging_root = create_staging_root(config, &release)?;
     let archive_path = staging_root.join("update.app.zip");
@@ -381,7 +437,11 @@ fn download_and_stage(
             release,
             staged_app,
             current_app,
-            staging_root: staging_root.clone(),
+            cleanup: Arc::new(StagingCleanup {
+                staging_root: staging_root.clone(),
+                installer_started: AtomicBool::new(false),
+                cleanup_sender,
+            }),
         })
     })();
 
@@ -406,27 +466,104 @@ fn create_staging_root(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let path = std::env::temp_dir()
-        .join("xuwe-updater")
-        .join(sanitize_path_component(config.app_id()))
-        .join(format!(
-            "{}-{}-{}-{timestamp}",
-            release.version,
-            release.bundle_version,
-            std::process::id()
-        ));
+    let path = staging_base(config).join(format!(
+        "{}-{}-{}-{timestamp}",
+        release.version,
+        release.bundle_version,
+        std::process::id()
+    ));
     fs::create_dir_all(&path)?;
     Ok(path)
 }
 
-fn sanitize_path_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| match character {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => character,
-            _ => '_',
-        })
-        .collect()
+fn staging_base(config: &UpdateConfig) -> PathBuf {
+    std::env::temp_dir()
+        .join("xuwe-updater")
+        .join(config.app_id())
+}
+
+fn start_staging_cleanup_worker() -> Option<mpsc::Sender<PathBuf>> {
+    let (sender, receiver) = mpsc::channel();
+    match thread::Builder::new()
+        .name("xuwe-update-cleanup".to_owned())
+        .spawn(move || {
+            while let Ok(staging_root) = receiver.recv() {
+                discard_staging_root(staging_root);
+            }
+        }) {
+        Ok(_) => Some(sender),
+        Err(error) => {
+            tracing::warn!(error = %error, "无法启动更新暂存目录清理线程");
+            None
+        }
+    }
+}
+
+fn discard_staging_root(staging_root: PathBuf) {
+    let file_name = staging_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("staging");
+    let discarded_root = staging_root.with_file_name(format!(".discarded-{file_name}"));
+    let cleanup_root = match fs::rename(&staging_root, &discarded_root) {
+        Ok(()) => discarded_root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            tracing::warn!(
+                path = %staging_root.display(),
+                error = %error,
+                "无法标记待清理的更新暂存目录"
+            );
+            staging_root
+        }
+    };
+    if let Err(error) = fs::remove_dir_all(&cleanup_root)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %cleanup_root.display(), error = %error, "无法清理更新暂存目录");
+    }
+}
+
+fn cleanup_stale_staging_roots(config: &UpdateConfig) {
+    let base = staging_base(config);
+    let Ok(entries) = fs::read_dir(&base) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let discarded = file_name.to_string_lossy().starts_with(".discarded-");
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= STALE_STAGING_AGE);
+        if !discarded && !stale {
+            continue;
+        }
+
+        let path = entry.path();
+        if let Err(error) = fs::remove_dir_all(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), error = %error, "无法清理遗留的更新暂存目录");
+        }
+    }
+}
+
+fn valid_app_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_APP_ID_BYTES
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'-' | b'_'))
 }
 
 fn format_digest(bytes: &[u8]) -> String {
@@ -448,6 +585,11 @@ pub enum UpdateError {
         /// URL 解析器返回的具体失败原因。
         String,
     ),
+    /// 应用标识为空、过长或包含不能安全用于暂存目录的字符。
+    #[error(
+        "应用标识无效；请使用字母或数字开头和结尾，并且只包含 ASCII 字母、数字、点、连字符或下划线"
+    )]
+    InvalidAppId,
     /// 当前应用版本不是合法的 SemVer。
     #[error("当前应用版本无效: {0}")]
     InvalidVersion(
@@ -537,6 +679,9 @@ pub enum UpdateError {
     /// 当前进程不是从 macOS `.app` 内启动，无法确定替换位置。
     #[error("当前程序不是从 macOS .app 中启动，无法执行原位更新")]
     AppBundleNotFound,
+    /// 当前暂存更新已经启动过安装 helper。
+    #[error("更新安装已经启动，请等待应用退出并完成替换")]
+    InstallerAlreadyStarted,
     /// 用户主动取消了更新。
     #[error("更新已取消")]
     Cancelled,

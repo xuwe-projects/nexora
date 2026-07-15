@@ -1,4 +1,4 @@
-use updater::{UpdateChannel, UpdateConfig, UpdateManifest, UpdateTarget};
+use updater::{UpdateChannel, UpdateConfig, UpdateError, UpdateManifest, UpdateTarget};
 
 const MANIFEST: &str = r#"
 {
@@ -18,6 +18,22 @@ const MANIFEST: &str = r#"
   ]
 }
 "#;
+
+#[test]
+fn update_config_rejects_unsafe_application_identifiers() {
+    for app_id in ["", ".", "..", ".hidden", "hidden.", "../console", "铉微"] {
+        let error = UpdateConfig::new(
+            "https://updates.example.com/stable/latest.json",
+            app_id,
+            "1.0.0",
+            1,
+            UpdateChannel::Stable,
+        )
+        .expect_err("不安全的应用标识必须被拒绝");
+
+        assert!(matches!(error, UpdateError::InvalidAppId));
+    }
+}
 
 #[test]
 fn higher_bundle_version_updates_same_semver() {

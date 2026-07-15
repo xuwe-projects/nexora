@@ -14,6 +14,10 @@ pub mod login_gate;
 /// 桌面工作区右侧主面板的统一顶部栏。
 pub mod panel_header;
 
+/// 窗口级 Dialog、Sheet 与 Notification 遮罩层组合。
+pub mod window_layers;
+
 pub use card::Card;
 pub use login_gate::LoginGate;
 pub use panel_header::PanelHeader;
+pub use window_layers::window_layers;

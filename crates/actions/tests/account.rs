@@ -5,22 +5,20 @@ use actions::{
 
 #[test]
 fn account_menu_actions_keep_stable_order_and_shortcuts() {
-    let actions = account::menu_actions("刘吉祥");
+    let actions = account::menu_actions();
 
     assert_eq!(
         actions
             .iter()
             .map(|action| action.label())
             .collect::<Vec<_>>(),
-        vec!["刘吉祥", "设置", "退出登录"]
+        vec!["设置", "退出登录"]
     );
-    assert_eq!(actions[0].kind(), AccountActionKind::Profile);
-    assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+P"));
-    assert_eq!(actions[1].kind(), AccountActionKind::Settings);
-    assert_eq!(actions[1].shortcut(), Some(settings::shortcut_label()));
-    assert!(actions[1].to_action().as_any().is::<OpenSettings>());
-    assert_eq!(actions[2].kind(), AccountActionKind::SignOut);
-    assert_eq!(actions[2].shortcut(), Some("Cmd+Shift+Q"));
+    assert_eq!(actions[0].kind(), AccountActionKind::Settings);
+    assert_eq!(actions[0].shortcut(), Some(settings::shortcut_label()));
+    assert!(actions[0].to_action().as_any().is::<OpenSettings>());
+    assert_eq!(actions[1].kind(), AccountActionKind::SignOut);
+    assert_eq!(actions[1].shortcut(), Some("Cmd+Shift+Q"));
 }
 
 #[test]

@@ -13,8 +13,10 @@ use crate::ConfigurationError;
 /// 例如 `SERVER__PORT` 会覆盖配置中的 `server.port`。
 #[derive(Debug, Clone)]
 pub struct LayeredConfigLoader<T> {
-    file: Option<(PathBuf, bool)>,
+    files: Vec<(PathBuf, bool)>,
     include_environment: bool,
+    environment_list_separator: Option<String>,
+    environment_list_keys: Vec<String>,
     _marker: PhantomData<fn() -> T>,
 }
 
@@ -22,8 +24,10 @@ impl<T> Default for LayeredConfigLoader<T> {
     /// 创建默认启用无前缀环境变量源的加载器。
     fn default() -> Self {
         Self {
-            file: None,
+            files: Vec::new(),
             include_environment: true,
+            environment_list_separator: None,
+            environment_list_keys: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -45,7 +49,7 @@ where
     ///
     /// 文件内容会先于环境变量加载，因此同名环境变量拥有更高优先级。
     pub fn with_required_file(mut self, path: impl Into<PathBuf>) -> Self {
-        self.file = Some((path.into(), true));
+        self.files.push((path.into(), true));
         self
     }
 
@@ -53,7 +57,21 @@ where
     ///
     /// 适合具有完整代码默认值、但允许部署环境提供覆盖文件的程序。
     pub fn with_optional_file(mut self, path: impl Into<PathBuf>) -> Self {
-        self.file = Some((path.into(), false));
+        self.files.push((path.into(), false));
+        self
+    }
+
+    /// 将一个环境变量字段按指定分隔符解析为字符串列表。
+    ///
+    /// `key` 使用反序列化后的点分字段名，例如 `features.enabled`。多次调用可以注册多个列表字段，但这些字段
+    /// 共享最后一次传入的分隔符；普通字符串字段不会受影响。
+    pub fn with_environment_list(
+        mut self,
+        key: impl Into<String>,
+        separator: impl Into<String>,
+    ) -> Self {
+        self.environment_list_keys.push(key.into());
+        self.environment_list_separator = Some(separator.into());
         self
     }
 
@@ -76,16 +94,21 @@ where
     /// 返回 [`ConfigurationError`]。
     pub fn load(self) -> Result<T, ConfigurationError> {
         let mut builder = Config::builder();
-        if let Some((path, required)) = self.file {
+        for (path, required) in self.files {
             builder = builder.add_source(File::from(path).required(required));
         }
         if self.include_environment {
-            builder = builder.add_source(
-                Environment::default()
-                    .separator("__")
-                    .try_parsing(true)
-                    .ignore_empty(true),
-            );
+            let mut environment = Environment::default()
+                .separator("__")
+                .try_parsing(true)
+                .ignore_empty(true);
+            if let Some(separator) = self.environment_list_separator.as_deref() {
+                environment = environment.list_separator(separator);
+                for key in &self.environment_list_keys {
+                    environment = environment.with_list_parse_key(key);
+                }
+            }
+            builder = builder.add_source(environment);
         }
 
         Ok(builder.build()?.try_deserialize()?)

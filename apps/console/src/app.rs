@@ -84,6 +84,11 @@ impl Application for Console {
         theme::set_font_size(config::font_size(cx), cx);
         theme::set_component_size(config::component_size(cx), cx);
         self.options.startup_display_uuid = config::startup_display_uuid(cx).map(ToOwned::to_owned);
+        actions::init();
+        account_actions::bind_keys(cx);
+        settings_actions::bind_keys(cx);
+        initialize_auth(cx);
+        register_account_actions(cx);
     }
 
     /// 创建控制台应用的根视图实体。
@@ -92,10 +97,6 @@ impl Application for Console {
     /// `gpui_component::Root` 后作为窗口根节点。
     fn build_root_view(&mut self, window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
         gpui_component::set_locale("zh-CN");
-        actions::init();
-        account_actions::bind_keys(cx);
-        settings_actions::bind_keys(cx);
-        initialize_auth(cx);
         settings_feature::init(console_updater_config(), cx);
         window_actions::init("Xuwe Console", cx);
         let pinned_tabs = config::pinned_tabs(cx);
@@ -107,11 +108,28 @@ impl Application for Console {
     }
 }
 
+/// 注册不依赖窗口焦点的账户 action。
+///
+/// 登录快捷键必须在未登录门禁尚未获得焦点时也可用；已有会话或认证任务执行中时，
+/// 该处理器会忽略重复请求。
+pub(crate) fn register_account_actions(cx: &mut App) {
+    cx.on_action(|_: &account_actions::SignInAccount, cx| {
+        let snapshot = auth::snapshot(cx);
+        if snapshot.authenticated || snapshot.busy {
+            return;
+        }
+
+        if let Err(error) = auth::start_login(cx) {
+            auth::complete_login(Err(error), cx);
+        }
+    });
+}
+
 fn initialize_auth(cx: &mut App) {
     let config = match auth::config_from_environment() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("Console OIDC 配置无效: {error}");
+            tracing::error!(error = %error, "Console OIDC 配置无效");
             None
         }
     };
@@ -119,7 +137,7 @@ fn initialize_auth(cx: &mut App) {
         Some(config) => match auth::token_store(config) {
             Ok(store) => Some(store),
             Err(error) => {
-                eprintln!("无法初始化 Console 系统凭据存储: {error}");
+                tracing::error!(error = %error, "无法初始化 Console 系统凭据存储");
                 None
             }
         },
@@ -139,7 +157,7 @@ fn console_updater_config() -> Option<UpdateConfig> {
         Some(value) => match value.parse::<u64>() {
             Ok(value) => value,
             Err(error) => {
-                eprintln!("Console 构建号 BUNDLE_VERSION 无效: {error}");
+                tracing::error!(error = %error, "Console 构建号 BUNDLE_VERSION 无效");
                 return None;
             }
         },
@@ -154,7 +172,7 @@ fn console_updater_config() -> Option<UpdateConfig> {
     ) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("Console 更新配置无效: {error}");
+            tracing::error!(error = %error, "Console 更新配置无效");
             return None;
         }
     };

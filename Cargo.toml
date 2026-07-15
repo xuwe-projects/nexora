@@ -5,13 +5,19 @@ members = [
     "apps/console",
     "apps/server",
     "crates/actions",
+    "crates/api",
     "crates/changelog",
     "crates/configuration",
+    "crates/contracts",
     "crates/desktop",
+    "crates/kernel",
+    "crates/logging",
+    "crates/migrate",
     "crates/oidc",
     "crates/theme",
     "crates/ui",
     "crates/updater",
+    "modules/*",
 ]
 
 [workspace.package]
@@ -19,10 +25,16 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+account = { path = "modules/account" }
 actions = { path = "crates/actions" }
+api = { path = "crates/api" }
 changelog = { path = "crates/changelog" }
 configuration = { path = "crates/configuration" }
+contracts = { path = "crates/contracts" }
 desktop = { path = "crates/desktop" }
+kernel = { path = "crates/kernel" }
+logging = { path = "crates/logging" }
+migrate = { path = "crates/migrate" }
 oidc = { path = "crates/oidc" }
 theme = { path = "crates/theme" }
 ui = { path = "crates/ui" }
@@ -43,10 +55,22 @@ thiserror = { version = "2", default-features = false, features = ["std"] }
 toml = { version = "1", default-features = false, features = ["display", "serde", "std"] }
 toml_edit = { version = "0.22", default-features = false, features = ["parse"] }
 url = { version = "2", default-features = false, features = ["serde", "std"] }
+uuid = { version = "1.23.5", default-features = false, features = ["serde", "v7"] }
+
+# 服务端异步、HTTP 与 PostgreSQL
+async-trait = { version = "0.1.89", default-features = false }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-native-roots", "uuid"] }
+tokio = { version = "1.52.3", default-features = false }
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.6", default-features = false }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "env-filter", "fmt", "registry"] }
 
 # 更新下载
 async-channel = { version = "2", default-features = false, features = ["std"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 # 桌面认证
 base64 = { version = "0.22", default-features = false, features = ["std"] }

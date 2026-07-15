@@ -446,7 +446,7 @@ pub fn snapshot(cx: &App) -> AuthSnapshot {
 ///
 /// 尚未配置 OIDC issuer 时返回 [`AuthError::MissingIssuer`]。
 pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
-    eprintln!("Console OIDC: 收到登录请求");
+    tracing::info!("收到 Console OIDC 登录请求");
     if AuthState::global(cx).busy {
         return Err(AuthError::LoginInProgress);
     }
@@ -476,12 +476,12 @@ pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
                     // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
                     cx.refresh_windows();
                 });
-                eprintln!("Console OIDC: Discovery 完成，正在打开系统浏览器");
+                tracing::info!("Console OIDC Discovery 完成，正在打开系统浏览器");
                 cx.open_url(authorization_url.as_str());
                 wait_for_login(pending, cx);
             }
             Err(error) => {
-                eprintln!("Console OIDC: 创建登录请求失败: {error}");
+                tracing::error!(error = %error, "Console OIDC 创建登录请求失败");
                 complete_login(Err(error), cx);
             }
         });
@@ -640,7 +640,7 @@ fn persist_session_tokens(
 ) -> Option<AuthTokenStoreError> {
     let warning = store.and_then(|store| store.save_tokens(tokens).err());
     if let Some(error) = &warning {
-        eprintln!("Console OIDC: 无法保存 refresh token: {error:?}");
+        tracing::warn!(error = ?error, "Console OIDC 无法保存 refresh token");
     }
     warning
 }

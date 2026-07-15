@@ -11,11 +11,13 @@ actions = { workspace = true }
 changelog = { workspace = true }
 configuration = { workspace = true }
 desktop = { workspace = true }
+logging = { workspace = true }
 oidc = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 theme = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 ui = { workspace = true }
 updater = { workspace = true }
 

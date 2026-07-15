@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use actions::account::AccountActionKind;
+use actions::account::{AccountActionKind, SignInAccount};
 use configuration::UserConfigStore;
 use desktop::{Application as _, centered_window_bounds};
 use gpui::{AppContext as _, Axis, TestAppContext, px, size};
@@ -84,6 +84,50 @@ fn signing_out_clears_the_authenticated_session(cx: &mut TestAppContext) {
         let snapshot = auth::snapshot(cx);
         assert!(!snapshot.authenticated);
         assert!(snapshot.avatar_url.is_none());
+    });
+}
+
+#[gpui::test]
+fn sign_in_action_is_reachable_without_a_window_or_focus(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        auth::init(None, None, cx);
+        app::register_account_actions(cx);
+
+        cx.dispatch_action(&SignInAccount);
+
+        assert_eq!(auth::snapshot(cx).status.as_ref(), "未配置 OIDC_ISSUER_URL");
+    });
+}
+
+#[gpui::test]
+fn sign_in_action_does_not_restart_an_authenticated_session(cx: &mut TestAppContext) {
+    let config = oidc::OidcConfig::with_default_scopes(
+        "https://id.example.com",
+        "console",
+        "http://127.0.0.1:0/auth/callback",
+    )
+    .unwrap();
+    let session = oidc::OidcSession::from_token_cache(oidc::OidcTokenCache {
+        access_token: "access-token".to_owned(),
+        profile: Some(oidc::OidcUserProfile {
+            subject: "user-1".to_owned(),
+            ..oidc::OidcUserProfile::default()
+        }),
+        ..oidc::OidcTokenCache::default()
+    })
+    .unwrap();
+
+    cx.update(|cx| {
+        auth::init(Some(config), None, cx);
+        auth::complete_login(Ok(session), cx);
+        app::register_account_actions(cx);
+
+        cx.dispatch_action(&SignInAccount);
+
+        let snapshot = auth::snapshot(cx);
+        assert!(snapshot.authenticated);
+        assert!(!snapshot.busy);
+        assert_eq!(snapshot.status.as_ref(), "已登录");
     });
 }
 

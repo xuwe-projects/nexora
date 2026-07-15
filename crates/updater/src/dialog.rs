@@ -39,7 +39,6 @@ pub fn open_update_dialog(config: UpdateConfig, window: &mut Window, cx: &mut Ap
 struct UpdateDialog {
     status: UpdateDialogStatus,
     cancellation: CancellationToken,
-    installing: bool,
     _task: Task<()>,
 }
 
@@ -51,7 +50,6 @@ impl UpdateDialog {
                 return Self {
                     status: UpdateDialogStatus::Failed(error.to_string()),
                     cancellation: CancellationToken::default(),
-                    installing: false,
                     _task: Task::ready(()),
                 };
             }
@@ -86,7 +84,6 @@ impl UpdateDialog {
         Self {
             status: UpdateDialogStatus::Checking,
             cancellation,
-            installing: false,
             _task: task,
         }
     }
@@ -102,7 +99,6 @@ impl UpdateDialog {
 
         match staged.prepare_restart() {
             Ok(()) => {
-                self.installing = true;
                 cx.quit();
             }
             Err(error) => {
@@ -116,11 +112,6 @@ impl UpdateDialog {
 impl Drop for UpdateDialog {
     fn drop(&mut self) {
         self.cancel();
-        if !self.installing
-            && let UpdateDialogStatus::ReadyToRestart(staged) = &self.status
-        {
-            staged.discard();
-        }
     }
 }
 

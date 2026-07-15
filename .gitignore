@@ -6,4 +6,11 @@
 .env
 
 *.env
-/config/desktop.toml
+
+# 运行时配置可能包含数据库凭据或访问令牌，只跟踪说明与示例文件。
+/config/**
+!/config/**/
+!/config/README.md
+!/config/**/example.*
+!/config/**/*.example
+!/config/**/*.example.*

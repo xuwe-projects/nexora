@@ -49,3 +49,75 @@ pub enum ConfigurationError {
         actual: u32,
     },
 }
+
+impl ConfigurationError {
+    /// 返回适合写入日志或终端的脱敏错误说明。
+    ///
+    /// `config-rs` 的 TOML 语法错误可能在默认展示中附带完整源码行；该方法只保留错误类别、
+    /// 配置来源和字段名，不展示原始值，避免数据库 URL、访问令牌等配置秘密进入日志。
+    pub fn safe_diagnostic(&self) -> String {
+        match self {
+            Self::Load(error) => format!("配置加载失败: {}", safe_config_error(error, None, None)),
+            Self::Serialize(_) => "配置序列化失败".to_owned(),
+            Self::Io(error) => format!("配置文件操作失败: {error}"),
+            Self::ConfigDirectoryUnavailable { application } => {
+                format!("无法确定应用 `{application}` 的系统配置目录")
+            }
+            Self::InvalidFileName(path) => {
+                format!("用户配置文件名 `{}` 必须是单个普通文件名", path.display())
+            }
+            Self::UnsupportedSchema { expected, actual } => {
+                format!("不支持配置 schema 版本 {actual}，当前版本为 {expected}")
+            }
+        }
+    }
+}
+
+fn safe_config_error(
+    error: &config_rs::ConfigError,
+    inherited_origin: Option<&str>,
+    inherited_key: Option<&str>,
+) -> String {
+    match error {
+        config_rs::ConfigError::Frozen => "配置已经冻结".to_owned(),
+        config_rs::ConfigError::NotFound(key) => format!("缺少字段 `{key}`"),
+        config_rs::ConfigError::PathParse { .. } => "配置字段路径无效".to_owned(),
+        config_rs::ConfigError::FileParse { uri, .. } => with_location(
+            "配置文件语法无效",
+            uri.as_deref().or(inherited_origin),
+            inherited_key,
+        ),
+        config_rs::ConfigError::Type {
+            origin,
+            expected,
+            key,
+            ..
+        } => with_location(
+            format!("配置值类型无效，期望 {expected}"),
+            origin.as_deref().or(inherited_origin),
+            key.as_deref().or(inherited_key),
+        ),
+        config_rs::ConfigError::At { error, origin, key } => safe_config_error(
+            error,
+            origin.as_deref().or(inherited_origin),
+            key.as_deref().or(inherited_key),
+        ),
+        config_rs::ConfigError::Message(_) => "配置内容无效".to_owned(),
+        config_rs::ConfigError::Foreign(_) => "配置来源读取失败".to_owned(),
+        _ => "配置加载失败".to_owned(),
+    }
+}
+
+fn with_location(message: impl Into<String>, origin: Option<&str>, key: Option<&str>) -> String {
+    let mut message = message.into();
+    if let Some(origin) = origin {
+        message.push_str(format!("（来源：{origin}").as_str());
+        if let Some(key) = key {
+            message.push_str(format!("，字段：{key}").as_str());
+        }
+        message.push('）');
+    } else if let Some(key) = key {
+        message.push_str(format!("（字段：{key}）").as_str());
+    }
+    message
+}

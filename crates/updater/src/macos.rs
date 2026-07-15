@@ -139,29 +139,4 @@ fn command_succeeded(
     Err(UpdateError::CommandFailed { command, message })
 }
 
-const INSTALL_HELPER: &str = r#"#!/bin/sh
-pid="$1"
-current_app="$2"
-staged_app="$3"
-staging_root="$4"
-backup_app="${current_app}.xuwe-updater-backup"
-
-while kill -0 "$pid" 2>/dev/null; do
-  sleep 0.1
-done
-
-rm -rf "$backup_app"
-if mv "$current_app" "$backup_app" && mv "$staged_app" "$current_app"; then
-  open "$current_app"
-  rm -rf "$backup_app"
-  rm -rf "$staging_root"
-  exit 0
-fi
-
-rm -rf "$current_app"
-if [ -d "$backup_app" ]; then
-  mv "$backup_app" "$current_app"
-  open "$current_app"
-fi
-exit 1
-"#;
+const INSTALL_HELPER: &str = include_str!("../assets/install-update.sh");

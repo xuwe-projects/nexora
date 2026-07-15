@@ -17,11 +17,12 @@ Serde 默认值 < TOML 文件 < 环境变量
 SERVER__HOST=0.0.0.0
 SERVER__PORT=8080
 DATABASE__URL=postgres://localhost/example
+OIDC__PERSONAL_ACCESS_TOKEN=replace-with-zitadel-service-account-pat
 ```
 
 模板项目约定把运行时配置样例放在仓库根目录 `config/` 中。服务端默认读取
-`config/local.toml`，也可以通过 `--profile production` 切换为 `config/production.toml`，
-或使用 `--config /path/to/server.toml` 指定任意文件。
+`config/server.toml`，也可以把其他 TOML 路径作为第一个位置参数传入。可提交的完整字段说明
+位于 `config/example.server.toml`；真实数据库密码和 ZITADEL PAT 不应提交到仓库。
 
 ## 桌面用户配置
 

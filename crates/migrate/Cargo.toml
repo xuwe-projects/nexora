@@ -1,0 +1,10 @@
+[package]
+name = "migrate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+configuration = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true, features = ["macros", "migrate"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

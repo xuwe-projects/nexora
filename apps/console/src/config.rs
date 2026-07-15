@@ -1,5 +1,10 @@
 //! Console 桌面应用用户偏好配置。
 
+use std::{
+    sync::mpsc::{self, Sender},
+    thread::{self, JoinHandle},
+};
+
 use crate::features::FeatureId;
 use configuration::{ConfigurationError, UserConfigStore, VersionedConfiguration};
 use gpui::{App, Context, Global, Subscription, UpdateGlobal as _};
@@ -172,10 +177,78 @@ struct WorkspacePreferences {
     pinned_tabs: Vec<String>,
 }
 
+#[derive(Debug)]
+struct PreferencesWriter {
+    sender: Sender<PreferencesWriteCommand>,
+    worker: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum PreferencesWriteCommand {
+    Persist(ConsolePreferences),
+    Shutdown,
+}
+
+impl PreferencesWriter {
+    fn start(store: ConsolePreferencesStore) -> Result<Self, std::io::Error> {
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("xuwe-preferences".to_owned())
+            .spawn(move || {
+                while let Ok(command) = receiver.recv() {
+                    let PreferencesWriteCommand::Persist(mut preferences) = command else {
+                        break;
+                    };
+                    let mut shutdown = false;
+                    while let Ok(command) = receiver.try_recv() {
+                        match command {
+                            PreferencesWriteCommand::Persist(latest) => preferences = latest,
+                            PreferencesWriteCommand::Shutdown => {
+                                shutdown = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Err(error) = store.save(&preferences) {
+                        tracing::error!(error = %error, "无法保存 Console 用户配置");
+                    }
+                    if shutdown {
+                        break;
+                    }
+                }
+            })?;
+
+        Ok(Self {
+            sender,
+            worker: Some(worker),
+        })
+    }
+
+    fn persist(&self, preferences: &ConsolePreferences) {
+        if self
+            .sender
+            .send(PreferencesWriteCommand::Persist(preferences.clone()))
+            .is_err()
+        {
+            tracing::error!("Console 用户配置后台写入线程已经停止");
+        }
+    }
+}
+
+impl Drop for PreferencesWriter {
+    fn drop(&mut self) {
+        _ = self.sender.send(PreferencesWriteCommand::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            _ = worker.join();
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct PreferencesState {
     preferences: ConsolePreferences,
-    store: Option<ConsolePreferencesStore>,
+    writer: Option<PreferencesWriter>,
 }
 
 impl Global for PreferencesState {}
@@ -266,25 +339,20 @@ where
     cx.observe_global::<PreferencesState>(|_, cx| cx.notify())
 }
 
-/// 更新内存中的主题选择并立即保存到当前用户的本地配置文件。
+/// 更新内存中的主题选择，并把最新快照交给后台线程保存。
 ///
-/// 文件保存失败时保留本次运行中的选择，并把错误输出到标准错误，避免中断设置交互。
+/// 文件保存失败时保留本次运行中的选择，并记录错误日志，避免中断设置交互。
 ///
 /// # Panics
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
 pub fn persist_theme_selection(selection: ThemeSelection, cx: &mut App) {
-    PreferencesState::update_global(cx, |state, _| {
-        state.preferences.set_theme_selection(selection);
-        if let Some(store) = state.store.as_ref()
-            && let Err(error) = store.save(&state.preferences)
-        {
-            eprintln!("无法保存 Console 用户主题配置: {error}");
-        }
+    update_preferences(cx, |preferences| {
+        preferences.set_theme_selection(selection);
     });
 }
 
-/// 更新应用基础字体大小并立即保存到当前用户的本地配置文件。
+/// 更新应用基础字体大小，并把最新快照交给后台线程保存。
 ///
 /// 字号会被限制在设置页允许的范围内；保存失败时仍保留本次运行中的选择。
 ///
@@ -292,17 +360,12 @@ pub fn persist_theme_selection(selection: ThemeSelection, cx: &mut App) {
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
 pub fn persist_font_size(font_size: u16, cx: &mut App) {
-    PreferencesState::update_global(cx, |state, _| {
-        state.preferences.set_font_size(font_size);
-        if let Some(store) = state.store.as_ref()
-            && let Err(error) = store.save(&state.preferences)
-        {
-            eprintln!("无法保存 Console 字体大小配置: {error}");
-        }
+    update_preferences(cx, |preferences| {
+        preferences.set_font_size(font_size);
     });
 }
 
-/// 更新统一组件尺寸并立即保存到当前用户的本地配置文件。
+/// 更新统一组件尺寸，并把最新快照交给后台线程保存。
 ///
 /// 该函数只负责更新持久化偏好；调用方应先通过 `theme::set_component_size` 应用运行时状态。
 /// 保存失败时仍保留本次运行中的选择。
@@ -315,36 +378,25 @@ pub fn persist_component_size(new_component_size: Size, cx: &mut App) {
         return;
     }
 
-    PreferencesState::update_global(cx, |state, _| {
-        state.preferences.set_component_size(new_component_size);
-        if let Some(store) = state.store.as_ref()
-            && let Err(error) = store.save(&state.preferences)
-        {
-            eprintln!("无法保存 Console 组件尺寸配置: {error}");
-        }
+    update_preferences(cx, |preferences| {
+        preferences.set_component_size(new_component_size);
     });
 }
 
-/// 更新窗口默认显示器并立即保存到当前用户的本地配置文件。
+/// 更新窗口默认显示器，并把最新快照交给后台线程保存。
 ///
-/// 传入 `None` 表示改为跟随系统主显示器。文件保存失败时保留本次运行中的选择，
-/// 并把错误输出到标准错误。
+/// 传入 `None` 表示改为跟随系统主显示器。文件保存失败时保留本次运行中的选择并记录错误日志。
 ///
 /// # Panics
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
 pub fn persist_startup_display_uuid(display_uuid: Option<String>, cx: &mut App) {
-    PreferencesState::update_global(cx, |state, _| {
-        state.preferences.set_startup_display_uuid(display_uuid);
-        if let Some(store) = state.store.as_ref()
-            && let Err(error) = store.save(&state.preferences)
-        {
-            eprintln!("无法保存 Console 启动显示器配置: {error}");
-        }
+    update_preferences(cx, |preferences| {
+        preferences.set_startup_display_uuid(display_uuid);
     });
 }
 
-/// 更新置顶标签顺序并立即保存到当前用户的本地配置文件。
+/// 更新置顶标签顺序，并把最新快照交给后台线程保存。
 ///
 /// 保存失败时仍保留本次运行中的置顶状态，后续标签操作可以再次尝试写入。
 ///
@@ -352,12 +404,16 @@ pub fn persist_startup_display_uuid(display_uuid: Option<String>, cx: &mut App) 
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
 pub fn persist_pinned_tabs(pinned_tabs: &[FeatureId], cx: &mut App) {
+    update_preferences(cx, |preferences| {
+        preferences.set_pinned_tabs(pinned_tabs);
+    });
+}
+
+fn update_preferences(cx: &mut App, update: impl FnOnce(&mut ConsolePreferences)) {
     PreferencesState::update_global(cx, |state, _| {
-        state.preferences.set_pinned_tabs(pinned_tabs);
-        if let Some(store) = state.store.as_ref()
-            && let Err(error) = store.save(&state.preferences)
-        {
-            eprintln!("无法保存 Console 置顶标签配置: {error}");
+        update(&mut state.preferences);
+        if let Some(writer) = state.writer.as_ref() {
+            writer.persist(&state.preferences);
         }
     });
 }
@@ -366,22 +422,31 @@ fn load_preferences_state() -> PreferencesState {
     let store = match preferences_store() {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("无法确定 Console 用户配置目录: {error}");
+            tracing::error!(error = %error, "无法确定 Console 用户配置目录");
             return PreferencesState::default();
         }
     };
 
     if let Err(error) = migrate_legacy_preferences(&store) {
-        eprintln!("无法迁移 Console 旧版用户配置: {error}");
+        tracing::error!(error = %error, "无法迁移 Console 旧版用户配置");
     }
 
     match store.load_versioned_or_default() {
-        Ok(preferences) => PreferencesState {
-            preferences,
-            store: Some(store),
-        },
+        Ok(preferences) => {
+            let writer = match PreferencesWriter::start(store) {
+                Ok(writer) => Some(writer),
+                Err(error) => {
+                    tracing::error!(error = %error, "无法启动 Console 用户配置后台写入线程");
+                    None
+                }
+            };
+            PreferencesState {
+                preferences,
+                writer,
+            }
+        }
         Err(error) => {
-            eprintln!("无法加载 Console 用户配置: {error}");
+            tracing::error!(error = %error, "无法加载 Console 用户配置");
             PreferencesState::default()
         }
     }

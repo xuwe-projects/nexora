@@ -309,7 +309,7 @@ where
                 if let Some(target_display_id) = target_display_id
                     && let Err(error) = center_window_on_display(window, target_display_id)
                 {
-                    eprintln!("无法在目标显示器上居中窗口: {error}");
+                    tracing::warn!(error = %error, "无法在目标显示器上居中窗口");
                 }
                 let view = desktop_application.build_root_view(window, cx);
                 let root = cx.new(|cx| gpui_component::Root::new(view, window, cx));

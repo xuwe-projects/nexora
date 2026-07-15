@@ -1,0 +1,582 @@
+openapi: 3.1.0
+info:
+  title: Xuwe API
+  version: 0.1.0
+  description: 基于 OIDC Bearer token 与本地 PostgreSQL RBAC 的管理 API。
+servers:
+  - url: http://127.0.0.1:3000
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: 检查 API 与 PostgreSQL 是否可用
+      responses:
+        "200":
+          description: 服务可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /me:
+    get:
+      operationId: getCurrentUser
+      summary: 返回当前用户、角色与合并权限
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 当前授权快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /users:
+    get:
+      operationId: listUsers
+      summary: 分页列出用户
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 用户分页
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /users/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+    get:
+      operationId: getUser
+      summary: 返回用户授权详情
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 用户授权详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateUserStatus
+      summary: 启用或停用用户
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserStatus"
+      responses:
+        "200":
+          description: 更新后的用户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /users/{user_id}/roles:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+    put:
+      operationId: replaceUserRoles
+      summary: 原子替换用户角色
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceUserRoles"
+      responses:
+        "200":
+          description: 更新后的用户授权详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /roles:
+    get:
+      operationId: listRoles
+      summary: 列出角色及其权限
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 角色集合
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createRole
+      summary: 创建自定义角色
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRole"
+      responses:
+        "201":
+          description: 已创建角色；Location 指向角色资源
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+  /roles/{role_id}:
+    parameters:
+      - $ref: "#/components/parameters/RoleId"
+    get:
+      operationId: getRole
+      summary: 返回角色及其权限
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 角色详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateRole
+      summary: 修改自定义角色元数据
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRole"
+      responses:
+        "200":
+          description: 更新后的角色
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+    delete:
+      operationId: deleteRole
+      summary: 删除未被引用的自定义角色
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: 角色已删除
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /roles/{role_id}/permissions:
+    parameters:
+      - $ref: "#/components/parameters/RoleId"
+    put:
+      operationId: replaceRolePermissions
+      summary: 原子替换自定义角色权限
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceRolePermissions"
+      responses:
+        "200":
+          description: 更新后的角色
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /permissions:
+    get:
+      operationId: listPermissions
+      summary: 列出权限目录
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 权限集合
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Permission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RoleId:
+      name: role_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+  responses:
+    Unauthorized:
+      description: Bearer token 缺失、无效或已过期
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Forbidden:
+      description: 用户已停用或缺少权限
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: 资源冲突、操作会移除最后一个管理员，或试图修改内置超级管理员
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ValidationFailed:
+      description: 字段校验失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ServiceUnavailable:
+      description: PostgreSQL 或身份提供方暂时不可用
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          const: ok
+    UserStatus:
+      type: string
+      enum: [active, suspended]
+    User:
+      type: object
+      required: [id, issuer, subject, display_name, status, is_super_admin, created_at, updated_at, last_login_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        issuer:
+          type: string
+          format: uri
+        subject:
+          type: string
+        email:
+          type: [string, "null"]
+          format: email
+        display_name:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+          format: uri
+        status:
+          $ref: "#/components/schemas/UserStatus"
+        is_super_admin:
+          type: boolean
+          description: 是否为系统唯一且不可变的内置超级管理员
+        created_at:
+          type: integer
+          format: int64
+          description: 用户创建时间的 Unix 秒时间戳
+        updated_at:
+          type: integer
+          format: int64
+          description: 用户资料最后更新时间的 Unix 秒时间戳
+        last_login_at:
+          type: integer
+          format: int64
+          description: 最近成功登录时间的 Unix 秒时间戳
+    Permission:
+      type: object
+      required: [id, key, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9._-]+:[a-z][a-z0-9._-]+$"
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+    Role:
+      type: object
+      required: [id, key, name, is_system, permissions, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        is_system:
+          type: boolean
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Permission"
+        created_at:
+          type: integer
+          format: int64
+          description: 角色创建时间的 Unix 秒时间戳
+        updated_at:
+          type: integer
+          format: int64
+          description: 角色最后更新时间的 Unix 秒时间戳
+    AccessProfile:
+      type: object
+      required: [user, roles, permissions]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Role"
+        permissions:
+          type: array
+          items:
+            type: string
+    UserPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        page:
+          type: object
+          required: [number, size, total]
+          properties:
+            number:
+              type: integer
+            size:
+              type: integer
+            total:
+              type: integer
+    UpdateUserStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/UserStatus"
+    ReplaceUserRoles:
+      type: object
+      additionalProperties: false
+      required: [role_ids]
+      properties:
+        role_ids:
+          type: array
+          maxItems: 64
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    CreateRole:
+      type: object
+      additionalProperties: false
+      required: [key, name]
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9._-]{1,63}$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+        permission_ids:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    UpdateRole:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+    ReplaceRolePermissions:
+      type: object
+      additionalProperties: false
+      required: [permission_ids]
+      properties:
+        permission_ids:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details, request_id]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+            request_id:
+              type: string

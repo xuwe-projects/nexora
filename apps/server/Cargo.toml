@@ -4,6 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+account = { workspace = true }
+api = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
 configuration = { workspace = true }
+contracts = { workspace = true }
+logging = { workspace = true }
 serde = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+tracing = { workspace = true }
+url = { workspace = true }

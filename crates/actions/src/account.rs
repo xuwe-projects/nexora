@@ -11,16 +11,15 @@ gpui::actions!(
     [
         /// 打开系统浏览器并登录当前账户。
         SignInAccount,
-        /// 打开当前登录用户的个人资料页。
-        OpenAccountProfile,
         /// 退出当前登录账户。
         SignOutAccount
     ]
 );
 
-/// 账户菜单使用的 GPUI key context。
+/// 账户菜单中需要登录态的 GPUI key context。
 ///
-/// 视图需要在可接收账户快捷键的根元素上设置该 context，菜单才能正确展示和解析这些快捷键。
+/// 视图需要在已登录工作区的根元素上设置该 context，退出登录快捷键才会生效。
+/// 登录快捷键是应用级入口，不依赖焦点或该 context。
 pub const CONTEXT: &str = "console_account_menu";
 
 /// 账户菜单中的业务动作种类。
@@ -30,9 +29,6 @@ pub const CONTEXT: &str = "console_account_menu";
 pub enum AccountActionKind {
     /// 打开系统浏览器并登录当前账户。
     SignIn,
-
-    /// 打开当前登录用户的个人资料页。
-    Profile,
 
     /// 打开设置页或账户设置入口。
     Settings,
@@ -75,8 +71,6 @@ impl AccountActionSpec {
     }
 
     /// 返回该菜单项展示给用户的文案。
-    ///
-    /// 个人资料项通常使用当前用户名称，其他项使用固定命令文案。
     pub fn label(&self) -> &str {
         self.label.as_str()
     }
@@ -94,7 +88,6 @@ impl AccountActionSpec {
     pub fn to_action(&self) -> Box<dyn Action> {
         match self.kind {
             AccountActionKind::SignIn => Box::new(SignInAccount),
-            AccountActionKind::Profile => Box::new(OpenAccountProfile),
             AccountActionKind::Settings => Box::new(OpenSettings),
             AccountActionKind::SignOut => Box::new(SignOutAccount),
         }
@@ -103,14 +96,9 @@ impl AccountActionSpec {
 
 /// 返回账户菜单默认动作列表。
 ///
-/// `account_name` 会作为个人资料入口的展示文案，其余动作保持固定顺序：设置、退出登录。
-pub fn menu_actions(account_name: impl Into<String>) -> Vec<AccountActionSpec> {
+/// 当前账户名称由账户栏本身展示；菜单只暴露已经实现的设置和退出操作。
+pub fn menu_actions() -> Vec<AccountActionSpec> {
     vec![
-        AccountActionSpec::new(
-            AccountActionKind::Profile,
-            account_name,
-            Some("Cmd+Shift+P"),
-        ),
         AccountActionSpec::new(
             AccountActionKind::Settings,
             "设置",
@@ -139,8 +127,7 @@ pub fn signed_out_menu_actions() -> Vec<AccountActionSpec> {
 /// 调用方通常在应用初始化或创建根视图前调用该函数，使菜单项和键盘入口共享相同 action。
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-shift-l", SignInAccount, Some(CONTEXT)),
-        KeyBinding::new("cmd-shift-p", OpenAccountProfile, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-l", SignInAccount, None),
         KeyBinding::new("cmd-shift-q", SignOutAccount, Some(CONTEXT)),
     ]);
 }

@@ -82,7 +82,7 @@ fn open_settings_window(cx: &mut App) {
         if let Some(target_display_id) = target_display_id
             && let Err(error) = desktop::center_window_on_display(window, target_display_id)
         {
-            eprintln!("无法在目标显示器上居中设置窗口: {error}");
+            tracing::warn!(error = %error, "无法在目标显示器上居中设置窗口");
         }
         let settings = cx.new(SettingsWindow::new);
         let root = cx.new(|cx| gpui_component::Root::new(settings, window, cx));
@@ -94,7 +94,7 @@ fn open_settings_window(cx: &mut App) {
             cx.activate(true);
             _ = settings_window.update(cx, |_, window, _| window.activate_window());
         }
-        Err(error) => eprintln!("无法打开设置窗口: {error:#}"),
+        Err(error) => tracing::error!(error = %error, "无法打开设置窗口"),
     }
 }
 
@@ -199,6 +199,7 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let window_layers = ui::window_layers(window, cx);
         let content = div()
             .flex_1()
             .min_w_0()
@@ -228,6 +229,7 @@ impl Render for SettingsWindow {
                             .bg(gpui::transparent_black()),
                     )
                 })
+                .children(window_layers)
                 .into_any_element();
         }
 
@@ -241,6 +243,7 @@ impl Render for SettingsWindow {
             .bg(cx.theme().tokens.background)
             .child(TitleBar::new())
             .child(content)
+            .children(window_layers)
             .into_any_element()
     }
 }

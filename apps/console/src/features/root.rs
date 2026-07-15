@@ -10,9 +10,7 @@ use crate::{
         virtual_scroll::VirtualScrollFeature,
     },
 };
-use actions::account::{
-    self as account_actions, AccountActionKind, OpenAccountProfile, SignInAccount, SignOutAccount,
-};
+use actions::account::{self as account_actions, AccountActionKind, SignOutAccount};
 use gpui::{
     Anchor, AnyElement, Context, IntoElement, MouseButton, Render, ScrollHandle, WeakEntity,
     Window, div, prelude::*, px,
@@ -557,7 +555,7 @@ impl RootView {
     fn render_account_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = auth::snapshot(cx);
         let menu_items = if snapshot.authenticated {
-            account_actions::menu_actions(snapshot.display_name.to_string())
+            account_actions::menu_actions()
         } else {
             account_actions::signed_out_menu_actions()
         };
@@ -593,39 +591,21 @@ impl RootView {
                             .icon(account_icon(item.kind()));
                         let menu_item = match item.kind() {
                             AccountActionKind::SignIn => menu_item.on_click(|_, _, cx| {
-                                eprintln!("Console OIDC: 登录菜单已点击");
+                                tracing::debug!("Console OIDC 登录菜单已点击");
                                 if let Err(error) = auth::start_login(cx) {
-                                    eprintln!("Console OIDC: 无法开始登录: {error}");
+                                    tracing::error!(error = %error, "Console OIDC 无法开始登录");
                                     auth::complete_login(Err(error), cx);
                                 }
                             }),
                             AccountActionKind::SignOut => {
                                 menu_item.on_click(|_, _, cx| auth::sign_out(cx))
                             }
-                            AccountActionKind::Profile | AccountActionKind::Settings => {
-                                menu_item.action(item.to_action())
-                            }
+                            AccountActionKind::Settings => menu_item.action(item.to_action()),
                         };
                         menu.item(menu_item)
                     },
                 )
             })
-    }
-
-    fn open_account_profile(
-        &mut self,
-        _: &OpenAccountProfile,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.notify();
-    }
-
-    fn sign_in_account(&mut self, _: &SignInAccount, _: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = auth::start_login(cx) {
-            auth::complete_login(Err(error), cx);
-        }
-        cx.notify();
     }
 
     fn sign_out_account(&mut self, _: &SignOutAccount, _: &mut Window, cx: &mut Context<Self>) {
@@ -1105,30 +1085,31 @@ impl Render for RootView {
     /// 渲染时会把控制台专属的导航、标签栏和当前 feature 页面传入共享工作区布局，
     /// 体现多个业务模块共同构成桌面程序、窗口结构由公共 UI crate 复用的职责边界。
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !auth::snapshot(cx).authenticated {
-            return LoginFeature::render(window, cx);
-        }
+        let content = if auth::snapshot(cx).authenticated {
+            let sidebar = self.render_sidebar(cx);
+            let title_bar_content = self.render_title_bar_content(cx);
+            let panel_header = self.render_panel_header(cx);
+            let content_scrollable = self.active_feature() != FeatureId::VirtualScroll;
+            let active_feature = self.render_active_feature(cx);
 
-        let sidebar = self.render_sidebar(cx);
-        let title_bar_content = self.render_title_bar_content(cx);
-        let panel_header = self.render_panel_header(cx);
-        let content_scrollable = self.active_feature() != FeatureId::VirtualScroll;
-        let active_feature = self.render_active_feature(cx);
+            WorkspaceLayout::new(sidebar, title_bar_content, active_feature)
+                .with_sidebar_width(px(224.0))
+                .with_sidebar_width_range(px(208.0)..px(300.0))
+                .with_panel_header(panel_header)
+                .with_content_scrollable(content_scrollable)
+                .render(window, cx)
+        } else {
+            LoginFeature::render(window, cx)
+        };
+        let window_layers = ui::window_layers(window, cx);
 
         div()
+            .relative()
             .key_context(account_actions::CONTEXT)
-            .on_action(cx.listener(Self::sign_in_account))
-            .on_action(cx.listener(Self::open_account_profile))
             .on_action(cx.listener(Self::sign_out_account))
             .size_full()
-            .child(
-                WorkspaceLayout::new(sidebar, title_bar_content, active_feature)
-                    .with_sidebar_width(px(224.0))
-                    .with_sidebar_width_range(px(208.0)..px(300.0))
-                    .with_panel_header(panel_header)
-                    .with_content_scrollable(content_scrollable)
-                    .render(window, cx),
-            )
+            .child(content)
+            .children(window_layers)
             .into_any_element()
     }
 }
@@ -1158,7 +1139,6 @@ fn feature_breadcrumb_path(feature: FeatureId) -> Vec<(&'static str, Option<Feat
 fn account_icon(kind: AccountActionKind) -> IconName {
     match kind {
         AccountActionKind::SignIn => IconName::CircleUser,
-        AccountActionKind::Profile => IconName::CircleUser,
         AccountActionKind::Settings => IconName::Settings2,
         AccountActionKind::SignOut => IconName::CircleX,
     }
