@@ -11,7 +11,7 @@ port = 3000
 # PostgreSQL 连接 URL：postgres://用户名:密码@主机:端口/数据库名。
 # 先在 PostgreSQL 中创建数据库和账号，并授予该账号应用 schema 的读写权限。
 # 生产环境推荐通过 DATABASE__URL 注入，避免把密码写入 TOML。
-url = "postgres://xuwe:replace-me@127.0.0.1:5432/xuwe"
+url = "postgres://nexora:replace-me@127.0.0.1:5432/nexora"
 # 此服务实例允许同时占用的最大数据库连接数；多副本部署时需同时考虑 PostgreSQL 总连接上限。
 max_connections = 10
 

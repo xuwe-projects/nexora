@@ -180,7 +180,7 @@ impl AuthTokenStore {
             .collect::<String>();
 
         Ok(Self {
-            service: "com.xuwe.console.oidc".to_owned(),
+            service: "com.nexora.console.oidc".to_owned(),
             user: format!("active-session:{user}"),
             legacy: UserConfigStore::for_application("com", "Xuwe", "Console", "auth.toml")?,
         })
@@ -460,7 +460,7 @@ pub fn init(config: Option<AuthConfig>, store: Option<AuthTokenStore>, cx: &mut 
             let result = restore_task.await;
             cx.update(|cx| complete_restore(result, cx));
         })
-        // xuwe-lint: allow(xuwe::detached_lifecycle) reason="认证恢复任务属于应用级 Global 生命周期"
+        // nexora-lint: allow(nexora::detached_lifecycle) reason="认证恢复任务属于应用级 Global 生命周期"
         .detach();
     }
 }
@@ -621,7 +621,7 @@ pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
         auth.busy = true;
         auth.login_window = login_window;
         auth.status = "正在连接认证服务...".to_owned();
-        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证门禁与主工作区切换影响整个窗口"
+        // nexora-lint: allow(nexora::global_refresh_scope) reason="认证门禁与主工作区切换影响整个窗口"
         cx.refresh_windows();
     });
 
@@ -636,7 +636,7 @@ pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
                 let authorization_url = pending.authorization_url().to_owned();
                 AuthState::update_global(cx, |auth, cx| {
                     auth.status = "已打开浏览器，正在等待登录...".to_owned();
-                    // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
+                    // nexora-lint: allow(nexora::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
                     cx.refresh_windows();
                 });
                 tracing::info!("Console OIDC Discovery 完成，正在打开系统浏览器");
@@ -649,7 +649,7 @@ pub fn start_login(cx: &mut App) -> Result<(), AuthError> {
             }
         });
     })
-    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="浏览器登录流程属于应用级认证 Global 生命周期"
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="浏览器登录流程属于应用级认证 Global 生命周期"
     .detach();
 
     Ok(())
@@ -666,7 +666,7 @@ fn wait_for_login(pending: oidc::PendingOidcLogin, cx: &mut App) {
             complete_login(result, cx);
         });
     })
-    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="loopback 回调等待属于应用级认证 Global 生命周期"
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="loopback 回调等待属于应用级认证 Global 生命周期"
     .detach();
 }
 
@@ -678,7 +678,7 @@ fn validate_login_session(session: OidcSession, cx: &mut App) {
     let store = AuthState::global(cx).store.clone();
     AuthState::update_global(cx, |auth, cx| {
         auth.status = "正在验证系统访问权限...".to_owned();
-        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
+        // nexora-lint: allow(nexora::global_refresh_scope) reason="认证状态提示需要刷新应用级门禁"
         cx.refresh_windows();
     });
     let validation_task = cx.background_spawn(async move {
@@ -717,7 +717,7 @@ fn validate_login_session(session: OidcSession, cx: &mut App) {
             Err(error) => complete_login(Err(error), cx),
         });
     })
-    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="业务登录门禁与凭据写入属于应用级认证 Global 生命周期"
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="业务登录门禁与凭据写入属于应用级认证 Global 生命周期"
     .detach();
 }
 
@@ -742,7 +742,7 @@ pub fn complete_login(result: Result<OidcSession, AuthError>, cx: &mut App) {
                 } else {
                     error_message
                 };
-                // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证失败状态需要刷新整个登录门禁和通知层"
+                // nexora-lint: allow(nexora::global_refresh_scope) reason="认证失败状态需要刷新整个登录门禁和通知层"
                 cx.refresh_windows();
             });
         }
@@ -823,7 +823,7 @@ pub fn sign_out(cx: &mut App) {
         } else {
             "未配置 OIDC".to_owned()
         };
-        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="退出登录需要把完整工作区切换为认证门禁"
+        // nexora-lint: allow(nexora::global_refresh_scope) reason="退出登录需要把完整工作区切换为认证门禁"
         cx.refresh_windows();
     });
 
@@ -834,13 +834,13 @@ pub fn sign_out(cx: &mut App) {
                 cx.update(|cx| {
                     AuthState::update_global(cx, |auth, cx| {
                         auth.status = format!("已退出，但清除系统登录凭据失败: {error}");
-                        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="系统凭据清理错误需要刷新登录门禁提示"
+                        // nexora-lint: allow(nexora::global_refresh_scope) reason="系统凭据清理错误需要刷新登录门禁提示"
                         cx.refresh_windows();
                     });
                 });
             }
         })
-        // xuwe-lint: allow(xuwe::detached_lifecycle) reason="系统凭据清理属于应用级认证 Global 生命周期"
+        // nexora-lint: allow(nexora::detached_lifecycle) reason="系统凭据清理属于应用级认证 Global 生命周期"
         .detach();
     }
 }
@@ -883,13 +883,13 @@ fn complete_restore(result: Result<Option<OidcSession>, AuthError>, cx: &mut App
         Ok(None) => AuthState::update_global(cx, |auth, cx| {
             auth.busy = false;
             auth.status = "未登录".to_owned();
-            // xuwe-lint: allow(xuwe::global_refresh_scope) reason="登录恢复结束需要刷新整个认证门禁"
+            // nexora-lint: allow(nexora::global_refresh_scope) reason="登录恢复结束需要刷新整个认证门禁"
             cx.refresh_windows();
         }),
         Err(error) => AuthState::update_global(cx, |auth, cx| {
             auth.busy = false;
             auth.status = format!("登录态恢复失败: {error}");
-            // xuwe-lint: allow(xuwe::global_refresh_scope) reason="登录恢复错误需要刷新整个认证门禁"
+            // nexora-lint: allow(nexora::global_refresh_scope) reason="登录恢复错误需要刷新整个认证门禁"
             cx.refresh_windows();
         }),
     }
@@ -910,7 +910,7 @@ pub(crate) fn apply_session(
             .unwrap_or_else(|| "已登录".to_owned());
         auth.session = Some(session);
         auth.refresh_generation = auth.refresh_generation.wrapping_add(1);
-        // xuwe-lint: allow(xuwe::global_refresh_scope) reason="认证成功需要把登录门禁切换为完整工作区"
+        // nexora-lint: allow(nexora::global_refresh_scope) reason="认证成功需要把登录门禁切换为完整工作区"
         cx.refresh_windows();
     });
     let generation = AuthState::global(cx).refresh_generation;
@@ -939,7 +939,7 @@ fn schedule_session_refresh(expires_at: Option<u64>, generation: u64, cx: &mut A
         timer.await;
         cx.update(|cx| start_scheduled_refresh(generation, cx));
     })
-    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="token 续期定时器属于应用级认证 Global 生命周期"
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="token 续期定时器属于应用级认证 Global 生命周期"
     .detach();
 }
 
@@ -986,7 +986,7 @@ fn start_scheduled_refresh(generation: u64, cx: &mut App) {
         let result = refresh_task.await;
         cx.update(|cx| complete_scheduled_refresh(generation, result, cx));
     })
-    // xuwe-lint: allow(xuwe::detached_lifecycle) reason="token 续期请求属于应用级认证 Global 生命周期"
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="token 续期请求属于应用级认证 Global 生命周期"
     .detach();
 }
 
@@ -1005,14 +1005,14 @@ fn complete_scheduled_refresh(
                 auth.session = None;
                 auth.status = error.to_string();
                 auth.refresh_generation = auth.refresh_generation.wrapping_add(1);
-                // xuwe-lint: allow(xuwe::global_refresh_scope) reason="会话失效需要把完整工作区切换为登录门禁"
+                // nexora-lint: allow(nexora::global_refresh_scope) reason="会话失效需要把完整工作区切换为登录门禁"
                 cx.refresh_windows();
             });
         }
         Err(error) => {
             AuthState::update_global(cx, |auth, cx| {
                 auth.status = format!("会话自动续期失败，将稍后重试: {error}");
-                // xuwe-lint: allow(xuwe::global_refresh_scope) reason="自动续期错误需要刷新应用级认证提示"
+                // nexora-lint: allow(nexora::global_refresh_scope) reason="自动续期错误需要刷新应用级认证提示"
                 cx.refresh_windows();
             });
             let timer = cx.background_executor().timer(Duration::from_secs(60));
@@ -1020,7 +1020,7 @@ fn complete_scheduled_refresh(
                 timer.await;
                 cx.update(|cx| start_scheduled_refresh(generation, cx));
             })
-            // xuwe-lint: allow(xuwe::detached_lifecycle) reason="token 续期重试定时器属于应用级认证 Global 生命周期"
+            // nexora-lint: allow(nexora::detached_lifecycle) reason="token 续期重试定时器属于应用级认证 Global 生命周期"
             .detach();
         }
     }

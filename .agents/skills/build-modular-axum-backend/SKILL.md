@@ -87,7 +87,7 @@ description: 使用 Cargo 工作区、Axum 0.8、SQLx/PostgreSQL、模块独立 
 由 `apps/` 下当前应用的 Cargo 包名推导默认配置文件，禁止在通用启动模板中固定写死 `server.toml`：
 
 ```text
-apps/server  ──> config/server.toml
+examples/server  ──> config/server.toml
 apps/admin   ──> config/admin.toml
 ```
 

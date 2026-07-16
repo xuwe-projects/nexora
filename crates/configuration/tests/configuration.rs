@@ -47,11 +47,11 @@ impl VersionedConfiguration for Preferences {
 
 #[test]
 fn local_user_store_uses_project_local_config_directory() {
-    let project_dirs = ProjectDirs::from("com", "Xuwe", "ConfigurationTest")
+    let project_dirs = ProjectDirs::from("com", "Nexora", "ConfigurationTest")
         .expect("当前平台应当可以确定本机配置目录");
     let store = UserConfigStore::<Preferences>::for_local_application(
         "com",
-        "Xuwe",
+        "Nexora",
         "ConfigurationTest",
         "settings.toml",
     )

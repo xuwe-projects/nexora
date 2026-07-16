@@ -1,10 +1,10 @@
 {
   "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
-  "name": "Xuwe",
-  "author": "Xuwe",
+  "name": "Nexora",
+  "author": "Nexora",
   "themes": [
     {
-      "name": "Xuwe Light",
+      "name": "Nexora Light",
       "mode": "light",
       "radius": 6,
       "radius.lg": 8,
@@ -60,7 +60,7 @@
       }
     },
     {
-      "name": "Xuwe Dark",
+      "name": "Nexora Dark",
       "mode": "dark",
       "radius": 6,
       "radius.lg": 8,

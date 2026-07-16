@@ -12,6 +12,8 @@ Axum 服务端和独立业务模块，用于共同验证框架边界与真实应
 以下能力已经存在于源码和测试中：
 
 - 同一个 `nexora` Cargo package 同时提供框架库和 `nexora` 命令行程序；
+- 同一个 CLI 提供 `create`、`init`、`build`、`doctor` 与 workspace `lint`，不再维护
+  第二个工具二进制；
 - `#[derive(nexora::Feature)]` 自动注册 Feature 元数据与 Entity 工厂，
   `#[derive(nexora::Window)]` 自动注册独立窗口、强类型参数与原生窗口工厂；
 - `#[derive(nexora::SidebarHeader)]` 与 `#[derive(nexora::SidebarFooter)]` 自动发现并挂载
@@ -214,7 +216,8 @@ cargo run -p nexora -- --help
 ```
 
 Cargo 依赖与可执行文件都叫 `nexora`。尚未从 registry 发布时，可在本仓库
-使用 `cargo install --path crates/nexora` 安装 CLI。直接运行 `nexora create` 时，CLI 会像
+使用 `cargo install --path crates/nexora --no-default-features --features cli` 安装 CLI。
+直接运行 `nexora create` 时，CLI 会像
 Vite 一样交互询问项目名称、single/workspace 结构以及是否启用完整 Account；所有问题都有
 默认值。脚本和 CI 仍可显式传入参数：
 
@@ -250,14 +253,16 @@ deeplink scheme 注册、公开 API 和发布兼容策略。
 
 ## Workspace 现有组成
 
-这个 workspace 原先以 Desktop Template 作为内部代号；下面的服务端结构和运行说明继续保留，
-也是 Nexora 当前用于端到端验证的参考应用。
+框架实现位于 `crates/` 与 `modules/`；可运行产品不再作为 `apps/` 主体，而是放在
+`examples/` 中验证真实桌面端与服务端组合。
 
 ## 后台结构
 
 ```text
 .
-├── apps/server/                 # 进程启动、PgPool 创建和顶层路由组合
+├── examples/
+│   ├── console/                # GPUI 桌面端完整集成示例
+│   └── server/                 # Axum、PgPool 与 Account 组合示例
 ├── config/
 │   └── example.server.toml      # 可提交的服务端配置示例
 ├── crates/
@@ -271,19 +276,19 @@ deeplink scheme 注册、公开 API 和发布兼容策略。
 
 服务端只创建一个 `PgPool`。宿主把它和 token verifier 交给
 `Account::new(AccountDependencies)`，Account 内部保存连接池的廉价克隆句柄并返回可与
-`Router<AppState>` 合并的路由。只有 `apps/server` 在最外层调用一次
+`Router<AppState>` 合并的路由。只有 `examples/server` 在最外层调用一次
 `.with_state(app_state)`。
 
 依赖方向保持单向：
 
 ```text
-apps/server ──> modules/account ──> crates/api + crates/contracts + SQLx
-            └─> crates/configuration
+examples/server ──> modules/account ──> crates/api + crates/contracts + SQLx
+                └─> crates/configuration
 
 crates/migrate ──> crates/configuration + SQLx
 ```
 
-业务模块不依赖 `apps/server` 或服务端的 `AppState`。业务 SQL 只出现在模块的 `stores`
+业务模块不依赖 `examples/server` 或服务端的 `AppState`。业务 SQL 只出现在模块的 `stores`
 边界；表结构、索引、约束和必要基础数据统一位于 `crates/migrate/migrations`。
 
 ## 本地运行
@@ -324,7 +329,7 @@ cargo fmt --all
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p cli --bin xuwecli -- lint --workspace . --deny-warnings
+cargo run -p nexora -- lint --workspace . --deny-warnings
 ```
 
 ## 许可证

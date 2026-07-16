@@ -812,17 +812,17 @@ fn callback_page(state: CallbackPageState) -> (&'static str, String) {
             CallbackPageState::Success => (
                 "200 OK",
                 "success",
-                "登录已完成 · 铉微安全认证",
+                "登录已完成 · Nexora 安全认证",
                 "身份验证完成",
                 "登录已完成",
-                "授权结果已安全返回铉微桌面应用，应用正在验证会话并准备你的工作区。",
+                "授权结果已安全返回 Nexora 桌面应用，应用正在验证会话并准备你的工作区。",
                 "桌面应用已收到授权结果",
                 "true",
             ),
             CallbackPageState::Failure => (
                 "400 Bad Request",
                 "failure",
-                "登录未完成 · 铉微安全认证",
+                "登录未完成 · Nexora 安全认证",
                 "身份验证中断",
                 "登录未完成",
                 "认证服务未返回可接受的授权结果。请返回桌面应用查看详情，然后重新尝试登录。",
@@ -1105,9 +1105,9 @@ const CALLBACK_PAGE_TEMPLATE: &str = r#"<!doctype html>
 <body class="%%TONE%%">
   <main class="shell">
     <div>
-      <div class="brand" aria-label="铉微安全认证">
+      <div class="brand" aria-label="Nexora 安全认证">
         <img src="data:image/png;base64,%%LOGO%%" alt="">
-        <span>铉微安全认证</span>
+        <span>Nexora 安全认证</span>
       </div>
       <section class="card" aria-labelledby="page-title">
         <div class="content">

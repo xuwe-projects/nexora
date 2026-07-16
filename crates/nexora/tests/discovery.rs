@@ -1,3 +1,5 @@
+#![cfg(all(feature = "desktop", feature = "derive"))]
+
 use nexora::{
     AppRegistry, Feature, FeatureElement, RouteTargetKind, Window, WindowElement,
     gpui::{Context, Empty, IntoElement, Window as GpuiWindow},

@@ -75,7 +75,7 @@ impl nexora::FeatureElement for HomeFeature {
                             .text_xs()
                             .font_bold()
                             .text_color(theme.primary)
-                            .child("DESKTOP TEMPLATE"),
+                            .child("NEXORA FRAMEWORK"),
                     )
                     .child(
                         div()

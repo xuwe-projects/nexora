@@ -39,7 +39,7 @@ pub use layered::LayeredConfigLoader;
 `apps/` 下每个后端应用的目录名必须与 Cargo 包名一致。默认配置文件名由当前应用的 Cargo 包名决定：
 
 ```text
-apps/server  ──> config/server.toml
+examples/server  ──> config/server.toml
 apps/admin   ──> config/admin.toml
 apps/worker  ──> config/worker.toml
 ```

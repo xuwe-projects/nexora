@@ -35,7 +35,7 @@
 ## 依赖方向
 
 ```text
-apps/server ──> modules/account
+examples/server ──> modules/account
             ├─> modules/<业务模块>
             └─> crates/configuration
 
@@ -175,5 +175,5 @@ REFERENCES account.accounts(id)
 - 递归忽略 `config/` 下其他文件。
 - `apps/` 下后端应用的目录名和 Cargo 包名必须一致。
 - 由调用方选择配置文件；没有命令行参数时，使用 `env!("CARGO_PKG_NAME")` 推导 `config/<应用名>.toml`。
-- 例如 `apps/server` 默认使用 `config/server.toml`，`apps/admin` 默认使用 `config/admin.toml`。
+- 例如 `examples/server` 默认使用 `config/server.toml`，`apps/admin` 默认使用 `config/admin.toml`。
 - 禁止提交真实数据库凭据。

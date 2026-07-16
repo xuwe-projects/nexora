@@ -11,7 +11,7 @@ pipeline {
     string(
       name: 'VERSION',
       defaultValue: '',
-      description: '发布版本号；为空时由 xuwecli 使用 workspace 默认版本。'
+      description: '发布版本号；为空时由 nexora 使用 workspace 默认版本。'
     )
     string(
       name: 'BUNDLE_VERSION',
@@ -31,12 +31,12 @@ pipeline {
     booleanParam(
       name: 'BUILD_WINDOWS',
       defaultValue: false,
-      description: '是否构建 Windows 产物；当前需要等待 xuwecli Windows 打包能力补齐。'
+      description: '是否构建 Windows 产物；当前需要等待 nexora Windows 打包能力补齐。'
     )
     booleanParam(
       name: 'PUBLISH',
       defaultValue: false,
-      description: '是否执行发布上传；当前默认关闭，等 xuwecli publish 接入后再打开。'
+      description: '是否执行发布上传；当前默认关闭，等 nexora publish 接入后再打开。'
     )
   }
 
@@ -53,7 +53,7 @@ pipeline {
         sh '''
           set -eu
 
-          cargo install --path apps/cli --locked
+          cargo install --path crates/nexora --locked --no-default-features --features cli
 
           VERSION_ARG=""
           if [ -n "${VERSION}" ]; then
@@ -62,7 +62,7 @@ pipeline {
 
           BUILD_BUNDLE_VERSION="${BUNDLE_VERSION:-${BUILD_NUMBER}}"
 
-          xuwecli build \
+          nexora build \
             --targets current \
             ${VERSION_ARG} \
             --bundle-version "${BUILD_BUNDLE_VERSION}" \
@@ -85,7 +85,7 @@ pipeline {
         powershell '''
           $ErrorActionPreference = "Stop"
 
-          cargo install --path apps/cli --locked
+          cargo install --path crates/nexora --locked --no-default-features --features cli
 
           $versionArg = @()
           if ($env:VERSION) {
@@ -97,7 +97,7 @@ pipeline {
             $buildBundleVersion = $env:BUILD_NUMBER
           }
 
-          xuwecli build `
+          nexora build `
             --targets current `
             @versionArg `
             --bundle-version "$buildBundleVersion" `
@@ -137,7 +137,7 @@ pipeline {
         sh '''
           set -eu
 
-          echo "xuwecli publish 尚未接入，当前只归档 dist 产物。"
+          echo "nexora publish 尚未接入，当前只归档 dist 产物。"
           echo "后续接入后应先上传安装包、校验文件和 notes，最后上传 latest.json。"
         '''
       }

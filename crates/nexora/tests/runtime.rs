@@ -1,3 +1,5 @@
+#![cfg(all(feature = "desktop", feature = "derive"))]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gpui::{AppContext as _, Context, Empty, TestAppContext, Window};

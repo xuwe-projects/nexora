@@ -1,3 +1,5 @@
+#![cfg(all(feature = "desktop", feature = "derive"))]
+
 use nexora::{
     AppRegistry, Feature, FeatureElement, FeatureMetadata, NoPath, NoQuery, Path, Query,
     RegistryError, ResolveError, RouteExtractError, RouteTarget, RouteTargetKind, Window,

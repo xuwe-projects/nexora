@@ -47,7 +47,7 @@ fn helper_restores_backup_when_staged_move_fails() {
     assert_eq!(fs::read_to_string(marker).unwrap(), "current");
     assert!(
         !current_app
-            .with_extension("app.xuwe-updater-backup")
+            .with_extension("app.nexora-updater-backup")
             .exists()
     );
     assert!(!staging_root.exists());
@@ -87,7 +87,7 @@ fn temporary_directory(label: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "xuwe-updater-test-{label}-{}-{nonce}",
+        "nexora-updater-test-{label}-{}-{nonce}",
         std::process::id()
     ));
     fs::create_dir_all(&path).unwrap();

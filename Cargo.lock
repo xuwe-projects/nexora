@@ -1228,17 +1228,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "proc-macro2",
- "serde_json",
- "syn",
- "toml_edit 0.22.27",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4845,14 +4834,18 @@ dependencies = [
  "nexora-macros",
  "oidc",
  "percent-encoding",
+ "proc-macro2",
  "reqwest",
  "serde",
  "serde_html_form",
+ "serde_json",
  "serde_path_to_error",
  "sqlx",
+ "syn",
  "theme",
  "thiserror 2.0.18",
  "tokio",
+ "toml_edit 0.22.27",
  "tracing",
  "url",
 ]

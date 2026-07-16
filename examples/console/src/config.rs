@@ -36,7 +36,7 @@ pub struct ConsolePreferences {
 }
 
 impl Default for ConsolePreferences {
-    /// 创建使用铉微主题并跟随系统颜色模式的默认用户偏好。
+    /// 创建使用 Nexora 主题并跟随系统颜色模式的默认用户偏好。
     fn default() -> Self {
         Self {
             schema_version: CONSOLE_SCHEMA_VERSION,
@@ -200,7 +200,7 @@ impl PreferencesWriter {
     fn start(store: ConsolePreferencesStore) -> Result<Self, std::io::Error> {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
-            .name("xuwe-preferences".to_owned())
+            .name("nexora-preferences".to_owned())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
                     let PreferencesWriteCommand::Persist(mut preferences) = command else {
@@ -262,17 +262,20 @@ impl Global for PreferencesState {}
 
 /// 创建 Console 在当前操作系统标准配置目录中的用户偏好存储。
 ///
+/// 新配置统一写入 Nexora 对应的本地应用目录；启动加载阶段仍会从旧 Xuwe
+/// 目录读取并迁移已有配置，避免品牌升级导致用户偏好丢失。
+///
 /// # Errors
 ///
 /// 当前平台无法确定应用配置目录时返回 [`ConfigurationError`]。
 pub fn preferences_store() -> Result<ConsolePreferencesStore, ConfigurationError> {
-    UserConfigStore::for_local_application("com", "Xuwe", "Console", "settings.toml")
+    UserConfigStore::for_local_application("com", "Nexora", "Console", "settings.toml")
 }
 
 /// 在应用启动阶段加载当前操作系统用户的本地偏好并注册全局状态。
 ///
 /// Windows 使用 `%LOCALAPPDATA%`，macOS 与 Linux 使用各自的平台标准配置目录。
-/// 旧版 Windows 漫游目录中的设置会在本地文件尚不存在时复制到新位置。
+/// 旧 Xuwe 应用目录中的设置会在 Nexora 本地配置尚不存在时复制到新位置。
 pub fn init(cx: &mut App) {
     if cx.has_global::<PreferencesState>() {
         return;

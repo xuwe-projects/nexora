@@ -181,7 +181,7 @@ pub fn task_rows() -> &'static [TaskRow] {
             duration: "18s",
         },
         TaskRow {
-            command: "xuwecli build --mode local",
+            command: "nexora build --mode local",
             kind: "本地打包",
             status: TaskStatus::Ready,
             duration: "等待中",

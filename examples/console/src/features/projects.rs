@@ -155,7 +155,7 @@ pub fn project_rows() -> &'static [ProjectRow] {
     static ROWS: [ProjectRow; 3] = [
         ProjectRow {
             name: "Console",
-            path: "apps/console",
+            path: "examples/console",
             description: "GPUI 桌面入口",
             status: ProjectStatus::Active,
         },

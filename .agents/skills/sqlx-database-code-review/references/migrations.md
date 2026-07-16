@@ -80,7 +80,7 @@ SQLx 支持顺序版本和时间戳版本，两者都有效：
 20260715103000_create_users.sql
 ```
 
-Xuwe 采用顺序版本，并将所有迁移集中到 `crates/migrate/migrations`。业务名称写入描述，便于识别归属：
+Nexora 采用顺序版本，并将所有迁移集中到 `crates/migrate/migrations`。业务名称写入描述，便于识别归属：
 
 ```text
 crates/migrate/migrations/
@@ -90,7 +90,7 @@ crates/migrate/migrations/
 └── 0002_accounts_add_super_admin.down.sql
 ```
 
-不要把迁移散落在 `modules/accounts`、`crates/database` 或 `apps/server`。`crates/migrate` 是唯一迁移执行边界。
+不要把迁移散落在 `modules/accounts`、`crates/database` 或 `examples/server`。`crates/migrate` 是唯一迁移执行边界。
 
 ## 可逆迁移
 

@@ -263,7 +263,7 @@ console -> api -> axum + sqlx + tokio + ...
 ## Crate 命名
 
 - crate 名称直接表达职责或业务边界，不要重复项目名、产品名或 workspace 名作为前缀。
-- 禁止使用 `xxx-core`、`xxx-handle`、`xxx-handler` 这类“项目前缀 + 通用技术角色”的名称，例如 `xuwe-core`、`console-core`、`xuwe-handler`。
+- 禁止使用 `xxx-core`、`xxx-handle`、`xxx-handler` 这类“项目前缀 + 通用技术角色”的名称，例如 `nexora-core`、`console-core`、`nexora-handler`。
 - 当职责明确且不存在歧义时，直接使用 `core`、`handler` 等简洁名称。
 - 如果 `core` 与 Rust 核心库冲突、名称不可用，或者 `handler` 无法准确表达职责，不要重新添加 `xxx-` 前缀；改用更符合业务场景或架构职责的名称，例如 `domain`、`application`、`accounts`、`projects`、`builds`、`migration` 或 `desktop`。
 - 当一个 workspace 存在多个同类 handler 时，优先按业务边界拆分并使用业务名称，例如 `accounts`、`billing`，不要创建 `account-handler`、`billing-handler`。
@@ -273,7 +273,7 @@ console -> api -> axum + sqlx + tokio + ...
 
 | 不推荐 | 推荐 | 原因 |
 | --- | --- | --- |
-| `xuwe-core` | `core` 或 `domain` | 去掉冗余项目名前缀，并在冲突时表达领域职责。 |
+| `nexora-core` | `core` 或 `domain` | 去掉冗余项目名前缀，并在冲突时表达领域职责。 |
 | `console-handler` | `handler` 或具体业务名 | 避免使用应用名前缀包装通用角色。 |
 | `account-handler` | `accounts` | 直接表达账号业务边界，而不是实现层角色。 |
 | `desktop-handle` | `desktop` | 使用实际业务或平台职责，避免含义模糊的 `handle`。 |
@@ -284,13 +284,13 @@ console -> api -> axum + sqlx + tokio + ...
 - `src/main.rs` 只负责参数解析、配置加载、依赖装配和启动流程，避免直接承载大量可复用业务逻辑。
 - bin crate 需要复用或测试业务逻辑时，将逻辑拆到独立的 workspace library crate，再由 bin crate 通过 `{ workspace = true }` 依赖该 crate。
 - 不要为了让集成测试能够导入 bin crate 而补建薄 `src/lib.rs`，也不要在 `main.rs` 和 `lib.rs` 之间重复声明同一组模块。
-- 同一个产品同时需要命令入口和可复用能力时，使用两个职责明确的 crate，例如 `apps/server` 只保留 `src/main.rs`，可复用能力放在 `crates/application`、`crates/domain` 或具体业务 crate 中。
+- 同一个产品同时需要命令入口和可复用能力时，使用两个职责明确的 crate，例如 `examples/server` 只保留 `src/main.rs`，可复用能力放在 `crates/application`、`crates/domain` 或具体业务 crate 中。
 - library crate 使用 `src/lib.rs`，bin crate 使用 `src/main.rs`；除非用户明确要求特殊 Cargo 多目标 package，否则两种目标不要混放在同一个 crate。
 
 推荐结构：
 
 ```text
-apps/server/
+examples/server/
 ├── Cargo.toml
 └── src/main.rs
 
@@ -341,7 +341,7 @@ src/
 
 ## 测试组织
 
-- 所有 Rust 测试用例必须放在对应 crate 的 `tests/` 集成测试目录中，例如 `apps/console/tests/` 或 `crates/desktop/tests/`。
+- 所有 Rust 测试用例必须放在对应 crate 的 `tests/` 集成测试目录中，例如 `examples/console/tests/` 或 `crates/desktop/tests/`。
 - 生产源码中禁止出现 `#[cfg(test)]`、`mod tests`、测试专用导入、测试专用类型或仅为测试条件编译的逻辑。
 - 新增行为或修复缺陷时，优先先编写或调整能够复现预期与失败场景的测试，再实现生产代码。
 - 测试 bin crate 时，优先验证命令入口的外部行为，或直接测试它依赖的独立 library crate；不要通过新增同 package 的 `src/lib.rs` 暴露实现细节。
@@ -396,11 +396,11 @@ cargo fmt --all
 cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo run -p cli --bin xuwecli -- lint --workspace . --deny-warnings
+cargo run -p nexora -- lint --workspace . --deny-warnings
 ```
 
-- `xuwecli lint` 是本仓库的团队规则门禁，负责补充 rustc 和 Clippy 无法覆盖的 workspace 依赖、crate 组织、中文 rustdoc、测试目录、GPUI 生命周期、技术选型、API 与数据库边界检查。
-- 自定义 lint 的完整规则、级别和带原因豁免格式见 `apps/cli/LINTS.md`；确定性 `error` 不允许豁免，启发式 `warning` 必须经过审查后才能局部放行。
+- `nexora lint` 是本仓库的团队规则门禁，负责补充 rustc 和 Clippy 无法覆盖的 workspace 依赖、crate 组织、中文 rustdoc、测试目录、GPUI 生命周期、技术选型、API 与数据库边界检查。
+- 自定义 lint 的完整规则、级别和带原因豁免格式见 `crates/nexora/LINTS.md`；确定性 `error` 不允许豁免，启发式 `warning` 必须经过审查后才能局部放行。
 - 需要生成或验证开发构建产物时运行 `cargo build --workspace`；修改发布配置、条件编译或仅在优化构建中出现的代码时，额外运行 `cargo build --workspace --release`。
 - 修改可执行程序行为时，除自动化测试外，使用 `cargo run -p <package> -- <args>` 和代表性参数验证关键路径。
 - 修复 `rustfmt`、编译器、Clippy 或测试报告的全部相关错误和警告，然后重新运行受影响的检查，直到结果通过；不要通过无依据的 `allow` 属性掩盖问题。

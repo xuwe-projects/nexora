@@ -1,17 +1,17 @@
-//! Xuwe CLI 的命令解析与执行能力。
+//! Nexora CLI 的命令解析与执行能力。
 //!
-//! 当前实现包含 macOS 桌面应用构建和环境检查，后续可以继续拆分 `new`、`init`、`run`
-//! 等独立命令模块，并随 `apps/cli` 整体迁移到其他项目。
+//! 当前实现包含 macOS 桌面应用构建、环境检查和 workspace lint，并由 Nexora 的统一
+//! Clap 入口负责暴露命令。
 
-#[path = "commands/lint.rs"]
+#[path = "tooling/lint.rs"]
 mod lint;
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
+use std::ffi::OsString;
 use std::{
     env,
     error::Error,
-    ffi::OsString,
     fmt, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -24,66 +24,7 @@ use std::{
 /// 错误会统一封装为 `CliError`，方便二进制入口和集成测试使用同一套错误表达。
 pub type CliResult<T> = Result<T, CliError>;
 
-/// 运行 `xuwecli` 命令。
-///
-/// 该函数接收完整命令行参数，解析子命令并执行对应流程。
-/// 当前主要用于 `xuwecli build` 和 `xuwecli doctor`，二进制入口会把
-/// `std::env::args_os()` 直接传入这里。
-///
-/// # Errors
-///
-/// 参数不合法、目标命令缺少运行依赖，或者构建、检查和文件操作失败时返回错误。
-pub fn run<I, S>(args: I) -> Result<(), Box<dyn Error>>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString> + Clone,
-{
-    let cli = match Cli::try_parse_from(args) {
-        Ok(cli) => cli,
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
-            error.print()?;
-            return Ok(());
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    let result: CliResult<()> = match cli_config(cli) {
-        CliConfig::Help => {
-            print_help()?;
-            Ok(())
-        }
-        CliConfig::Version => {
-            print_version();
-            Ok(())
-        }
-        config @ CliConfig::Build(_) => {
-            ensure_macos()?;
-            let host_arch = detect_host_arch()?;
-            let plans = build_plans(config, host_arch.trim())?;
-            execute_builds(plans)?;
-            Ok(())
-        }
-        CliConfig::Doctor(config) => {
-            ensure_macos()?;
-            run_doctor(config.fix)?;
-            Ok(())
-        }
-        CliConfig::Lint(config) => lint::run(
-            &config.workspace,
-            config.deny_warnings,
-            config.format == LintOutputFormat::Json,
-        ),
-    };
-
-    result.map_err(Into::into)
-}
-
-/// `xuwecli` 执行过程中的错误。
+/// `nexora` 执行过程中的错误。
 ///
 /// 该错误保存面向终端用户的中文信息，并实现标准 `Error` trait，便于向上层调用方透传。
 #[derive(Debug)]
@@ -107,48 +48,15 @@ impl fmt::Display for CliError {
 
 impl Error for CliError {}
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "xuwecli",
-    about = "本地开发与发布辅助命令",
-    disable_version_flag = true
-)]
-struct Cli {
-    /// 输出当前 CLI 版本并退出。
-    #[arg(short = 'v', long = "version", global = true)]
-    version: bool,
-    #[command(subcommand)]
-    command: Option<CliCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-enum CliCommand {
-    /// 构建、签名并打包 macOS 桌面应用。
-    Build(Box<BuildConfig>),
-    /// 检查本地 macOS 打包依赖。
-    Doctor(DoctorConfig),
-    /// 检查 workspace 是否符合团队工程规范。
-    Lint(LintConfig),
-}
-
-#[derive(Debug, Clone)]
-enum CliConfig {
-    Build(Box<BuildConfig>),
-    Doctor(DoctorConfig),
-    Lint(LintConfig),
-    Help,
-    Version,
-}
-
 #[derive(Args, Debug, Clone)]
-struct DoctorConfig {
+pub(super) struct DoctorConfig {
     /// 缺少可自动安装的依赖时尝试安装。
     #[arg(long)]
     fix: bool,
 }
 
 #[derive(Args, Debug, Clone)]
-struct LintConfig {
+pub(super) struct LintConfig {
     /// 要检查的 Cargo workspace 根目录。
     #[arg(long, default_value = ".")]
     workspace: PathBuf,
@@ -213,7 +121,7 @@ impl ReleaseChannel {
 }
 
 #[derive(Args, Debug, Clone)]
-struct BuildConfig {
+pub(super) struct BuildConfig {
     /// 打包模式，`dist` 会默认走 Developer ID 签名和公证，`local` 只做本地包。
     #[arg(long, value_enum, default_value = "dist")]
     mode: BuildMode,
@@ -268,7 +176,7 @@ struct BuildConfig {
     /// 跳过自动更新包、更新日志副本和 latest.json 生成。
     #[arg(long)]
     skip_update_package: bool,
-    /// 自动更新清单中的应用稳定标识，默认使用 `com.xuwe.<package>`。
+    /// 自动更新清单中的应用稳定标识，默认使用 `com.nexora.<package>`。
     #[arg(long)]
     app_id: Option<String>,
     /// 自动更新通道。
@@ -285,7 +193,54 @@ struct BuildConfig {
     notes_locale: String,
 }
 
-/// `xuwecli build` 解析后的构建计划。
+#[derive(Debug, Parser)]
+#[command(name = "nexora")]
+struct BuildTestCli {
+    #[command(subcommand)]
+    command: BuildTestCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum BuildTestCommand {
+    Build(Box<BuildConfig>),
+}
+
+/// 执行统一 CLI 已解析完成的 macOS 构建命令。
+///
+/// # Errors
+///
+/// 当前平台不是 macOS、无法识别主机架构、构建计划无效或任一打包步骤失败时返回错误。
+pub(super) fn run_build_command(config: Box<BuildConfig>) -> CliResult<()> {
+    ensure_macos()?;
+    let host_arch = detect_host_arch()?;
+    let plans = build_plans(config, host_arch.trim())?;
+    execute_builds(plans)
+}
+
+/// 执行统一 CLI 已解析完成的本地打包环境检查。
+///
+/// # Errors
+///
+/// 当前平台不是 macOS，或依赖检查及可选安装失败时返回错误。
+pub(super) fn run_doctor_command(config: DoctorConfig) -> CliResult<()> {
+    ensure_macos()?;
+    run_doctor(config.fix)
+}
+
+/// 执行统一 CLI 已解析完成的 workspace lint。
+///
+/// # Errors
+///
+/// workspace 无法加载、诊断无法生成，或检查发现阻断问题时返回错误。
+pub(super) fn run_lint_command(config: LintConfig) -> CliResult<()> {
+    lint::run(
+        &config.workspace,
+        config.deny_warnings,
+        config.format == LintOutputFormat::Json,
+    )
+}
+
+/// `nexora build` 解析后的构建计划。
 ///
 /// 该类型把命令行参数、环境变量和本机架构归并成可执行的只读计划，
 /// 便于执行阶段和集成测试使用同一份决策结果。
@@ -317,33 +272,13 @@ pub struct BuildPlan {
     bundle_version: u64,
 }
 
+#[allow(dead_code)]
 impl BuildPlan {
     /// 返回构建计划使用的模式。
     ///
     /// 模式决定默认签名、公证和产物用途。
     pub fn mode(&self) -> BuildMode {
         self.mode
-    }
-
-    /// 返回要打包的 Cargo package 名称。
-    ///
-    /// 该名称会传给 `cargo bundle -p`。
-    pub fn package(&self) -> &str {
-        &self.package
-    }
-
-    /// 返回 `.app` 的展示名称。
-    ///
-    /// 该名称用于定位 cargo-bundle 输出目录中的应用包，并参与 DMG 文件名生成。
-    pub fn app_name(&self) -> &str {
-        &self.app_name
-    }
-
-    /// 返回产物文件名中使用的应用版本号。
-    ///
-    /// 默认值来自当前 package 版本，也可以通过 `--app-version` 覆盖。
-    pub fn app_version(&self) -> &str {
-        &self.app_version
     }
 
     /// 返回 Rust 编译目标三元组。
@@ -358,13 +293,6 @@ impl BuildPlan {
     /// 该值已经合并了 `--mode`、`--sign` 和 `--no-sign` 的影响。
     pub fn signing(&self) -> SigningMode {
         self.signing
-    }
-
-    /// 返回 Developer ID 签名身份。
-    ///
-    /// 当签名模式不是 Developer ID，或者需要执行阶段自动发现证书时，该值可能为空。
-    pub fn sign_identity(&self) -> Option<&str> {
-        self.sign_identity.as_deref()
     }
 
     /// 返回 Apple 公证使用的 keychain profile 名称。
@@ -394,20 +322,6 @@ impl BuildPlan {
     /// 传入 `--skip-update-package` 时，该值会为 `false`。
     pub fn create_update_package(&self) -> bool {
         self.create_update_package
-    }
-
-    /// 返回缺少依赖时是否允许自动安装。
-    ///
-    /// 该值会同时考虑默认配置和 `--no-install-deps`。
-    pub fn install_deps(&self) -> bool {
-        self.install_deps
-    }
-
-    /// 返回 cargo-bundle 预期生成的 `.app` 路径。
-    ///
-    /// 执行阶段会用该路径确认应用包是否存在。
-    pub fn app_path(&self) -> &Path {
-        &self.app_path
     }
 
     /// 返回最终 DMG 产物路径。
@@ -452,20 +366,6 @@ impl BuildPlan {
         &self.output_dir
     }
 
-    /// 返回传给 codesign 的 entitlements 文件路径。
-    ///
-    /// 未显式配置且默认文件不存在时，该值为空。
-    pub fn entitlements(&self) -> Option<&Path> {
-        self.entitlements.as_deref()
-    }
-
-    /// 返回传给 `cargo bundle --features` 的 features 字符串。
-    ///
-    /// 未传入 `--features` 时，该值为空。
-    pub fn features(&self) -> Option<&str> {
-        self.features.as_deref()
-    }
-
     /// 返回自动更新清单中的应用稳定标识。
     ///
     /// 更新器会使用该值避免错误安装其他桌面程序的更新包。
@@ -489,6 +389,7 @@ impl BuildPlan {
 /// # Errors
 ///
 /// 更新包不存在、哈希计算失败、更新日志复制失败或 `latest.json` 写入失败时返回错误。
+#[allow(dead_code)]
 pub fn write_update_metadata_for_plan(plan: &BuildPlan) -> CliResult<()> {
     write_update_metadata_for_plans(std::slice::from_ref(plan))
 }
@@ -501,6 +402,7 @@ pub fn write_update_metadata_for_plan(plan: &BuildPlan) -> CliResult<()> {
 /// # Errors
 ///
 /// 任意更新包不存在、构建计划之间的版本或通道不兼容，或清单写入失败时返回错误。
+#[allow(dead_code)]
 pub fn write_update_metadata_for_plans(plans: &[BuildPlan]) -> CliResult<()> {
     for plan in plans {
         let checksum_path = write_sha256_sidecar(&plan.app_zip_path)?;
@@ -518,6 +420,7 @@ pub fn write_update_metadata_for_plans(plans: &[BuildPlan]) -> CliResult<()> {
 /// # Errors
 ///
 /// 命令行参数无法解析、构建配置互相冲突或主机架构不受支持时返回错误。
+#[allow(dead_code)]
 pub fn build_plan_from_args<I, S>(args: I, host_arch: &str) -> CliResult<BuildPlan>
 where
     I: IntoIterator<Item = S>,
@@ -539,53 +442,19 @@ where
 /// # Errors
 ///
 /// 命令行参数无法解析、target 列表不受支持，或单 target 构建配置冲突时返回错误。
+#[allow(dead_code)]
 pub fn build_plans_from_args<I, S>(args: I, host_arch: &str) -> CliResult<Vec<BuildPlan>>
 where
     I: IntoIterator<Item = S>,
     S: Into<OsString> + Clone,
 {
-    let config = parse_args(args)?;
-
+    let cli =
+        BuildTestCli::try_parse_from(args).map_err(|error| CliError::new(error.to_string()))?;
+    let BuildTestCommand::Build(config) = cli.command;
     build_plans(config, host_arch)
 }
 
-fn parse_args<I, S>(args: I) -> CliResult<CliConfig>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString> + Clone,
-{
-    match Cli::try_parse_from(args) {
-        Ok(cli) => Ok(cli_config(cli)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
-            Ok(CliConfig::Help)
-        }
-        Err(error) => Err(CliError::new(error.to_string())),
-    }
-}
-
-fn cli_config(cli: Cli) -> CliConfig {
-    if cli.version {
-        return CliConfig::Version;
-    }
-
-    match cli.command {
-        Some(CliCommand::Build(config)) => CliConfig::Build(config),
-        Some(CliCommand::Doctor(config)) => CliConfig::Doctor(config),
-        Some(CliCommand::Lint(config)) => CliConfig::Lint(config),
-        None => CliConfig::Help,
-    }
-}
-
-fn build_plans(config: CliConfig, host_arch: &str) -> CliResult<Vec<BuildPlan>> {
-    let CliConfig::Build(config) = config else {
-        return Err(CliError::new("当前配置不是 build 命令"));
-    };
-
+fn build_plans(config: Box<BuildConfig>, host_arch: &str) -> CliResult<Vec<BuildPlan>> {
     let targets = resolve_build_targets(&config, host_arch)?;
     targets
         .into_iter()
@@ -653,7 +522,7 @@ fn build_single_plan(config: BuildConfig, host_arch: &str) -> CliResult<BuildPla
     let latest_manifest_path = config.output_dir.join("latest.json");
     let app_id = config
         .app_id
-        .unwrap_or_else(|| format!("com.xuwe.{}", config.package));
+        .unwrap_or_else(|| format!("com.nexora.{}", config.package));
     let notes_component = config
         .notes_component
         .unwrap_or_else(|| config.package.clone());
@@ -674,7 +543,7 @@ fn build_single_plan(config: BuildConfig, host_arch: &str) -> CliResult<BuildPla
     let notary_profile = config
         .notary_profile
         .or_else(|| env::var("NOTARY_PROFILE").ok())
-        .unwrap_or_else(|| "xuwe".to_string());
+        .unwrap_or_else(|| "nexora".to_string());
     let entitlements = config.entitlements.or_else(|| {
         let path = PathBuf::from("Entitlements.plist");
         path.exists().then_some(path)
@@ -754,7 +623,7 @@ fn expand_target_alias(value: &str, host_arch: &str) -> CliResult<Vec<String>> {
         "aarch64-apple-darwin" | "x86_64-apple-darwin" => Ok(vec![value.to_string()]),
         target if target.contains("windows") || target.contains("linux") => {
             Err(CliError::new(format!(
-                "本机 `xuwecli build` 暂不直接构建 `{target}`；Windows/Linux 需要远程 runner 或 CI matrix 产物后再合并 latest.json"
+                "本机 `nexora build` 暂不直接构建 `{target}`；Windows/Linux 需要远程 runner 或 CI matrix 产物后再合并 latest.json"
             )))
         }
         target => Err(CliError::new(format!(
@@ -801,7 +670,7 @@ fn execute_builds(plans: Vec<BuildPlan>) -> CliResult<()> {
 }
 
 fn execute_build(plan: &BuildPlan) -> CliResult<()> {
-    println!("xuwecli build");
+    println!("nexora build");
     println!("  mode: {:?}", plan.mode);
     println!("  package: {}", plan.package);
     println!("  app: {}", plan.app_name);
@@ -1387,17 +1256,4 @@ fn command_status(command: &mut Command) -> CliResult<bool> {
         .status()
         .map_err(|error| CliError::new(format!("无法执行命令: {error}")))?;
     Ok(status.success())
-}
-
-fn print_help() -> CliResult<()> {
-    let mut command = Cli::command();
-    command
-        .print_help()
-        .map_err(|error| CliError::new(format!("无法输出帮助信息: {error}")))?;
-    println!();
-    Ok(())
-}
-
-fn print_version() {
-    println!("xuwecli {}", env!("CARGO_PKG_VERSION"));
 }

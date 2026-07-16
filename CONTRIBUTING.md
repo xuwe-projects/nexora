@@ -23,7 +23,7 @@ cargo fmt --all --check
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p cli --bin xuwecli -- lint --workspace . --deny-warnings
+cargo run -p nexora -- lint --workspace . --deny-warnings
 ```
 
 仅修改 Nexora 框架时，可以先使用更快的核心测试：

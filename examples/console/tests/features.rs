@@ -714,7 +714,7 @@ fn settings_load_current_console_changelog() {
 #[test]
 fn console_preferences_keep_theme_selection() {
     let mut preferences = ConsolePreferences::default();
-    let selection = ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark);
+    let selection = ThemeSelection::new(ThemePreset::Nexora, ColorScheme::Dark);
 
     preferences.set_theme_selection(selection);
 
@@ -727,7 +727,7 @@ fn console_preferences_round_trip_theme_display_font_size_component_size_and_pin
     let path = directory.join("settings.toml");
     let store = UserConfigStore::<ConsolePreferences>::at_path(&path);
     let mut preferences = ConsolePreferences::default();
-    let selection = ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark);
+    let selection = ThemeSelection::new(ThemePreset::Nexora, ColorScheme::Dark);
     preferences.set_theme_selection(selection);
     preferences.set_startup_display_uuid(Some("display-uuid".to_owned()));
     preferences.set_font_size(18);
@@ -769,7 +769,7 @@ fn version_one_preferences_default_to_system_primary_display() {
     assert!(loaded.pinned_tab_paths().is_empty());
     assert_eq!(
         loaded.theme_selection(),
-        ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark)
+        ThemeSelection::new(ThemePreset::Nexora, ColorScheme::Dark)
     );
     _ = fs::remove_dir_all(directory);
 }
@@ -922,7 +922,7 @@ fn task_rows_keep_pipeline_order() {
         commands,
         vec![
             "cargo check --workspace",
-            "xuwecli build --mode local",
+            "nexora build --mode local",
             "codesign + notarytool",
             "sha256 sidecar",
         ]

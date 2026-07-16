@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -146,6 +148,17 @@ fn help_and_version_are_available() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: nexora"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("create"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("init"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("build"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("doctor"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("lint"));
+
+    let build_help = directory.run(&["help", "build"]);
+    assert!(build_help.status.success());
+    let build_help = String::from_utf8_lossy(&build_help.stdout);
+    assert!(build_help.contains("nexora build [OPTIONS]"));
+    assert!(build_help.contains("--mode <MODE>"));
+    assert!(build_help.contains("--targets <TARGETS>"));
+    assert!(build_help.contains("--app-id <APP_ID>"));
 
     let create_help = directory.run(&["help", "create"]);
     assert!(create_help.status.success());
@@ -163,12 +176,14 @@ fn help_and_version_are_available() {
     assert!(init_help.contains("--layout <LAYOUT>"));
     assert!(init_help.contains("--features <FEATURES>"));
 
-    let version = directory.run(&["--version"]);
-    assert!(version.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&version.stdout),
-        format!("nexora {}\n", env!("CARGO_PKG_VERSION"))
-    );
+    for flag in ["--version", "-v"] {
+        let version = directory.run(&[flag]);
+        assert!(version.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&version.stdout),
+            format!("nexora {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     let version_command = directory.run(&["version"]);
     assert!(version_command.status.success());

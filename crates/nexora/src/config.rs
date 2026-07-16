@@ -109,6 +109,8 @@ pub trait AccountServerSection {
 /// ```no_run
 /// use serde::Deserialize;
 ///
+/// # #[cfg(feature = "derive")]
+/// # fn main() -> Result<(), nexora::config::ConfigError> {
 /// #[derive(Deserialize, nexora::Settings)]
 /// struct ApplicationSettings {
 ///     endpoint: String,
@@ -116,7 +118,10 @@ pub trait AccountServerSection {
 ///
 /// let settings: ApplicationSettings = nexora::config::initialize(None)?;
 /// println!("{}", settings.endpoint);
-/// # Ok::<(), nexora::config::ConfigError>(())
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "derive"))]
+/// # fn main() {}
 /// ```
 ///
 /// # Errors

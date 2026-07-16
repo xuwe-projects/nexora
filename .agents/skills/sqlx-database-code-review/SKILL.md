@@ -1,9 +1,9 @@
 ---
 name: sqlx-database-code-review
-description: 审查 Xuwe workspace 中使用 SQLx 与 PostgreSQL 的数据库代码。检查查询与绑定、FromRow/Type 映射、PostgreSQL ENUM 与 Rust enum 一致性、DDL 对象注释、连接池、事务、迁移、错误上下文和数据库职责边界，并区分编译期查询宏与可审查的运行时查询策略。
+description: 审查 Nexora workspace 中使用 SQLx 与 PostgreSQL 的数据库代码。检查查询与绑定、FromRow/Type 映射、PostgreSQL ENUM 与 Rust enum 一致性、DDL 对象注释、连接池、事务、迁移、错误上下文和数据库职责边界，并区分编译期查询宏与可审查的运行时查询策略。
 ---
 
-# Xuwe SQLx 数据库代码审查
+# Nexora SQLx 数据库代码审查
 
 ## 先确定范围和事实
 
@@ -22,7 +22,7 @@ description: 审查 Xuwe workspace 中使用 SQLx 与 PostgreSQL 的数据库代
 - `crates/migrate` 负责执行迁移，SQL 文件集中放在 `crates/migrate/migrations`。
 - `modules/<business>/src/store.rs` 定义持久化端口，`store/postgres.rs` 及其子模块执行 SQLx 查询和事务。
 - `crates/api` 的 Router/handler 不执行 SQL；业务 application 不持有具体 `PgPool`。
-- 宿主在 `apps/server` composition root 中异步创建连接池、运行迁移并构造 Postgres store。
+- 宿主在 `examples/server` composition root 中异步创建连接池、运行迁移并构造 Postgres store。
 - 不建议新增 `Repository`/`Service` 命名；本项目使用 `Application`/`Store`。
 
 ## 审查查询
@@ -70,7 +70,7 @@ description: 审查 Xuwe workspace 中使用 SQLx 与 PostgreSQL 的数据库代
 ## 审查迁移
 
 - SQLx 同时接受顺序版本和时间戳版本；两者都有效，不要把其中一种报告为错误。
-- Xuwe 统一使用顺序版本并集中到 `crates/migrate/migrations`，例如 `0003_accounts_add_email.up.sql`。
+- Nexora 统一使用顺序版本并集中到 `crates/migrate/migrations`，例如 `0003_accounts_add_email.up.sql`。
 - 可逆迁移使用同版本成对的 `.up.sql`/`.down.sql`，不要把 down SQL 只写成 up 文件里的注释。
 - 不修改已进入共享环境的迁移；通过后续迁移修正。
 - 每个新表必须有 `COMMENT ON TABLE`，每个列必须有 `COMMENT ON COLUMN`；类型、具名约束、索引、函数和触发器也应记录用途。

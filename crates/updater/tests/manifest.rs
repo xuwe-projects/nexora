@@ -3,7 +3,7 @@ use updater::{UpdateChannel, UpdateConfig, UpdateError, UpdateManifest, UpdateTa
 const MANIFEST: &str = r#"
 {
   "schema_version": 1,
-  "app_id": "com.xuwe.console",
+  "app_id": "com.nexora.console",
   "channel": "beta",
   "version": "1.2.0-beta.2",
   "bundle_version": 1043,
@@ -39,7 +39,7 @@ fn update_config_rejects_unsafe_application_identifiers() {
 fn higher_bundle_version_updates_same_semver() {
     let config = UpdateConfig::new(
         "https://updates.example.com/beta/latest.json",
-        "com.xuwe.console",
+        "com.nexora.console",
         "1.2.0-beta.2",
         1042,
         UpdateChannel::Beta,
@@ -60,7 +60,7 @@ fn higher_bundle_version_updates_same_semver() {
 fn equal_release_is_up_to_date() {
     let config = UpdateConfig::new(
         "https://updates.example.com/beta/latest.json",
-        "com.xuwe.console",
+        "com.nexora.console",
         "1.2.0-beta.2",
         1043,
         UpdateChannel::Beta,
@@ -80,7 +80,7 @@ fn equal_release_is_up_to_date() {
 fn channel_mismatch_is_rejected() {
     let config = UpdateConfig::new(
         "https://updates.example.com/stable/latest.json",
-        "com.xuwe.console",
+        "com.nexora.console",
         "1.1.0",
         1000,
         UpdateChannel::Stable,
@@ -99,7 +99,7 @@ fn channel_mismatch_is_rejected() {
 fn higher_semver_updates_even_with_lower_bundle_version() {
     let config = UpdateConfig::new(
         "https://updates.example.com/beta/latest.json",
-        "com.xuwe.console",
+        "com.nexora.console",
         "1.1.0",
         2000,
         UpdateChannel::Beta,
@@ -119,7 +119,7 @@ fn higher_semver_updates_even_with_lower_bundle_version() {
 fn lower_semver_does_not_update_even_with_higher_bundle_version() {
     let config = UpdateConfig::new(
         "https://updates.example.com/beta/latest.json",
-        "com.xuwe.console",
+        "com.nexora.console",
         "1.3.0-beta.1",
         1000,
         UpdateChannel::Beta,

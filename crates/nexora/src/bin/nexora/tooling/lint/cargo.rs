@@ -242,7 +242,7 @@ fn check_members(workspace: &Workspace, report: &mut Report) {
             if !dependency.uses_workspace {
                 report.push(
                     Diagnostic::error(
-                        "xuwe::dependency_not_in_workspace",
+                        "nexora::dependency_not_in_workspace",
                         relative_path(workspace.root(), &member.manifest.path),
                         dependency.line,
                         dependency.column,
@@ -259,7 +259,7 @@ fn check_members(workspace: &Workspace, report: &mut Report) {
             } else if !workspace_dependencies.contains(dependency.declared_name.as_str()) {
                 report.push(
                     Diagnostic::error(
-                        "xuwe::dependency_not_in_workspace",
+                        "nexora::dependency_not_in_workspace",
                         relative_path(workspace.root(), &member.manifest.path),
                         dependency.line,
                         dependency.column,
@@ -296,7 +296,7 @@ fn check_member_name(workspace: &Workspace, member: &Member, report: &mut Report
     let (line, column) = package_item.map_or((1, 1), |item| member.manifest.position(item));
     report.push(
         Diagnostic::error(
-            "xuwe::invalid_crate_name",
+            "nexora::invalid_crate_name",
             relative_path(workspace.root(), &member.manifest.path),
             line,
             column,
@@ -317,7 +317,7 @@ fn check_member_targets(workspace: &Workspace, member: &Member, report: &mut Rep
 
     report.push(
         Diagnostic::error(
-            "xuwe::mixed_binary_library",
+            "nexora::mixed_binary_library",
             relative_path(workspace.root(), &member.manifest.path),
             1,
             1,
@@ -375,7 +375,7 @@ fn check_technology(
     if let Some(replacement) = replacement {
         report.push(
             Diagnostic::error(
-                "xuwe::forbidden_technology",
+                "nexora::forbidden_technology",
                 relative_path(workspace.root(), &member.manifest.path),
                 dependency.line,
                 dependency.column,
@@ -406,7 +406,7 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
             {
                 report.push(
                     Diagnostic::warning(
-                        "xuwe::forbidden_dependency_edge",
+                        "nexora::forbidden_dependency_edge",
                         relative_path(workspace.root(), &member.manifest.path),
                         dependency.line,
                         dependency.column,
@@ -427,8 +427,8 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
 
             let member_area = first_component(relative_path(workspace.root(), &member.directory));
             let target_area = first_component(relative_path(workspace.root(), &target.directory));
-            let library_depends_on_app =
-                member_area.as_deref() == Some("crates") && target_area.as_deref() == Some("apps");
+            let library_depends_on_app = member_area.as_deref() == Some("crates")
+                && matches!(target_area.as_deref(), Some("apps" | "examples"));
             let console_depends_on_server =
                 member.name == "console" && matches!(target.name.as_str(), "api" | "server");
             let lightweight_contract_has_heavy_dependency = is_contract_crate(&member.name)
@@ -443,7 +443,7 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
             {
                 report.push(
                     Diagnostic::warning(
-                        "xuwe::forbidden_dependency_edge",
+                        "nexora::forbidden_dependency_edge",
                         relative_path(workspace.root(), &member.manifest.path),
                         dependency.line,
                         dependency.column,
@@ -472,7 +472,7 @@ fn check_migration_locations(workspace: &Workspace, report: &mut Report) -> CliR
 
         report.push(
             Diagnostic::error(
-                "xuwe::invalid_migration_location",
+                "nexora::invalid_migration_location",
                 relative.join("."),
                 1,
                 1,
@@ -488,7 +488,7 @@ fn check_migration_locations(workspace: &Workspace, report: &mut Report) -> CliR
         {
             report.push(
                 Diagnostic::error(
-                    "xuwe::invalid_migration_location",
+                    "nexora::invalid_migration_location",
                     relative_path(workspace.root(), &member.manifest.path),
                     1,
                     1,
@@ -537,7 +537,7 @@ fn check_modified_migrations(workspace: &Workspace, report: &mut Report) -> CliR
         }
         report.push(
             Diagnostic::error(
-                "xuwe::modified_migration",
+                "nexora::modified_migration",
                 path,
                 1,
                 1,
@@ -565,13 +565,13 @@ fn push_broad_feature_diagnostics(
         return;
     };
     let (line, column) = manifest.dependency_position(dependency_name, item);
-    if manifest_is_suppressed(manifest, "xuwe::broad_dependency_feature", line) {
+    if manifest_is_suppressed(manifest, "nexora::broad_dependency_feature", line) {
         return;
     }
 
     report.push(
         Diagnostic::warning(
-            "xuwe::broad_dependency_feature",
+            "nexora::broad_dependency_feature",
             relative_path(workspace.root(), &manifest.path),
             line,
             column,
@@ -596,7 +596,7 @@ fn push_broad_feature_diagnostics_from_dependency(
     };
     if manifest_is_suppressed(
         &member.manifest,
-        "xuwe::broad_dependency_feature",
+        "nexora::broad_dependency_feature",
         dependency.line,
     ) {
         return;
@@ -604,7 +604,7 @@ fn push_broad_feature_diagnostics_from_dependency(
 
     report.push(
         Diagnostic::warning(
-            "xuwe::broad_dependency_feature",
+            "nexora::broad_dependency_feature",
             relative_path(workspace.root(), &member.manifest.path),
             dependency.line,
             dependency.column,
@@ -847,7 +847,7 @@ fn manifest_is_suppressed(manifest: &Manifest, rule: &str, line: usize) -> bool 
     let end = line.saturating_sub(1).min(lines.len());
 
     lines[start..end].iter().any(|candidate| {
-        candidate.contains("xuwe-lint: allow(")
+        candidate.contains("nexora-lint: allow(")
             && candidate.contains(rule)
             && candidate.contains("reason=")
     })

@@ -1,7 +1,7 @@
 # Business Modules
 
 `modules` 中的每个目录都是能独立管理 State、HTTP 和数据库行为的业务库 crate。业务模块依赖
-共享基础 crate，但不得依赖 `apps/server` 或其中的具体 `AppState`。
+共享基础 crate，但不得依赖 `examples/server` 或其中的具体 `AppState`。
 
 ## 标准形状
 

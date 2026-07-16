@@ -262,7 +262,7 @@ fn check_config_rejects_insecure_oidc_and_invalid_database_or_audience() {
         ),
         (
             "database-scheme",
-            "[database]\nurl = \"mysql://localhost/xuwe\"\n",
+            "[database]\nurl = \"mysql://localhost/nexora\"\n",
             "database.url 必须使用 postgres 或 postgresql scheme",
         ),
         (

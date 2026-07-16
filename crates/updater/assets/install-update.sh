@@ -4,7 +4,7 @@ pid="$1"
 current_app="$2"
 staged_app="$3"
 staging_root="$4"
-backup_app="${current_app}.xuwe-updater-backup"
+backup_app="${current_app}.nexora-updater-backup"
 
 while kill -0 "$pid" 2>/dev/null; do
   sleep 0.1

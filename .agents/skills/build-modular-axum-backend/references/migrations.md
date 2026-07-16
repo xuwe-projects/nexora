@@ -166,7 +166,7 @@ let pool = PgPoolOptions::new()
 sqlx::migrate!("./migrations").run(&pool).await?;
 ```
 
-`MigrationConfig` 由 migrate crate 自己定义，不要依赖 `apps/server` 的配置类型。
+`MigrationConfig` 由 migrate crate 自己定义，不要依赖 `examples/server` 的配置类型。
 
 ## 执行和验证
 

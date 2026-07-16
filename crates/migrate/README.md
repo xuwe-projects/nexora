@@ -2,7 +2,7 @@
 
 本 crate 是 PostgreSQL 结构变更的唯一所有者。它同时提供独立 `migrate` 命令和可由
 Nexora Account composition root 调用的 library API；两种入口共享同一套 fail-closed 检查，
-且都不依赖 `apps/server`。
+且都不依赖 `examples/server`。
 
 ## 文件组织
 
@@ -46,7 +46,7 @@ cargo run -p migrate -- config/server.toml
 未传路径时默认读取 `config/server.toml`。环境变量最后加载并覆盖文件，例如：
 
 ```bash
-DATABASE__URL=postgres://postgres:postgres@127.0.0.1:5432/xuwe \
+DATABASE__URL=postgres://postgres:postgres@127.0.0.1:5432/nexora \
   cargo run -p migrate -- config/server.toml
 ```
 

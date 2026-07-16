@@ -1,9 +1,9 @@
 ---
 name: rust-technology-selection
-description: 用于设计、实现或审查 Xuwe workspace 的数据库访问、数据库迁移、HTTP 服务、Axum 请求提取和异步运行时技术选型。数据库统一使用 SQLx 与 PostgreSQL，迁移集中在 crates/migrate，HTTP 使用 Axum 0.8，异步运行时使用 Tokio。
+description: 用于设计、实现或审查 Nexora workspace 的数据库访问、数据库迁移、HTTP 服务、Axum 请求提取和异步运行时技术选型。数据库统一使用 SQLx 与 PostgreSQL，迁移集中在 crates/migrate，HTTP 使用 Axum 0.8，异步运行时使用 Tokio。
 ---
 
-# Xuwe Rust 技术选型
+# Nexora Rust 技术选型
 
 ## 固定技术栈
 
@@ -22,7 +22,7 @@ description: 用于设计、实现或审查 Xuwe workspace 的数据库访问、
 
 ### 连接池
 
-- 在 `apps/server` composition root 中异步创建一次连接池，通过 `Database`、`AppState` 和 Postgres store 共享。
+- 在 `examples/server` composition root 中异步创建一次连接池，通过 `Database`、`AppState` 和 Postgres store 共享。
 - `PgPool` 可廉价克隆，通常无需 `Arc<PgPool>`；不要每个请求创建连接池。
 - 根据 PostgreSQL 总连接预算、应用副本数和压测结果配置 `max_connections`、`acquire_timeout` 等参数。
 - 不使用静态 `LazyLock` 配合 `Handle::block_on` 初始化异步连接池，也不创建嵌套 runtime。
@@ -48,7 +48,7 @@ description: 用于设计、实现或审查 Xuwe workspace 的数据库访问、
 ## 数据库迁移
 
 - 所有结构和版本变更由 `sqlx migrate` 管理，SQL 文件集中在 `crates/migrate/migrations`。
-- Xuwe 使用顺序版本；SQLx 同时接受顺序和时间戳版本，不能把另一种格式视为无效。
+- Nexora 使用顺序版本；SQLx 同时接受顺序和时间戳版本，不能把另一种格式视为无效。
 - 可逆迁移用同版本 `.up.sql`/`.down.sql` 成对维护。
 - 已进入共享环境的迁移不直接修改，通过后续迁移修正。
 - `crates/migrate` 只负责版本演进，不承载业务查询、HTTP 路由或 application。

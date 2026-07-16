@@ -307,7 +307,7 @@ impl Updater {
         let config = self.config.clone();
 
         thread::Builder::new()
-            .name("xuwe-updater".to_owned())
+            .name("nexora-updater".to_owned())
             .spawn(move || run_update(config, worker_cancellation, sender))?;
 
         Ok(UpdateSession {
@@ -478,14 +478,14 @@ fn create_staging_root(
 
 fn staging_base(config: &UpdateConfig) -> PathBuf {
     std::env::temp_dir()
-        .join("xuwe-updater")
+        .join("nexora-updater")
         .join(config.app_id())
 }
 
 fn start_staging_cleanup_worker() -> Option<mpsc::Sender<PathBuf>> {
     let (sender, receiver) = mpsc::channel();
     match thread::Builder::new()
-        .name("xuwe-update-cleanup".to_owned())
+        .name("nexora-update-cleanup".to_owned())
         .spawn(move || {
             while let Ok(staging_root) = receiver.recv() {
                 discard_staging_root(staging_root);

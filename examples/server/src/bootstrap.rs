@@ -28,7 +28,8 @@ pub(crate) struct InitializedServer {
 ///
 /// # Errors
 ///
-/// PostgreSQL 连接、OIDC discovery、用户目录或初始化状态读取失败时返回 [`BootstrapError`]。
+/// PostgreSQL 连接、OIDC discovery、部署 issuer 核对、用户目录或账号模块状态读取失败时
+/// 返回 [`BootstrapError`]。
 pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, BootstrapError> {
     let pool = PgPoolOptions::new()
         .max_connections(config.database.max_connections)
@@ -105,8 +106,8 @@ pub enum BootstrapError {
         #[from]
         DirectoryError,
     ),
-    /// 账号模块无法读取系统初始化状态。
-    #[error("无法读取系统初始化状态")]
+    /// 账号模块无法核对部署 issuer、读取初始化状态或加载系统角色。
+    #[error("账号模块初始化、部署 issuer 核对或状态读取失败")]
     Account(
         /// 账号领域返回的底层错误。
         #[from]

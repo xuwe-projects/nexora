@@ -16,7 +16,7 @@ use jsonwebtoken::{
 };
 use serde_json::json;
 
-const AUDIENCE: &str = "xuwe-api";
+const AUDIENCE: &str = "nexora-api";
 const KEY_ID: &str = "test-key";
 const PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgWTFfCGljY6aw3Hrt

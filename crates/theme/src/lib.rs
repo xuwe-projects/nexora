@@ -7,9 +7,9 @@ use gpui::{App, Global, Window, px};
 use gpui_component::{Size, Theme, ThemeMode, ThemeRegistry, scroll::ScrollbarShow};
 use serde::{Deserialize, Serialize};
 
-const XUWE_THEME_SET: &str = include_str!("../themes/xuwe.json");
-const XUWE_LIGHT_THEME_NAME: &str = "Xuwe Light";
-const XUWE_DARK_THEME_NAME: &str = "Xuwe Dark";
+const NEXORA_THEME_SET: &str = include_str!("../themes/nexora.json");
+const NEXORA_LIGHT_THEME_NAME: &str = "Nexora Light";
+const NEXORA_DARK_THEME_NAME: &str = "Nexora Dark";
 /// 应用界面默认基础字号，单位为逻辑像素。
 pub const DEFAULT_FONT_SIZE: u16 = 14;
 /// 应用设置允许选择的最小基础字号，单位为逻辑像素。
@@ -72,34 +72,38 @@ impl ColorScheme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreset {
-    /// 模板提供的铉微主题，使用中性色作为界面基底，并使用蓝色作为主要交互强调色。
+    /// Nexora 默认主题，使用中性色作为界面基底，并使用蓝色作为主要交互强调色。
     #[default]
-    Xuwe,
+    #[serde(alias = "xuwe")]
+    Nexora,
 }
 
 impl ThemePreset {
     /// 设置界面可以选择的全部内置主题预设。
-    pub const ALL: [Self; 1] = [Self::Xuwe];
+    pub const ALL: [Self; 1] = [Self::Nexora];
 
     /// 返回用于配置存储和下拉选项值的稳定标识。
     pub const fn id(self) -> &'static str {
         match self {
-            Self::Xuwe => "xuwe",
+            Self::Nexora => "nexora",
         }
     }
 
     /// 返回适合直接展示在中文设置界面中的主题名称。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Xuwe => "铉微",
+            Self::Nexora => "Nexora",
         }
     }
 
     /// 根据稳定标识解析主题预设。
     ///
-    /// 无法识别的标识会返回 `None`，调用方可以保留当前设置而不改变主题。
+    /// 旧版 `xuwe` 标识会兼容迁移到 Nexora；其他无法识别的标识返回 `None`。
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|preset| preset.id() == id)
+        match id {
+            "nexora" | "xuwe" => Some(Self::Nexora),
+            _ => None,
+        }
     }
 }
 
@@ -153,7 +157,7 @@ impl Global for ThemeState {}
 
 /// 初始化应用主题。
 ///
-/// 调用方必须先执行 `gpui_component::init`，本函数随后会把编译进应用的 Xuwe 主题
+/// 调用方必须先执行 `gpui_component::init`，本函数随后会把编译进应用的 Nexora 主题
 /// 注册到组件主题表，创建默认主题状态，并立即按照系统外观应用主题。
 ///
 /// # Panics
@@ -163,8 +167,8 @@ impl Global for ThemeState {}
 /// 并由主题 crate 的集成测试提前校验。
 pub fn init(cx: &mut App) {
     ThemeRegistry::global_mut(cx)
-        .load_themes_from_str(XUWE_THEME_SET)
-        .expect("内置 Xuwe 主题必须符合 gpui-component ThemeSet 格式");
+        .load_themes_from_str(NEXORA_THEME_SET)
+        .expect("内置 Nexora 主题必须符合 gpui-component ThemeSet 格式");
 
     if !cx.has_global::<ThemeState>() {
         cx.set_global(ThemeState::new());
@@ -190,7 +194,7 @@ pub fn attach_window(window: &mut Window, cx: &mut App) {
                 apply_active_theme(Some(window), cx);
             }
         })
-        // xuwe-lint: allow(xuwe::detached_lifecycle) reason="监听由窗口持有并随窗口销毁"
+        // nexora-lint: allow(nexora::detached_lifecycle) reason="监听由窗口持有并随窗口销毁"
         .detach();
 }
 
@@ -304,17 +308,17 @@ fn apply_active_theme(window: Option<&mut Window>, cx: &mut App) {
         let registry = ThemeRegistry::global(cx);
 
         match selection.preset() {
-            ThemePreset::Xuwe => (
+            ThemePreset::Nexora => (
                 registry
                     .themes()
-                    .get(XUWE_LIGHT_THEME_NAME)
+                    .get(NEXORA_LIGHT_THEME_NAME)
                     .cloned()
-                    .expect("主题注册表必须包含 Xuwe Light"),
+                    .expect("主题注册表必须包含 Nexora Light"),
                 registry
                     .themes()
-                    .get(XUWE_DARK_THEME_NAME)
+                    .get(NEXORA_DARK_THEME_NAME)
                     .cloned()
-                    .expect("主题注册表必须包含 Xuwe Dark"),
+                    .expect("主题注册表必须包含 Nexora Dark"),
             ),
         }
     };

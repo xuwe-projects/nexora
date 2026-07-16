@@ -1,13 +1,13 @@
 ---
 name: git-commit
-description: 在 Xuwe workspace 中准备、审查或创建 Git 提交时使用。强制使用 Conventional Commits v1.0.0 格式，提交内容使用中文，并要求正文详细说明改动内容、目的、影响范围和验证情况。
+description: 在 Nexora workspace 中准备、审查或创建 Git 提交时使用。强制使用 Conventional Commits v1.0.0 格式，提交内容使用中文，并要求正文详细说明改动内容、目的、影响范围和验证情况。
 ---
 
 # Git 提交
 
 ## 目的
 
-使用这个 skill 为 Xuwe workspace 创建清晰、可审阅的 Git 提交。提交信息必须遵循 Conventional Commits v1.0.0，同时人类可读的摘要和正文使用中文。
+使用这个 skill 为 Nexora workspace 创建清晰、可审阅的 Git 提交。提交信息必须遵循 Conventional Commits v1.0.0，同时人类可读的摘要和正文使用中文。
 
 参考：https://www.conventionalcommits.org/en/v1.0.0/#summary
 

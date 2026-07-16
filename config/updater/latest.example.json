@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "app_id": "com.xuwe.console",
+  "app_id": "com.nexora.console",
   "channel": "stable",
   "version": "0.2.0",
   "bundle_version": 12,

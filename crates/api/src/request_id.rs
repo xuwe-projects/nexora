@@ -16,7 +16,7 @@ tokio::task_local! {
     static CURRENT_CONTEXT: ExecutionContext;
 }
 
-// xuwe-lint: allow(xuwe::raw_axum_request) reason="请求 ID middleware 必须包装完整请求并把同一 ID 传播到响应"
+// nexora-lint: allow(nexora::raw_axum_request) reason="请求 ID middleware 必须包装完整请求并把同一 ID 传播到响应"
 pub(crate) async fn assign(mut request: Request<Body>, next: Next) -> Response {
     let request_id = request
         .headers()

@@ -75,7 +75,7 @@ fn check_file(
     if path.file_name().and_then(|name| name.to_str()) == Some("mod.rs") {
         report.push(
             Diagnostic::error(
-                "xuwe::forbidden_mod_rs",
+                "nexora::forbidden_mod_rs",
                 relative_path(workspace.root(), path),
                 1,
                 1,
@@ -106,7 +106,7 @@ fn check_file(
         is_theme: member.name() == "theme",
         is_gpui: member.uses_gpui(),
         uses_axum: member.uses_dependency("axum"),
-        uses_sqlx: member.uses_dependency("sqlx"),
+        uses_sqlx: member.uses_dependency("sqlx") && source.contains(concat!("sqlx", "::")),
         is_contract: member.is_contract(),
     };
     let mut source_rules = SourceRuleVisitor::new(&source, relative, profile, report);
@@ -132,7 +132,7 @@ impl PublicDocsVisitor<'_> {
         if docs.trim().is_empty() {
             self.push(
                 Diagnostic::error(
-                    "xuwe::non_chinese_public_docs",
+                    "nexora::non_chinese_public_docs",
                     self.path.clone(),
                     span_line(span),
                     span_column(span),
@@ -143,7 +143,7 @@ impl PublicDocsVisitor<'_> {
         } else if !contains_chinese(&docs) {
             self.push(
                 Diagnostic::error(
-                    "xuwe::non_chinese_public_docs",
+                    "nexora::non_chinese_public_docs",
                     self.path.clone(),
                     span_line(span),
                     span_column(span),
@@ -194,7 +194,7 @@ impl PublicDocsVisitor<'_> {
         if returns_result(signature) && !docs.contains("# Errors") {
             self.push(
                 Diagnostic::error(
-                    "xuwe::missing_errors_section",
+                    "nexora::missing_errors_section",
                     self.path.clone(),
                     span_line(span),
                     span_column(span),
@@ -211,7 +211,7 @@ impl PublicDocsVisitor<'_> {
         if can_panic && !docs.contains("# Panics") {
             self.push(
                 Diagnostic::error(
-                    "xuwe::missing_panics_section",
+                    "nexora::missing_panics_section",
                     self.path.clone(),
                     span_line(span),
                     span_column(span),
@@ -391,7 +391,7 @@ impl<'a> SourceRuleVisitor<'a> {
         let end = line.saturating_sub(1).min(lines.len());
 
         lines[start..end].iter().any(|candidate| {
-            candidate.contains("xuwe-lint: allow(")
+            candidate.contains("nexora-lint: allow(")
                 && candidate.contains(rule)
                 && candidate.contains("reason=")
         })
@@ -437,7 +437,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::render_side_effect",
+                "nexora::render_side_effect",
                 node.method.span(),
                 format!("render() 中直接调用了具有副作用的 `cx.{method}()`"),
             )
@@ -456,7 +456,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::empty_event_handler",
+                "nexora::empty_event_handler",
                 node.method.span(),
                 format!("事件处理器 `{method}` 使用了空闭包"),
             )
@@ -505,7 +505,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::non_rest_route",
+                "nexora::non_rest_route",
                 literal.span(),
                 format!(
                     "Axum 路由 `{path}` 使用了动作式路径、非小写静态段或非 snake_case 参数"
@@ -523,12 +523,12 @@ impl<'a> SourceRuleVisitor<'a> {
         }
         let diagnostic = self
             .warning(
-                "xuwe::detached_lifecycle",
+                "nexora::detached_lifecycle",
                 node.method.span(),
                 "GPUI Task 或 Subscription 被 detach，生命周期不再由组件字段显式管理",
             )
             .with_help(
-                "优先保存句柄；确需 detach 时在上一行添加带中文原因的 `xuwe-lint: allow(xuwe::detached_lifecycle) reason=...`",
+                "优先保存句柄；确需 detach 时在上一行添加带中文原因的 `nexora-lint: allow(nexora::detached_lifecycle) reason=...`",
             );
         self.push(diagnostic, node.method.span());
     }
@@ -544,7 +544,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::unstable_element_id",
+                "nexora::unstable_element_id",
                 node.method.span(),
                 "ElementId 使用了列表位置、时间或随机值，跨帧身份可能变化",
             )
@@ -558,7 +558,7 @@ impl<'a> SourceRuleVisitor<'a> {
         }
         let diagnostic = self
             .warning(
-                "xuwe::global_refresh_scope",
+                "nexora::global_refresh_scope",
                 node.method.span(),
                 "非主题模块调用了 refresh_windows()，可能扩大刷新范围",
             )
@@ -586,7 +586,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::icon_button_without_tooltip",
+                "nexora::icon_button_without_tooltip",
                 node.method.span(),
                 "纯图标 Button 没有 Tooltip 或可访问名称",
             )
@@ -614,7 +614,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::render_side_effect",
+                "nexora::render_side_effect",
                 node.span(),
                 "render() 中直接执行了文件、网络、数据库或进程操作",
             )
@@ -651,7 +651,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::dynamic_sql_concatenation",
+                "nexora::dynamic_sql_concatenation",
                 sql.span(),
                 "SQLx 查询通过 format! 或字符串加法动态拼接 SQL",
             )
@@ -672,7 +672,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::dynamic_sql_concatenation",
+                "nexora::dynamic_sql_concatenation",
                 fragment.span(),
                 "QueryBuilder::push 接收了动态拼接的 SQL 片段",
             )
@@ -700,7 +700,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::hardcoded_visual_color",
+                "nexora::hardcoded_visual_color",
                 node.span(),
                 format!("业务 UI 直接调用 `{name}()` 写入固定颜色"),
             )
@@ -725,7 +725,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::untracked_task",
+                "nexora::untracked_task",
                 call.method.span(),
                 format!("`{method}()` 返回的生命周期句柄被直接丢弃"),
             )
@@ -747,7 +747,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .error(
-                "xuwe::non_gpui_global_state",
+                "nexora::non_gpui_global_state",
                 node.ident.span(),
                 format!("静态状态 `{}` 绕过了 GPUI Global", node.ident),
             )
@@ -765,7 +765,7 @@ impl<'a> SourceRuleVisitor<'a> {
             }
             let diagnostic = self
                 .warning(
-                    "xuwe::copied_global_state",
+                    "nexora::copied_global_state",
                     field.span(),
                     "组件字段保存了完整 Theme 或 ThemeRegistry",
                 )
@@ -787,7 +787,7 @@ impl<'a> SourceRuleVisitor<'a> {
         }
         let diagnostic = self
             .error(
-                "xuwe::action_outside_actions",
+                "nexora::action_outside_actions",
                 node.path.span(),
                 "GPUI Action 定义出现在 actions crate 之外",
             )
@@ -813,7 +813,7 @@ impl<'a> SourceRuleVisitor<'a> {
         }
         let diagnostic = self
             .error(
-                "xuwe::action_outside_actions",
+                "nexora::action_outside_actions",
                 attribute.span(),
                 "Action derive 出现在 actions crate 之外",
             )
@@ -835,7 +835,7 @@ impl<'a> SourceRuleVisitor<'a> {
 
         let diagnostic = self
             .warning(
-                "xuwe::database_entity_in_contract",
+                "nexora::database_entity_in_contract",
                 attribute.span(),
                 "契约或共享模型类型暴露了 SQLx 数据库映射细节",
             )
@@ -858,7 +858,7 @@ impl<'a> SourceRuleVisitor<'a> {
             if matches!(name.as_str(), "Bytes" | "HeaderMap" | "Request" | "String") {
                 let diagnostic = self
                     .warning(
-                        "xuwe::raw_axum_request",
+                        "nexora::raw_axum_request",
                         argument.ty.span(),
                         format!("异步 handler 直接接收原始 `{name}` 请求数据"),
                     )
@@ -873,7 +873,7 @@ impl<'a> SourceRuleVisitor<'a> {
             {
                 let diagnostic = self
                     .warning(
-                        "xuwe::unbounded_request_body",
+                        "nexora::unbounded_request_body",
                         argument.ty.span(),
                         format!("消费请求正文的 `{name}` 没有在当前模块声明 DefaultBodyLimit"),
                     )
@@ -898,7 +898,7 @@ impl<'a> SourceRuleVisitor<'a> {
         }
         let diagnostic = self
             .error(
-                "xuwe::inline_test_module",
+                "nexora::inline_test_module",
                 attribute.span(),
                 "生产源码中出现了 test 条件编译",
             )
@@ -996,7 +996,7 @@ impl<'ast> Visit<'ast> for SourceRuleVisitor<'_> {
         if node.ident == "tests" {
             let diagnostic = self
                 .error(
-                    "xuwe::inline_test_module",
+                    "nexora::inline_test_module",
                     node.ident.span(),
                     "生产源码中声明了 tests 模块",
                 )
@@ -1026,7 +1026,7 @@ impl<'ast> Visit<'ast> for SourceRuleVisitor<'_> {
         if self.is_gpui && name.as_deref() == Some("thread_local") {
             let diagnostic = self
                 .error(
-                    "xuwe::non_gpui_global_state",
+                    "nexora::non_gpui_global_state",
                     node.path.span(),
                     "GPUI crate 使用 thread_local! 保存状态",
                 )

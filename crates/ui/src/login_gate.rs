@@ -57,12 +57,12 @@ impl LoginGate {
             configured: true,
             busy: false,
             status: None,
-            login_label: "使用铉微账户登录".into(),
+            login_label: "使用 Nexora 账户登录".into(),
             busy_label: "正在连接认证服务...".into(),
             on_login: Rc::new(on_login),
             on_settings: Rc::new(on_settings),
-            privacy_url: "https://xuwe.cc/privacy".into(),
-            help_url: "https://github.com/xuwe-projects/desktop-template/issues".into(),
+            privacy_url: "https://github.com/xuwe-projects/nexora".into(),
+            help_url: "https://github.com/xuwe-projects/nexora/issues".into(),
         }
     }
 
@@ -232,7 +232,7 @@ impl RenderOnce for LoginGate {
                                             .size_5()
                                             .text_color(theme.primary),
                                     )
-                                    .child("由铉微统一身份认证保护"),
+                                    .child("由 Nexora 统一身份认证保护"),
                             )
                             .when_some(self.status, |this, status| {
                                 this.child(

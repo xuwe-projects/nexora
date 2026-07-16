@@ -21,7 +21,7 @@ where
 {
     type Rejection = ApiError;
 
-    // xuwe-lint: allow(xuwe::raw_axum_request) reason="自定义 JSON extractor 必须接收请求后委托 Axum Json 完成正文解析"
+    // nexora-lint: allow(nexora::raw_axum_request) reason="自定义 JSON extractor 必须接收请求后委托 Axum Json 完成正文解析"
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         Json::<T>::from_request(request, state)
             .await

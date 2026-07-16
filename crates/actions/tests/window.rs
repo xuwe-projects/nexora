@@ -3,16 +3,16 @@ use gpui::{Menu, MenuItem};
 
 #[test]
 fn application_menus_expose_quit_and_window_commands() {
-    let menus = window::application_menus("Xuwe Console");
+    let menus = window::application_menus("Nexora Console");
 
     assert_eq!(
         menus
             .iter()
             .map(|menu| menu.name.as_ref())
             .collect::<Vec<_>>(),
-        vec!["Xuwe Console", "Window"]
+        vec!["Nexora Console", "Window"]
     );
-    assert_eq!(action_names(&menus[0]), vec!["Quit Xuwe Console"]);
+    assert_eq!(action_names(&menus[0]), vec!["Quit Nexora Console"]);
     assert_eq!(
         action_names(&menus[1]),
         vec!["Minimize", "Zoom", "Toggle Full Screen"]

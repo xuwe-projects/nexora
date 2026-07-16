@@ -1,3 +1,5 @@
+#![cfg(all(feature = "desktop", feature = "derive"))]
+
 use nexora::{
     Application as _, ApplicationError, ApplicationOptions, FeatureElement, WindowElement,
     gpui::{Context, Empty, IntoElement, Window, px, size},

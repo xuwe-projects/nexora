@@ -163,7 +163,7 @@ impl Default for DatabaseSettings {
     /// 创建本地开发数据库默认配置。
     fn default() -> Self {
         Self {
-            url: "postgres://postgres:postgres@127.0.0.1:5432/xuwe".to_owned(),
+            url: "postgres://postgres:postgres@127.0.0.1:5432/nexora".to_owned(),
             max_connections: 10,
         }
     }
@@ -205,7 +205,7 @@ impl Default for OidcSettings {
     fn default() -> Self {
         Self {
             issuer_url: "https://id.example.com".to_owned(),
-            audience: "xuwe-api".to_owned(),
+            audience: "nexora-api".to_owned(),
             project_id: String::new(),
             personal_access_token: String::new(),
         }

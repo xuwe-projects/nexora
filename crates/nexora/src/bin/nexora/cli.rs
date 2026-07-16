@@ -1,5 +1,8 @@
 //! Nexora 项目创建与初始化命令。
 
+#[path = "tooling.rs"]
+mod tooling;
+
 use std::{
     env,
     ffi::OsStr,
@@ -115,15 +118,23 @@ enum ProjectFeature {
     name = "nexora",
     version,
     about = "Nexora 全栈桌面应用框架",
+    disable_version_flag = true,
     propagate_version = true
 )]
 struct Cli {
+    /// 输出当前 Nexora 版本并退出。
+    #[arg(short = 'v', long = "version", global = true)]
+    version: bool,
+
     #[command(subcommand)]
     command: Option<NexoraCommand>,
 }
 
 #[derive(Debug, Subcommand)]
 enum NexoraCommand {
+    /// 构建、签名并打包 macOS 桌面应用。
+    Build(Box<tooling::BuildConfig>),
+
     /// 创建一个新的 Nexora 项目。
     Create {
         /// 要创建的项目名称；非交互模式省略时使用 `nexora-app`。
@@ -154,6 +165,12 @@ enum NexoraCommand {
         features: Vec<ProjectFeature>,
     },
 
+    /// 检查本地 macOS 打包依赖。
+    Doctor(tooling::DoctorConfig),
+
+    /// 检查 workspace 是否符合 Nexora 工程规范。
+    Lint(tooling::LintConfig),
+
     /// 显示当前 Nexora 版本。
     Version,
 }
@@ -164,10 +181,20 @@ enum NexoraCommand {
 ///
 /// # Errors
 ///
-/// 项目名称或目标路径不合法、目标文件已存在，或目录与文件创建失败时，返回面向用户的错误信息。
+/// 项目名称或目标路径不合法、目标文件已存在、目录与文件创建失败，macOS 构建或环境
+/// 检查无法完成，或者 workspace lint 未通过时，返回面向用户的错误信息。
 pub(super) fn run() -> Result<(), String> {
     let interactive = is_interactive_terminal();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if cli.version {
+        print_version();
+        return Ok(());
+    }
+
+    match cli.command {
+        Some(NexoraCommand::Build(config)) => {
+            tooling::run_build_command(config).map_err(|error| error.to_string())
+        }
         Some(NexoraCommand::Create {
             name,
             layout,
@@ -184,6 +211,12 @@ pub(super) fn run() -> Result<(), String> {
         }) => {
             let options = resolve_scaffold_options(layout, features, interactive)?;
             run_init(path, options)
+        }
+        Some(NexoraCommand::Doctor(config)) => {
+            tooling::run_doctor_command(config).map_err(|error| error.to_string())
+        }
+        Some(NexoraCommand::Lint(config)) => {
+            tooling::run_lint_command(config).map_err(|error| error.to_string())
         }
         Some(NexoraCommand::Version) => {
             print_version();

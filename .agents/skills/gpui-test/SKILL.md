@@ -1,7 +1,7 @@
 ---
 name: gpui-test
 description: >-
-  用于在 Xuwe workspace 中编写、调试或复现确定性 GPUI 测试，包括 gpui::test 参数、
+  用于在 Nexora workspace 中编写、调试或复现确定性 GPUI 测试，包括 gpui::test 参数、
   TestAppContext、VisualTestContext、调度器种子、ITERATIONS/SEED、禁止停驻失败和待处理任务追踪。
 ---
 
@@ -63,7 +63,7 @@ description: >-
 
 - `RUST_BACKTRACE=1` 或 `RUST_BACKTRACE=full`：显示 panic 回溯。
 - `RUST_LOG=<filter>`：当测试已初始化日志系统时启用日志。
-- `ZED_HEADLESS=1`：GPUI 上游保留的环境变量名，用于让平台推断倾向无头模式；名称来自上游，但在 Xuwe 测试中仍按该原名设置。
+- `ZED_HEADLESS=1`：GPUI 上游保留的环境变量名，用于让平台推断倾向无头模式；名称来自上游，但在 Nexora 测试中仍按该原名设置。
 
 缩小复现范围时，优先使用环境变量，不要修改测试代码。
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 use std::{
     fs,
     path::PathBuf,
@@ -15,7 +17,7 @@ impl Fixture {
     fn new(name: &str) -> Self {
         let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
         let root =
-            std::env::temp_dir().join(format!("xuwecli-lint-{name}-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("nexora-lint-{name}-{}-{id}", std::process::id()));
         if root.exists() {
             fs::remove_dir_all(&root).unwrap();
         }
@@ -30,7 +32,7 @@ impl Fixture {
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_xuwecli"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nexora"));
         command.arg("lint").arg("--workspace").arg(&self.root);
         command.args(arguments).output().unwrap()
     }
@@ -74,7 +76,7 @@ fn cargo_rules_report_workspace_and_technology_violations() {
         "Cargo.toml",
         r#"[workspace]
 resolver = "3"
-members = ["crates/xuwe-core"]
+members = ["crates/nexora-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -86,9 +88,9 @@ serde = "1"
 "#,
     );
     fixture.write(
-        "crates/xuwe-core/Cargo.toml",
+        "crates/nexora-core/Cargo.toml",
         r#"[package]
-name = "xuwe-core"
+name = "nexora-core"
 version.workspace = true
 edition.workspace = true
 
@@ -98,12 +100,12 @@ actix-web = "4"
 "#,
     );
     fixture.write(
-        "crates/xuwe-core/src/main.rs",
+        "crates/nexora-core/src/main.rs",
         "//! 二进制入口。\nfn main() {}\n",
     );
-    fixture.write("crates/xuwe-core/src/lib.rs", "//! 库入口。\n");
+    fixture.write("crates/nexora-core/src/lib.rs", "//! 库入口。\n");
     fixture.write(
-        "crates/xuwe-core/migrations/0001_create_users.sql",
+        "crates/nexora-core/migrations/0001_create_users.sql",
         "CREATE TABLE users (id INTEGER PRIMARY KEY);\n",
     );
 
@@ -112,12 +114,12 @@ actix-web = "4"
 
     assert!(!output.status.success());
     for rule in [
-        "xuwe::dependency_not_in_workspace",
-        "xuwe::broad_dependency_feature",
-        "xuwe::forbidden_technology",
-        "xuwe::invalid_crate_name",
-        "xuwe::invalid_migration_location",
-        "xuwe::mixed_binary_library",
+        "nexora::dependency_not_in_workspace",
+        "nexora::broad_dependency_feature",
+        "nexora::forbidden_technology",
+        "nexora::invalid_crate_name",
+        "nexora::invalid_migration_location",
+        "nexora::mixed_binary_library",
     ] {
         assert!(stdout.contains(rule), "missing {rule} in:\n{stdout}");
     }
@@ -269,26 +271,26 @@ fn find_user(name: &str) {
 
     assert!(!output.status.success());
     for rule in [
-        "xuwe::action_outside_actions",
-        "xuwe::copied_global_state",
-        "xuwe::detached_lifecycle",
-        "xuwe::dynamic_sql_concatenation",
-        "xuwe::empty_event_handler",
-        "xuwe::forbidden_mod_rs",
-        "xuwe::global_refresh_scope",
-        "xuwe::hardcoded_visual_color",
-        "xuwe::icon_button_without_tooltip",
-        "xuwe::inline_test_module",
-        "xuwe::missing_errors_section",
-        "xuwe::missing_panics_section",
-        "xuwe::non_chinese_public_docs",
-        "xuwe::non_gpui_global_state",
-        "xuwe::non_rest_route",
-        "xuwe::raw_axum_request",
-        "xuwe::render_side_effect",
-        "xuwe::unbounded_request_body",
-        "xuwe::unstable_element_id",
-        "xuwe::untracked_task",
+        "nexora::action_outside_actions",
+        "nexora::copied_global_state",
+        "nexora::detached_lifecycle",
+        "nexora::dynamic_sql_concatenation",
+        "nexora::empty_event_handler",
+        "nexora::forbidden_mod_rs",
+        "nexora::global_refresh_scope",
+        "nexora::hardcoded_visual_color",
+        "nexora::icon_button_without_tooltip",
+        "nexora::inline_test_module",
+        "nexora::missing_errors_section",
+        "nexora::missing_panics_section",
+        "nexora::non_chinese_public_docs",
+        "nexora::non_gpui_global_state",
+        "nexora::non_rest_route",
+        "nexora::raw_axum_request",
+        "nexora::render_side_effect",
+        "nexora::unbounded_request_body",
+        "nexora::unstable_element_id",
+        "nexora::untracked_task",
     ] {
         assert!(stdout.contains(rule), "missing {rule} in:\n{stdout}");
     }
@@ -331,7 +333,7 @@ syn = { workspace = true }
     assert_eq!(value["summary"]["warnings"], 1);
     assert_eq!(
         value["diagnostics"][0]["rule"],
-        "xuwe::broad_dependency_feature"
+        "nexora::broad_dependency_feature"
     );
 
     let denied = fixture.run(&["--deny-warnings"]);
@@ -383,8 +385,8 @@ pub struct User {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(!output.status.success());
-    assert!(stdout.contains("xuwe::database_entity_in_contract"));
-    assert!(stdout.contains("xuwe::forbidden_dependency_edge"));
+    assert!(stdout.contains("nexora::database_entity_in_contract"));
+    assert!(stdout.contains("nexora::forbidden_dependency_edge"));
 }
 
 #[test]
@@ -439,7 +441,7 @@ edition.workspace = true
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(!output.status.success());
-    assert!(stdout.contains("xuwe::modified_migration"));
+    assert!(stdout.contains("nexora::modified_migration"));
 }
 
 #[test]
@@ -503,7 +505,7 @@ async fn handler() {}
     let invalid = fixture.run(&["--deny-warnings"]);
     let stdout = String::from_utf8_lossy(&invalid.stdout);
     assert!(!invalid.status.success());
-    assert!(stdout.contains("xuwe::non_rest_route"));
+    assert!(stdout.contains("nexora::non_rest_route"));
     assert!(stdout.contains("{user-id}"));
 }
 
@@ -513,7 +515,7 @@ fn valid_workspace(name: &str) -> Fixture {
         "Cargo.toml",
         r#"[workspace]
 resolver = "3"
-members = ["apps/console", "crates/actions"]
+members = ["examples/console", "crates/actions"]
 
 [workspace.package]
 version = "0.1.0"
@@ -525,7 +527,7 @@ gpui = "0.2"
 "#,
     );
     fixture.write(
-        "apps/console/Cargo.toml",
+        "examples/console/Cargo.toml",
         r#"[package]
 name = "console"
 version.workspace = true
@@ -537,7 +539,7 @@ gpui = { workspace = true }
 "#,
     );
     fixture.write(
-        "apps/console/src/main.rs",
+        "examples/console/src/main.rs",
         "//! 控制台入口。\nfn main() {}\n",
     );
     fixture.write(

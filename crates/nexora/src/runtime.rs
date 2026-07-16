@@ -532,11 +532,11 @@ where
                     cx.global_mut::<WindowRoutes>().routes.remove(&entity_id);
                 }
             })
-            // xuwe-lint: allow(xuwe::detached_lifecycle) reason=窗口路由清理必须持续到对应 Entity 释放，并由 GPUI Entity 生命周期终止
+            // nexora-lint: allow(nexora::detached_lifecycle) reason=窗口路由清理必须持续到对应 Entity 释放，并由 GPUI Entity 生命周期终止
             .detach();
         entity_cx
             .on_release_in(window, |element, window, cx| element.closing(window, cx))
-            // xuwe-lint: allow(xuwe::detached_lifecycle) reason=Window closing 生命周期必须持续到窗口 Entity 释放，并由 GPUI Entity 生命周期终止
+            // nexora-lint: allow(nexora::detached_lifecycle) reason=Window closing 生命周期必须持续到窗口 Entity 释放，并由 GPUI Entity 生命周期终止
             .detach();
 
         let mut element = constructor(window, entity_cx);
@@ -766,7 +766,7 @@ where
                     cx.global_mut::<FeatureRoutes>().routes.remove(&entity_id);
                 }
             })
-            // xuwe-lint: allow(xuwe::detached_lifecycle) reason=路由清理回调必须持续存活到对应 Entity 释放，且由 GPUI 的 Entity 生命周期负责终止
+            // nexora-lint: allow(nexora::detached_lifecycle) reason=路由清理回调必须持续存活到对应 Entity 释放，且由 GPUI 的 Entity 生命周期负责终止
             .detach();
 
         let mut feature = constructor(window, entity_cx);

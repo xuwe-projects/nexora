@@ -33,7 +33,7 @@ cargo run -p server -- /path/to/server.toml
 ```bash
 SERVER__HOST=0.0.0.0
 SERVER__PORT=8080
-DATABASE__URL=postgres://xuwe:secret@postgres:5432/xuwe
+DATABASE__URL=postgres://nexora:secret@postgres:5432/nexora
 DATABASE__MAX_CONNECTIONS=20
 SETUP__SECRET=long-random-setup-secret
 OIDC__ISSUER_URL=https://id.example.com
@@ -150,7 +150,7 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
 - `server.env.example`：服务端运行时环境变量示例。
 - `desktop.toml.example`：Console 桌面应用本地运行配置样例。
 - `desktop-build.env.example`：桌面端构建、签名和更新相关环境变量示例。
-- `updater/latest.example.json`：`xuwecli build` 生成的更新清单形状示例，不需要手写。
+- `updater/latest.example.json`：`nexora build` 生成的更新清单形状示例，不需要手写。
 
 ## 桌面端 OIDC 认证
 
@@ -193,7 +193,7 @@ API_BASE_URL=http://127.0.0.1:3000
 其中还包含签名、公证和更新发布变量。`config-rs` 的文件源不会把这种 `KEY=value` 文件当作
 TOML 读取，因此应用运行时只通过 `config/desktop.toml` 加载 OIDC 文件配置。
 
-以后新增 `apps/<app>` 桌面程序时，可以复用 `crates/oidc`，应用层只需要负责自己的
+以后新增桌面程序示例时，可以复用 `crates/oidc`，应用层只需要负责自己的
 环境变量装配、token 存储位置和 GPUI 状态接入。
 
 Console 只把 refresh token 保存到系统安全凭据库：macOS 使用 Keychain，Windows 使用
@@ -205,21 +205,21 @@ Provider 返回 `invalid_grant` 时会清除失效凭据并回到登录页，临
 
 ## 更新发布文件
 
-`xuwecli build` 会在 `dist/` 下生成自动更新需要的 `.app.zip`、同名 `.sha256`、
-`latest.json` 和 `notes/...md` 更新日志副本。后续 `xuwecli publish` 接入 OSS 后，应先上传
+`nexora build` 会在 `dist/` 下生成自动更新需要的 `.app.zip`、同名 `.sha256`、
+`latest.json` 和 `notes/...md` 更新日志副本。后续 `nexora publish` 接入 OSS 后，应先上传
 安装包、校验文件和更新日志，最后上传 `latest.json`。
 
 本机 macOS 可以一次构建多个 macOS 架构：
 
 ```bash
-xuwecli build --targets macos --bundle-version 12
+nexora build --targets macos --bundle-version 12
 ```
 
 该命令会顺序构建 Apple Silicon 与 Intel macOS 产物，并把两个 `.app.zip` 写入同一个
 `latest.json.artifacts`。如果只构建当前机器架构，使用默认值或显式传入：
 
 ```bash
-xuwecli build --targets current
+nexora build --targets current
 ```
 
 Windows、Linux 和 macOS 完整发布矩阵不应依赖单个 Docker 容器完成。推荐做法是使用 CI 或

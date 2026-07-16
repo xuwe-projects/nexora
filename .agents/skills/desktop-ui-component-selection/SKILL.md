@@ -1,6 +1,6 @@
 ---
 name: desktop-ui-component-selection
-description: 用于构建、修改或审查 Xuwe 的 GPUI 桌面交互，并优先从 gpui-component 选择现有组件。适用于导航、表单、弹层、表格、设置、应用壳、反馈状态，以及任何可能已有官方组件的界面。
+description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并优先从 gpui-component 选择现有组件。适用于导航、表单、弹层、表格、设置、应用壳、反馈状态，以及任何可能已有官方组件的界面。
 ---
 
 # 桌面 UI 组件选择

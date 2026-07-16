@@ -165,7 +165,7 @@ fn console_updater_config() -> Option<UpdateConfig> {
     };
     let mut config = match UpdateConfig::new(
         manifest_url,
-        "com.xuwe.console",
+        "com.nexora.console",
         env!("CARGO_PKG_VERSION"),
         bundle_version,
         UpdateChannel::Stable,

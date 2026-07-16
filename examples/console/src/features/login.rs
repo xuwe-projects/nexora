@@ -9,8 +9,8 @@ use ui::LoginGate;
 
 use crate::auth;
 
-const PRIVACY_URL: &str = "https://xuwe.cc/privacy";
-const HELP_URL: &str = "https://github.com/xuwe-projects/desktop-template/issues";
+const PRIVACY_URL: &str = "https://github.com/xuwe-projects/nexora";
+const HELP_URL: &str = "https://github.com/xuwe-projects/nexora/issues";
 
 /// Console 未登录状态使用的认证页面适配器。
 pub struct LoginFeature;
@@ -25,7 +25,7 @@ impl LoginFeature {
         let status = visible_status(snapshot.status.as_ref()).then_some(snapshot.status.clone());
 
         LoginGate::new(
-            "铉微 Console",
+            "Nexora Console",
             format!("Console {}", env!("CARGO_PKG_VERSION")),
             |_, _, cx| {
                 if let Err(error) = auth::start_login(cx) {

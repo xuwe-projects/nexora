@@ -8,7 +8,7 @@
 ```json
 {
   "schema_version": 1,
-  "app_id": "com.xuwe.console",
+  "app_id": "com.nexora.console",
   "channel": "stable",
   "version": "0.2.0",
   "bundle_version": 12,
@@ -47,7 +47,7 @@ shasum -a 256 Console.app.zip
 ```rust,ignore
 let config = updater::UpdateConfig::new(
     "https://updates.example.com/console/stable/latest.json",
-    "com.xuwe.console",
+    "com.nexora.console",
     env!("CARGO_PKG_VERSION"),
     12,
     updater::UpdateChannel::Stable,
@@ -57,10 +57,10 @@ let config = updater::UpdateConfig::new(
 updater::open_update_dialog(config, window, cx);
 ```
 
-`latest.json` 由 `xuwecli build` 根据 `.app.zip`、SHA-256、文件大小和
+`latest.json` 由 `nexora build` 根据 `.app.zip`、SHA-256、文件大小和
 `changelogs/<version>/<component>/<locale>.md` 自动生成；仓库中的 example 只描述协议形状。
 默认使用相对 URL，发布时把安装包、校验文件、`notes/` 和 `latest.json` 上传到同一个 OSS 前缀即可。
-本机 macOS 可以用 `xuwecli build --targets macos` 生成 Apple Silicon 和 Intel 两个 artifact；
+本机 macOS 可以用 `nexora build --targets macos` 生成 Apple Silicon 和 Intel 两个 artifact；
 Windows 与 Linux 产物应由对应系统的 runner 构建后再合并到最终清单。
 
 Console 示例通过编译时环境变量配置清单地址和可选签名团队：

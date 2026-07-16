@@ -1,3 +1,5 @@
+#![cfg(all(feature = "desktop", feature = "derive"))]
+
 use gpui::{AppContext as _, Context, Empty, IntoElement, Render, TestAppContext, Window};
 use nexora::{AppRegistry, RegistryError};
 

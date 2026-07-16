@@ -1,9 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/cli",
-    "apps/console",
-    "apps/server",
+    "examples/console",
+    "examples/server",
     "crates/actions",
     "crates/api",
     "crates/changelog",
@@ -26,8 +25,8 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/xuwe-projects/desktop-template"
-homepage = "https://github.com/xuwe-projects/desktop-template"
+repository = "https://github.com/xuwe-projects/nexora"
+homepage = "https://github.com/xuwe-projects/nexora"
 
 [workspace.dependencies]
 account = { version = "0.1.0", path = "modules/account", default-features = false }
@@ -102,7 +101,7 @@ security-framework = { version = "3.7.0", default-features = false }
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
 proc-macro-crate = { version = "3.5.0", default-features = false }
 quote = { version = "1", default-features = false }
-# xuwe-lint: allow(xuwe::broad_dependency_feature) reason="CLI 需要解析完整 Rust 文件 AST"
+# nexora-lint: allow(nexora::broad_dependency_feature) reason="CLI 需要解析完整 Rust 文件 AST"
 syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "visit"] }
 
 # UI 框架

@@ -1,4 +1,7 @@
-#[path = "../src/commands.rs"]
+#![cfg(feature = "cli")]
+
+#[allow(dead_code)]
+#[path = "../src/bin/nexora/tooling.rs"]
 pub mod commands;
 
 use commands::{
@@ -21,7 +24,7 @@ fn maps_host_arch_to_macos_target() {
 
 #[test]
 fn local_build_defaults_to_ad_hoc_signing_without_notarization() {
-    let plan = build_plan_from_args(["xuwecli", "build", "--mode", "local"], "arm64").unwrap();
+    let plan = build_plan_from_args(["nexora", "build", "--mode", "local"], "arm64").unwrap();
 
     assert_eq!(plan.target(), "aarch64-apple-darwin");
     assert_eq!(plan.signing(), SigningMode::AdHoc);
@@ -30,7 +33,7 @@ fn local_build_defaults_to_ad_hoc_signing_without_notarization() {
 
 #[test]
 fn dist_build_defaults_to_developer_id_signing_with_notarization() {
-    let plan = build_plan_from_args(["xuwecli", "build"], "x86_64").unwrap();
+    let plan = build_plan_from_args(["nexora", "build"], "x86_64").unwrap();
 
     assert_eq!(plan.target(), "x86_64-apple-darwin");
     assert_eq!(plan.signing(), SigningMode::DeveloperId);
@@ -39,7 +42,7 @@ fn dist_build_defaults_to_developer_id_signing_with_notarization() {
 
 #[test]
 fn build_outputs_versioned_dmg_to_dist_by_default() {
-    let plan = build_plan_from_args(["xuwecli", "build"], "arm64").unwrap();
+    let plan = build_plan_from_args(["nexora", "build"], "arm64").unwrap();
     let expected_dmg_path = PathBuf::from(format!(
         "dist/console-{}-aarch64.dmg",
         env!("CARGO_PKG_VERSION")
@@ -50,10 +53,18 @@ fn build_outputs_versioned_dmg_to_dist_by_default() {
 }
 
 #[test]
+fn build_uses_nexora_update_and_notary_defaults() {
+    let plan = build_plan_from_args(["nexora", "build"], "arm64").unwrap();
+
+    assert_eq!(plan.app_id(), "com.nexora.console");
+    assert_eq!(plan.notary_profile(), "nexora");
+}
+
+#[test]
 fn build_outputs_update_package_and_manifest_by_default() {
     let plan = build_plan_from_args(
         [
-            "xuwecli",
+            "nexora",
             "build",
             "--bundle-version",
             "7",
@@ -99,15 +110,14 @@ fn build_outputs_update_package_and_manifest_by_default() {
 
 #[test]
 fn skip_update_package_disables_update_artifacts() {
-    let plan =
-        build_plan_from_args(["xuwecli", "build", "--skip-update-package"], "arm64").unwrap();
+    let plan = build_plan_from_args(["nexora", "build", "--skip-update-package"], "arm64").unwrap();
 
     assert!(!plan.create_update_package());
 }
 
 #[test]
 fn targets_alias_builds_macos_matrix() {
-    let plans = build_plans_from_args(["xuwecli", "build", "--targets", "macos"], "arm64").unwrap();
+    let plans = build_plans_from_args(["nexora", "build", "--targets", "macos"], "arm64").unwrap();
     let targets = plans.iter().map(|plan| plan.target()).collect::<Vec<_>>();
 
     assert_eq!(targets, vec!["aarch64-apple-darwin", "x86_64-apple-darwin"]);
@@ -133,7 +143,7 @@ fn targets_alias_builds_macos_matrix() {
 fn target_and_targets_cannot_be_used_together() {
     let error = build_plans_from_args(
         [
-            "xuwecli",
+            "nexora",
             "build",
             "--target",
             "aarch64-apple-darwin",
@@ -149,7 +159,7 @@ fn target_and_targets_cannot_be_used_together() {
 
 #[test]
 fn checksum_writes_sha256_sidecar_file() {
-    let root = env::temp_dir().join(format!("xuwecli-checksum-{}", std::process::id()));
+    let root = env::temp_dir().join(format!("nexora-checksum-{}", std::process::id()));
     let dmg_path = root.join("console-0.1.0-aarch64.dmg");
     let checksum_path = root.join("console-0.1.0-aarch64.dmg.sha256");
 
@@ -158,13 +168,13 @@ fn checksum_writes_sha256_sidecar_file() {
     }
 
     fs::create_dir_all(&root).unwrap();
-    fs::write(&dmg_path, b"xuwe").unwrap();
+    fs::write(&dmg_path, b"nexora").unwrap();
 
     write_sha256_sidecar(&dmg_path).unwrap();
 
     assert_eq!(
         fs::read_to_string(&checksum_path).unwrap(),
-        "a7b3c35ced49e279435986e7be3de315a45d12b01c4d51c4acfbf2fa0fdce691  console-0.1.0-aarch64.dmg\n"
+        "6684bd7ca5b118220b0b7f9996bc71c75359fec3242a3c8ce8a53e889081bf55  console-0.1.0-aarch64.dmg\n"
     );
 
     fs::remove_dir_all(&root).unwrap();
@@ -172,7 +182,7 @@ fn checksum_writes_sha256_sidecar_file() {
 
 #[test]
 fn update_metadata_writes_latest_json_for_app_zip() {
-    let root = env::temp_dir().join(format!("xuwecli-update-{}", std::process::id()));
+    let root = env::temp_dir().join(format!("nexora-update-{}", std::process::id()));
     let output_dir = root.join("dist");
 
     if root.exists() {
@@ -182,7 +192,7 @@ fn update_metadata_writes_latest_json_for_app_zip() {
     fs::create_dir_all(&output_dir).unwrap();
     let plan = build_plan_from_args(
         [
-            "xuwecli",
+            "nexora",
             "build",
             "--output-dir",
             output_dir.to_str().unwrap(),
@@ -196,7 +206,7 @@ fn update_metadata_writes_latest_json_for_app_zip() {
         "arm64",
     )
     .unwrap();
-    fs::write(plan.app_zip_path(), b"xuwe").unwrap();
+    fs::write(plan.app_zip_path(), b"nexora").unwrap();
 
     write_update_metadata_for_plan(&plan).unwrap();
 
@@ -213,16 +223,16 @@ fn update_metadata_writes_latest_json_for_app_zip() {
     );
     assert_eq!(
         manifest["artifacts"][0]["sha256"],
-        "a7b3c35ced49e279435986e7be3de315a45d12b01c4d51c4acfbf2fa0fdce691"
+        "6684bd7ca5b118220b0b7f9996bc71c75359fec3242a3c8ce8a53e889081bf55"
     );
-    assert_eq!(manifest["artifacts"][0]["size"], 4);
+    assert_eq!(manifest["artifacts"][0]["size"], 6);
 
     fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn update_metadata_merges_multiple_targets_into_latest_json() {
-    let root = env::temp_dir().join(format!("xuwecli-update-matrix-{}", std::process::id()));
+    let root = env::temp_dir().join(format!("nexora-update-matrix-{}", std::process::id()));
     let output_dir = root.join("dist");
 
     if root.exists() {
@@ -232,7 +242,7 @@ fn update_metadata_merges_multiple_targets_into_latest_json() {
     fs::create_dir_all(&output_dir).unwrap();
     let plans = build_plans_from_args(
         [
-            "xuwecli",
+            "nexora",
             "build",
             "--output-dir",
             output_dir.to_str().unwrap(),
@@ -267,12 +277,12 @@ fn update_metadata_merges_multiple_targets_into_latest_json() {
 fn build_accepts_app_version_override() {
     let plan = build_plan_from_args(
         [
-            "xuwecli",
+            "nexora",
             "build",
             "--app-version",
             "1.2.3",
             "--app-name",
-            "Xuwe",
+            "Nexora",
         ],
         "arm64",
     )
@@ -280,14 +290,14 @@ fn build_accepts_app_version_override() {
 
     assert_eq!(
         plan.dmg_path(),
-        PathBuf::from("dist/Xuwe-1.2.3-aarch64.dmg").as_path()
+        PathBuf::from("dist/Nexora-1.2.3-aarch64.dmg").as_path()
     );
 }
 
 #[test]
 fn skip_flags_disable_dmg_and_notarization() {
     let plan = build_plan_from_args(
-        ["xuwecli", "build", "--skip-dmg", "--skip-notarize"],
+        ["nexora", "build", "--skip-dmg", "--skip-notarize"],
         "arm64",
     )
     .unwrap();
@@ -298,7 +308,7 @@ fn skip_flags_disable_dmg_and_notarization() {
 
 #[test]
 fn skip_dmg_also_disables_notarization() {
-    let plan = build_plan_from_args(["xuwecli", "build", "--skip-dmg"], "arm64").unwrap();
+    let plan = build_plan_from_args(["nexora", "build", "--skip-dmg"], "arm64").unwrap();
 
     assert!(!plan.create_dmg());
     assert!(!plan.notarize());
@@ -307,7 +317,7 @@ fn skip_dmg_also_disables_notarization() {
 #[test]
 fn build_args_support_equals_syntax() {
     let plan =
-        build_plan_from_args(["xuwecli", "build", "--mode=local", "--sign=none"], "arm64").unwrap();
+        build_plan_from_args(["nexora", "build", "--mode=local", "--sign=none"], "arm64").unwrap();
 
     assert_eq!(plan.mode(), BuildMode::Local);
     assert_eq!(plan.signing(), SigningMode::None);
