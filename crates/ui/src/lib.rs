@@ -11,6 +11,9 @@ pub mod layout;
 /// 桌面应用未登录时复用的认证门禁。
 pub mod login_gate;
 
+/// 受右侧主面板边界约束的模态对话框。
+pub mod panel_dialog;
+
 /// 桌面工作区右侧主面板的统一顶部栏。
 pub mod panel_header;
 
@@ -19,5 +22,6 @@ pub mod window_layers;
 
 pub use card::Card;
 pub use login_gate::LoginGate;
+pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;
 pub use window_layers::window_layers;

@@ -20,6 +20,7 @@ pub struct WorkspaceLayout {
     sidebar: AnyElement,
     title_bar_content: AnyElement,
     panel_header: Option<AnyElement>,
+    panel_overlay: Option<AnyElement>,
     content: AnyElement,
     content_padding: Pixels,
     content_scrollable: bool,
@@ -42,6 +43,7 @@ impl WorkspaceLayout {
             sidebar: sidebar.into_any_element(),
             title_bar_content: title_bar_content.into_any_element(),
             panel_header: None,
+            panel_overlay: None,
             content: content.into_any_element(),
             content_padding: px(24.0),
             content_scrollable: true,
@@ -56,6 +58,15 @@ impl WorkspaceLayout {
     /// 未调用该方法时不会预留顶部栏高度，保证不需要页面导航栏的应用仍可复用当前布局。
     pub fn with_panel_header(mut self, panel_header: impl IntoElement) -> Self {
         self.panel_header = Some(panel_header.into_any_element());
+        self
+    }
+
+    /// 设置只覆盖右侧主面板的浮层。
+    ///
+    /// 浮层会在 Panel Header 与业务内容之后渲染，并受右侧可调整宽度面板的边界裁剪，
+    /// 因此不会覆盖窗口级标签栏或左侧导航。通常传入共享 [`crate::PanelDialog`]。
+    pub fn with_panel_overlay(mut self, panel_overlay: impl IntoElement) -> Self {
+        self.panel_overlay = Some(panel_overlay.into_any_element());
         self
     }
 
@@ -115,6 +126,13 @@ impl WorkspaceLayout {
         self.panel_header.is_some()
     }
 
+    /// 返回右侧主面板是否配置了局部浮层。
+    ///
+    /// 该值用于调用方和集成测试确认临时界面是否挂载在 Panel 层级，而不是窗口根遮罩层。
+    pub fn has_panel_overlay(&self) -> bool {
+        self.panel_overlay.is_some()
+    }
+
     /// 返回侧边导航区域首次渲染时使用的宽度。
     ///
     /// 该值用于确认共享布局的默认导航宽度，也方便具体应用在测试中校验自己的壳配置。
@@ -153,6 +171,7 @@ impl WorkspaceLayout {
             sidebar,
             title_bar_content,
             panel_header,
+            panel_overlay,
             content,
             content_padding,
             content_scrollable,
@@ -189,13 +208,18 @@ impl WorkspaceLayout {
             .child(
                 resizable_panel().child(
                     div()
+                        .relative()
                         .flex()
                         .flex_col()
                         .size_full()
                         .min_w_0()
                         .min_h_0()
+                        .overflow_hidden()
                         .when_some(panel_header, |this, panel_header| this.child(panel_header))
-                        .child(content_panel),
+                        .child(content_panel)
+                        .when_some(panel_overlay, |this, panel_overlay| {
+                            this.child(panel_overlay)
+                        }),
                 ),
             );
 

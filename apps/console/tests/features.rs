@@ -11,10 +11,11 @@ use actions::account::{AccountActionKind, SignInAccount};
 use configuration::UserConfigStore;
 use desktop::{Application as _, centered_window_bounds};
 use gpui::{
-    AppContext as _, Axis, Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window,
-    px, size,
+    AnyElement, AppContext as _, Axis, Context, Entity, InteractiveElement as _, IntoElement,
+    Modifiers, ParentElement as _, Render, TestAppContext, Window, div, px, size,
 };
 use gpui_component::{Size, notification::NotificationList, setting::SettingItem};
+use ui::layout::WorkspaceLayout;
 #[path = "../src/account_api.rs"]
 mod account_api;
 #[path = "../src/app.rs"]
@@ -32,6 +33,7 @@ use features::{
     FeatureId, feature_catalog, feature_catalog_sections,
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
+    roles::RolesFeature,
     root::RootView,
     settings::{current_console_changelog, settings_window_options, startup_display_setting_item},
     tasks::task_rows,
@@ -47,6 +49,90 @@ impl Render for NotificationTestRoot {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         self.notifications.clone()
     }
+}
+
+struct RolePanelTestRoot {
+    roles: Entity<RolesFeature>,
+    show_roles: bool,
+}
+
+impl Render for RolePanelTestRoot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (content, panel_overlay): (AnyElement, Option<AnyElement>) = if self.show_roles {
+            (
+                self.roles.clone().into_any_element(),
+                Some(self.roles.read(cx).panel_dialog()),
+            )
+        } else {
+            (div().child("其他页面").into_any_element(), None)
+        };
+        let sidebar = div()
+            .id("role-test-sidebar")
+            .debug_selector(|| "role-test-sidebar".into());
+        let title_bar = div()
+            .id("role-test-title-bar")
+            .debug_selector(|| "role-test-title-bar".into());
+        let layout =
+            WorkspaceLayout::new(sidebar, title_bar, content).with_content_padding(px(0.0));
+        let layout = if let Some(panel_overlay) = panel_overlay {
+            layout.with_panel_overlay(panel_overlay)
+        } else {
+            layout
+        };
+
+        layout.render(window, cx)
+    }
+}
+
+#[gpui::test]
+fn role_create_panel_dialog_survives_feature_visibility_switch(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (root, cx) = cx.add_window_view(|window, cx| RolePanelTestRoot {
+        roles: cx.new(|cx| RolesFeature::new(window, cx)),
+        show_roles: true,
+    });
+
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let open_button = cx
+        .debug_bounds("open-create-role-dialog")
+        .expect("角色页面应当渲染创建角色按钮");
+
+    cx.simulate_click(open_button.center(), Modifiers::none());
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let overlay = cx
+        .debug_bounds("panel-dialog-overlay")
+        .expect("角色创建弹窗应当渲染在 Panel overlay 中");
+    let sidebar = cx
+        .debug_bounds("role-test-sidebar")
+        .expect("测试工作区应当渲染 Sidebar");
+    let title_bar = cx
+        .debug_bounds("role-test-title-bar")
+        .expect("测试工作区应当渲染标签栏内容");
+
+    assert!(overlay.left() >= sidebar.right());
+    assert!(overlay.top() >= title_bar.bottom());
+
+    root.update_in(cx, |root, _, cx| {
+        root.show_roles = false;
+        cx.notify();
+    });
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("panel-dialog-overlay").is_none());
+
+    root.update_in(cx, |root, _, cx| {
+        root.show_roles = true;
+        cx.notify();
+    });
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("panel-dialog-overlay").is_some());
 }
 
 #[cfg(target_os = "macos")]

@@ -1141,6 +1141,16 @@ impl RootView {
         }
     }
 
+    fn render_active_panel_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match self.active_feature() {
+            FeatureId::Roles => self
+                .roles_feature
+                .as_ref()
+                .map(|roles| roles.read(cx).panel_dialog()),
+            _ => None,
+        }
+    }
+
     fn render_overflow_example(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
 
@@ -1181,14 +1191,21 @@ impl Render for RootView {
             let title_bar_content = self.render_title_bar_content(cx);
             let panel_header = self.render_panel_header(cx);
             let content_scrollable = self.active_feature() != FeatureId::VirtualScroll;
+            let panel_overlay = self.render_active_panel_overlay(cx);
             let active_feature = self.render_active_feature(cx);
 
-            WorkspaceLayout::new(sidebar, title_bar_content, active_feature)
+            let layout = WorkspaceLayout::new(sidebar, title_bar_content, active_feature)
                 .with_sidebar_width(px(224.0))
                 .with_sidebar_width_range(px(208.0)..px(300.0))
                 .with_panel_header(panel_header)
-                .with_content_scrollable(content_scrollable)
-                .render(window, cx)
+                .with_content_scrollable(content_scrollable);
+            let layout = if let Some(panel_overlay) = panel_overlay {
+                layout.with_panel_overlay(panel_overlay)
+            } else {
+                layout
+            };
+
+            layout.render(window, cx)
         } else {
             LoginFeature::render(window, cx)
         };

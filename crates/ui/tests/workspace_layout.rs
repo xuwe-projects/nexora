@@ -31,6 +31,13 @@ fn workspace_layout_accepts_a_shared_panel_header() {
 }
 
 #[test]
+fn workspace_layout_accepts_a_panel_scoped_overlay() {
+    let layout = WorkspaceLayout::new(div(), div(), div()).with_panel_overlay(div());
+
+    assert!(layout.has_panel_overlay());
+}
+
+#[test]
 fn workspace_layout_uses_resizable_sidebar_width_limits_by_default() {
     let layout = WorkspaceLayout::new(div(), div(), div());
 
