@@ -24,8 +24,16 @@ use url::{Host, Url};
 
 use crate::config::{__private::ProvidesAccountClientSettings, AccountClientSection, ConfigError};
 
+#[path = "client/runtime.rs"]
+mod runtime;
+
 pub use contracts::account as contract;
 pub use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache, PendingOidcLogin};
+pub(crate) use runtime::observe_authentication_in;
+pub use runtime::{
+    AccountLoginRuntimeError, AccountLoginSnapshot, install_authenticator, is_authenticated,
+    login_profile, login_session, login_snapshot, sign_out, start_login,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -268,6 +276,19 @@ impl PendingAccountLogin {
     /// OIDC 登录任一步骤失败，或业务服务拒绝当前账号时返回错误。
     pub fn finish(self) -> Result<AccountLogin, AccountAuthenticationError> {
         let session = self.pending.finish()?;
+        validate_account_login(&self.account, session)
+    }
+
+    /// 等待 loopback callback，并允许宿主取消尚未完成的浏览器登录。
+    ///
+    /// # Errors
+    ///
+    /// 宿主取消、OIDC 登录失败，或业务服务拒绝当前账号时返回错误。
+    pub fn finish_with_cancellation(
+        self,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<AccountLogin, AccountAuthenticationError> {
+        let session = self.pending.finish_with_cancellation(is_cancelled)?;
         validate_account_login(&self.account, session)
     }
 }

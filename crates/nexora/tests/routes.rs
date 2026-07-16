@@ -84,8 +84,7 @@ impl_empty_feature_element!(
     UserRolesFeature,
 );
 
-#[derive(Default, Window)]
-#[nexora(title = "设置", path = "/settings", icon = "settings")]
+#[derive(Default, nexora::SettingsWindow)]
 struct SettingsWindow;
 
 #[derive(Default, Window)]
@@ -119,7 +118,7 @@ fn registry_builds_navigation_and_children_from_metadata() {
         .feature::<UsersFeature>()
         .feature::<HomeFeature>()
         .feature::<UserDetailsFeature>()
-        .window::<SettingsWindow>()
+        .settings_window::<SettingsWindow>()
         .build()
         .unwrap();
 
@@ -345,7 +344,7 @@ fn trailing_slash_is_canonicalized_for_concrete_location() {
 #[test]
 fn window_path_resolves_without_becoming_a_feature() {
     let registry = AppRegistry::builder()
-        .window::<SettingsWindow>()
+        .settings_window::<SettingsWindow>()
         .window::<UserWindow>()
         .build()
         .unwrap();

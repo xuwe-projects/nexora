@@ -320,6 +320,20 @@ where
 }
 
 #[cfg(feature = "desktop")]
+impl NavigationContextExt for App {
+    fn navigate(&mut self, location: impl Into<String>) -> Result<(), NavigationRequestError> {
+        let handler = self
+            .has_global::<NavigationDispatcher>()
+            .then(|| self.global::<NavigationDispatcher>().handler.clone())
+            .flatten()
+            .ok_or(NavigationRequestError::DispatcherUnavailable)?;
+        let location = location.into();
+        self.defer(move |cx| handler(location, cx));
+        Ok(())
+    }
+}
+
+#[cfg(feature = "desktop")]
 type NavigationHandler = Rc<dyn Fn(String, &mut App)>;
 
 #[cfg(feature = "desktop")]
@@ -497,6 +511,23 @@ impl WindowInstance {
 /// Header 与 Footer 共用该工厂逻辑；具体插槽种类由各自的 inventory 注册类型区分。
 #[doc(hidden)]
 pub fn create_sidebar_slot<T>(
+    window: &mut Window,
+    cx: &mut App,
+    constructor: fn(&mut Window, &mut Context<T>) -> T,
+) -> AnyView
+where
+    T: Render,
+{
+    cx.new(|entity_cx| constructor(window, entity_cx)).into()
+}
+
+/// 使用 Login Feature 派生宏生成的构造器创建并擦除登录页面 Entity。
+///
+/// 登录页面不是普通路由 Feature，不会绑定路径参数或进入标签生命周期；Entity 由主窗口
+/// Shell 创建一次并持续复用，具体状态仍由实现类型自行持有。
+#[cfg(feature = "account-client")]
+#[doc(hidden)]
+pub fn create_login_feature<T>(
     window: &mut Window,
     cx: &mut App,
     constructor: fn(&mut Window, &mut Context<T>) -> T,

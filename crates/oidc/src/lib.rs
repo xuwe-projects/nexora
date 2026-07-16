@@ -8,7 +8,8 @@ use std::{
     fmt,
     io::{BufRead as _, BufReader, Write as _},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{
@@ -28,6 +29,8 @@ use url::Url;
 
 const DEFAULT_SCOPE: &str = "openid profile email offline_access";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+const CALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const CALLBACK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CALLBACK_LOGO_BYTES: &[u8] = include_bytes!("../../../assets/logos/logo-icon-128.png");
 
 /// OIDC 桌面端认证配置。
@@ -281,11 +284,30 @@ impl PendingOidcLogin {
     ///
     /// 用户取消、回调 state 不匹配、网络请求失败或 Provider 返回错误时返回 [`OidcError`]。
     pub fn finish(self) -> Result<OidcSession, OidcError> {
+        self.finish_with_cancellation(|| false)
+    }
+
+    /// 等待浏览器回调，并允许宿主在等待期间取消本次登录。
+    ///
+    /// `is_cancelled` 会在等待 loopback 连接和开始 token 交换前重复检查；返回 `true` 时
+    /// 立即释放本地 listener 并返回 [`OidcError::LoginCancelled`]。
+    ///
+    /// # Errors
+    ///
+    /// 宿主取消登录、等待回调超时，或标准 OIDC 流程任一步骤失败时返回错误。
+    pub fn finish_with_cancellation(
+        self,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<OidcSession, OidcError> {
         let code = wait_for_authorization_code(
             &self.listener,
             self.config.callback_path(),
             self.state.as_str(),
+            &is_cancelled,
         )?;
+        if is_cancelled() {
+            return Err(OidcError::LoginCancelled);
+        }
         let mut tokens = exchange_code(
             &self.http,
             &self.metadata,
@@ -294,6 +316,9 @@ impl PendingOidcLogin {
             code.as_str(),
             self.listener.local_addr()?.port(),
         )?;
+        if is_cancelled() {
+            return Err(OidcError::LoginCancelled);
+        }
         let id_token = tokens
             .id_token
             .as_deref()
@@ -466,6 +491,12 @@ pub enum OidcError {
         #[from]
         std::io::Error,
     ),
+    /// 浏览器没有在允许时间内完成本地 loopback 回调。
+    #[error("等待 OIDC 登录回调超时")]
+    CallbackTimeout,
+    /// 宿主应用在浏览器回调完成前取消了本次登录。
+    #[error("OIDC 登录已取消")]
+    LoginCancelled,
     /// 网络请求失败。
     #[error(transparent)]
     Http(
@@ -717,9 +748,28 @@ fn wait_for_authorization_code(
     listener: &TcpListener,
     callback_path: &str,
     expected_state: &str,
+    is_cancelled: &impl Fn() -> bool,
 ) -> Result<String, OidcError> {
-    let (stream, _) = listener.accept()?;
-    stream.set_read_timeout(Some(CALLBACK_TIMEOUT))?;
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + CALLBACK_TIMEOUT;
+    let stream = loop {
+        if is_cancelled() {
+            return Err(OidcError::LoginCancelled);
+        }
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(OidcError::CallbackTimeout);
+                }
+                thread::sleep(CALLBACK_POLL_INTERVAL);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
+    };
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(CALLBACK_REQUEST_TIMEOUT))?;
     handle_callback_stream(stream, callback_path, expected_state)
 }
 

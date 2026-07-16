@@ -229,6 +229,25 @@ fn callback_failure_returns_a_complete_safe_html_page() {
 }
 
 #[test]
+fn pending_login_can_be_cancelled_before_the_browser_callback() {
+    let (issuer, server) = spawn_provider(1, |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| match request.path.as_str() {
+            "/.well-known/openid-configuration" => {
+                HttpResponse::json(discovery_document(&issuer, false))
+            }
+            path => panic!("unexpected provider request: {path}"),
+        }
+    });
+    let pending = client(&issuer).begin_login().unwrap();
+
+    let error = pending.finish_with_cancellation(|| true).unwrap_err();
+    server.join().unwrap();
+
+    assert!(matches!(error, OidcError::LoginCancelled));
+}
+
+#[test]
 fn refresh_grant_rotates_tokens_and_validates_a_new_id_token() {
     let requests = Arc::new(Mutex::new(Vec::<HttpRequest>::new()));
     let server_requests = Arc::clone(&requests);

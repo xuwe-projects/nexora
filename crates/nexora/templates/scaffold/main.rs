@@ -1,13 +1,13 @@
 {%- if account_enabled -%}
-mod account;
 mod config;
 mod features;
 
-use crate::account::AccountRuntime;
-use nexora::{Application as _, ApplicationOptions, gpui::App};
+use nexora::{
+    Application as _, ApplicationOptions, account::client::AccountAuthenticator, gpui::App,
+};
 
 struct DesktopApplication {
-    account: AccountRuntime,
+    authenticator: AccountAuthenticator,
 }
 
 impl nexora::Application for DesktopApplication {
@@ -18,7 +18,7 @@ impl nexora::Application for DesktopApplication {
     }
 
     fn initialize(&mut self, cx: &mut App) {
-        cx.set_global(self.account.clone());
+        nexora::account::client::install_authenticator(self.authenticator.clone(), cx);
     }
 }
 
@@ -27,10 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_config = nexora::account::client::client_config(&settings)?;
     let authenticator = nexora::account::client::AccountAuthenticator::new(&client_config)?;
 
-    DesktopApplication {
-        account: AccountRuntime::new(client_config, authenticator),
-    }
-    .run()?;
+    DesktopApplication { authenticator }.run()?;
     Ok(())
 }
 {%- else -%}

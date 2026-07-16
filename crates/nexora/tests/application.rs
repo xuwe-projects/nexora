@@ -15,8 +15,7 @@ impl FeatureElement for HomeFeature {
     }
 }
 
-#[derive(Default, nexora::Window)]
-#[nexora(title = "设置", path = "/settings")]
+#[derive(Default, nexora::SettingsWindow)]
 struct SettingsWindow;
 
 impl WindowElement for SettingsWindow {

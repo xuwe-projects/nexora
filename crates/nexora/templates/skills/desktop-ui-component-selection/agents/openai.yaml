@@ -1,0 +1,4 @@
+interface:
+  display_name: "桌面 UI 组件选择"
+  short_description: "桌面交互到 gpui-component 的组件选择指南"
+  default_prompt: "使用 $desktop-ui-component-selection 为当前 Nexora 桌面交互选择合适的 gpui-component 组件。"

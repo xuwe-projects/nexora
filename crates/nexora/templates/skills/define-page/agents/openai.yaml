@@ -1,0 +1,4 @@
+interface:
+  display_name: "定义桌面页面"
+  short_description: "创建带导航的 Feature 或独立 GPUI 窗口页面"
+  default_prompt: "使用 $define-page 为当前 GPUI 桌面应用创建带导航的 Feature 或独立窗口。"

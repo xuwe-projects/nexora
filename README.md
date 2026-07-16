@@ -18,6 +18,8 @@ Axum 服务端和独立业务模块，用于共同验证框架边界与真实应
   `#[derive(nexora::Window)]` 自动注册独立窗口、强类型参数与原生窗口工厂；
 - `#[derive(nexora::SidebarHeader)]` 与 `#[derive(nexora::SidebarFooter)]` 自动发现并挂载
   应用自定义的 Sidebar 顶部、底部 GPUI View；
+- `#[derive(nexora::LoginFeature)]` 与 `#[derive(nexora::SettingsWindow)]` 提供最多一个应用级
+  覆盖；没有覆盖时使用框架默认登录门禁和 `/settings` 设置窗口；
 - `Application` 自动发现注册项、校验首路由并启动带导航和标签的通用 GPUI Shell；
 - 在同一注册表中校验 Feature 与 Window 的路径、标识、父子导航关系和路由冲突；
 - 匹配静态路径、`:name` 动态参数、查询字符串与 custom scheme URI；
@@ -151,6 +153,39 @@ impl Render for AppSidebarHeader {
 `factory` 时使用 `Default`；需要创建子 Entity 时可使用
 `#[nexora(factory = Type::new)]`。
 
+## 登录门禁与设置窗口
+
+启用 `account-client` 后，Nexora Shell 会在未认证时显示框架默认登录门禁，并推迟创建
+业务 Feature Entity。登录成功后才初始化当前 Feature；退出登录会关闭全部缓存页面，避免
+不同用户复用上一会话的页面状态，并关闭已经打开的业务 Window；未登录时只有
+`/settings` 仍允许打开。应用需要完全自定义登录体验时，可以声明且只能声明一个：
+
+```rust
+#[derive(Default, nexora::LoginFeature)]
+struct AppLogin;
+
+impl nexora::gpui::Render for AppLogin {
+    fn render(
+        &mut self,
+        _window: &mut nexora::gpui::Window,
+        cx: &mut nexora::gpui::Context<Self>,
+    ) -> impl nexora::gpui::IntoElement {
+        let status = nexora::account::client::login_snapshot(cx).status;
+        nexora::gpui::div().child(status)
+    }
+}
+```
+
+登录交互使用 `nexora::account::client::start_login`，退出使用 `sign_out`。派生类型直接实现
+GPUI `Render`，不会进入路由、导航或标签。多个自定义登录页会返回确定的
+`DuplicateLoginFeature` 错误。
+
+桌面端始终提供一个固定 ID 为 `settings`、路径为 `/settings` 的独立设置窗口。默认内容包含
+主题预设、颜色模式、字号和组件密度；重复打开会激活已有原生窗口。应用可以用
+`#[derive(nexora::SettingsWindow)]` 与
+现有 `WindowElement` 完整替换它，但不能再注册普通 `/settings` Window，也不能定义多个
+Settings Window 覆盖。
+
 ## 强类型配置
 
 根配置可以包含任意应用字段：
@@ -170,7 +205,8 @@ let settings: Settings = nexora::config::initialize(None)?;
 `#[nexora(account_client)]` 和 `#[nexora(account_server)]` 标记各自的标准配置段。
 桌面 Account 配置同时包含 `api.endpoint` 与 OIDC public client 参数；
 `AccountAuthenticator` 组合 Authorization Code + PKCE、loopback callback、token 刷新与
-`/me` 业务门禁，但是否打开浏览器、何时登录以及如何展示状态仍由业务 Feature 决定。
+`/me` 业务门禁。框架默认 Login Feature 负责打开浏览器和展示状态；自定义 Login Feature
+也可以直接复用同一套 Account 客户端运行时。
 
 ## Account 组合边界
 
@@ -229,12 +265,16 @@ nexora init . --layout workspace
 nexora create my-fullstack-app --layout workspace --features account
 ```
 
-开启 `account` 脚手架时会同时生成 `apps/desktop`、`apps/server` 与服务端示例
-配置，因此使用 workspace 布局。交互模式选择 Account 后会自动调整为 workspace；同时显式
-传入 `--layout single --features account` 时会返回清晰错误。生成的桌面端会加载强类型配置并注册
-`AccountAuthenticator` Global；服务端会使用共享 `PgPool` 显式执行安全迁移，再完成
+开启 `account` 脚手架时会同时生成 `apps/desktop`、`apps/server` 与可直接被默认路径发现的
+桌面端/服务端配置，因此使用 workspace 布局。交互模式选择 Account 后会自动调整为
+workspace；同时显式
+传入 `--layout single --features account` 时会返回清晰错误。生成的桌面端会加载强类型配置并把
+`AccountAuthenticator` 安装到 Nexora 登录运行时；服务端会使用共享 `PgPool` 显式执行安全迁移，再完成
 `Account::new`、Router merge 和宿主自定义路由。空数据库初始化默认关闭，必须由使用方
 确认目标后显式设置 `initialize_empty_database = true`。
+
+`create` 与 `init` 还会把仓库 `.agents/skills` 中的全部开发规范写入生成项目，并附带
+`develop-nexora-apps` 框架 Skill；已有同名 Skill 时初始化会整体拒绝，不会覆盖用户内容。
 
 两种布局都由 `templates/scaffold/` 下的独立 Askama 模板生成。
 Cargo 会强制排除包含子 `Cargo.toml` 的目录，因此清单模板使用语义后缀以便进入

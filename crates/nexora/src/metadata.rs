@@ -137,6 +137,30 @@ pub trait Window: 'static {
     const REGISTRATION: Option<crate::__private::WindowRegistration> = None;
 }
 
+/// Account 桌面客户端未认证时使用的应用级登录页面。
+///
+/// `#[derive(nexora::LoginFeature)]` 会为直接实现 [`gpui::Render`] 的具体类型生成本标记
+/// 实现并提交用户覆盖注册。每个最终应用最多只能定义一个覆盖项；没有定义时框架使用
+/// `account-client` 自带的默认登录页面。Login Feature 不属于路径路由、主导航或标签页。
+#[cfg(feature = "account-client")]
+pub trait LoginFeature: gpui::Render + 'static {
+    /// 派生宏生成的类型擦除登录页面注册记录。
+    #[doc(hidden)]
+    const REGISTRATION: crate::__private::LoginFeatureRegistration;
+}
+
+/// 应用级设置窗口的单例标记契约。
+///
+/// `#[derive(nexora::SettingsWindow)]` 会固定使用 `settings` 标识与 `/settings` 路径，
+/// 并生成 [`Window`]、GPUI [`gpui::Render`] 和本标记实现。应用继续通过
+/// [`crate::WindowElement`] 定义窗口内容、初始化生命周期与原生窗口选项。每个最终应用
+/// 最多只能定义一个覆盖项；没有定义时框架使用桌面能力自带的默认设置窗口。
+pub trait SettingsWindow: Window {
+    /// 派生宏生成的类型擦除设置窗口注册记录。
+    #[doc(hidden)]
+    const REGISTRATION: crate::__private::SettingsWindowRegistration;
+}
+
 /// 主窗口 Sidebar 顶部自定义内容的标记契约。
 ///
 /// 实现类型直接使用 GPUI [`gpui::Render`] 描述自己的状态与界面；

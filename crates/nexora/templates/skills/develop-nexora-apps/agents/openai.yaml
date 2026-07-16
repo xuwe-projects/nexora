@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexora 应用开发"
+  short_description: "使用 Nexora 构建、扩展与维护 Rust 桌面全栈应用"
+  default_prompt: "Use $develop-nexora-apps to build or modify this Nexora application."

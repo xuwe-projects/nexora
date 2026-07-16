@@ -20,8 +20,6 @@ const MAIN_TEMPLATE: &str = include_str!("../templates/scaffold/main.rs");
 const FEATURES_TEMPLATE: &str = include_str!("../templates/scaffold/features.rs");
 const HOME_FEATURE_TEMPLATE: &str = include_str!("../templates/scaffold/features/home.rs");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/scaffold/gitignore.askama");
-const DESKTOP_ACCOUNT_TEMPLATE: &str =
-    include_str!("../templates/scaffold/workspace/apps/desktop/account.rs");
 const DESKTOP_CONFIG_TEMPLATE: &str =
     include_str!("../templates/scaffold/workspace/apps/desktop/config.rs");
 const SERVER_MANIFEST_TEMPLATE: &str =
@@ -139,6 +137,71 @@ fn askama_source(template: &str) -> &str {
     template.strip_suffix('\n').unwrap_or(template)
 }
 
+fn collect_relative_files(root: &Path) -> Vec<PathBuf> {
+    fn visit(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(directory).expect("应能读取 Skill 目录") {
+            let path = entry.expect("应能读取 Skill 目录项").path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.push(
+                    path.strip_prefix(root)
+                        .expect("Skill 文件应位于根目录内")
+                        .to_path_buf(),
+                );
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files.sort();
+    files
+}
+
+fn assert_generated_skills(project: &Path) {
+    let template_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
+    let generated_root = project.join(".agents/skills");
+    let template_files = collect_relative_files(&template_root);
+    let generated_files = collect_relative_files(&generated_root);
+
+    assert_eq!(generated_files, template_files);
+    assert!(
+        generated_files.contains(&PathBuf::from("develop-nexora-apps/SKILL.md")),
+        "生成项目应包含 Nexora 框架 Skill"
+    );
+    for relative_path in template_files {
+        assert_eq!(
+            fs::read(generated_root.join(&relative_path)).unwrap(),
+            fs::read(template_root.join(&relative_path)).unwrap(),
+            "Skill 模板应原样写入：{}",
+            relative_path.display()
+        );
+    }
+}
+
+#[test]
+fn packaged_skill_templates_match_the_workspace_agent_skills() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_root = manifest.join("../../.agents/skills");
+    let template_root = manifest.join("templates/skills");
+    if !source_root.is_dir() {
+        return;
+    }
+    let source_files = collect_relative_files(&source_root);
+    let template_files = collect_relative_files(&template_root);
+
+    assert_eq!(template_files, source_files);
+    for relative_path in source_files {
+        assert_eq!(
+            fs::read(source_root.join(&relative_path)).unwrap(),
+            fs::read(template_root.join(&relative_path)).unwrap(),
+            "发布模板必须与仓库 Skill 保持一致：{}",
+            relative_path.display()
+        );
+    }
+}
+
 #[test]
 fn help_and_version_are_available() {
     let directory = TestDirectory::new("help-version");
@@ -208,6 +271,7 @@ fn create_without_arguments_uses_non_tty_defaults() {
     assert!(project.join("Cargo.toml").is_file());
     assert!(project.join("src/main.rs").is_file());
     assert!(!project.join("apps").exists());
+    assert_generated_skills(&project);
 }
 
 #[test]
@@ -224,6 +288,7 @@ fn init_without_arguments_uses_current_directory_in_non_tty_mode() {
     assert!(directory.path().join("Cargo.toml").is_file());
     assert!(directory.path().join("src/main.rs").is_file());
     assert!(!directory.path().join("apps").exists());
+    assert_generated_skills(directory.path());
 }
 
 #[test]
@@ -257,6 +322,7 @@ fn create_defaults_to_a_single_package_project() {
         askama_source(HOME_FEATURE_TEMPLATE)
     );
     assert!(!project.join("apps").exists());
+    assert_generated_skills(&project);
 
     assert!(main.contains("impl nexora::Application for DesktopApplication"));
     assert!(main.contains("DesktopApplication.run()"));
@@ -304,6 +370,7 @@ fn create_can_generate_a_workspace_project() {
     assert!(!project.join("apps/desktop/src/account.rs").exists());
     assert!(!project.join("apps/desktop/src/config.rs").exists());
     assert!(!project.join("config").exists());
+    assert_generated_skills(&project);
 }
 
 #[test]
@@ -331,6 +398,7 @@ fn init_single_preserves_existing_content() {
         fs::read_to_string(project.join("src/main.rs")).unwrap(),
         expected_main(false)
     );
+    assert_generated_skills(&project);
 }
 
 #[test]
@@ -362,6 +430,7 @@ fn init_can_generate_a_workspace_and_preserve_existing_content() {
         fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap(),
         expected_main(false)
     );
+    assert_generated_skills(&project);
 }
 
 #[test]
@@ -397,10 +466,7 @@ fn workspace_account_feature_generates_a_composable_server() {
         fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap(),
         expected_main(true)
     );
-    assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/account.rs")).unwrap(),
-        askama_source(DESKTOP_ACCOUNT_TEMPLATE)
-    );
+    assert!(!project.join("apps/desktop/src/account.rs").exists());
     assert_eq!(
         fs::read_to_string(project.join("apps/desktop/src/config.rs")).unwrap(),
         askama_source(DESKTOP_CONFIG_TEMPLATE)
@@ -422,13 +488,14 @@ fn workspace_account_feature_generates_a_composable_server() {
         askama_source(SERVER_ROUTES_TEMPLATE)
     );
     assert_eq!(
-        fs::read_to_string(project.join("config/example.server.toml")).unwrap(),
+        fs::read_to_string(project.join("config/server.toml")).unwrap(),
         askama_source(EXAMPLE_SERVER_CONFIG_TEMPLATE)
     );
     assert_eq!(
-        fs::read_to_string(project.join("config/example.desktop.toml")).unwrap(),
+        fs::read_to_string(project.join("config/fullstack-app.toml")).unwrap(),
         askama_source(EXAMPLE_DESKTOP_CONFIG_TEMPLATE)
     );
+    assert_generated_skills(&project);
 
     let server_main = fs::read_to_string(project.join("apps/server/src/main.rs")).unwrap();
     let migrate = server_main
@@ -456,7 +523,7 @@ fn workspace_account_feature_generates_a_composable_server() {
             .contains("#[serde(default)]")
     );
     assert!(
-        fs::read_to_string(project.join("config/example.server.toml"))
+        fs::read_to_string(project.join("config/server.toml"))
             .unwrap()
             .contains("首次连接确认为空的新数据库时改为 true")
     );
@@ -465,13 +532,52 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(desktop_main.contains("nexora::config::initialize(None)"));
     assert!(desktop_main.contains("account::client::client_config"));
     assert!(desktop_main.contains("AccountAuthenticator::new"));
-    assert!(desktop_main.contains("cx.set_global(self.account.clone())"));
+    assert!(desktop_main.contains("authenticator: AccountAuthenticator"));
+    assert!(desktop_main.contains(
+        "nexora::account::client::install_authenticator(self.authenticator.clone(), cx)"
+    ));
+    assert!(!desktop_main.contains("AccountRuntime"));
     assert!(!desktop_main.contains("begin_login"));
     assert!(
         fs::read_to_string(project.join("apps/desktop/src/config.rs"))
             .unwrap()
             .contains("#[nexora(account_client)]")
     );
+}
+
+#[test]
+fn init_workspace_account_generates_all_agent_skills() {
+    let directory = TestDirectory::new("init-workspace-account-skills");
+    let project = directory.path().join("existing-account-workspace");
+    fs::create_dir(&project).unwrap();
+    fs::write(project.join("README.md"), "keep me").unwrap();
+
+    let output = directory.run(&[
+        "init",
+        "existing-account-workspace",
+        "--layout",
+        "workspace",
+        "--features",
+        "account",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("README.md")).unwrap(),
+        "keep me"
+    );
+    assert!(project.join("apps/server/src/main.rs").is_file());
+    assert!(project.join("config/server.toml").is_file());
+    assert!(
+        project
+            .join("config/existing-account-workspace.toml")
+            .is_file()
+    );
+    assert_generated_skills(&project);
 }
 
 #[test]
@@ -530,6 +636,26 @@ fn account_feature_requires_workspace_without_leaving_files() {
 }
 
 #[test]
+fn account_workspace_rejects_the_reserved_server_project_name() {
+    let directory = TestDirectory::new("account-reserved-server-name");
+
+    for name in ["server", "Server"] {
+        let output = directory.run(&[
+            "create",
+            name,
+            "--layout",
+            "workspace",
+            "--features",
+            "account",
+        ]);
+
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("保留包名"));
+        assert!(!directory.path().join(name).exists());
+    }
+}
+
+#[test]
 fn account_without_layout_uses_workspace_in_non_tty_mode() {
     let directory = TestDirectory::new("account-auto-workspace");
 
@@ -542,7 +668,8 @@ fn account_without_layout_uses_workspace_in_non_tty_mode() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("项目结构已自动调整为 workspace"));
     let project = directory.path().join("account-app");
-    assert!(project.join("apps/desktop/src/account.rs").is_file());
+    assert!(!project.join("apps/desktop/src/account.rs").exists());
+    assert!(project.join("apps/desktop/src/config.rs").is_file());
     assert!(project.join("apps/server/src/main.rs").is_file());
 }
 
@@ -601,6 +728,25 @@ fn init_never_overwrites_single_package_files() {
         "main sentinel"
     );
     assert!(!main_project.join("Cargo.toml").exists());
+}
+
+#[test]
+fn init_never_overwrites_an_existing_agent_skill() {
+    let directory = TestDirectory::new("skill-no-overwrite");
+    let project = directory.path().join("existing-skill");
+    let skill = project.join(".agents/skills/develop-nexora-apps/SKILL.md");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    fs::write(&skill, "skill sentinel").unwrap();
+
+    let output = directory.run(&["init", "existing-skill"]);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains(".agents/skills/develop-nexora-apps/SKILL.md")
+    );
+    assert_eq!(fs::read_to_string(skill).unwrap(), "skill sentinel");
+    assert!(!project.join("Cargo.toml").exists());
 }
 
 #[test]

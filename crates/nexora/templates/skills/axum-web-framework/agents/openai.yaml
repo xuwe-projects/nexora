@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexora Axum 开发"
+  short_description: "按项目分层实现和审查 Axum 0.8 HTTP API"
+  default_prompt: "使用 $axum-web-framework 在 Nexora workspace 中实现或审查当前 Axum API。"

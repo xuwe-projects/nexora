@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexora SQLx 代码审查"
+  short_description: "审查 SQLx 查询、ENUM、DDL 注释、事务与迁移"
+  default_prompt: "使用 $sqlx-database-code-review 审查当前 Nexora workspace 的 SQLx 数据库改动。"

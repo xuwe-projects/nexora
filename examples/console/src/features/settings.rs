@@ -155,14 +155,8 @@ impl SettingsFeature {
 ///
 /// 该视图只负责为 `SettingsFeature` 提供全窗口尺寸和主题背景，设置项本身仍由 feature 模块维护，
 /// 并继续使用 `gpui-component` 的 `Settings`、`SettingPage` 和 `SettingField` 组件。
-#[derive(nexora::Window)]
-#[nexora(
-    title = "设置",
-    path = "/settings",
-    icon = "settings",
-    order = 0,
-    factory = SettingsWindow::new
-)]
+#[derive(nexora::SettingsWindow)]
+#[nexora(factory = SettingsWindow::new)]
 pub struct SettingsWindow {
     font_size_slider: Entity<SliderState>,
     _preferences_subscription: Subscription,

@@ -2,20 +2,23 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui::{App, AppContext as _, Window};
+use gpui::{App, AppContext as _, Global, Window};
 #[cfg(feature = "desktop")]
 use gpui::{WindowHandle, WindowOptions};
 use matchit::Router;
 use thiserror::Error;
 
+#[cfg(feature = "account-client")]
+use crate::{__private::LoginFeatureRegistration, LoginFeature as LoginFeatureDefinition};
 use crate::{
     __private::{
-        FeatureRegistration, SidebarFooterRegistration, SidebarHeaderRegistration,
-        WindowRegistration,
+        FeatureRegistration, SettingsWindowRegistration, SidebarFooterRegistration,
+        SidebarHeaderRegistration, WindowRegistration,
     },
     Feature, FeatureInstance, FeatureMetadata, FeatureRuntimeError, ResolveError, RouteMatch,
-    RouteTarget, SidebarFooter as SidebarFooterDefinition,
-    SidebarHeader as SidebarHeaderDefinition, Window as WindowDefinition, WindowMetadata,
+    RouteTarget, SettingsWindow as SettingsWindowDefinition,
+    SidebarFooter as SidebarFooterDefinition, SidebarHeader as SidebarHeaderDefinition,
+    Window as WindowDefinition, WindowMetadata,
     route::{RouteParameters, canonical_segment, decode_parameter, parse_location},
 };
 #[cfg(feature = "desktop")]
@@ -31,6 +34,9 @@ pub struct AppRegistryBuilder {
     feature_registrations: Vec<FeatureRegistration>,
     windows: Vec<WindowMetadata>,
     window_registrations: Vec<WindowRegistration>,
+    settings_windows: Vec<SettingsWindowRegistration>,
+    #[cfg(feature = "account-client")]
+    login_features: Vec<LoginFeatureRegistration>,
     sidebar_headers: Vec<SidebarHeaderRegistration>,
     sidebar_footers: Vec<SidebarFooterRegistration>,
 }
@@ -53,10 +59,41 @@ impl AppRegistryBuilder {
     where
         W: WindowDefinition,
     {
-        self.windows.push(W::METADATA);
         if let Some(registration) = W::REGISTRATION {
+            if let Some(type_name) = registration.settings_window_type_name() {
+                self.settings_windows
+                    .push(SettingsWindowRegistration::new(type_name, registration));
+                return self;
+            }
             self.window_registrations.push(registration);
         }
+        self.windows.push(W::METADATA);
+        self
+    }
+
+    /// 注册一个应用级 Settings Window 覆盖类型。
+    ///
+    /// 同一个注册表最多允许一个覆盖项；没有注册时框架会自动使用默认设置窗口。重复项
+    /// 会在 [`Self::build`] 阶段返回结构化错误。
+    pub fn settings_window<S>(mut self) -> Self
+    where
+        S: SettingsWindowDefinition,
+    {
+        self.settings_windows
+            .push(<S as SettingsWindowDefinition>::REGISTRATION);
+        self
+    }
+
+    /// 注册一个 Account 桌面客户端使用的 Login Feature 覆盖类型。
+    ///
+    /// 同一个注册表最多允许一个覆盖项；没有注册时框架会自动使用默认登录页面。该 API
+    /// 仅在启用 `account-client` 时存在。
+    #[cfg(feature = "account-client")]
+    pub fn login_feature<L>(mut self) -> Self
+    where
+        L: LoginFeatureDefinition,
+    {
+        self.login_features.push(L::REGISTRATION);
         self
     }
 
@@ -86,9 +123,25 @@ impl AppRegistryBuilder {
     ///
     /// # Errors
     ///
-    /// 路径格式无效、动态路径错误地进入导航、标识重复、父 Feature 不存在，或者任意
-    /// Feature 与 Window 的路径模式发生冲突时返回 [`RegistryError`]。
+    /// 路径格式无效、动态路径错误地进入导航、标识重复、父 Feature 不存在、专用界面
+    /// 覆盖项重复，或者任意 Feature 与 Window 的路径模式发生冲突时返回
+    /// [`RegistryError`]。
     pub fn build(mut self) -> Result<AppRegistry, RegistryError> {
+        self.settings_windows
+            .sort_by_key(SettingsWindowRegistration::type_name);
+        let settings_window = unique_settings_window(self.settings_windows)?
+            .unwrap_or_else(crate::defaults::default_settings_window_registration);
+        let settings_window = settings_window.window();
+        self.windows.push(settings_window.metadata());
+        self.window_registrations.push(settings_window);
+
+        #[cfg(feature = "account-client")]
+        self.login_features
+            .sort_by_key(LoginFeatureRegistration::type_name);
+        #[cfg(feature = "account-client")]
+        let login_feature = unique_login_feature(self.login_features)?
+            .unwrap_or_else(crate::defaults::default_login_registration);
+
         self.features
             .sort_by_key(|metadata| (metadata.order(), metadata.path(), metadata.id()));
         self.windows
@@ -139,6 +192,8 @@ impl AppRegistryBuilder {
                 .collect(),
             sidebar_header,
             sidebar_footer,
+            #[cfg(feature = "account-client")]
+            login_feature,
             routes,
         })
     }
@@ -155,8 +210,17 @@ pub struct AppRegistry {
     window_registrations: HashMap<&'static str, WindowRegistration>,
     sidebar_header: Option<SidebarHeaderRegistration>,
     sidebar_footer: Option<SidebarFooterRegistration>,
+    #[cfg(feature = "account-client")]
+    login_feature: LoginFeatureRegistration,
     routes: Router<RouteTarget>,
 }
+
+#[derive(Default)]
+struct SettingsWindowRuntime {
+    handle: Option<WindowHandle<gpui_component::Root>>,
+}
+
+impl Global for SettingsWindowRuntime {}
 
 impl AppRegistry {
     /// 创建一个空注册表构建器。
@@ -167,12 +231,14 @@ impl AppRegistry {
     /// 自动发现当前程序中所有派生的 Feature 与 Window，并构建统一注册表。
     ///
     /// `#[derive(nexora::Feature)]` 与 `#[derive(nexora::Window)]` 会在链接时提交静态
-    /// 元数据，因此应用无需维护额外的 `features()` 或 `windows()` 注册函数。返回的
-    /// 注册表仍会执行与手动 builder 相同的标识、父子关系和路径冲突校验。
+    /// 元数据；Login Feature 与 Settings Window 派生宏只提交应用级覆盖项。没有覆盖时
+    /// 注册表使用框架默认专用界面，有且只有一个覆盖时替换默认实现，多个覆盖则返回
+    /// 确定性错误。应用无需维护额外的 `features()` 或 `windows()` 注册函数。
     ///
     /// # Errors
     ///
-    /// 任意自动发现的元数据无效或互相冲突时返回 [`RegistryError`]。
+    /// 任意自动发现的元数据无效、专用界面覆盖重复或路由互相冲突时返回
+    /// [`RegistryError`]。
     pub fn discover() -> Result<Self, RegistryError> {
         let mut builder = AppRegistryBuilder::default();
         inventory::iter::<crate::__private::FeatureRegistration>
@@ -187,6 +253,17 @@ impl AppRegistry {
                 builder.windows.push(registration.metadata());
                 builder.window_registrations.push(*registration);
             });
+        builder.settings_windows.extend(
+            inventory::iter::<crate::__private::SettingsWindowRegistration>
+                .into_iter()
+                .copied(),
+        );
+        #[cfg(feature = "account-client")]
+        builder.login_features.extend(
+            inventory::iter::<crate::__private::LoginFeatureRegistration>
+                .into_iter()
+                .copied(),
+        );
         builder.sidebar_headers.extend(
             inventory::iter::<crate::__private::SidebarHeaderRegistration>
                 .into_iter()
@@ -240,6 +317,15 @@ impl AppRegistry {
     ) -> Option<gpui::AnyView> {
         self.sidebar_footer
             .map(|registration| (registration.factory())(window, cx))
+    }
+
+    /// 创建 Account 桌面客户端当前选中的 Login Feature Entity。
+    ///
+    /// 应用没有声明覆盖类型时使用框架默认实现；存在一个覆盖类型时使用该实现。工厂只
+    /// 负责创建 Entity，主窗口 Shell 应保存并复用返回的 `AnyView`。
+    #[cfg(feature = "account-client")]
+    pub fn create_login_feature(&self, window: &mut Window, cx: &mut App) -> gpui::AnyView {
+        (self.login_feature.factory())(window, cx)
     }
 
     /// 返回应该出现在主侧边栏中的 Feature。
@@ -351,7 +437,8 @@ impl AppRegistry {
     ///
     /// 框架会先完成强类型路由校验和 Window 自定义选项计算，再在当前 GPUI 进程中调用
     /// `App::open_window`，把页面 Entity 包裹进 `gpui_component::Root` 并挂载应用主题。
-    /// Window 不会进入主窗口导航或标签缓存。
+    /// Window 不会进入主窗口导航或标签缓存。保留的 `settings` 窗口采用单实例语义；已有
+    /// 窗口仍然存活时会直接激活，关闭后再次调用才创建新实例。
     ///
     /// # Errors
     ///
@@ -378,6 +465,20 @@ impl AppRegistry {
             .get(metadata.id())
             .ok_or(WindowRuntimeError::MissingFactory { id: metadata.id() })?;
         let options: WindowOptions = (registration.options_factory())(&route, cx)?;
+        if metadata.id() == "settings"
+            && let Some(handle) = cx
+                .try_global::<SettingsWindowRuntime>()
+                .and_then(|runtime| runtime.handle)
+        {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                cx.activate(true);
+                return Ok(handle);
+            }
+            cx.global_mut::<SettingsWindowRuntime>().handle = None;
+        }
         let factory = registration.factory();
         let window_id = metadata.id();
 
@@ -393,6 +494,10 @@ impl AppRegistry {
                 id: window_id,
                 message: source.to_string(),
             })?;
+        if metadata.id() == "settings" {
+            cx.default_global::<SettingsWindowRuntime>().handle = Some(handle);
+            _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
         cx.activate(true);
         Ok(handle)
     }
@@ -428,6 +533,22 @@ pub enum RegistryError {
     DuplicateWindowId {
         /// 重复的 Window 标识。
         id: &'static str,
+    },
+    /// 应用同时注册了多个 Login Feature 覆盖实现。
+    #[error("Login Feature 重复注册：`{first}` 与 `{duplicate}`")]
+    DuplicateLoginFeature {
+        /// 按 Rust 类型名称排序后首先出现的 Login Feature。
+        first: &'static str,
+        /// 与首个覆盖实现冲突的 Login Feature。
+        duplicate: &'static str,
+    },
+    /// 应用同时注册了多个 Settings Window 覆盖实现。
+    #[error("Settings Window 重复注册：`{first}` 与 `{duplicate}`")]
+    DuplicateSettingsWindow {
+        /// 按 Rust 类型名称排序后首先出现的 Settings Window。
+        first: &'static str,
+        /// 与首个覆盖实现冲突的 Settings Window。
+        duplicate: &'static str,
     },
     /// 应用同时注册了多个 Sidebar Header 实现。
     #[error("Sidebar Header 重复注册：`{first}` 与 `{duplicate}`")]
@@ -475,6 +596,39 @@ pub enum RegistryError {
         /// 路由器报告的已存在模式。
         conflict: String,
     },
+}
+
+#[cfg(feature = "account-client")]
+fn unique_login_feature(
+    registrations: Vec<LoginFeatureRegistration>,
+) -> Result<Option<LoginFeatureRegistration>, RegistryError> {
+    let mut registrations = registrations.into_iter();
+    let Some(first) = registrations.next() else {
+        return Ok(None);
+    };
+    if let Some(duplicate) = registrations.next() {
+        return Err(RegistryError::DuplicateLoginFeature {
+            first: first.type_name(),
+            duplicate: duplicate.type_name(),
+        });
+    }
+    Ok(Some(first))
+}
+
+fn unique_settings_window(
+    registrations: Vec<SettingsWindowRegistration>,
+) -> Result<Option<SettingsWindowRegistration>, RegistryError> {
+    let mut registrations = registrations.into_iter();
+    let Some(first) = registrations.next() else {
+        return Ok(None);
+    };
+    if let Some(duplicate) = registrations.next() {
+        return Err(RegistryError::DuplicateSettingsWindow {
+            first: first.type_name(),
+            duplicate: duplicate.type_name(),
+        });
+    }
+    Ok(Some(first))
 }
 
 fn unique_sidebar_header(

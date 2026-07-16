@@ -1,0 +1,4 @@
+interface:
+  display_name: "Karpathy 编码准则"
+  short_description: "以简单、精确、目标驱动的方式降低常见 LLM 编码错误"
+  default_prompt: "使用 $karpathy-guidelines 以简单、精确且可验证的方式实现或审查当前代码改动。"

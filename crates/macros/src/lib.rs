@@ -47,6 +47,34 @@ pub fn derive_window(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// 为直接实现 `gpui::Render` 的类型注册 Account 登录页覆盖实现。
+///
+/// 一个应用最多只能派生一个 Login Feature。没有应用级实现时，Nexora 会使用
+/// `account-client` 提供的默认登录页；`#[nexora(factory = Type::new)]` 可以覆盖默认的
+/// [`Default`] 构造方式。
+#[proc_macro_derive(LoginFeature, attributes(nexora))]
+pub fn derive_login_feature(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    expand_login_feature(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// 为类型生成应用级 Settings Window 覆盖实现。
+///
+/// 设置窗口使用框架保留的 `settings` 标识和 `/settings` 路径。宏会生成
+/// `nexora::Window` 与 GPUI `Render` 实现，并把渲染转发给应用实现的
+/// `nexora::WindowElement`；`#[nexora(factory = Type::new)]` 可以提供自定义构造函数。
+#[proc_macro_derive(SettingsWindow, attributes(nexora))]
+pub fn derive_settings_window(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    expand_settings_window(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
 /// 为直接实现 `gpui::Render` 的类型注册主 Sidebar Header 插槽。
 ///
 /// 默认使用 [`Default`] 创建一次 GPUI Entity；状态化类型可以通过
@@ -355,6 +383,158 @@ fn expand_window(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     })
 }
 
+fn expand_login_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
+    reject_generics(&input, "LoginFeature")?;
+    let factory = parse_optional_factory(&input.attrs, "LoginFeature")?;
+    let ident = &input.ident;
+    let nexora = nexora_path();
+    let constructor = factory.map_or_else(
+        || quote!(|_, _| ::core::default::Default::default()),
+        |factory| quote!(#factory),
+    );
+    let type_name = ident.to_string();
+    let type_name = type_name.strip_prefix("r#").unwrap_or(&type_name);
+    let factory_function = Ident::new(
+        &format!("__nexora_login_feature_factory_{type_name}"),
+        ident.span(),
+    );
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #nexora::LoginFeature for #ident #type_generics #where_clause {
+            const REGISTRATION: #nexora::__private::LoginFeatureRegistration =
+                #nexora::__private::LoginFeatureRegistration::new(
+                    ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                    #factory_function,
+                );
+        }
+
+        #[allow(non_snake_case, reason = "派生宏工厂名称包含原始 Login Feature 类型名以避免冲突")]
+        fn #factory_function(
+            window: &mut #nexora::__private::gpui::Window,
+            cx: &mut #nexora::__private::gpui::App,
+        ) -> #nexora::__private::gpui::AnyView {
+            #nexora::__private::create_login_feature::<#ident>(
+                window,
+                cx,
+                #constructor,
+            )
+        }
+
+        #nexora::__private::inventory::submit! {
+            #nexora::__private::LoginFeatureRegistration::new(
+                ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                #factory_function,
+            )
+        }
+    })
+}
+
+fn expand_settings_window(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
+    reject_generics(&input, "SettingsWindow")?;
+    let factory = parse_optional_factory(&input.attrs, "SettingsWindow")?;
+    let ident = &input.ident;
+    let nexora = nexora_path();
+    let constructor = factory.map_or_else(
+        || quote!(|_, _| ::core::default::Default::default()),
+        |factory| quote!(#factory),
+    );
+    let type_name = ident.to_string();
+    let type_name = type_name.strip_prefix("r#").unwrap_or(&type_name);
+    let factory_function = Ident::new(
+        &format!("__nexora_settings_window_factory_{type_name}"),
+        ident.span(),
+    );
+    let options_function = Ident::new(
+        &format!("__nexora_settings_window_options_{type_name}"),
+        ident.span(),
+    );
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #nexora::Window for #ident #type_generics #where_clause {
+            type Path = #nexora::NoPath;
+            type Query = #nexora::NoQuery;
+
+            const METADATA: #nexora::WindowMetadata = #nexora::WindowMetadata::new(
+                "settings",
+                "设置",
+                "/settings",
+                ::core::option::Option::Some("settings"),
+                0,
+            );
+
+            const REGISTRATION: ::core::option::Option<#nexora::__private::WindowRegistration> =
+                ::core::option::Option::Some(#nexora::__private::WindowRegistration::new_settings(
+                    ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                    Self::METADATA,
+                    #factory_function,
+                    #options_function,
+                ));
+        }
+
+        impl #impl_generics #nexora::SettingsWindow for #ident #type_generics #where_clause {
+            const REGISTRATION: #nexora::__private::SettingsWindowRegistration =
+                #nexora::__private::SettingsWindowRegistration::new(
+                    ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                    #nexora::__private::WindowRegistration::new_settings(
+                        ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                        <Self as #nexora::Window>::METADATA,
+                        #factory_function,
+                        #options_function,
+                    ),
+                );
+        }
+
+        impl #impl_generics #nexora::__private::gpui::Render for #ident #type_generics #where_clause {
+            fn render(
+                &mut self,
+                window: &mut #nexora::__private::gpui::Window,
+                cx: &mut #nexora::__private::gpui::Context<Self>,
+            ) -> impl #nexora::__private::gpui::IntoElement {
+                <Self as #nexora::WindowElement>::render(self, window, cx)
+            }
+        }
+
+        #[allow(non_snake_case, reason = "派生宏工厂名称包含原始 Settings Window 类型名以避免冲突")]
+        fn #factory_function(
+            route: #nexora::RouteMatch,
+            window: &mut #nexora::__private::gpui::Window,
+            cx: &mut #nexora::__private::gpui::App,
+        ) -> ::core::result::Result<#nexora::WindowInstance, #nexora::WindowRuntimeError> {
+            #nexora::__private::create_window::<#ident>(
+                route,
+                window,
+                cx,
+                #constructor,
+            )
+        }
+
+        #[allow(non_snake_case, reason = "派生宏选项工厂名称包含原始 Settings Window 类型名以避免冲突")]
+        fn #options_function(
+            route: &#nexora::RouteMatch,
+            cx: &#nexora::__private::gpui::App,
+        ) -> ::core::result::Result<
+            #nexora::__private::gpui::WindowOptions,
+            #nexora::WindowRuntimeError,
+        > {
+            #nexora::__private::window_options::<#ident>(route, cx)
+        }
+
+        #nexora::__private::inventory::submit! {
+            #nexora::__private::SettingsWindowRegistration::new(
+                ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                #nexora::__private::WindowRegistration::new_settings(
+                    ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident)),
+                    <#ident as #nexora::Window>::METADATA,
+                    #factory_function,
+                    #options_function,
+                ),
+            )
+        }
+    })
+}
+
 fn expand_sidebar_slot(
     input: DeriveInput,
     kind: SidebarSlotKind,
@@ -364,7 +544,7 @@ fn expand_sidebar_slot(
         SidebarSlotKind::Footer => "SidebarFooter",
     };
     reject_generics(&input, kind_name)?;
-    let factory = parse_sidebar_slot_factory(&input.attrs)?;
+    let factory = parse_optional_factory(&input.attrs, kind_name)?;
     let ident = &input.ident;
     let nexora = nexora_path();
     let constructor = factory.map_or_else(
@@ -755,7 +935,7 @@ fn parse_window_arguments(attributes: &[Attribute]) -> Result<WindowArguments> {
     Ok(arguments)
 }
 
-fn parse_sidebar_slot_factory(attributes: &[Attribute]) -> Result<Option<ExprPath>> {
+fn parse_optional_factory(attributes: &[Attribute], kind: &str) -> Result<Option<ExprPath>> {
     let mut matching = attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("nexora"));
@@ -775,7 +955,7 @@ fn parse_sidebar_slot_factory(attributes: &[Attribute]) -> Result<Option<ExprPat
             let value = meta.value()?.parse::<ExprPath>()?;
             set_once(&mut factory, value, meta.path.span(), "factory")
         } else {
-            Err(meta.error("Sidebar 插槽只支持 factory 属性"))
+            Err(meta.error(format!("{kind} 只支持 factory 属性")))
         }
     })?;
     Ok(factory)

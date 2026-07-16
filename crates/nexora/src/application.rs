@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use desktop::{Application as DesktopApplication, ApplicationOptions as DesktopApplicationOptions};
+#[cfg(feature = "account-client")]
+use gpui::WindowHandle;
 use gpui::{
     AnyElement, AnyView, App, Context, IntoElement as _, Pixels, Render, Size, Subscription,
     Window, WindowOptions, div, prelude::*, px, size,
@@ -340,6 +342,9 @@ enum NavigationError {
     Feature(#[from] FeatureRuntimeError),
     #[error(transparent)]
     Window(#[from] WindowRuntimeError),
+    #[cfg(feature = "account-client")]
+    #[error("未登录时不能打开独立窗口 `{path}`")]
+    AuthenticationRequired { path: String },
 }
 
 struct ApplicationShell {
@@ -347,9 +352,17 @@ struct ApplicationShell {
     active_path: String,
     opened_tabs: Vec<RouteMatch>,
     feature_instances: HashMap<String, FeatureInstance>,
+    #[cfg(feature = "account-client")]
+    login_feature: AnyView,
+    #[cfg(feature = "account-client")]
+    authenticated: bool,
+    #[cfg(feature = "account-client")]
+    business_windows: Vec<WindowHandle<gpui_component::Root>>,
     sidebar_header: Option<AnyView>,
     sidebar_footer: Option<AnyView>,
     navigation_error: Option<String>,
+    #[cfg(feature = "account-client")]
+    _authentication_subscription: Subscription,
     _release_subscription: Option<Subscription>,
 }
 
@@ -369,23 +382,45 @@ impl ApplicationShell {
             },
             cx,
         );
-        let sidebar_header = registry.create_sidebar_header(window, cx);
-        let sidebar_footer = registry.create_sidebar_footer(window, cx);
         let active_path = initial_route.concrete_path().to_owned();
-        let mut feature_instances = HashMap::new();
-        let navigation_error = match registry.create_feature(initial_route.clone(), window, cx) {
-            Ok(mut instance) => {
-                instance.activate(window, cx);
-                feature_instances.insert(active_path.clone(), instance);
-                None
-            }
-            Err(error) => Some(error.to_string()),
+        #[cfg(feature = "account-client")]
+        let login_feature = registry.create_login_feature(window, cx);
+        #[cfg(feature = "account-client")]
+        let authenticated = crate::account::client::is_authenticated(cx);
+        #[cfg(feature = "account-client")]
+        let (sidebar_header, sidebar_footer) = if authenticated {
+            (
+                registry.create_sidebar_header(window, cx),
+                registry.create_sidebar_footer(window, cx),
+            )
+        } else {
+            (None, None)
         };
+        #[cfg(not(feature = "account-client"))]
+        let sidebar_header = registry.create_sidebar_header(window, cx);
+        #[cfg(not(feature = "account-client"))]
+        let sidebar_footer = registry.create_sidebar_footer(window, cx);
+        #[cfg(feature = "account-client")]
+        let (feature_instances, navigation_error) = if authenticated {
+            create_initial_feature(&registry, initial_route.clone(), window, cx)
+        } else {
+            (HashMap::new(), None)
+        };
+        #[cfg(not(feature = "account-client"))]
+        let (feature_instances, navigation_error) =
+            create_initial_feature(&registry, initial_route.clone(), window, cx);
+        #[cfg(feature = "account-client")]
+        let _authentication_subscription =
+            crate::account::client::observe_authentication_in(window, cx, |this, window, cx| {
+                this.authentication_changed(window, cx);
+            });
         let _release_subscription = Some(cx.on_release_in(window, |this, window, cx| {
             clear_navigation_handler(cx);
             for (_, mut instance) in this.feature_instances.drain() {
                 instance.close(window, cx);
             }
+            #[cfg(feature = "account-client")]
+            this.close_business_windows(cx);
         }));
 
         Self {
@@ -393,10 +428,72 @@ impl ApplicationShell {
             active_path,
             opened_tabs: vec![initial_route],
             feature_instances,
+            #[cfg(feature = "account-client")]
+            login_feature,
+            #[cfg(feature = "account-client")]
+            authenticated,
+            #[cfg(feature = "account-client")]
+            business_windows: Vec::new(),
             sidebar_header,
             sidebar_footer,
             navigation_error,
+            #[cfg(feature = "account-client")]
+            _authentication_subscription,
             _release_subscription,
+        }
+    }
+
+    #[cfg(feature = "account-client")]
+    fn authentication_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let authenticated = crate::account::client::is_authenticated(cx);
+        if authenticated == self.authenticated {
+            cx.notify();
+            return;
+        }
+
+        self.authenticated = authenticated;
+        if authenticated {
+            self.sidebar_header = self.registry.create_sidebar_header(window, cx);
+            self.sidebar_footer = self.registry.create_sidebar_footer(window, cx);
+            self.activate_selected_feature(window, cx);
+        } else {
+            for (_, mut instance) in self.feature_instances.drain() {
+                instance.close(window, cx);
+            }
+            self.close_business_windows(cx);
+            self.sidebar_header = None;
+            self.sidebar_footer = None;
+            self.navigation_error = None;
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "account-client")]
+    fn close_business_windows(&mut self, cx: &mut App) {
+        for handle in self.business_windows.drain(..) {
+            _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    #[cfg(feature = "account-client")]
+    fn activate_selected_feature(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(route) = self
+            .opened_tabs
+            .iter()
+            .find(|route| route.concrete_path() == self.active_path)
+            .cloned()
+        else {
+            return;
+        };
+
+        match self.registry.create_feature(route, window, cx) {
+            Ok(mut instance) => {
+                instance.activate(window, cx);
+                self.feature_instances
+                    .insert(self.active_path.clone(), instance);
+                self.navigation_error = None;
+            }
+            Err(error) => self.navigation_error = Some(error.to_string()),
         }
     }
 
@@ -429,12 +526,36 @@ impl ApplicationShell {
         cx: &mut Context<Self>,
     ) -> Result<(), NavigationError> {
         if route.target().kind() == RouteTargetKind::Window {
+            #[cfg(feature = "account-client")]
+            if !self.authenticated && route.target().id() != "settings" {
+                return Err(NavigationError::AuthenticationRequired {
+                    path: route.concrete_path().to_owned(),
+                });
+            }
+            #[cfg(feature = "account-client")]
+            {
+                let is_settings = route.target().id() == "settings";
+                let handle = self.registry.open_window(route, cx)?;
+                if !is_settings {
+                    self.business_windows
+                        .retain(|existing| existing.read(cx).is_ok());
+                    self.business_windows.push(handle);
+                }
+            }
+            #[cfg(not(feature = "account-client"))]
             self.registry.open_window(route, cx)?;
             self.navigation_error = None;
+            cx.notify();
             return Ok(());
         }
 
         let target_path = route.concrete_path().to_owned();
+        #[cfg(feature = "account-client")]
+        if !self.authenticated {
+            self.select_tab(route, target_path, cx);
+            return Ok(());
+        }
+
         if let Some(instance) = self.feature_instances.get_mut(target_path.as_str()) {
             instance.update_route(route.clone(), window, cx)?;
         } else {
@@ -452,6 +573,11 @@ impl ApplicationShell {
             .expect("刚创建或复用的 Feature 实例必须存在")
             .activate(window, cx);
 
+        self.select_tab(route, target_path, cx);
+        Ok(())
+    }
+
+    fn select_tab(&mut self, route: RouteMatch, target_path: String, cx: &mut Context<Self>) {
         if let Some(tab) = self
             .opened_tabs
             .iter_mut()
@@ -464,7 +590,6 @@ impl ApplicationShell {
         self.active_path = target_path;
         self.navigation_error = None;
         cx.notify();
-        Ok(())
     }
 
     fn render_navigation_item(
@@ -603,6 +728,26 @@ fn feature_icon(icon: &str) -> Option<IconName> {
 
 impl Render for ApplicationShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        #[cfg(feature = "account-client")]
+        if !self.authenticated {
+            let navigation_error = self.navigation_error.clone();
+            return div()
+                .relative()
+                .size_full()
+                .child(self.login_feature.clone())
+                .when_some(navigation_error, |element, message| {
+                    element.child(
+                        div()
+                            .absolute()
+                            .left_3()
+                            .right_3()
+                            .bottom_3()
+                            .child(Alert::error("nexora-login-navigation-error", message)),
+                    )
+                })
+                .into_any_element();
+        }
+
         let border = cx.theme().border;
         let navigation_error = self.navigation_error.clone();
 
@@ -651,5 +796,25 @@ impl Render for ApplicationShell {
                             }),
                     ),
             )
+            .into_any_element()
     }
+}
+
+fn create_initial_feature(
+    registry: &AppRegistry,
+    initial_route: RouteMatch,
+    window: &mut Window,
+    cx: &mut App,
+) -> (HashMap<String, FeatureInstance>, Option<String>) {
+    let active_path = initial_route.concrete_path().to_owned();
+    let mut feature_instances = HashMap::new();
+    let navigation_error = match registry.create_feature(initial_route, window, cx) {
+        Ok(mut instance) => {
+            instance.activate(window, cx);
+            feature_instances.insert(active_path, instance);
+            None
+        }
+        Err(error) => Some(error.to_string()),
+    };
+    (feature_instances, navigation_error)
 }

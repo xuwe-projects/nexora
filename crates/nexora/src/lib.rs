@@ -18,6 +18,8 @@ pub mod config;
 #[cfg(feature = "desktop")]
 mod application;
 #[cfg(feature = "desktop")]
+mod defaults;
+#[cfg(feature = "desktop")]
 mod metadata;
 #[cfg(feature = "desktop")]
 mod registry;
@@ -30,13 +32,17 @@ mod runtime;
 pub use application::{Application, ApplicationError, ApplicationOptions};
 #[cfg(feature = "desktop")]
 pub use gpui;
+#[cfg(all(feature = "account-client", feature = "derive"))]
+pub use macros::LoginFeature;
 #[cfg(feature = "derive")]
 pub use macros::Settings;
 #[cfg(all(feature = "derive", feature = "desktop"))]
-pub use macros::{Feature, SidebarFooter, SidebarHeader, Window};
+pub use macros::{Feature, SettingsWindow, SidebarFooter, SidebarHeader, Window};
+#[cfg(feature = "account-client")]
+pub use metadata::LoginFeature;
 #[cfg(feature = "desktop")]
 pub use metadata::{
-    Feature, FeatureMetadata, SidebarFooter, SidebarHeader, Window, WindowMetadata,
+    Feature, FeatureMetadata, SettingsWindow, SidebarFooter, SidebarHeader, Window, WindowMetadata,
 };
 #[cfg(feature = "desktop")]
 pub use registry::{AppRegistry, AppRegistryBuilder, RegistryError};
@@ -78,6 +84,8 @@ pub mod __private {
         runtime::{WindowInstance, WindowRuntimeError},
     };
 
+    #[cfg(feature = "account-client")]
+    pub use crate::runtime::create_login_feature;
     #[cfg(feature = "desktop")]
     pub use crate::runtime::{create_feature, create_sidebar_slot, create_window, window_options};
 
@@ -109,6 +117,34 @@ pub mod __private {
         }
 
         pub(crate) const fn factory(&self) -> FeatureFactory {
+            self.factory
+        }
+    }
+
+    /// 派生宏写入 Login Feature 注册表的类型擦除 Entity 工厂。
+    #[cfg(feature = "account-client")]
+    pub type LoginFeatureFactory = fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView;
+
+    /// 一条由 `#[derive(LoginFeature)]` 自动提交的应用级覆盖注册。
+    #[cfg(feature = "account-client")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct LoginFeatureRegistration {
+        type_name: &'static str,
+        factory: LoginFeatureFactory,
+    }
+
+    #[cfg(feature = "account-client")]
+    impl LoginFeatureRegistration {
+        /// 创建包含实现类型名称和 Entity 工厂的 Login Feature 覆盖记录。
+        pub const fn new(type_name: &'static str, factory: LoginFeatureFactory) -> Self {
+            Self { type_name, factory }
+        }
+
+        pub(crate) const fn type_name(&self) -> &'static str {
+            self.type_name
+        }
+
+        pub(crate) const fn factory(&self) -> LoginFeatureFactory {
             self.factory
         }
     }
@@ -185,6 +221,7 @@ pub mod __private {
         metadata: WindowMetadata,
         factory: WindowFactory,
         options_factory: WindowOptionsFactory,
+        settings_window_type_name: Option<&'static str>,
     }
 
     #[cfg(feature = "desktop")]
@@ -199,6 +236,22 @@ pub mod __private {
                 metadata,
                 factory,
                 options_factory,
+                settings_window_type_name: None,
+            }
+        }
+
+        /// 创建派生宏使用的专用设置窗口注册记录。
+        pub const fn new_settings(
+            type_name: &'static str,
+            metadata: WindowMetadata,
+            factory: WindowFactory,
+            options_factory: WindowOptionsFactory,
+        ) -> Self {
+            Self {
+                metadata,
+                factory,
+                options_factory,
+                settings_window_type_name: Some(type_name),
             }
         }
 
@@ -213,10 +266,42 @@ pub mod __private {
         pub(crate) const fn options_factory(&self) -> WindowOptionsFactory {
             self.options_factory
         }
+
+        pub(crate) const fn settings_window_type_name(&self) -> Option<&'static str> {
+            self.settings_window_type_name
+        }
+    }
+
+    /// 一条由 `#[derive(SettingsWindow)]` 自动提交的应用级设置窗口覆盖注册。
+    #[cfg(feature = "desktop")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct SettingsWindowRegistration {
+        type_name: &'static str,
+        window: WindowRegistration,
+    }
+
+    #[cfg(feature = "desktop")]
+    impl SettingsWindowRegistration {
+        /// 创建包含实现类型名称和普通 Window 工厂的设置窗口覆盖记录。
+        pub const fn new(type_name: &'static str, window: WindowRegistration) -> Self {
+            Self { type_name, window }
+        }
+
+        pub(crate) const fn type_name(&self) -> &'static str {
+            self.type_name
+        }
+
+        pub(crate) const fn window(&self) -> WindowRegistration {
+            self.window
+        }
     }
 
     #[cfg(feature = "desktop")]
     inventory::collect!(FeatureRegistration);
+    #[cfg(feature = "account-client")]
+    inventory::collect!(LoginFeatureRegistration);
+    #[cfg(feature = "desktop")]
+    inventory::collect!(SettingsWindowRegistration);
     #[cfg(feature = "desktop")]
     inventory::collect!(SidebarHeaderRegistration);
     #[cfg(feature = "desktop")]

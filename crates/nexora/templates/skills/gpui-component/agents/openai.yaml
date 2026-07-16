@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPUI 组件库"
+  short_description: "指导在 GPUI 应用中选择、配置并使用 gpui-component 组件"
+  default_prompt: "使用 $gpui-component 为当前 GPUI 界面选择并实现合适的组件。"

@@ -30,7 +30,14 @@ fn derives_are_discovered_without_a_manual_registration_list() {
     let registry = AppRegistry::discover().unwrap();
 
     assert_eq!(registry.features(), [DiscoveredFeature::METADATA]);
-    assert_eq!(registry.windows(), [DiscoveredWindow::METADATA]);
+    assert_eq!(
+        registry
+            .windows()
+            .iter()
+            .map(|metadata| metadata.id())
+            .collect::<Vec<_>>(),
+        ["discovered", "settings"]
+    );
     assert_eq!(
         registry.resolve("/discovered").unwrap().target().kind(),
         RouteTargetKind::Feature

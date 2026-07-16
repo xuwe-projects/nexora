@@ -16,7 +16,6 @@ include = [
     "templates/scaffold/single/Cargo.toml.askama",
     "templates/scaffold/workspace/Cargo.toml.askama",
     "templates/scaffold/workspace/apps/desktop/Cargo.toml.askama",
-    "templates/scaffold/workspace/apps/desktop/account.rs",
     "templates/scaffold/workspace/apps/desktop/config.rs",
     "templates/scaffold/workspace/apps/server/Cargo.toml.askama",
     "templates/scaffold/workspace/apps/server/config.rs",
@@ -24,6 +23,7 @@ include = [
     "templates/scaffold/workspace/apps/server/routes.rs",
     "templates/scaffold/workspace/config/example.desktop.toml",
     "templates/scaffold/workspace/config/example.server.toml",
+    "templates/skills/**",
     "tests/**",
 ]
 description = "以 GPUI、强类型路由和可组合业务模块构建 Rust 桌面全栈应用的框架"
@@ -56,6 +56,7 @@ desktop = [
     "dep:serde_html_form",
     "dep:serde_path_to_error",
     "dep:theme",
+    "dep:ui",
     "dep:url",
 ]
 server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:tracing", "dep:url"]
@@ -94,6 +95,7 @@ theme = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
 toml_edit = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+ui = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [dev-dependencies]
