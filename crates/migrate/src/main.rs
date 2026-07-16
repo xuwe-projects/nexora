@@ -1,20 +1,16 @@
 //! PostgreSQL 数据库结构迁移程序。
 //!
-//! 该程序是 `crates/migrate/migrations` 的唯一执行入口，不包含业务查询或 HTTP 路由。
+//! 该程序复用同包迁移库的安全检查与执行能力，不包含业务查询或 HTTP 路由。
 
-mod safety;
-
-use std::{collections::HashSet, error::Error, path::PathBuf, process::ExitCode};
+use std::{error::Error, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use configuration::LayeredConfigLoader;
+use migrate::{MigrationOptions, prepare};
 use serde::Deserialize;
-use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
-
-use crate::safety::{DatabaseState, validate_migration_safety};
+use sqlx::postgres::PgPoolOptions;
 
 const DEFAULT_CONFIG_FILE: &str = "config/server.toml";
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, Parser)]
 #[command(name = "migrate", version, about = "安全地向前应用 PostgreSQL 迁移")]
@@ -58,105 +54,24 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .with_required_file(config_path)
         .load()?;
     let pool = PgPoolOptions::new().connect(&config.database.url).await?;
-    let target = migration_target(&pool).await?;
-    let state = database_state(&pool).await?;
-    validate_migration_safety(&state, arguments.initialize_empty_database)?;
-
-    let applied = state
-        .applied_migrations
-        .iter()
-        .map(|(version, _)| *version)
-        .collect::<HashSet<_>>();
-    let pending = MIGRATOR
-        .iter()
-        .filter(|migration| migration.migration_type.is_up_migration())
-        .filter(|migration| !applied.contains(&migration.version))
-        .map(|migration| migration.version)
-        .collect::<Vec<_>>();
+    let plan = prepare(
+        &pool,
+        MigrationOptions::new().initialize_empty_database(arguments.initialize_empty_database),
+    )
+    .await?;
+    let target = plan.target();
     eprintln!(
-        "数据库迁移目标: database={}, server={}:{}, 已应用={}，待应用={pending:?}",
-        target.database,
-        target.server_address.as_deref().unwrap_or("local"),
+        "数据库迁移目标: database={}, server={}:{}, 已应用={}，待应用={:?}",
+        target.database(),
+        target.server_address().unwrap_or("local"),
         target
-            .server_port
+            .server_port()
             .map_or_else(|| "default".to_owned(), |port| port.to_string()),
-        state.applied_migrations.len(),
+        plan.applied_count(),
+        plan.pending_versions(),
     );
 
-    MIGRATOR.run(&pool).await?;
-    eprintln!("数据库迁移完成: database={}", target.database);
+    let report = plan.run(&pool).await?;
+    eprintln!("数据库迁移完成: database={}", report.target().database());
     Ok(())
-}
-
-struct MigrationTarget {
-    database: String,
-    server_address: Option<String>,
-    server_port: Option<i32>,
-}
-
-async fn migration_target(pool: &PgPool) -> Result<MigrationTarget, sqlx::Error> {
-    let (database, server_address, server_port) =
-        sqlx::query_as::<_, (String, Option<String>, Option<i32>)>(
-            r#"
-        SELECT current_database(), inet_server_addr()::TEXT, inet_server_port()
-        "#,
-        )
-        .fetch_one(pool)
-        .await?;
-    Ok(MigrationTarget {
-        database,
-        server_address,
-        server_port,
-    })
-}
-
-async fn database_state(pool: &PgPool) -> Result<DatabaseState, sqlx::Error> {
-    let migrations_table_exists =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
-    let applied_migrations = if migrations_table_exists {
-        sqlx::query_as::<_, (i64, bool)>(
-            "SELECT version, success FROM public._sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(pool)
-        .await?
-    } else {
-        Vec::new()
-    };
-    let account_schema_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'account')",
-    )
-    .fetch_one(pool)
-    .await?;
-    let (
-        users_exists,
-        roles_exists,
-        permissions_exists,
-        role_permissions_exists,
-        user_roles_exists,
-        system_initialization_exists,
-    ) = sqlx::query_as::<_, (bool, bool, bool, bool, bool, bool)>(
-        r#"
-        SELECT
-            to_regclass('account.users') IS NOT NULL,
-            to_regclass('account.roles') IS NOT NULL,
-            to_regclass('account.permissions') IS NOT NULL,
-            to_regclass('account.role_permissions') IS NOT NULL,
-            to_regclass('account.user_roles') IS NOT NULL,
-            to_regclass('account.system_initialization') IS NOT NULL
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
-    Ok(DatabaseState {
-        applied_migrations,
-        account_schema_exists,
-        users_exists,
-        roles_exists,
-        permissions_exists,
-        role_permissions_exists,
-        user_roles_exists,
-        system_initialization_exists,
-    })
 }

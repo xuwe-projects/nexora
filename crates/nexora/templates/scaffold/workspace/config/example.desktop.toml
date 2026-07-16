@@ -1,0 +1,8 @@
+[account.api]
+endpoint = "http://127.0.0.1:3000"
+
+[account.oidc]
+issuer_url = "https://identity.example.com"
+client_id = "nexora-desktop"
+scopes = ["openid", "profile", "email", "offline_access"]
+redirect_uri = "http://127.0.0.1:0/auth/callback"

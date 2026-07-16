@@ -8,9 +8,8 @@ use crate::config;
 use actions::settings::OpenSettings;
 use changelog::{ChangelogEntry, ChangelogError, EmbeddedChangelogRepository};
 use gpui::{
-    AnyElement, App, Axis, Context, Entity, Global, IntoElement, ParentElement as _, Render,
-    SharedString, StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div,
-    prelude::*, px, size,
+    AnyElement, App, Axis, Context, Entity, Global, IntoElement, ParentElement as _, SharedString,
+    StyleRefinement, Subscription, Window, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, Size, TitleBar,
@@ -56,10 +55,14 @@ pub fn init(updater_config: Option<UpdateConfig>, cx: &mut App) {
         window: None,
         updater_config,
     });
-    cx.on_action(|_: &OpenSettings, cx| open_settings_window(cx));
+    cx.on_action(|_: &OpenSettings, cx| open_window(cx));
 }
 
-fn open_settings_window(cx: &mut App) {
+/// 打开或激活由 Nexora `Window` 元数据描述的设置窗口。
+///
+/// Action 与路径路由共用这一入口，保证快捷键、账户菜单和 `/settings` deeplink 都遵循
+/// 相同的单实例窗口生命周期。
+pub(crate) fn open_window(cx: &mut App) {
     let existing_window = cx.global::<SettingsWindowState>().window;
     if let Some(existing_window) = existing_window
         && existing_window
@@ -84,7 +87,7 @@ fn open_settings_window(cx: &mut App) {
         {
             tracing::warn!(error = %error, "无法在目标显示器上居中设置窗口");
         }
-        let settings = cx.new(SettingsWindow::new);
+        let settings = cx.new(|cx| SettingsWindow::new(window, cx));
         let root = cx.new(|cx| gpui_component::Root::new(settings, window, cx));
         theme::attach_window(window, cx);
         root
@@ -152,6 +155,14 @@ impl SettingsFeature {
 ///
 /// 该视图只负责为 `SettingsFeature` 提供全窗口尺寸和主题背景，设置项本身仍由 feature 模块维护，
 /// 并继续使用 `gpui-component` 的 `Settings`、`SettingPage` 和 `SettingField` 组件。
+#[derive(nexora::Window)]
+#[nexora(
+    title = "设置",
+    path = "/settings",
+    icon = "settings",
+    order = 0,
+    factory = SettingsWindow::new
+)]
 pub struct SettingsWindow {
     font_size_slider: Entity<SliderState>,
     _preferences_subscription: Subscription,
@@ -160,7 +171,7 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     /// 创建独立设置窗口视图，并观察后续用户偏好变化以局部刷新当前窗口。
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let current_font_size = config::font_size(cx);
         let font_size_slider = cx.new(|_| {
             SliderState::new()
@@ -197,7 +208,14 @@ impl SettingsWindow {
     }
 }
 
-impl Render for SettingsWindow {
+impl nexora::WindowElement for SettingsWindow {
+    fn window_options(
+        _route: &nexora::WindowRoute<Self::Path, Self::Query>,
+        cx: &App,
+    ) -> WindowOptions {
+        settings_window_options(config::startup_display_uuid(cx), cx)
+    }
+
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let window_layers = ui::window_layers(window, cx);
         let content = div()

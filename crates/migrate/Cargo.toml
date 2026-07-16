@@ -3,13 +3,24 @@ name = "migrate"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.nexora]
+allow-mixed-targets = true
+reason = "迁移命令与框架内迁移 API 必须共享同一组嵌入式 SQL 和 fail-closed 安全检查"
+
 [features]
-default = []
+default = ["cli"]
+cli = ["dep:clap", "dep:configuration", "dep:serde", "dep:tokio"]
 database-tests = []
 
 [dependencies]
-clap = { workspace = true }
-configuration = { workspace = true }
-serde = { workspace = true }
+clap = { workspace = true, optional = true }
+configuration = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["macros", "migrate"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread"] }
+
+[[bin]]
+name = "migrate"
+path = "src/main.rs"
+required-features = ["cli"]

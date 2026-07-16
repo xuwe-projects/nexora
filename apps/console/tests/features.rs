@@ -7,14 +7,18 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use actions::account::{AccountActionKind, SignInAccount};
+use actions::{
+    account::{AccountActionKind, SignInAccount},
+    settings::OpenSettings,
+};
 use configuration::UserConfigStore;
 use desktop::{Application as _, centered_window_bounds};
 use gpui::{
-    AnyElement, AppContext as _, Axis, Context, Entity, InteractiveElement as _, IntoElement,
-    Modifiers, ParentElement as _, Render, TestAppContext, Window, div, px, size,
+    AnyElement, AppContext as _, Axis, Context, Entity, Global, InteractiveElement as _,
+    IntoElement, Modifiers, ParentElement as _, Render, TestAppContext, Window, div, px, size,
 };
 use gpui_component::{Size, notification::NotificationList, setting::SettingItem};
+use serde::Deserialize;
 use ui::layout::WorkspaceLayout;
 #[path = "../src/account_api.rs"]
 mod account_api;
@@ -30,7 +34,7 @@ mod features;
 use app::Console;
 use config::ConsolePreferences;
 use features::{
-    FeatureId, feature_catalog, feature_catalog_sections,
+    FeatureId, feature_catalog, feature_catalog_sections, feature_registry,
     home::{next_steps, virtual_form_rows, virtual_form_view_modes},
     projects::project_rows,
     roles::RolesFeature,
@@ -44,6 +48,11 @@ use theme::{ColorScheme, ThemePreset, ThemeSelection};
 struct NotificationTestRoot {
     notifications: Entity<NotificationList>,
 }
+
+#[derive(Default)]
+struct WindowRouteDispatchCount(usize);
+
+impl Global for WindowRouteDispatchCount {}
 
 impl Render for NotificationTestRoot {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -723,7 +732,7 @@ fn console_preferences_round_trip_theme_display_font_size_component_size_and_pin
     preferences.set_startup_display_uuid(Some("display-uuid".to_owned()));
     preferences.set_font_size(18);
     preferences.set_component_size(Size::Large);
-    preferences.set_pinned_tabs(&[FeatureId::Projects, FeatureId::Tasks]);
+    preferences.set_pinned_tab_paths(&["/projects".to_owned(), "/tasks".to_owned()]);
 
     store.save(&preferences).expect("用户偏好应当可以保存");
     let loaded = store
@@ -734,10 +743,7 @@ fn console_preferences_round_trip_theme_display_font_size_component_size_and_pin
     assert_eq!(loaded.startup_display_uuid(), Some("display-uuid"));
     assert_eq!(loaded.font_size(), 18);
     assert_eq!(loaded.component_size(), Size::Large);
-    assert_eq!(
-        loaded.pinned_tabs(),
-        vec![FeatureId::Projects, FeatureId::Tasks]
-    );
+    assert_eq!(loaded.pinned_tab_paths(), vec!["/projects", "/tasks"]);
     _ = fs::remove_dir_all(directory);
 }
 
@@ -760,7 +766,7 @@ fn version_one_preferences_default_to_system_primary_display() {
     assert_eq!(loaded.startup_display_uuid(), None);
     assert_eq!(loaded.font_size(), theme::DEFAULT_FONT_SIZE);
     assert_eq!(loaded.component_size(), theme::DEFAULT_COMPONENT_SIZE);
-    assert!(loaded.pinned_tabs().is_empty());
+    assert!(loaded.pinned_tab_paths().is_empty());
     assert_eq!(
         loaded.theme_selection(),
         ThemeSelection::new(ThemePreset::Xuwe, ColorScheme::Dark)
@@ -784,10 +790,7 @@ fn console_preferences_ignore_unknown_and_duplicate_pinned_tabs() {
         .load_versioned_or_default()
         .expect("过期标签标识不应阻止其他偏好加载");
 
-    assert_eq!(
-        loaded.pinned_tabs(),
-        vec![FeatureId::Projects, FeatureId::Tasks]
-    );
+    assert_eq!(loaded.pinned_tab_paths(), vec!["/projects", "/tasks"]);
     _ = fs::remove_dir_all(directory);
 }
 
@@ -906,7 +909,7 @@ fn project_rows_keep_template_projects() {
     let rows = project_rows();
     let names = rows.iter().map(|row| row.name()).collect::<Vec<_>>();
 
-    assert_eq!(names, vec!["Console", "Desktop Runtime", "Xuwe CLI"]);
+    assert_eq!(names, vec!["Console", "Desktop Runtime", "Nexora CLI"]);
     assert_eq!(rows[0].status().label(), "active");
 }
 
@@ -972,6 +975,83 @@ fn root_view_can_select_active_feature() {
     assert_eq!(view.active_feature(), FeatureId::Tasks);
 }
 
+#[test]
+fn nexora_registry_keeps_hidden_feature_and_window_routable() {
+    let registry = feature_registry();
+
+    assert!(
+        !registry
+            .navigation_features()
+            .any(|metadata| metadata.id() == "user-details")
+    );
+    assert_eq!(
+        registry
+            .resolve("/users/details/42")
+            .unwrap()
+            .target()
+            .kind(),
+        nexora::RouteTargetKind::Feature
+    );
+    assert_eq!(
+        registry.resolve("/settings").unwrap().target().kind(),
+        nexora::RouteTargetKind::Window
+    );
+}
+
+#[test]
+fn root_view_uses_concrete_paths_for_dynamic_tabs_and_history() {
+    let mut view = RootView::new();
+
+    view.select_path("/users/details/1").unwrap();
+    view.select_path("/users/details/2").unwrap();
+    view.select_path("/users/details/1").unwrap();
+
+    assert_eq!(view.active_feature(), FeatureId::UserDetails);
+    assert_eq!(view.active_path(), "/users/details/1");
+    assert_eq!(
+        view.opened_paths(),
+        ["/", "/users/details/1", "/users/details/2"]
+    );
+    assert_eq!(
+        view.navigation_history_paths(),
+        [
+            "/",
+            "/users/details/1",
+            "/users/details/2",
+            "/users/details/1"
+        ]
+    );
+
+    view.toggle_pin_path("/users/details/2");
+    assert_eq!(view.pinned_paths(), ["/users/details/2"]);
+    view.close_path("/users/details/1");
+    assert_eq!(view.opened_paths(), ["/users/details/2", "/"]);
+}
+
+#[test]
+fn root_view_canonicalizes_path_aliases_and_refreshes_query_state() {
+    #[derive(Deserialize)]
+    struct TabQuery {
+        tab: String,
+    }
+
+    let mut view = RootView::new();
+
+    view.select_path("/users/details/%41?tab=summary").unwrap();
+    view.select_path("/users/details/A?tab=roles").unwrap();
+
+    assert_eq!(view.opened_paths(), ["/", "/users/details/A"]);
+    let nexora::Query(query): nexora::Query<TabQuery> = view.active_route().query().unwrap();
+    assert_eq!(query.tab, "roles");
+
+    view.navigate_back();
+    assert_eq!(view.active_path(), "/");
+    view.navigate_forward();
+    assert_eq!(view.active_path(), "/users/details/A");
+    let nexora::Query(query): nexora::Query<TabQuery> = view.active_route().query().unwrap();
+    assert_eq!(query.tab, "roles");
+}
+
 #[gpui::test]
 fn root_view_entity_updates_navigation_inside_gpui(cx: &mut TestAppContext) {
     let root = cx.new(|_| RootView::new());
@@ -989,6 +1069,55 @@ fn root_view_entity_updates_navigation_inside_gpui(cx: &mut TestAppContext) {
         cx.read_entity(&root, |root, _| root.opened_tabs().to_vec()),
         [FeatureId::Home, FeatureId::Tasks]
     );
+}
+
+#[gpui::test]
+fn root_view_releases_feature_runtime_with_its_window(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        auth::init(None, None, cx);
+    });
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let mut root = RootView::new();
+        root.initialize_feature_state(window, cx);
+        root
+    });
+    let weak_root = root.downgrade();
+
+    drop(root);
+    cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+
+    assert!(weak_root.upgrade().is_none());
+}
+
+#[gpui::test]
+fn root_view_opens_window_routes_without_creating_tabs(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_global(WindowRouteDispatchCount::default());
+        cx.on_action(|_: &OpenSettings, cx| {
+            cx.global_mut::<WindowRouteDispatchCount>().0 += 1;
+        });
+    });
+    let root = cx.new(|_| RootView::new());
+
+    let target = cx.update_entity(&root, |root, cx| root.open_path("/settings", cx).unwrap());
+
+    assert_eq!(target, nexora::RouteTargetKind::Window);
+    assert_eq!(cx.update(|cx| cx.global::<WindowRouteDispatchCount>().0), 1);
+    assert_eq!(
+        cx.read_entity(&root, |root, _| root
+            .opened_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()),
+        ["/"]
+    );
+
+    cx.update_entity(&root, |root, cx| {
+        root.open_path("nexora://settings", cx).unwrap();
+    });
+    assert_eq!(cx.update(|cx| cx.global::<WindowRouteDispatchCount>().0), 2);
 }
 
 #[test]

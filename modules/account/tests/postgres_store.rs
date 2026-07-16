@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use account::{
-    Account, AccountError, ExternalIdentity,
+    Account, AccountDependencies, AccountError, AccountInitialization,
+    AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
+    IdentityIssuerBindingOutcome, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
 };
 use api::with_http_layers;
@@ -14,15 +16,20 @@ use axum::{
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
 };
 use contracts::account::{
-    AccessProfileResponse, ReplaceUserRolesRequest, UpdateUserStatusRequest, UserStatus,
+    AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest, UpdateUserStatusRequest,
+    UserStatus,
 };
 use contracts::error::ErrorEnvelope;
 use sqlx::PgPool;
 use tower::ServiceExt as _;
 
+const TEST_IDENTITY_ISSUER: &str = "https://id.example.com/";
+const OTHER_IDENTITY_ISSUER: &str = "https://other-id.example.com/";
+
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPool) {
     let roles = test_account(pool)
+        .await
         .system_roles()
         .await
         .expect("应当可以读取初始化系统角色");
@@ -42,7 +49,7 @@ async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPo
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn unknown_identity_is_denied_without_creating_local_user(pool: PgPool) {
-    let account = test_account(pool.clone());
+    let account = test_account(pool.clone()).await;
     let response = router(&account)
         .oneshot(
             Request::builder()
@@ -70,7 +77,7 @@ async fn unknown_identity_is_denied_without_creating_local_user(pool: PgPool) {
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPool) {
     insert_user("User0001", "ordinary-user", &pool).await;
-    let account = test_account(pool);
+    let account = test_account(pool).await;
     let profile = current_profile(&account, "ordinary-user").await;
 
     assert_eq!(profile.user.id, "User0001");
@@ -81,7 +88,7 @@ async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPo
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn initialization_promotes_existing_user_and_removes_all_roles(pool: PgPool) {
-    let account = test_account(pool.clone());
+    let account = test_account(pool.clone()).await;
     insert_user("Exist001", "existing-super-admin", &pool).await;
     let existing = current_profile(&account, "existing-super-admin").await;
     let administrator_role_id = system_role_id("admin", &pool).await;
@@ -108,10 +115,13 @@ async fn initialization_promotes_existing_user_and_removes_all_roles(pool: PgPoo
     .await
     .expect("应当可以准备已有角色关系");
 
-    let super_admin = account
-        .initialize_super_admin(&identity("existing-super-admin"))
+    let outcome = account
+        .initialize(initialization("existing-super-admin"))
         .await
         .expect("已有用户应当可以设为超级管理员");
+    let AccountInitializationOutcome::Initialized { super_admin } = outcome else {
+        panic!("首次初始化应返回 Initialized");
+    };
     assert_eq!(super_admin.id, existing.user.id);
     assert!(super_admin.is_super_admin);
     assert!(
@@ -135,11 +145,8 @@ async fn initialization_promotes_existing_user_and_removes_all_roles(pool: PgPoo
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn last_active_administrator_cannot_be_suspended_or_demoted(pool: PgPool) {
-    let account = test_account(pool.clone());
-    account
-        .initialize_super_admin(&identity("super-admin"))
-        .await
-        .expect("系统初始化应当成功");
+    let account = test_account(pool.clone()).await;
+    initialize_account(&account, "super-admin").await;
     insert_user("Admin001", "administrator", &pool).await;
     let administrator = current_profile(&account, "administrator").await;
     let administrator_role_id = system_role_id("admin", &pool).await;
@@ -178,19 +185,33 @@ async fn last_active_administrator_cannot_be_suspended_or_demoted(pool: PgPool) 
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn super_administrator_is_unique_immutable_and_has_no_grants(pool: PgPool) {
-    let account = test_account(pool.clone());
-    assert!(
-        !account
-            .is_system_initialized()
+    let account = test_account(pool.clone()).await;
+    assert!(matches!(
+        account
+            .initialization_status()
             .await
-            .expect("应读取初始化状态")
-    );
-    let super_admin = account
-        .initialize_super_admin(&identity("super-admin"))
+            .expect("应读取初始化状态"),
+        AccountInitializationStatus::Required
+    ));
+    let outcome = account
+        .initialize(initialization("super-admin"))
         .await
         .expect("首次初始化应当成功");
+    let AccountInitializationOutcome::Initialized { super_admin } = outcome else {
+        panic!("首次初始化应返回 Initialized");
+    };
+    let repeated_same = account
+        .initialize(initialization("super-admin"))
+        .await
+        .expect("相同身份重复初始化应按幂等成功处理");
+    assert!(matches!(
+        repeated_same,
+        AccountInitializationOutcome::AlreadyInitialized {
+            super_admin: ref repeated
+        } if repeated.id == super_admin.id
+    ));
     let repeated = account
-        .initialize_super_admin(&identity("another-super-admin"))
+        .initialize(initialization("another-super-admin"))
         .await
         .expect_err("初始化完成后不应允许替换超级管理员");
     assert!(matches!(
@@ -199,6 +220,15 @@ async fn super_administrator_is_unique_immutable_and_has_no_grants(pool: PgPool)
             code: "system_already_initialized",
             ..
         }
+    ));
+    assert!(matches!(
+        account
+            .initialization_status()
+            .await
+            .expect("应读取完成后的初始化状态"),
+        AccountInitializationStatus::Completed {
+            super_admin: ref initialized
+        } if initialized.id == super_admin.id
     ));
 
     let profile = current_profile(&account, "super-admin").await;
@@ -257,12 +287,192 @@ async fn super_administrator_is_unique_immutable_and_has_no_grants(pool: PgPool)
     );
 }
 
-fn test_account(pool: PgPool) -> Account {
-    Account::new(pool, Arc::new(TokenIdentityVerifier))
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn concurrent_same_identity_initialization_is_idempotent(pool: PgPool) {
+    let account = test_account(pool).await;
+    let first_account = account.clone();
+    let second_account = account.clone();
+    let (first, second) = tokio::join!(
+        first_account.initialize(initialization("concurrent-super-admin")),
+        second_account.initialize(initialization("concurrent-super-admin")),
+    );
+    let first = first.expect("第一个并发初始化请求应当成功");
+    let second = second.expect("第二个并发初始化请求应当幂等成功");
+
+    assert!(matches!(
+        (&first, &second),
+        (
+            AccountInitializationOutcome::Initialized { super_admin: first },
+            AccountInitializationOutcome::AlreadyInitialized {
+                super_admin: second
+            }
+        ) | (
+            AccountInitializationOutcome::AlreadyInitialized { super_admin: first },
+            AccountInitializationOutcome::Initialized {
+                super_admin: second
+            }
+        ) if first.id == second.id
+    ));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn deployment_issuer_binding_is_idempotent_and_immutable(pool: PgPool) {
+    let first = Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
+        .await
+        .expect("首次部署 issuer 绑定应当成功");
+    assert_eq!(first, IdentityIssuerBindingOutcome::Bound);
+
+    let repeated = Account::bind_identity_issuer(&pool, "https://id.example.com")
+        .await
+        .expect("规范化后的同一 issuer 应当可以安全重试");
+    assert_eq!(repeated, IdentityIssuerBindingOutcome::Verified);
+
+    let replacement = Account::bind_identity_issuer(&pool, OTHER_IDENTITY_ISSUER)
+        .await
+        .expect_err("部署 issuer 首次绑定后不能替换");
+    assert!(matches!(replacement, AccountError::IdentityIssuerMismatch));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn concurrent_different_issuer_binding_has_exactly_one_winner(pool: PgPool) {
+    let (first, second) = tokio::join!(
+        Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER),
+        Account::bind_identity_issuer(&pool, OTHER_IDENTITY_ISSUER),
+    );
+
+    assert!(matches!(
+        (&first, &second),
+        (
+            Ok(IdentityIssuerBindingOutcome::Bound),
+            Err(AccountError::IdentityIssuerMismatch)
+        ) | (
+            Err(AccountError::IdentityIssuerMismatch),
+            Ok(IdentityIssuerBindingOutcome::Bound)
+        )
+    ));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn token_from_another_issuer_is_rejected_as_authentication_failure(pool: PgPool) {
+    let account = test_account(pool).await;
+    account
+        .provision_user(identity("known-user"))
+        .await
+        .expect("应当可以预先开通测试用户");
+
+    let response = router(&account)
+        .oneshot(
+            Request::builder()
+                .uri("/me")
+                .header(AUTHORIZATION, "Bearer other:known-user")
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回认证错误");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .expect("认证错误正文应当可读取");
+    let error: ErrorEnvelope = serde_json::from_slice(&body).expect("错误响应应符合公共契约");
+    assert_eq!(error.error.code, "invalid_identity_issuer");
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    initialize_account(&account, "super-admin").await;
+    let administrator = account
+        .provision_user(identity("administrator"))
+        .await
+        .expect("管理员身份应当可以预先开通");
+    let administrator_role_id = system_role_id("admin", &pool).await;
+    sqlx::query("INSERT INTO account.user_roles (user_id, role_id) VALUES ($1, $2)")
+        .bind(administrator.id.as_str())
+        .bind(administrator_role_id)
+        .execute(&pool)
+        .await
+        .expect("应当可以授予系统管理员角色");
+    account
+        .provision_user(identity("ordinary-member"))
+        .await
+        .expect("普通成员身份应当可以预先开通");
+
+    let request = ProvisionUserRequest {
+        identity_id: "provisioned-user".to_owned(),
+        email: Some("provisioned-user@example.com".to_owned()),
+        display_name: "已开通用户".to_owned(),
+        avatar_url: None,
+    };
+    let forbidden = request_json(
+        &account,
+        Method::POST,
+        "/users".to_owned(),
+        "ordinary-member",
+        &request,
+    )
+    .await;
+    assert_eq!(forbidden, StatusCode::FORBIDDEN);
+    let response = request_json_response(
+        &account,
+        Method::POST,
+        "/users".to_owned(),
+        "administrator",
+        &request,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get("location")
+        .expect("创建响应应当包含 Location")
+        .to_str()
+        .expect("Location 应当是 ASCII");
+    assert!(location.starts_with("/users/"));
+
+    let profile = current_profile(&account, "provisioned-user").await;
+    assert_eq!(profile.user.identity_id, "provisioned-user");
+
+    let repeated = request_json(
+        &account,
+        Method::POST,
+        "/users".to_owned(),
+        "administrator",
+        &request,
+    )
+    .await;
+    assert_eq!(repeated, StatusCode::CONFLICT);
+}
+
+async fn test_account(pool: PgPool) -> Account {
+    Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
+        .await
+        .expect("测试部署 issuer 应当可以绑定或核对");
+    Account::new(AccountDependencies {
+        pool,
+        token_verifier: Arc::new(TokenIdentityVerifier),
+    })
 }
 
 fn router(account: &Account) -> Router {
-    with_http_layers(account.clone().routers::<()>())
+    with_http_layers(account.routers::<()>())
+}
+
+async fn initialize_account(account: &Account, identity_id: &str) -> User {
+    match account
+        .initialize(initialization(identity_id))
+        .await
+        .expect("账号模块初始化应当成功")
+    {
+        AccountInitializationOutcome::Initialized { super_admin }
+        | AccountInitializationOutcome::AlreadyInitialized { super_admin } => super_admin,
+    }
+}
+
+fn initialization(identity_id: &str) -> AccountInitialization {
+    AccountInitialization {
+        super_admin: identity(identity_id),
+    }
 }
 
 async fn current_profile(account: &Account, token: &str) -> AccessProfileResponse {
@@ -290,6 +500,18 @@ async fn request_json<T: serde::Serialize>(
     token: &str,
     body: &T,
 ) -> StatusCode {
+    request_json_response(account, method, uri, token, body)
+        .await
+        .status()
+}
+
+async fn request_json_response<T: serde::Serialize>(
+    account: &Account,
+    method: Method,
+    uri: String,
+    token: &str,
+    body: &T,
+) -> axum::response::Response {
     router(account)
         .oneshot(
             Request::builder()
@@ -304,7 +526,6 @@ async fn request_json<T: serde::Serialize>(
         )
         .await
         .expect("路由应当返回响应")
-        .status()
 }
 
 async fn system_role_id(key: &str, pool: &PgPool) -> i64 {
@@ -345,9 +566,14 @@ struct TokenIdentityVerifier;
 #[async_trait]
 impl AccessTokenVerifier for TokenIdentityVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
+        let (issuer, subject) = token
+            .strip_prefix("other:")
+            .map_or((TEST_IDENTITY_ISSUER, token), |subject| {
+                (OTHER_IDENTITY_ISSUER, subject)
+            });
         Ok(VerifiedIdentity {
-            issuer: "https://id.example.com/".to_owned(),
-            subject: token.to_owned(),
+            issuer: issuer.to_owned(),
+            subject: subject.to_owned(),
             email: Some(format!("{token}@example.com")),
             display_name: token.to_owned(),
             avatar_url: None,

@@ -51,6 +51,12 @@ pub enum StoreError {
     /// 系统已经完成一次性初始化。
     #[error("系统已经完成初始化")]
     SystemAlreadyInitialized,
+    /// 当前部署尚未绑定允许使用的唯一 OIDC issuer。
+    #[error("当前部署尚未绑定 OIDC issuer")]
+    IdentityIssuerNotBound,
+    /// 请求或配置中的 OIDC issuer 与当前部署已绑定值不一致。
+    #[error("OIDC issuer 与当前部署绑定值不一致")]
+    IdentityIssuerMismatch,
     /// 数据库中的值不符合当前领域模型约束。
     #[error("数据库中的{0}无效")]
     InvalidData(
@@ -68,9 +74,18 @@ impl StoreError {
 /// 账号与授权用例向 API 层返回的领域错误。
 #[derive(Debug, Error)]
 pub enum AccountError {
-    /// 外部身份缺少稳定的 identity ID。
+    /// 外部身份缺少稳定 identity ID 或必要展示字段。
     #[error("认证身份不完整")]
     InvalidIdentity,
+    /// 部署级 OIDC issuer 不是安全的规范 URL。
+    #[error("OIDC issuer 无效")]
+    InvalidIdentityIssuer,
+    /// 当前部署尚未完成 OIDC issuer 绑定。
+    #[error("当前部署尚未绑定 OIDC issuer")]
+    IdentityIssuerNotBound,
+    /// OIDC issuer 与当前部署首次绑定的不可变值不一致。
+    #[error("OIDC issuer 与当前部署绑定值不一致")]
+    IdentityIssuerMismatch,
     /// 当前用户已被停用。
     #[error("当前用户已被停用")]
     UserSuspended,
@@ -136,6 +151,8 @@ impl From<StoreError> for AccountError {
                 code: "system_already_initialized",
                 message: "系统已经完成初始化",
             },
+            StoreError::IdentityIssuerNotBound => Self::IdentityIssuerNotBound,
+            StoreError::IdentityIssuerMismatch => Self::IdentityIssuerMismatch,
             other => Self::Store(other),
         }
     }
@@ -147,6 +164,19 @@ impl From<AccountError> for ApiError {
             AccountError::InvalidIdentity => {
                 Self::unauthorized("invalid_identity", "认证身份不完整")
             }
+            AccountError::InvalidIdentityIssuer => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_identity_issuer",
+                "OIDC issuer 配置无效",
+            ),
+            AccountError::IdentityIssuerNotBound => {
+                tracing::error!("当前部署尚未绑定 OIDC issuer");
+                Self::service_unavailable("identity_issuer_not_bound", "认证服务配置尚未完成")
+            }
+            AccountError::IdentityIssuerMismatch => Self::unauthorized(
+                "invalid_identity_issuer",
+                "Bearer token 的 issuer 不属于当前部署",
+            ),
             AccountError::UserSuspended => Self::new(
                 StatusCode::FORBIDDEN,
                 "account_suspended",

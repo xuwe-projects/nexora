@@ -98,10 +98,10 @@ impl Application for Console {
     fn build_root_view(&mut self, window: &mut Window, cx: &mut App) -> Entity<Self::RootView> {
         gpui_component::set_locale("zh-CN");
         settings_feature::init(console_updater_config(), cx);
-        window_actions::init("Xuwe Console", cx);
-        let pinned_tabs = config::pinned_tabs(cx);
+        window_actions::init("Nexora Console", cx);
+        let pinned_tabs = config::pinned_tab_paths(cx);
         cx.new(|cx| {
-            let mut root = RootView::with_pinned_tabs(pinned_tabs);
+            let mut root = RootView::with_pinned_paths(pinned_tabs);
             root.initialize_feature_state(window, cx);
             root
         })

@@ -7,7 +7,15 @@ edition.workspace = true
 path = "src/account.rs"
 
 [features]
+default = ["zitadel"]
 database-tests = []
+zitadel = [
+    "dep:grpc",
+    "dep:grpc-protobuf",
+    "dep:grpc-protobuf-build",
+    "dep:protobuf",
+    "dep:rustls",
+]
 
 [dependencies]
 api = { workspace = true }
@@ -15,14 +23,14 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 contracts = { workspace = true }
-grpc = { workspace = true }
-grpc-protobuf = { workspace = true }
+grpc = { workspace = true, optional = true }
+grpc-protobuf = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true }
 kernel = { workspace = true }
-protobuf = { workspace = true }
+protobuf = { workspace = true, optional = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-rustls = { workspace = true }
+rustls = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = ["derive"] }
@@ -39,4 +47,4 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true, features = ["util"] }
 
 [build-dependencies]
-grpc-protobuf-build = { workspace = true }
+grpc-protobuf-build = { workspace = true, optional = true }

@@ -10,6 +10,7 @@ fn permission_enum_uses_stable_database_keys() {
         (PermissionKey::UsersRead, "users:read"),
         (PermissionKey::UsersRolesWrite, "users:roles.write"),
         (PermissionKey::UsersStatusWrite, "users:status.write"),
+        (PermissionKey::UsersProvision, "users:provision"),
         (PermissionKey::RolesRead, "roles:read"),
         (PermissionKey::RolesWrite, "roles:write"),
         (PermissionKey::PermissionsRead, "permissions:read"),

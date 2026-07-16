@@ -1,20 +1,25 @@
 //! 用户与用户角色 handlers。
 
 use api::{ApiJson, ApiPath, ApiQuery};
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::State,
+    http::{StatusCode, header::LOCATION},
+    response::IntoResponse,
+};
 use contracts::{
     account::{
-        AccessProfileResponse, ReplaceUserRolesRequest, UpdateUserStatusRequest, UserPageResponse,
-        UserResponse,
+        AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest,
+        UpdateUserStatusRequest, UserPageResponse, UserResponse,
     },
     pagination::PageQuery,
 };
 
 use crate::{
-    AccountError, AccountState, ApiError, StoreError,
+    AccountError, AccountState, ApiError, ExternalIdentity, StoreError,
     authorization::{
         Authorized,
-        accounts::{ReadUsers, WriteUserRoles, WriteUserStatus},
+        accounts::{ProvisionUsers, ReadUsers, WriteUserRoles, WriteUserStatus},
     },
     handlers::accounts::{
         access_profile_response, page_request, user_page_response, user_response, user_role_ids,
@@ -22,6 +27,28 @@ use crate::{
     },
     stores,
 };
+
+/// 显式开通一个经过管理员确认的外部身份。
+pub(crate) async fn provision_user(
+    _authorization: Authorized<ProvisionUsers>,
+    State(state): State<AccountState>,
+    ApiJson(request): ApiJson<ProvisionUserRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user = state
+        .provision_user(ExternalIdentity {
+            identity_id: request.identity_id,
+            email: request.email,
+            display_name: request.display_name,
+            avatar_url: request.avatar_url,
+        })
+        .await?;
+    let location = format!("/users/{}", user.id);
+    Ok((
+        StatusCode::CREATED,
+        [(LOCATION, location)],
+        Json(user_response(user)),
+    ))
+}
 
 /// 分页返回用户集合。
 pub(crate) async fn list_users(

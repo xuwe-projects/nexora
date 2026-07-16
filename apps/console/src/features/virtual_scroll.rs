@@ -107,20 +107,20 @@ pub fn virtual_scroll_stock_seeds() -> &'static [StockSeed] {
 /// 虚拟滚动数据表功能视图。
 ///
 /// 该 feature 持有独立的 `TableState`，用于展示大规模股票行和多列横向滚动，避免把演示状态放进根视图。
-#[derive(Default)]
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "虚拟滚动",
+    path = "/examples/virtual-scroll",
+    section = "扩展示例",
+    icon = "frame",
+    order = 50
+)]
 pub struct VirtualScrollFeature {
     table: Option<Entity<TableState<StockTableDelegate>>>,
 }
 
-impl VirtualScrollFeature {
-    /// 创建虚拟滚动表格使用的长期状态。
-    ///
-    /// 该方法必须在所属根视图的构造阶段调用，确保 `render` 不会创建 Entity 或引入其他
-    /// 长期副作用。
-    pub fn initialize<T>(&mut self, window: &mut Window, cx: &mut Context<T>)
-    where
-        T: 'static,
-    {
+impl nexora::FeatureElement for VirtualScrollFeature {
+    fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.table.get_or_insert_with(|| {
             cx.new(|cx| {
                 TableState::new(StockTableDelegate::new(DEFAULT_ROW_COUNT), window, cx)
@@ -136,19 +136,7 @@ impl VirtualScrollFeature {
         });
     }
 
-    /// 渲染虚拟滚动股票数据表。
-    ///
-    /// 页面展示标题、当前表格规模摘要和 `DataTable` 主体，表格本身支持行列虚拟滚动、固定列、
-    /// 列调整、列拖拽排序和点击表头排序。
-    ///
-    /// # Panics
-    ///
-    /// 如果所属 [`RootView`](crate::features::root::RootView) 未在构造阶段调用
-    /// `initialize_feature_state`，虚拟滚动表格状态尚未创建时会 panic。
-    pub fn render<T>(&self, cx: &mut Context<T>) -> AnyElement
-    where
-        T: 'static,
-    {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let table = self
             .table
             .as_ref()

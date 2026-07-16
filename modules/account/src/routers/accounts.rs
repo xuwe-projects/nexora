@@ -11,7 +11,11 @@ use crate::{AccountState, handlers};
 pub(super) fn initialize() -> Router<AccountState> {
     Router::new()
         .route("/me", get(handlers::accounts::me::current_user))
-        .route("/users", get(handlers::accounts::users::list_users))
+        .route(
+            "/users",
+            get(handlers::accounts::users::list_users)
+                .post(handlers::accounts::users::provision_user),
+        )
         .route(
             "/users/{user_id}",
             get(handlers::accounts::users::get_user)

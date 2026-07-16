@@ -99,32 +99,39 @@ impl ConsolePreferences {
         self.window.startup_display_uuid = display_uuid;
     }
 
-    /// 返回配置中仍能识别的置顶标签，并按保存顺序去除重复项。
-    pub fn pinned_tabs(&self) -> Vec<FeatureId> {
+    /// 返回使用具体逻辑路径表达的置顶标签。
+    ///
+    /// 新版本直接保存 `/users/details/42` 等具体路径；读取旧版本保存的 FeatureId 时会
+    /// 自动转换为对应静态路径，从而保持已有用户配置可继续使用。
+    pub fn pinned_tab_paths(&self) -> Vec<String> {
         self.workspace
             .pinned_tabs
             .iter()
-            .filter_map(|id| FeatureId::from_id(id))
-            .fold(Vec::new(), |mut tabs, feature| {
-                if !tabs.contains(&feature) {
-                    tabs.push(feature);
+            .filter_map(|value| {
+                if value.starts_with('/') {
+                    Some(value.clone())
+                } else {
+                    FeatureId::from_id(value).map(|feature| feature.path().to_owned())
                 }
-                tabs
+            })
+            .filter(|path| !path.contains(':'))
+            .fold(Vec::new(), |mut paths, path| {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+                paths
             })
     }
 
-    /// 使用当前标签顺序更新需要在下次启动时恢复的置顶功能区。
-    pub fn set_pinned_tabs(&mut self, pinned_tabs: &[FeatureId]) {
+    /// 使用具体逻辑路径更新需要在下次启动时恢复的置顶标签。
+    pub fn set_pinned_tab_paths(&mut self, pinned_tabs: &[String]) {
         self.schema_version = CONSOLE_SCHEMA_VERSION;
-        self.workspace.pinned_tabs = pinned_tabs
-            .iter()
-            .map(|feature| feature.id().to_owned())
-            .fold(Vec::new(), |mut ids, id| {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-                ids
-            });
+        self.workspace.pinned_tabs = pinned_tabs.iter().fold(Vec::new(), |mut paths, path| {
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+            paths
+        });
     }
 }
 
@@ -320,13 +327,15 @@ pub fn startup_display_uuid(cx: &App) -> Option<&str> {
         .startup_display_uuid()
 }
 
-/// 返回启动时恢复且仍然有效的置顶标签列表。
+/// 返回启动时恢复且仍能由 Nexora 注册表解析的置顶标签路径。
 ///
 /// # Panics
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
-pub fn pinned_tabs(cx: &App) -> Vec<FeatureId> {
-    cx.global::<PreferencesState>().preferences.pinned_tabs()
+pub fn pinned_tab_paths(cx: &App) -> Vec<String> {
+    cx.global::<PreferencesState>()
+        .preferences
+        .pinned_tab_paths()
 }
 
 /// 观察用户偏好变化，并在变化时通知当前 Entity 局部重渲染。
@@ -396,16 +405,14 @@ pub fn persist_startup_display_uuid(display_uuid: Option<String>, cx: &mut App) 
     });
 }
 
-/// 更新置顶标签顺序，并把最新快照交给后台线程保存。
-///
-/// 保存失败时仍保留本次运行中的置顶状态，后续标签操作可以再次尝试写入。
+/// 更新具体路径形式的置顶标签顺序，并把最新快照交给后台线程保存。
 ///
 /// # Panics
 ///
 /// 在 [`init`] 之前调用时会因为偏好全局状态尚未注册而 panic。
-pub fn persist_pinned_tabs(pinned_tabs: &[FeatureId], cx: &mut App) {
+pub fn persist_pinned_tab_paths(pinned_tabs: &[String], cx: &mut App) {
     update_preferences(cx, |preferences| {
-        preferences.set_pinned_tabs(pinned_tabs);
+        preferences.set_pinned_tab_paths(pinned_tabs);
     });
 }
 

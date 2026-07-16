@@ -20,6 +20,7 @@ const MIN_JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 pub struct OidcAccessTokenVerifier {
     http: reqwest::Client,
     issuer: String,
+    identity_issuer: String,
     audience: String,
     jwks_uri: Url,
     signing_algorithms: Vec<String>,
@@ -39,6 +40,7 @@ impl OidcAccessTokenVerifier {
         audience: impl Into<String>,
     ) -> Result<Self, VerificationError> {
         let issuer_url = normalized_issuer(issuer.as_ref())?;
+        let identity_issuer = issuer_url.to_string();
         let audience = audience.into();
         if audience.trim().is_empty() {
             return Err(VerificationError::InvalidConfiguration(
@@ -77,6 +79,7 @@ impl OidcAccessTokenVerifier {
         Ok(Self {
             http,
             issuer: document.issuer.trim().to_owned(),
+            identity_issuer,
             audience,
             jwks_uri: document.jwks_uri,
             signing_algorithms: document.id_token_signing_alg_values_supported,
@@ -159,7 +162,7 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
             .unwrap_or(claims.subject.as_str())
             .to_owned();
         Ok(VerifiedIdentity {
-            issuer: self.issuer.clone(),
+            issuer: self.identity_issuer.clone(),
             subject: claims.subject,
             email: claims.email,
             display_name,

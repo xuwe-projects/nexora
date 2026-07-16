@@ -1,5 +1,8 @@
 use contracts::{
-    account::{PermissionResponse, RoleResponse, UpdateRoleRequest, UserResponse, UserStatus},
+    account::{
+        PermissionResponse, ProvisionUserRequest, RoleResponse, UpdateRoleRequest, UserResponse,
+        UserStatus,
+    },
     pagination::{PageMetadata, PageQuery, PageResponse},
     patch::PatchField,
 };
@@ -84,6 +87,24 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     assert_eq!(json["updated_at"], now);
     assert!(json["created_at"].is_i64());
     assert!(json["updated_at"].is_i64());
+}
+
+#[test]
+fn provision_user_request_uses_explicit_snake_case_identity_id() {
+    let request = ProvisionUserRequest {
+        identity_id: "user-1".to_owned(),
+        email: Some("user@example.com".to_owned()),
+        display_name: "测试用户".to_owned(),
+        avatar_url: None,
+    };
+
+    let json = serde_json::to_value(&request).expect("用户开通请求应当可以序列化");
+    assert_eq!(json["identity_id"], "user-1");
+    assert!(json.get("identityId").is_none());
+    assert_eq!(
+        serde_json::from_value::<ProvisionUserRequest>(json).expect("用户开通请求应当可以反序列化"),
+        request
+    );
 }
 
 #[test]

@@ -4,7 +4,8 @@ mod account_api;
 mod app;
 mod auth;
 mod config;
-mod features;
+/// Console 中可由 Nexora 注册表发现和路由的业务 Feature 集合。
+pub mod features;
 
 use app::Console;
 use desktop::Application as _;

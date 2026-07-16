@@ -1,0 +1,8 @@
+[package]
+name = "{{ project_name }}"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nexora = { workspace = true, features = ["desktop", "derive"{% if account_enabled %}, "account-client"{% endif %}] }
+{% if account_enabled %}serde = { workspace = true }{% endif %}

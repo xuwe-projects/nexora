@@ -216,6 +216,15 @@ impl Render for RoleCreateDialog {
 }
 
 /// 角色管理页面状态与异步生命周期。
+#[derive(nexora::Feature)]
+#[nexora(
+    title = "角色管理",
+    path = "/roles",
+    section = "访问控制",
+    icon = "asterisk",
+    order = 40,
+    factory = RolesFeature::new
+)]
 pub struct RolesFeature {
     roles: Vec<RoleResponse>,
     permissions: Vec<PermissionResponse>,
@@ -648,7 +657,7 @@ impl RolesFeature {
     }
 }
 
-impl Render for RolesFeature {
+impl nexora::FeatureElement for RolesFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
@@ -718,6 +727,10 @@ impl Render for RolesFeature {
                 self.loaded && !self.loading && self.roles.is_empty(),
                 |this| this.child(Alert::info("roles-empty", "当前系统没有角色")),
             )
+    }
+
+    fn activated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.load_if_needed(cx);
     }
 }
 

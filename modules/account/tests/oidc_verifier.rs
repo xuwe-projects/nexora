@@ -47,7 +47,7 @@ async fn verifier_enforces_standard_access_token_claims() {
         ))
         .await
         .expect("签名和标准声明有效的 token 应当通过");
-    assert_eq!(identity.issuer, issuer);
+    assert_eq!(identity.issuer, format!("{issuer}/"));
     assert_eq!(identity.subject, "user-1");
     assert_eq!(identity.display_name, "Ada");
 

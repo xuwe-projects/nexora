@@ -40,6 +40,54 @@ pub(crate) async fn sync_existing(
     .await?)
 }
 
+/// 显式创建一个经过宿主或管理员确认的本地用户。
+pub(crate) async fn provision(
+    identity: &ExternalIdentity,
+    pool: &PgPool,
+) -> Result<User, StoreError> {
+    let mut transaction = pool.begin().await?;
+    if query_existing(identity, &mut transaction).await?.is_some() {
+        return Err(StoreError::Conflict("user_already_provisioned"));
+    }
+
+    for _ in 0..USER_ID_GENERATION_ATTEMPTS {
+        let user_id = generate_user_id()?;
+        let inserted = sqlx::query_as::<_, User>(
+            r#"
+            INSERT INTO account.users (
+                id,
+                identity_id,
+                email,
+                display_name,
+                avatar_url
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            RETURNING id, identity_id, email, display_name, avatar_url, status,
+                      is_super_admin, created_at, updated_at, last_login_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(identity.identity_id.as_str())
+        .bind(identity.email.as_deref())
+        .bind(identity.display_name.as_str())
+        .bind(identity.avatar_url.as_deref())
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if let Some(user) = inserted {
+            transaction.commit().await?;
+            return Ok(user);
+        }
+        if query_existing(identity, &mut transaction).await?.is_some() {
+            return Err(StoreError::Conflict("user_already_provisioned"));
+        }
+    }
+
+    Err(StoreError::Database(sqlx::Error::Protocol(
+        "无法在限定次数内生成唯一的 8 位用户 ID".to_owned(),
+    )))
+}
+
 pub(super) async fn upsert(
     identity: &ExternalIdentity,
     transaction: &mut Transaction<'_, Postgres>,
@@ -52,7 +100,13 @@ pub(super) async fn upsert(
         let user_id = generate_user_id()?;
         let inserted = sqlx::query_as::<_, User>(
             r#"
-            INSERT INTO account.users (id, identity_id, email, display_name, avatar_url)
+            INSERT INTO account.users (
+                id,
+                identity_id,
+                email,
+                display_name,
+                avatar_url
+            )
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
             RETURNING id, identity_id, email, display_name, avatar_url, status,
@@ -100,6 +154,23 @@ async fn update_existing(
     .bind(identity.email.as_deref())
     .bind(identity.display_name.as_str())
     .bind(identity.avatar_url.as_deref())
+    .fetch_optional(&mut **transaction)
+    .await
+}
+
+async fn query_existing(
+    identity: &ExternalIdentity,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, identity_id, email, display_name, avatar_url, status,
+               is_super_admin, created_at, updated_at, last_login_at
+        FROM account.users
+        WHERE identity_id = $1
+        "#,
+    )
+    .bind(identity.identity_id.as_str())
     .fetch_optional(&mut **transaction)
     .await
 }

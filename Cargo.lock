@@ -379,6 +379,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "askama"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1bf825125edd887a019d0a3a837dcc5499a68b0d034cc3eb594070c3e18addc"
+dependencies = [
+ "askama_macros",
+ "itoa",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "askama_derive"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c7065972a130eafa84215f21352ae15b4a7393da48c1f5e103904490736738"
+dependencies = [
+ "askama_parser",
+ "memchr",
+ "proc-macro2",
+ "quote",
+ "rustc-hash 2.1.3",
+ "syn",
+]
+
+[[package]]
+name = "askama_macros"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e23b1d2c4bd39a41971f6124cef4cc6fd0540913ecb90919b69ab3bbe44ae1a"
+dependencies = [
+ "askama_derive",
+]
+
+[[package]]
+name = "askama_parser"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7db09fde9143e7ac4513358fb32ee32847125b63b18ea715afd487956da715da"
+dependencies = [
+ "rustc-hash 2.1.3",
+ "unicode-ident",
+ "winnow 1.0.3",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1372,6 +1419,7 @@ dependencies = [
  "gpui-component",
  "keyring",
  "logging",
+ "nexora",
  "oidc",
  "reqwest",
  "security-framework",
@@ -1383,6 +1431,18 @@ dependencies = [
  "ui",
  "updater",
  "url",
+]
+
+[[package]]
+name = "console"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fe5f465a4f6fee88fad41b85d990f84c835335e85b5d9e6e63e0d06d28cba7c"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "unicode-width",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1864,6 +1924,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialoguer"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
+dependencies = [
+ "console 0.16.4",
+ "shell-words",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2081,6 +2151,12 @@ dependencies = [
  "vswhom",
  "winreg",
 ]
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -4624,6 +4700,7 @@ dependencies = [
  "configuration",
  "serde",
  "sqlx",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -4747,6 +4824,49 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nexora"
+version = "0.1.0"
+dependencies = [
+ "account",
+ "askama",
+ "axum",
+ "clap",
+ "configuration",
+ "contracts",
+ "desktop",
+ "dialoguer",
+ "gpui",
+ "gpui-component",
+ "inventory",
+ "matchit",
+ "migrate",
+ "nexora-macros",
+ "oidc",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_html_form",
+ "serde_path_to_error",
+ "sqlx",
+ "theme",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "nexora-macros"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "no_std_io2"
@@ -7123,6 +7243,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_html_form"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f0346d7a342ab90f405cfc08f25d15075f944f42fcabbc5eac923829fa6d228"
+dependencies = [
+ "form_urlencoded",
+ "indexmap",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7269,6 +7400,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shellexpand"

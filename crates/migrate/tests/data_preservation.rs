@@ -7,6 +7,7 @@ const MIGRATION_2: &str = include_str!("../migrations/0002_account_add_super_adm
 const MIGRATION_3: &str =
     include_str!("../migrations/0003_account_rework_system_initialization.up.sql");
 const MIGRATION_4: &str = include_str!("../migrations/0004_account_change_identifier_types.up.sql");
+const MIGRATION_5: &str = include_str!("../migrations/0005_account_bind_identity_issuer.up.sql");
 
 #[sqlx::test(migrations = false)]
 async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) {
@@ -163,6 +164,146 @@ async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) 
             "bigint".to_owned(),
         )
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn initialized_deployment_can_bind_issuer_once_after_upgrade(pool: PgPool) {
+    apply(&pool, MIGRATION_1).await;
+    apply(&pool, MIGRATION_2).await;
+    apply(&pool, MIGRATION_3).await;
+    apply(&pool, MIGRATION_4).await;
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, is_super_admin)
+        VALUES ('Legacy01', 'legacy-super-admin', '遗留超级管理员', TRUE)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备遗留超级管理员");
+    sqlx::query(
+        r#"
+        UPDATE account.system_initialization
+        SET is_initialized = TRUE,
+            super_admin_user_id = 'Legacy01',
+            initialized_at = NOW()
+        WHERE id = 1
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备已完成初始化的旧部署");
+
+    apply(&pool, MIGRATION_5).await;
+
+    let unbound = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT identity_issuer FROM account.system_initialization WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("迁移后应当可以读取部署 issuer");
+    assert_eq!(unbound, None);
+
+    sqlx::query(
+        r#"
+        UPDATE account.system_initialization
+        SET identity_issuer = 'https://recovered.example.com/'
+        WHERE id = 1 AND identity_issuer IS NULL
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("已初始化旧部署也应当可以首次绑定 issuer");
+    let second_rebind = sqlx::query(
+        r#"
+        UPDATE account.system_initialization
+        SET identity_issuer = 'https://another.example.com/'
+        WHERE id = 1
+        "#,
+    )
+    .execute(&pool)
+    .await;
+    assert!(second_rebind.is_err(), "部署 issuer 首次绑定后必须冻结");
+}
+
+#[sqlx::test(migrations = false)]
+async fn deployment_issuer_is_required_and_user_subject_stays_globally_unique(pool: PgPool) {
+    apply(&pool, MIGRATION_1).await;
+    apply(&pool, MIGRATION_2).await;
+    apply(&pool, MIGRATION_3).await;
+    apply(&pool, MIGRATION_4).await;
+    apply(&pool, MIGRATION_5).await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, is_super_admin)
+        VALUES ('Admin001', 'admin-subject', '超级管理员', TRUE)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备超级管理员");
+    let initialize_without_issuer = sqlx::query(
+        r#"
+        UPDATE account.system_initialization
+        SET is_initialized = TRUE,
+            super_admin_user_id = 'Admin001',
+            initialized_at = NOW()
+        WHERE id = 1
+        "#,
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        initialize_without_issuer.is_err(),
+        "绑定部署 issuer 前不能完成初始化"
+    );
+
+    sqlx::query(
+        r#"
+        UPDATE account.system_initialization
+        SET identity_issuer = 'https://id.example.com/'
+        WHERE id = 1
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以首次绑定部署 issuer");
+
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name)
+        VALUES ('Member01', 'shared-subject', '第一个用户')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以创建第一个 subject");
+    let duplicate = sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name)
+        VALUES ('Member02', 'shared-subject', '重复用户')
+        "#,
+    )
+    .execute(&pool)
+    .await;
+    assert!(duplicate.is_err(), "identity ID 必须在部署内保持唯一");
+
+    let administrator_can_provision = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM account.roles
+            JOIN account.role_permissions ON role_permissions.role_id = roles.id
+            JOIN account.permissions ON permissions.id = role_permissions.permission_id
+            WHERE roles.key = 'admin' AND permissions.key = 'users:provision'
+        )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以检查新开通权限");
+    assert!(administrator_can_provision);
 }
 
 async fn apply(pool: &PgPool, sql: &'static str) {

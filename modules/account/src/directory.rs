@@ -41,7 +41,7 @@ const DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// 可用于首次初始化选择的人类用户。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryUser {
-    /// 认证授权服务中稳定唯一的用户 ID。
+    /// 当前目录 issuer 范围内稳定唯一的用户 ID（subject）。
     pub identity_id: String,
     /// 认证授权服务中的用户名。
     pub username: String,

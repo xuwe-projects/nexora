@@ -124,6 +124,54 @@ actix-web = "4"
 }
 
 #[test]
+fn cargo_rules_allow_documented_nexora_facade_mixed_targets() {
+    let fixture = Fixture::new("nexora-mixed-targets");
+    fixture.write(
+        "Cargo.toml",
+        r#"[workspace]
+resolver = "3"
+members = ["crates/nexora"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+"#,
+    );
+    fixture.write(
+        "crates/nexora/Cargo.toml",
+        r#"[package]
+name = "nexora"
+version.workspace = true
+edition.workspace = true
+
+[package.metadata.nexora]
+allow-mixed-targets = true
+reason = "框架依赖与命令行需要共享同一个公开 package 名称"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexora"
+path = "src/main.rs"
+"#,
+    );
+    fixture.write("crates/nexora/src/lib.rs", "//! Nexora 框架入口。\n");
+    fixture.write(
+        "crates/nexora/src/main.rs",
+        "//! Nexora 命令入口。\nfn main() {}\n",
+    );
+
+    let output = fixture.run(&["--deny-warnings"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn rust_and_gpui_rules_report_source_violations() {
     let fixture = Fixture::new("source-rules");
     fixture.write(

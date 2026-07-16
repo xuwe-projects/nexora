@@ -1,0 +1,95 @@
+[package]
+name = "nexora"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+include = [
+    "src/**",
+    "templates/scaffold/features.rs",
+    "templates/scaffold/features/home.rs",
+    "templates/scaffold/gitignore.askama",
+    "templates/scaffold/main.rs",
+    "templates/scaffold/single/Cargo.toml.askama",
+    "templates/scaffold/workspace/Cargo.toml.askama",
+    "templates/scaffold/workspace/apps/desktop/Cargo.toml.askama",
+    "templates/scaffold/workspace/apps/desktop/account.rs",
+    "templates/scaffold/workspace/apps/desktop/config.rs",
+    "templates/scaffold/workspace/apps/server/Cargo.toml.askama",
+    "templates/scaffold/workspace/apps/server/config.rs",
+    "templates/scaffold/workspace/apps/server/main.rs",
+    "templates/scaffold/workspace/apps/server/routes.rs",
+    "templates/scaffold/workspace/config/example.desktop.toml",
+    "templates/scaffold/workspace/config/example.server.toml",
+    "tests/**",
+]
+description = "以 GPUI、强类型路由和可组合业务模块构建 Rust 桌面全栈应用的框架"
+keywords = ["nexora", "gpui", "desktop", "framework", "routing"]
+categories = ["gui"]
+
+[package.metadata.nexora]
+allow-mixed-targets = true
+reason = "Nexora 对外必须同时提供同名框架依赖与命令行入口"
+
+[features]
+default = ["desktop", "derive", "cli"]
+cli = ["dep:askama", "dep:clap", "dep:dialoguer"]
+derive = ["dep:macros"]
+desktop = [
+    "dep:desktop",
+    "dep:gpui",
+    "dep:gpui-component",
+    "dep:inventory",
+    "dep:matchit",
+    "dep:percent-encoding",
+    "dep:serde_html_form",
+    "dep:serde_path_to_error",
+    "dep:theme",
+    "dep:url",
+]
+server = ["dep:axum", "dep:sqlx", "dep:tokio", "dep:tracing", "dep:url"]
+account-client = ["desktop", "derive", "dep:contracts", "dep:oidc", "dep:reqwest"]
+account-server = ["server", "derive", "dep:account", "dep:migrate"]
+account-zitadel = ["account-server", "account/zitadel"]
+account = ["account-client", "account-server", "account-zitadel"]
+
+[dependencies]
+account = { workspace = true, optional = true, default-features = false }
+askama = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+configuration = { workspace = true }
+contracts = { workspace = true, optional = true }
+desktop = { workspace = true, optional = true }
+dialoguer = { workspace = true, optional = true }
+gpui = { workspace = true, optional = true }
+gpui-component = { workspace = true, optional = true }
+inventory = { workspace = true, optional = true }
+macros = { workspace = true, optional = true }
+matchit = { workspace = true, optional = true }
+migrate = { workspace = true, optional = true, default-features = false }
+oidc = { workspace = true, optional = true }
+percent-encoding = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
+serde = { workspace = true }
+serde_html_form = { workspace = true, optional = true }
+serde_path_to_error = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+thiserror = { workspace = true }
+theme = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+tracing = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexora"
+path = "src/bin/nexora.rs"
+required-features = ["cli"]

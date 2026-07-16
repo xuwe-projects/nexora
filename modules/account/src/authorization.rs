@@ -42,6 +42,9 @@ impl FromRequestParts<AccountState> for AuthenticatedUser {
     ) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts)?;
         let identity = state.token_verifier().verify(token).await?;
+        state
+            .verify_identity_issuer(identity.issuer.as_str())
+            .await?;
         let identity = ExternalIdentity {
             identity_id: identity.subject,
             email: identity.email,

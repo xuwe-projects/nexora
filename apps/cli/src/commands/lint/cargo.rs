@@ -311,7 +311,7 @@ fn check_member_targets(workspace: &Workspace, member: &Member, report: &mut Rep
         || member.manifest.document.get("bin").is_some();
     let has_library = member.directory.join("src/lib.rs").is_file()
         || member.manifest.document.get("lib").is_some();
-    if !(has_binary && has_library) {
+    if !(has_binary && has_library) || allows_mixed_targets(member) {
         return;
     }
 
@@ -328,6 +328,31 @@ fn check_member_targets(workspace: &Workspace, member: &Member, report: &mut Rep
         )
         .with_help("保留 src/main.rs；需要复用的业务能力应拆到职责明确的 workspace library crate"),
     );
+}
+
+fn allows_mixed_targets(member: &Member) -> bool {
+    let Some(configuration) = member
+        .manifest
+        .document
+        .get("package")
+        .and_then(Item::as_table_like)
+        .and_then(|package| package.get("metadata"))
+        .and_then(Item::as_table_like)
+        .and_then(|metadata| metadata.get("nexora"))
+        .and_then(Item::as_table_like)
+    else {
+        return false;
+    };
+    let allowed = configuration
+        .get("allow-mixed-targets")
+        .and_then(Item::as_bool)
+        .unwrap_or(false);
+    let has_reason = configuration
+        .get("reason")
+        .and_then(Item::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty());
+
+    allowed && has_reason
 }
 
 fn check_technology(

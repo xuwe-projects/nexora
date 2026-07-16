@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use account::{
-    Account,
+    Account, AccountDependencies,
     authentication::{OidcAccessTokenVerifier, VerificationError},
     directory::{DirectoryError, ZitadelUserDirectory},
 };
@@ -22,7 +22,7 @@ pub(crate) struct InitializedServer {
     pub(crate) system_initialized: bool,
 }
 
-/// 创建唯一 PostgreSQL 连接池、初始化 OIDC verifier 并装配账号模块。
+/// 创建唯一 PostgreSQL 连接池、初始化 OIDC verifier、绑定部署 issuer 并装配账号模块。
 ///
 /// 数据库结构由独立的 `migrate` 程序管理；本函数不会在服务启动时隐式修改 schema。
 ///
@@ -41,7 +41,11 @@ pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, Boot
         config.oidc.audience.clone(),
     )
     .await?;
-    let account = Account::new(pool.clone(), Arc::new(verifier));
+    Account::bind_identity_issuer(&pool, config.oidc.issuer_url.as_str()).await?;
+    let account = Account::new(AccountDependencies {
+        pool: pool.clone(),
+        token_verifier: Arc::new(verifier),
+    });
     let system_initialized = account.is_system_initialized().await?;
     let directory = ZitadelUserDirectory::new(
         &config.oidc.issuer_url,

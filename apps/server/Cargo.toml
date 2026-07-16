@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-account = { workspace = true }
+account = { workspace = true, features = ["zitadel"] }
 api = { workspace = true }
 axum = { workspace = true, features = ["form"] }
 clap = { workspace = true }

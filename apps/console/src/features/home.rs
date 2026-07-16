@@ -22,20 +22,20 @@ use gpui_component::{
 ///
 /// 该类型持有首页自己的组件状态，例如虚拟表单使用的 `DataTable` 状态。
 /// `RootView` 只负责组合它，首页内部的表格交互状态由该类型自行维护。
-#[derive(Default)]
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "首页",
+    path = "/",
+    section = "工作台",
+    icon = "layout-dashboard",
+    order = 0
+)]
 pub struct HomeFeature {
     table: Option<Entity<TableState<VirtualFormTableDelegate>>>,
 }
 
-impl HomeFeature {
-    /// 创建首页使用的长期表格状态。
-    ///
-    /// 该方法必须在所属根视图的构造阶段调用，避免在 `render` 中创建 Entity，导致渲染
-    /// 副作用与组件生命周期混在一起。
-    pub fn initialize<T>(&mut self, window: &mut Window, cx: &mut Context<T>)
-    where
-        T: 'static,
-    {
+impl nexora::FeatureElement for HomeFeature {
+    fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.table.get_or_insert_with(|| {
             cx.new(|cx| {
                 TableState::new(VirtualFormTableDelegate::new(), window, cx)
@@ -48,18 +48,7 @@ impl HomeFeature {
         });
     }
 
-    /// 渲染首页概览内容。
-    ///
-    /// 页面包含模板状态、关键指标、建议的下一步操作和虚拟表单数据表，用于展示完整桌面应用的首页组织方式。
-    ///
-    /// # Panics
-    ///
-    /// 如果所属 [`RootView`](crate::features::root::RootView) 未在构造阶段调用
-    /// `initialize_feature_state`，首页表格状态尚未创建时会 panic。
-    pub fn render<T>(&self, cx: &mut Context<T>) -> AnyElement
-    where
-        T: 'static,
-    {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let table = self
             .table
             .as_ref()
@@ -127,7 +116,7 @@ impl HomeFeature {
                     .child(
                         panel("当前模板能力")
                             .child(capability("GPUI 运行器", "统一初始化窗口、组件库和应用配置", theme))
-                            .child(capability("Feature 组合", "Root 持有选中状态，feature 模块只关心自己的页面", theme))
+                            .child(capability("Feature 运行时", "注册表自动创建 Entity，feature 只实现渲染与生命周期", theme))
                             .child(capability("macOS 打包", "CLI 已支持 .app、DMG、签名、公证和校验文件", theme)),
                     ),
             )

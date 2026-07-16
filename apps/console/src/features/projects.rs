@@ -14,51 +14,60 @@ use ui::Card;
 /// 项目管理功能视图。
 ///
 /// 当前实现使用静态项目数据作为模板示例，真实应用可以在这里接入项目扫描、最近打开记录或远程同步状态。
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "项目",
+    path = "/projects",
+    section = "工作台",
+    icon = "folder-open",
+    order = 10
+)]
 pub struct ProjectsFeature;
 
-impl ProjectsFeature {
-    /// 渲染项目管理页面。
-    ///
-    /// 页面展示项目列表、状态标签和路径信息，适合作为后续文件系统或 workspace 管理功能的起点。
-    /// 渲染时会读取当前组件主题，保证示例页面能够跟随主题配置调整颜色。
-    pub fn render<T>(cx: &mut Context<T>) -> AnyElement
-    where
-        T: 'static,
-    {
-        let component_size = theme::component_size(cx);
-        let theme = cx.theme();
-        let rows = project_rows()
-            .iter()
-            .copied()
-            .map(|row| project_table_row(row, theme))
-            .collect::<Vec<_>>();
-
-        Card::new()
-            .p_4()
-            .gap_4()
-            .child(section_header(
-                "项目工作区",
-                "把项目列表、最近打开和环境状态收束在一个 feature 中。",
-                theme,
-            ))
-            .child(
-                Table::new()
-                    .with_size(component_size)
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(
-                        TableHeader::new().child(
-                            TableRow::new()
-                                .child(TableHead::new().w(px(220.)).child("项目"))
-                                .child(TableHead::new().child("职责"))
-                                .child(TableHead::new().w(px(140.)).child("状态")),
-                        ),
-                    )
-                    .child(TableBody::new().children(rows)),
-            )
-            .into_any_element()
+impl nexora::FeatureElement for ProjectsFeature {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        render_content(cx)
     }
+}
+
+/// 渲染项目页面及其两个目录子页面共享的内容。
+pub(crate) fn render_content<T>(cx: &mut Context<T>) -> AnyElement
+where
+    T: 'static,
+{
+    let component_size = theme::component_size(cx);
+    let theme = cx.theme();
+    let rows = project_rows()
+        .iter()
+        .copied()
+        .map(|row| project_table_row(row, theme))
+        .collect::<Vec<_>>();
+
+    Card::new()
+        .p_4()
+        .gap_4()
+        .child(section_header(
+            "项目工作区",
+            "把项目列表、最近打开和环境状态收束在一个 feature 中。",
+            theme,
+        ))
+        .child(
+            Table::new()
+                .with_size(component_size)
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .child(
+                    TableHeader::new().child(
+                        TableRow::new()
+                            .child(TableHead::new().w(px(220.)).child("项目"))
+                            .child(TableHead::new().child("职责"))
+                            .child(TableHead::new().w(px(140.)).child("状态")),
+                    ),
+                )
+                .child(TableBody::new().children(rows)),
+        )
+        .into_any_element()
 }
 
 /// 项目列表中的一行静态示例数据。
@@ -157,9 +166,9 @@ pub fn project_rows() -> &'static [ProjectRow] {
             status: ProjectStatus::Core,
         },
         ProjectRow {
-            name: "Xuwe CLI",
-            path: "apps/cli",
-            description: "本地构建、签名和打包工具",
+            name: "Nexora CLI",
+            path: "crates/nexora",
+            description: "Nexora 项目创建与初始化工具",
             status: ProjectStatus::Tooling,
         },
     ];

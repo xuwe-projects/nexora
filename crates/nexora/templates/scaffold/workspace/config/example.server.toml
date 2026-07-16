@@ -1,0 +1,12 @@
+[server]
+bind = "127.0.0.1:3000"
+
+[database]
+url = "postgres://postgres:postgres@127.0.0.1:5432/nexora"
+max_connections = 10
+# 仅首次连接确认为空的新数据库时改为 true；迁移成功后请恢复为 false。
+initialize_empty_database = false
+
+[account.oidc]
+issuer_url = "https://identity.example.com"
+audience = "nexora-api"

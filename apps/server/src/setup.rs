@@ -11,7 +11,7 @@ use std::{
 };
 
 use account::{
-    Account, AccountError,
+    Account, AccountError, AccountInitialization, AccountInitializationOutcome,
     directory::{DirectoryUser, ZitadelUserDirectory},
 };
 use axum::{
@@ -276,18 +276,28 @@ async fn complete(State(state): State<SetupState>, Form(form): Form<CompleteForm
     );
     match state
         .account
-        .initialize_super_admin(&selected.into_external_identity())
+        .initialize(AccountInitialization {
+            super_admin: selected.into_external_identity(),
+        })
         .await
     {
-        Ok(user) => {
+        Ok(outcome) => {
+            let (user, outcome) = match outcome {
+                AccountInitializationOutcome::Initialized { super_admin } => {
+                    (super_admin, "succeeded")
+                }
+                AccountInitializationOutcome::AlreadyInitialized { super_admin } => {
+                    (super_admin, "already_initialized")
+                }
+            };
             state.clear_session();
             tracing::info!(
                 business_operation = SETUP_BUSINESS_OPERATION,
                 stage = "complete_initialization",
-                outcome = "succeeded",
+                outcome,
                 user_id = %user.id,
                 identity_id = %user.identity_id,
-                "系统初始化完成，已设置超级管理员"
+                "账号模块初始化已完成"
             );
             html_response(StatusCode::OK, completed_page(display_name.as_str()))
         }

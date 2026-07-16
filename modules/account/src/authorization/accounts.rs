@@ -25,6 +25,13 @@ impl RequiredPermission for WriteUserStatus {
     const KEY: PermissionKey = PermissionKey::UsersStatusWrite;
 }
 
+/// 显式开通可信外部身份所需的权限标记。
+pub struct ProvisionUsers;
+
+impl RequiredPermission for ProvisionUsers {
+    const KEY: PermissionKey = PermissionKey::UsersProvision;
+}
+
 /// 查看角色资源所需的权限标记。
 pub struct ReadRoles;
 

@@ -6,7 +6,9 @@ use contracts::account::{
     AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse, UpdateUserStatusRequest,
     UserResponse, UserStatus,
 };
-use gpui::{AnyElement, Context, IntoElement as _, Render, Task, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, EventEmitter, IntoElement as _, Task, Window, div, prelude::*, px,
+};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
     alert::Alert,
@@ -31,7 +33,24 @@ struct UserRoleEditor {
     selected_role_ids: BTreeSet<i64>,
 }
 
+/// 用户管理页面向父级报告的导航意图。
+pub enum UsersFeatureEvent {
+    /// 请求通过 Nexora 动态路径打开指定用户详情标签。
+    OpenDetails {
+        /// 要写入 `/users/details/:id` 的稳定用户标识。
+        user_id: String,
+    },
+}
+
 /// 用户管理页面状态与异步生命周期。
+#[derive(nexora::Feature)]
+#[nexora(
+    title = "用户管理",
+    path = "/users",
+    section = "访问控制",
+    icon = "user",
+    order = 30
+)]
 pub struct UsersFeature {
     users: Vec<UserResponse>,
     roles: Vec<RoleResponse>,
@@ -45,6 +64,8 @@ pub struct UsersFeature {
     _load_task: Option<Task<()>>,
     _mutation_task: Option<Task<()>>,
 }
+
+impl EventEmitter<UsersFeatureEvent> for UsersFeature {}
 
 impl Default for UsersFeature {
     fn default() -> Self {
@@ -65,11 +86,6 @@ impl Default for UsersFeature {
 }
 
 impl UsersFeature {
-    /// 创建尚未发起网络请求的用户管理页面。
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// 页面首次进入时加载用户页和可分配角色目录。
     pub fn load_if_needed(&mut self, cx: &mut Context<Self>) {
         if !self.loaded && !self.loading {
@@ -229,6 +245,7 @@ impl UsersFeature {
     fn render_user_table(&self, cx: &mut Context<Self>) -> AnyElement {
         let rows = self.users.iter().map(|user| {
             let user_id = user.id.clone();
+            let detail_user_id = user.id.clone();
             let status_user_id = user.id.clone();
             let busy = self.busy_user_id.is_some();
             let is_active = user.status == UserStatus::Active;
@@ -259,9 +276,20 @@ impl UsersFeature {
                 .child(TableCell::new().child(user.email.clone().unwrap_or_else(|| "—".to_owned())))
                 .child(TableCell::new().w(px(88.)).child(status_label))
                 .child(
-                    TableCell::new().w(px(210.)).child(
+                    TableCell::new().w(px(310.)).child(
                         h_flex()
                             .gap_2()
+                            .child(
+                                Button::new(format!("user-details-{detail_user_id}"))
+                                    .small()
+                                    .outline()
+                                    .label("查看详情")
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(UsersFeatureEvent::OpenDetails {
+                                            user_id: detail_user_id.clone(),
+                                        });
+                                    })),
+                            )
                             .child(
                                 Button::new(format!("user-roles-{user_id}"))
                                     .small()
@@ -296,7 +324,7 @@ impl UsersFeature {
                         .child(TableHead::new().child("用户"))
                         .child(TableHead::new().child("邮箱"))
                         .child(TableHead::new().w(px(88.)).child("状态"))
-                        .child(TableHead::new().w(px(210.)).child("操作")),
+                        .child(TableHead::new().w(px(310.)).child("操作")),
                 ),
             )
             .child(TableBody::new().children(rows))
@@ -372,7 +400,7 @@ impl UsersFeature {
     }
 }
 
-impl Render for UsersFeature {
+impl nexora::FeatureElement for UsersFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let total_pages = usize::try_from(
             self.total.max(0).saturating_add(i64::from(PAGE_SIZE) - 1) / i64::from(PAGE_SIZE),
@@ -445,5 +473,9 @@ impl Render for UsersFeature {
             .when_some(self.render_role_editor(cx), |this, editor| {
                 this.child(editor)
             })
+    }
+
+    fn activated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.load_if_needed(cx);
     }
 }

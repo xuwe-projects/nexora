@@ -1,7 +1,8 @@
 # 数据库迁移
 
-本 crate 是 PostgreSQL 结构变更的唯一执行入口。它读取服务端同形状的数据库配置，但定义
-自己的 `MigrationConfig`，不依赖 `apps/server`。
+本 crate 是 PostgreSQL 结构变更的唯一所有者。它同时提供独立 `migrate` 命令和可由
+Nexora Account composition root 调用的 library API；两种入口共享同一套 fail-closed 检查，
+且都不依赖 `apps/server`。
 
 ## 文件组织
 
@@ -9,7 +10,9 @@
 crates/migrate/
 ├── migrations/                 # 所有模块共用的扁平迁移序列
 ├── seeds/<module>/             # 可选的本地测试数据
-└── src/main.rs                 # 独立迁移程序
+└── src/
+    ├── lib.rs                  # 可组合的 MigrationOptions/prepare/plan.run API
+    └── main.rs                 # 复用 library API 的独立迁移程序
 ```
 
 SQLx 迁移加载器只扫描 `migrations/` 一级目录，因此禁止按模块建立迁移子目录。文件使用
@@ -53,3 +56,14 @@ DATABASE__URL=postgres://postgres:postgres@127.0.0.1:5432/xuwe \
 ```bash
 psql "$DATABASE_URL" -f crates/migrate/seeds/<module>/<seed-file>.sql
 ```
+
+框架使用方不需要启动另一个进程，也可以在服务端创建共享 `PgPool` 后显式组合：
+
+```rust
+let options = nexora::account::server::MigrationOptions::new()
+    .initialize_empty_database(false);
+nexora::account::server::migrate(&pool, options).await?;
+```
+
+首次安装仍必须把该选项明确改为 `true`；它不会因为从应用内调用就绕过空库、未知 schema、
+失败迁移或核心表缺失检查。

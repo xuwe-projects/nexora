@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{pagination::PageResponse, patch::PatchField};
 
+/// 管理员显式开通可信外部身份的请求正文。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisionUserRequest {
+    /// 当前部署绑定的 OIDC issuer 中稳定且唯一的 identity ID（subject）。
+    pub identity_id: String,
+    /// 身份提供方返回的可选邮箱。
+    pub email: Option<String>,
+    /// 面向用户界面展示的名称。
+    pub display_name: String,
+    /// 身份提供方返回的可选头像 URL。
+    pub avatar_url: Option<String>,
+}
+
 /// 创建自定义角色的请求正文。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -80,7 +94,7 @@ pub struct AccessProfileResponse {
 pub struct UserResponse {
     /// 本地生成的 8 位大小写字母与数字用户 ID。
     pub id: String,
-    /// 认证授权服务中与用户对应的稳定唯一 ID。
+    /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
     /// 可选展示邮箱。
     pub email: Option<String>,

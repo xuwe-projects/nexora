@@ -1,0 +1,11 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+nexora = { workspace = true, features = ["server", "derive", "account-server"] }
+serde = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }

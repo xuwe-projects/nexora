@@ -4,10 +4,12 @@ use std::{collections::BTreeSet, fmt};
 
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, Type};
+use url::{Host, Url};
 
 use crate::{AccountError, StoreError};
 
 const MAX_IDENTITY_ID_LENGTH: usize = 255;
+const MAX_IDENTITY_ISSUER_LENGTH: usize = 2_048;
 const MAX_IDENTITY_NAME_LENGTH: usize = 200;
 const MAX_EMAIL_LENGTH: usize = 320;
 const MAX_AVATAR_URL_LENGTH: usize = 2_048;
@@ -15,7 +17,7 @@ const MAX_AVATAR_URL_LENGTH: usize = 2_048;
 /// 已通过认证授权服务验证、等待同步到本地用户表的身份资料。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalIdentity {
-    /// 认证授权服务中与用户对应的稳定唯一 ID。
+    /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
     /// 身份服务返回的可选邮箱。
     pub email: Option<String>,
@@ -71,6 +73,8 @@ pub enum PermissionKey {
     UsersRolesWrite,
     /// 启用或停用用户访问。
     UsersStatusWrite,
+    /// 把经过管理员确认的外部身份显式开通为本地用户。
+    UsersProvision,
     /// 查看角色及角色包含的权限。
     RolesRead,
     /// 创建、修改、删除自定义角色并配置权限。
@@ -86,6 +90,7 @@ impl PermissionKey {
             Self::UsersRead => "users:read",
             Self::UsersRolesWrite => "users:roles.write",
             Self::UsersStatusWrite => "users:status.write",
+            Self::UsersProvision => "users:provision",
             Self::RolesRead => "roles:read",
             Self::RolesWrite => "roles:write",
             Self::PermissionsRead => "permissions:read",
@@ -101,6 +106,7 @@ impl TryFrom<&str> for PermissionKey {
             "users:read" => Ok(Self::UsersRead),
             "users:roles.write" => Ok(Self::UsersRolesWrite),
             "users:status.write" => Ok(Self::UsersStatusWrite),
+            "users:provision" => Ok(Self::UsersProvision),
             "roles:read" => Ok(Self::RolesRead),
             "roles:write" => Ok(Self::RolesWrite),
             "permissions:read" => Ok(Self::PermissionsRead),
@@ -130,7 +136,7 @@ pub enum UserStatus {
 pub struct User {
     /// 本地生成的 8 位大小写字母与数字用户 ID。
     pub id: String,
-    /// 认证授权服务中与用户对应的稳定唯一 ID。
+    /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
     /// 可选展示邮箱。
     pub email: Option<String>,
@@ -148,6 +154,33 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
     /// 最近一次成功认证并同步身份的时间。
     pub last_login_at: DateTime<Utc>,
+}
+
+pub(crate) fn normalized_identity_issuer(value: &str) -> Result<String, AccountError> {
+    let mut issuer = Url::parse(value.trim()).map_err(|_| AccountError::InvalidIdentityIssuer)?;
+    if issuer.host().is_none()
+        || !issuer.username().is_empty()
+        || issuer.password().is_some()
+        || issuer.query().is_some()
+        || issuer.fragment().is_some()
+        || issuer.as_str().len() > MAX_IDENTITY_ISSUER_LENGTH
+    {
+        return Err(AccountError::InvalidIdentityIssuer);
+    }
+    let secure = issuer.scheme() == "https"
+        || (issuer.scheme() == "http"
+            && match issuer.host() {
+                Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+                Some(Host::Ipv4(address)) => address.is_loopback(),
+                Some(Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            });
+    if !secure {
+        return Err(AccountError::InvalidIdentityIssuer);
+    }
+    let path = issuer.path().trim_end_matches('/').to_owned();
+    issuer.set_path(if path.is_empty() { "/" } else { path.as_str() });
+    Ok(issuer.to_string())
 }
 
 /// `account.permissions` 查询返回的权限实体。

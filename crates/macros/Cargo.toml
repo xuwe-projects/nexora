@@ -1,0 +1,23 @@
+[package]
+name = "nexora-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+description = "Nexora 的 Feature、Window 与 Settings 强类型派生宏"
+keywords = ["nexora", "gpui", "proc-macro", "derive", "routing"]
+categories = ["development-tools::procedural-macro-helpers", "gui"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true, features = ["proc-macro"] }
+proc-macro-crate = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["derive", "proc-macro"] }
+
+[dev-dependencies]
+inventory = { workspace = true }

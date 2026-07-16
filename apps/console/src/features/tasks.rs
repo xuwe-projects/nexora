@@ -2,7 +2,7 @@
 //!
 //! 该模块展示构建、打包和发布任务队列，说明异步工作流可以作为独立 feature 管理。
 
-use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px};
+use gpui::{Context, IntoElement, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, Theme,
     button::{Button, ButtonVariants as _},
@@ -14,17 +14,18 @@ use ui::Card;
 /// 任务管理功能视图。
 ///
 /// 当前实现展示静态任务队列。真实项目可以把这些行替换为后台任务 Entity 或事件订阅结果。
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "任务",
+    path = "/tasks",
+    section = "工作台",
+    icon = "square-terminal",
+    order = 20
+)]
 pub struct TasksFeature;
 
-impl TasksFeature {
-    /// 渲染任务队列页面。
-    ///
-    /// 页面以构建流水线为例，展示任务名称、执行阶段、状态和耗时信息。
-    /// 渲染时会使用当前组件主题中的文字、边框和背景 token。
-    pub fn render<T>(cx: &mut Context<T>) -> AnyElement
-    where
-        T: 'static,
-    {
+impl nexora::FeatureElement for TasksFeature {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let component_size = theme::component_size(cx);
         let theme = cx.theme();
         let rows = task_rows()

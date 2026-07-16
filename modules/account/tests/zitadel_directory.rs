@@ -1,3 +1,5 @@
+#![cfg(feature = "zitadel")]
+
 use account::directory::{DirectoryError, ZitadelUserDirectory};
 use grpc::{StatusCodeError, StatusError};
 

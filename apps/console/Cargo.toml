@@ -13,6 +13,7 @@ configuration = { workspace = true }
 contracts = { workspace = true }
 desktop = { workspace = true }
 logging = { workspace = true }
+nexora = { workspace = true }
 oidc = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde = { workspace = true }

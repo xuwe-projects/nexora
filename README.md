@@ -1,6 +1,257 @@
-# Desktop Template
+# Nexora
 
-这是一个由 GPUI 桌面端、Axum 服务端和独立业务模块组成的 Rust workspace。
+Nexora 是一个正在形成中的 Rust 桌面全栈框架。本仓库同时包含框架 crate、GPUI 桌面端、
+Axum 服务端和独立业务模块，用于共同验证框架边界与真实应用集成。
+
+> [!WARNING]
+> Nexora 目前处于 **early alpha**。公开 API、生成项目结构和兼容策略仍可能发生破坏性
+> 变化，暂不建议直接用于生产环境。当前仓库内容不代表已经发布到 crates.io 的稳定版本。
+
+## 当前能力
+
+以下能力已经存在于源码和测试中：
+
+- 同一个 `nexora` Cargo package 同时提供框架库和 `nexora` 命令行程序；
+- `#[derive(nexora::Feature)]` 自动注册 Feature 元数据与 Entity 工厂，
+  `#[derive(nexora::Window)]` 自动注册独立窗口、强类型参数与原生窗口工厂；
+- `#[derive(nexora::SidebarHeader)]` 与 `#[derive(nexora::SidebarFooter)]` 自动发现并挂载
+  应用自定义的 Sidebar 顶部、底部 GPUI View；
+- `Application` 自动发现注册项、校验首路由并启动带导航和标签的通用 GPUI Shell；
+- 在同一注册表中校验 Feature 与 Window 的路径、标识、父子导航关系和路由冲突；
+- 匹配静态路径、`:name` 动态参数、查询字符串与 custom scheme URI；
+- 使用 serde 将动态路径和 query 在 Feature 创建前绑定为强类型
+  `Path<T>` 与 `Query<T>`；
+- 由 `FeatureElement::render` 定义完整 Panel 内容，派生宏自动生成 GPUI 原生
+  `Render` 转发；
+- 在 Feature Entity 上分发 `initialize`、`activated`、`deactivated`、`route_changed` 和
+  `closing`，未使用的生命周期无需覆盖；
+- `#[derive(nexora::Settings)]` 驱动强类型 TOML 配置加载与框架模块配置校验；
+- 按 Cargo feature 启用 Account 客户端或服务端能力；服务端只交付可组合
+  Router、用户/角色/权限与认证授权用例、可重试的一次性初始化 API，不接管宿主服务。
+
+## 最小桌面应用
+
+应用只需让 Feature 模块进入编译，并实现最小 `Application` 契约：
+
+```rust
+mod features;
+
+use nexora::Application as _;
+
+struct DesktopApplication;
+
+impl nexora::Application for DesktopApplication {}
+
+fn main() -> Result<(), nexora::ApplicationError> {
+    DesktopApplication.run()
+}
+```
+
+框架默认打开 `/`，创建 `900 × 640` 主窗口。需要自定义首路由、尺寸或语言时，
+覆盖 `Application::options`；需要注册 Global、Action 或应用服务时，覆盖
+`Application::initialize`。应用不需要自行组装 RootView。
+
+最小的 Feature 示例：
+
+```rust
+use nexora::{
+    FeatureElement,
+    gpui::{Context, IntoElement, Window, div, prelude::*},
+};
+
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "首页",
+    path = "/",
+    section = "工作台",
+    icon = "layout-dashboard",
+    order = 0
+)]
+struct HomeFeature;
+
+impl FeatureElement for HomeFeature {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div().child("Hello Nexora")
+    }
+}
+```
+
+`FeatureElement` 的约束是 `Feature + Sized + Render`，并要求每个页面实现没有默认值的
+`render`。`#[derive(Feature)]` 会为具体页面生成 GPUI `Render` 实现并转发到该方法，
+因此应用不需要维护两份渲染代码。返回值会原样成为 Panel 内容；框架不会擅自添加
+内边距、卡片或滚动容器。动态路径必须声明
+`path_params = T` 并设置 `navigation = false`；查询结构可通过 `query_params = Q` 声明，
+随后使用 `FeatureContextExt` 从 `cx` 读取已经校验的参数，并可通过
+`NavigationContextExt::navigate` 打开其他 Feature 或 Window。
+
+未声明 `factory` 时，派生宏使用 `Default` 创建 Feature。需要在构造阶段创建子 Entity，或类型
+本身无法实现 `Default` 时，可以声明 `factory = Type::new`；工厂接收 `&mut Window` 和
+`&mut Context<Self>` 并返回 `Self`。
+
+Feature 动态路径使用 `:name`，并必须关闭导航入口。例如：
+
+```rust
+#[derive(Clone, serde::Deserialize)]
+struct UserPath {
+    id: u64,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct UserQuery {
+    tab: Option<String>,
+}
+
+#[derive(Default, nexora::Feature)]
+#[nexora(
+    title = "用户详情",
+    path = "/users/details/:id",
+    path_params = UserPath,
+    query_params = UserQuery,
+    navigation = false
+)]
+struct UserDetailsFeature;
+```
+
+在 `FeatureElement` 中引入 `FeatureContextExt` 后，可以直接使用 `cx.path()` 和
+`cx.query()` 得到 `Path<UserPath>` 与 `Query<UserQuery>`；字段名、字段类型与缺失值
+都交给 serde 一次性校验，没有另一套字符串参数 API。
+
+`#[derive(nexora::Window)]` 支持与 Feature 一致的 `path_params`、`query_params` 和可选
+`factory`。应用实现 `WindowElement::render` 后，框架会完成强类型参数绑定、原生窗口创建、
+`gpui_component::Root` 挂载和生命周期清理。Window 不进入主导航或标签；Feature 中调用
+`cx.navigate("/settings")` 会直接打开对应原生窗口。
+
+Sidebar Header 与 Footer 不需要另一套 Nexora 渲染 trait。应用直接实现 GPUI
+`Render`，派生宏只负责自动注册和 Entity 构造：
+
+```rust
+use nexora::gpui::{Context, IntoElement, Render, Window, div, prelude::*};
+
+#[derive(Default, nexora::SidebarHeader)]
+struct AppSidebarHeader;
+
+impl Render for AppSidebarHeader {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div().child("My application")
+    }
+}
+```
+
+每个应用最多注册一个 Header 和一个 Footer，重复定义会在注册表发现阶段失败。未声明
+`factory` 时使用 `Default`；需要创建子 Entity 时可使用
+`#[nexora(factory = Type::new)]`。
+
+## 强类型配置
+
+根配置可以包含任意应用字段：
+
+```rust
+#[derive(serde::Deserialize, nexora::Settings)]
+struct Settings {
+    api_endpoint: String,
+}
+
+let settings: Settings = nexora::config::initialize(None)?;
+```
+
+`initialize::<T>` 按“显式传入的路径 → 进程的第一个命令行参数 →
+`config/<CARGO_PKG_NAME>.toml`”选择配置文件，之后允许环境变量覆盖，嵌套键使用
+双下划线。开启 Account 时，桌面与服务端分别使用
+`#[nexora(account_client)]` 和 `#[nexora(account_server)]` 标记各自的标准配置段。
+桌面 Account 配置同时包含 `api.endpoint` 与 OIDC public client 参数；
+`AccountAuthenticator` 组合 Authorization Code + PKCE、loopback callback、token 刷新与
+`/me` 业务门禁，但是否打开浏览器、何时登录以及如何展示状态仍由业务 Feature 决定。
+
+## Account 组合边界
+
+`account-server` 不启动端口、不创建第二个数据库连接池，也不接管宿主路由。
+宿主创建共享 `PgPool` 后显式组合：
+
+```rust
+let migration_options = nexora::account::server::MigrationOptions::new()
+    .initialize_empty_database(false);
+nexora::account::server::migrate(&pool, migration_options).await?;
+
+let dependencies = nexora::account::server::dependencies(pool.clone(), &settings).await?;
+let account = nexora::account::Account::new(dependencies);
+
+let app = axum::Router::new()
+    .merge(account.routers::<AppState>())
+    .merge(application_routes)
+    .with_state(app_state);
+```
+
+宿主可以通过 `account.initialization_status()` 把 Account 初始化状态组合到自己的引导
+流程，然后将服务端已验证的 `ExternalIdentity` 传给 `account.initialize(...)`。
+相同身份重试会幂等成功，另一个身份不能替换已绑定的超级管理员。Account
+不提供强制的初始化页面，也不执行宿主自己的初始化业务。
+
+普通 OIDC 身份不会在第一次携带 token 时自动注册。超级管理员或拥有
+`users:provision` 权限的管理员必须通过 `Account::provision_user` 或 `POST /users`
+显式开通 subject；开通后 `/me` 才会同步资料并允许进入系统。
+
+一个 Nexora 部署只允许使用一个 OIDC issuer。Account 服务端依赖初始化时会把配置中的
+issuer 原子绑定到 `account.system_initialization` 单例记录：尚未绑定时写入一次，已经绑定
+时只能使用完全相同的值，任何更换都会拒绝启动。每次 Bearer token 验证后还会再次确认
+claim 中的 issuer 与该部署值一致。issuer 因而不是用户字段，也不会出现在用户 API DTO 中；
+`identity_id`（OIDC subject）在这个部署范围内唯一。
+
+## 开始开发
+
+需要支持 Rust 2024 edition 的稳定工具链。克隆仓库后可先验证 Nexora 核心 crate：
+
+```bash
+cargo test -p nexora -p nexora-macros
+cargo run -p nexora -- --help
+```
+
+Cargo 依赖与可执行文件都叫 `nexora`。尚未从 registry 发布时，可在本仓库
+使用 `cargo install --path crates/nexora` 安装 CLI。直接运行 `nexora create` 时，CLI 会像
+Vite 一样交互询问项目名称、single/workspace 结构以及是否启用完整 Account；所有问题都有
+默认值。脚本和 CI 仍可显式传入参数：
+
+```bash
+nexora create
+nexora create my-app --layout single
+nexora create my-app --layout workspace
+nexora init . --layout workspace
+nexora create my-fullstack-app --layout workspace --features account
+```
+
+开启 `account` 脚手架时会同时生成 `apps/desktop`、`apps/server` 与服务端示例
+配置，因此使用 workspace 布局。交互模式选择 Account 后会自动调整为 workspace；同时显式
+传入 `--layout single --features account` 时会返回清晰错误。生成的桌面端会加载强类型配置并注册
+`AccountAuthenticator` Global；服务端会使用共享 `PgPool` 显式执行安全迁移，再完成
+`Account::new`、Router merge 和宿主自定义路由。空数据库初始化默认关闭，必须由使用方
+确认目标后显式设置 `initialize_empty_database = true`。
+
+两种布局都由 `templates/scaffold/` 下的独立 Askama 模板生成。
+Cargo 会强制排除包含子 `Cargo.toml` 的目录，因此清单模板使用语义后缀以便进入
+发布包；实际生成文件仍为标准 `Cargo.toml`。
+
+桌面端首次构建可能需要较长时间。Account 服务端的运行与数据库测试还需要
+本地 PostgreSQL 和有效 OIDC 配置。
+
+## 项目状态与路线
+
+当前优先事项是继续验证通用 Feature/Window Shell 与 Account 组合边界，收敛操作系统
+deeplink scheme 注册、公开 API 和发布兼容策略。
+
+如果你愿意参与，请先阅读 [贡献指南](CONTRIBUTING.md) 和
+[社区行为准则](CODE_OF_CONDUCT.md)。安全问题请按照 [安全策略](SECURITY.md) 私下报告。
+
+## Workspace 现有组成
+
+这个 workspace 原先以 Desktop Template 作为内部代号；下面的服务端结构和运行说明继续保留，
+也是 Nexora 当前用于端到端验证的参考应用。
 
 ## 后台结构
 
@@ -18,9 +269,10 @@
     └── account/                 # 账号模块 State、Router、handler、实体和 store
 ```
 
-服务端只创建一个 `PgPool`。`AccountState` 保存该连接池的廉价克隆句柄，账号模块先为自己的
-`Router<AccountState>` 注入模块 State，再返回可与 `Router<AppState>` 合并的路由。只有
-`apps/server` 在最外层调用一次 `.with_state(app_state)`。
+服务端只创建一个 `PgPool`。宿主把它和 token verifier 交给
+`Account::new(AccountDependencies)`，Account 内部保存连接池的廉价克隆句柄并返回可与
+`Router<AppState>` 合并的路由。只有 `apps/server` 在最外层调用一次
+`.with_state(app_state)`。
 
 依赖方向保持单向：
 
@@ -74,3 +326,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cli --bin xuwecli -- lint --workspace . --deny-warnings
 ```
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE-APACHE) 或 [MIT License](LICENSE-MIT) 双许可证，
+使用者可任选其一。
