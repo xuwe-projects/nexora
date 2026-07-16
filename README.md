@@ -265,7 +265,8 @@ nexora init . --layout workspace
 nexora create my-fullstack-app --layout workspace --features account
 ```
 
-开启 `account` 脚手架时会同时生成 `apps/desktop`、`apps/server` 与可直接被默认路径发现的
+workspace 布局会把桌面 package 生成到 `apps/<项目名>`，并将其设为默认 workspace member，
+因此可在项目根目录直接运行 `cargo run`。开启 `account` 脚手架时还会生成 `apps/server` 与可直接被默认路径发现的
 桌面端/服务端配置，因此使用 workspace 布局。交互模式选择 Account 后会自动调整为
 workspace；同时显式
 传入 `--layout single --features account` 时会返回清晰错误。生成的桌面端会加载强类型配置并把

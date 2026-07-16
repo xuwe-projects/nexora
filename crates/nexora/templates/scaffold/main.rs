@@ -13,6 +13,7 @@ struct DesktopApplication {
 impl nexora::Application for DesktopApplication {
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
+            .application_name("{{ project_name }}")
             .initial_path("/")
             .window_size(900.0, 640.0)
     }
@@ -40,6 +41,7 @@ struct DesktopApplication;
 impl nexora::Application for DesktopApplication {
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
+            .application_name("{{ project_name }}")
             .initial_path("/")
             .window_size(900.0, 640.0)
     }

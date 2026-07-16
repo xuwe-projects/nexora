@@ -38,6 +38,7 @@ pub struct LoginGate {
     on_settings: ClickHandler,
     privacy_url: SharedString,
     help_url: SharedString,
+    title_bar: bool,
 }
 
 impl LoginGate {
@@ -63,6 +64,7 @@ impl LoginGate {
             on_settings: Rc::new(on_settings),
             privacy_url: "https://github.com/xuwe-projects/nexora".into(),
             help_url: "https://github.com/xuwe-projects/nexora/issues".into(),
+            title_bar: true,
         }
     }
 
@@ -99,6 +101,15 @@ impl LoginGate {
     /// 覆盖帮助与支持链接。
     pub fn help_url(mut self, url: impl Into<SharedString>) -> Self {
         self.help_url = url.into();
+        self
+    }
+
+    /// 设置登录门禁是否自行渲染透明窗口标题栏。
+    ///
+    /// 独立使用 `LoginGate` 时应保持默认值 `true`；当外层框架已经统一提供 TitleBar 时，
+    /// 设置为 `false` 可以避免重复窗口拖拽区和窗口控制按钮。
+    pub const fn title_bar(mut self, title_bar: bool) -> Self {
+        self.title_bar = title_bar;
         self
     }
 }
@@ -264,15 +275,17 @@ impl RenderOnce for LoginGate {
                     .child(div().px_1().text_color(theme.muted_foreground).child("·"))
                     .child(footer_link("login-help", "帮助", self.help_url)),
             )
-            .child(
-                TitleBar::new()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .border_b(px(0.0))
-                    .bg(gpui::transparent_black()),
-            )
+            .when(self.title_bar, |this| {
+                this.child(
+                    TitleBar::new()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .border_b(px(0.0))
+                        .bg(gpui::transparent_black()),
+                )
+            })
     }
 }
 

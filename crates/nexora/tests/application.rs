@@ -44,15 +44,29 @@ fn default_options_are_immediately_usable() {
 
     assert!(options.activate);
     assert!(!options.daemon_mode);
+    assert_eq!(options.application_name, "Nexora");
+    assert_eq!(
+        options.sidebar_subtitle.as_deref(),
+        Some("Desktop workspace")
+    );
     assert_eq!(options.locale, "zh-CN");
     assert_eq!(options.initial_path, "/");
     assert_eq!(options.window_size, Some(size(px(900.0), px(640.0))));
     assert_eq!(options.window_min_size, Some(size(px(640.0), px(480.0))));
+    assert!(
+        options
+            .window_options
+            .as_ref()
+            .and_then(|options| options.titlebar.as_ref())
+            .is_some()
+    );
 }
 
 #[test]
 fn option_builders_replace_framework_defaults() {
     let options = ApplicationOptions::new()
+        .application_name("Nexora Studio")
+        .sidebar_subtitle("Project workspace")
         .initial_path("/users")
         .locale("en")
         .window_size(1280.0, 800.0)
@@ -61,6 +75,11 @@ fn option_builders_replace_framework_defaults() {
         .daemon_mode(true)
         .startup_display_uuid("display-1");
 
+    assert_eq!(options.application_name, "Nexora Studio");
+    assert_eq!(
+        options.sidebar_subtitle.as_deref(),
+        Some("Project workspace")
+    );
     assert_eq!(options.initial_path, "/users");
     assert_eq!(options.locale, "en");
     assert_eq!(options.window_size, Some(size(px(1280.0), px(800.0))));

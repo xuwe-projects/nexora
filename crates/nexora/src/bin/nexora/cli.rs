@@ -25,13 +25,14 @@ const DEFAULT_PROJECT_NAME: &str = "nexora-app";
 #[template(path = "scaffold/single/Cargo.toml.askama", escape = "none")]
 struct SingleManifestTemplate<'a> {
     project_name: &'a str,
-    nexora_version: &'a str,
+    nexora_source: &'a str,
 }
 
 #[derive(askama::Template)]
 #[template(path = "scaffold/workspace/Cargo.toml.askama", escape = "none")]
 struct WorkspaceManifestTemplate<'a> {
-    nexora_version: &'a str,
+    project_name: &'a str,
+    nexora_source: &'a str,
     account_enabled: bool,
 }
 
@@ -47,7 +48,8 @@ struct DesktopManifestTemplate<'a> {
 
 #[derive(askama::Template)]
 #[template(path = "scaffold/main.rs", escape = "none")]
-struct MainTemplate {
+struct MainTemplate<'a> {
+    project_name: &'a str,
     account_enabled: bool,
 }
 
@@ -58,6 +60,13 @@ struct FeaturesTemplate;
 #[derive(askama::Template)]
 #[template(path = "scaffold/features/home.rs", escape = "none")]
 struct HomeFeatureTemplate;
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/README.md", escape = "none")]
+struct ReadmeTemplate<'a> {
+    project_name: &'a str,
+    account_enabled: bool,
+}
 
 #[derive(askama::Template)]
 #[template(path = "scaffold/gitignore.askama", escape = "none")]
@@ -288,29 +297,50 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
     if account_enabled && project_name.eq_ignore_ascii_case("server") {
         return Err("`server` 是 Account workspace 的保留包名，请使用其他项目名称".to_owned());
     }
-    let main = MainTemplate { account_enabled }
+    let main = normalize_template_output(
+        MainTemplate {
+            project_name,
+            account_enabled,
+        }
         .render()
-        .map_err(|error| format!("无法渲染 main.rs 模板：{error}"))?;
-    let features_module = FeaturesTemplate
+        .map_err(|error| format!("无法渲染 main.rs 模板：{error}"))?,
+    );
+    let features_module = normalize_template_output(
+        FeaturesTemplate
+            .render()
+            .map_err(|error| format!("无法渲染 features.rs 模板：{error}"))?,
+    );
+    let home_feature = normalize_template_output(
+        HomeFeatureTemplate
+            .render()
+            .map_err(|error| format!("无法渲染 features/home.rs 模板：{error}"))?,
+    );
+    let readme = normalize_template_output(
+        ReadmeTemplate {
+            project_name,
+            account_enabled,
+        }
         .render()
-        .map_err(|error| format!("无法渲染 features.rs 模板：{error}"))?;
-    let home_feature = HomeFeatureTemplate
-        .render()
-        .map_err(|error| format!("无法渲染 features/home.rs 模板：{error}"))?;
-    let gitignore = GitignoreTemplate
-        .render()
-        .map_err(|error| format!("无法渲染 .gitignore 模板：{error}"))?;
-    let nexora_version = env!("CARGO_PKG_VERSION");
+        .map_err(|error| format!("无法渲染 README.md 模板：{error}"))?,
+    );
+    let gitignore = normalize_template_output(
+        GitignoreTemplate
+            .render()
+            .map_err(|error| format!("无法渲染 .gitignore 模板：{error}"))?,
+    );
+    let nexora_source = nexora_dependency_source();
 
     match layout {
         Layout::Single => {
-            let manifest = SingleManifestTemplate {
-                project_name,
-                nexora_version,
-            }
-            .render()
-            .map_err(|error| format!("无法渲染 Cargo.toml 模板：{error}"))?;
-            let mut directories = vec!["src", "src/features"];
+            let manifest = normalize_template_output(
+                SingleManifestTemplate {
+                    project_name,
+                    nexora_source: &nexora_source,
+                }
+                .render()
+                .map_err(|error| format!("无法渲染 Cargo.toml 模板：{error}"))?,
+            );
+            let mut directories = vec!["src".to_owned(), "src/features".to_owned()];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
                 ("Cargo.toml".to_owned(), manifest),
@@ -318,42 +348,56 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 ("src/features.rs".to_owned(), features_module),
                 ("src/features/home.rs".to_owned(), home_feature),
             ];
+            append_readme_if_missing(target, &mut files, readme)?;
             append_agent_skills(&mut directories, &mut files)?;
             write_scaffold(target, &directories, &files)
         }
         Layout::Workspace => {
-            let manifest = WorkspaceManifestTemplate {
-                nexora_version,
-                account_enabled,
-            }
-            .render()
-            .map_err(|error| format!("无法渲染工作区 Cargo.toml 模板：{error}"))?;
-            let desktop_manifest = DesktopManifestTemplate {
-                project_name,
-                account_enabled,
-            }
-            .render()
-            .map_err(|error| format!("无法渲染桌面应用 Cargo.toml 模板：{error}"))?;
+            let manifest = normalize_template_output(
+                WorkspaceManifestTemplate {
+                    project_name,
+                    nexora_source: &nexora_source,
+                    account_enabled,
+                }
+                .render()
+                .map_err(|error| format!("无法渲染工作区 Cargo.toml 模板：{error}"))?,
+            );
+            let desktop_manifest = normalize_template_output(
+                DesktopManifestTemplate {
+                    project_name,
+                    account_enabled,
+                }
+                .render()
+                .map_err(|error| format!("无法渲染桌面应用 Cargo.toml 模板：{error}"))?,
+            );
+            let desktop_directory = format!("apps/{project_name}");
             let mut directories = vec![
-                "apps",
-                "apps/desktop",
-                "apps/desktop/src",
-                "apps/desktop/src/features",
+                "apps".to_owned(),
+                desktop_directory.clone(),
+                format!("{desktop_directory}/src"),
+                format!("{desktop_directory}/src/features"),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
                 ("Cargo.toml".to_owned(), manifest),
-                ("apps/desktop/Cargo.toml".to_owned(), desktop_manifest),
-                ("apps/desktop/src/main.rs".to_owned(), main),
-                ("apps/desktop/src/features.rs".to_owned(), features_module),
-                ("apps/desktop/src/features/home.rs".to_owned(), home_feature),
+                (format!("{desktop_directory}/Cargo.toml"), desktop_manifest),
+                (format!("{desktop_directory}/src/main.rs"), main),
+                (
+                    format!("{desktop_directory}/src/features.rs"),
+                    features_module,
+                ),
+                (
+                    format!("{desktop_directory}/src/features/home.rs"),
+                    home_feature,
+                ),
             ];
 
             if account_enabled {
-                directories.extend(["apps/server", "apps/server/src", "config"]);
+                directories.extend(["apps/server", "apps/server/src", "config"].map(str::to_owned));
                 files.extend(render_account_workspace_templates(project_name)?);
             }
 
+            append_readme_if_missing(target, &mut files, readme)?;
             append_agent_skills(&mut directories, &mut files)?;
             write_scaffold(target, &directories, &files)
         }
@@ -361,57 +405,107 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
 }
 
 fn append_agent_skills(
-    directories: &mut Vec<&'static str>,
+    directories: &mut Vec<String>,
     files: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
-    directories.extend_from_slice(skills::DIRECTORIES);
+    directories.extend(
+        skills::DIRECTORIES
+            .iter()
+            .map(|directory| (*directory).to_owned()),
+    );
     files.extend(skills::render()?);
     Ok(())
+}
+
+fn append_readme_if_missing(
+    target: &Path,
+    files: &mut Vec<(String, String)>,
+    readme: String,
+) -> Result<(), String> {
+    if !path_exists(&target.join("README.md"))? {
+        files.push(("README.md".to_owned(), readme));
+    }
+    Ok(())
+}
+
+fn normalize_template_output(contents: String) -> String {
+    contents.replace("\r\n", "\n").replace('\r', "")
+}
+
+fn nexora_dependency_source() -> String {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let is_workspace_source = manifest_dir.file_name() == Some(OsStr::new("nexora"))
+        && manifest_dir.parent().and_then(Path::file_name) == Some(OsStr::new("crates"))
+        && manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|root| root.join("Cargo.toml").is_file());
+
+    if is_workspace_source {
+        let path = manifest_dir.to_string_lossy().replace('\\', "/");
+        format!("path = \"{path}\"")
+    } else {
+        format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))
+    }
 }
 
 fn render_account_workspace_templates(project_name: &str) -> Result<Vec<(String, String)>, String> {
     Ok(vec![
         (
-            "apps/desktop/src/config.rs".to_owned(),
-            DesktopConfigTemplate
-                .render()
-                .map_err(|error| format!("无法渲染桌面端 config.rs 模板：{error}"))?,
+            format!("apps/{project_name}/src/config.rs"),
+            normalize_template_output(
+                DesktopConfigTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染桌面端 config.rs 模板：{error}"))?,
+            ),
         ),
         (
             "apps/server/Cargo.toml".to_owned(),
-            ServerManifestTemplate
-                .render()
-                .map_err(|error| format!("无法渲染服务端 Cargo.toml 模板：{error}"))?,
+            normalize_template_output(
+                ServerManifestTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染服务端 Cargo.toml 模板：{error}"))?,
+            ),
         ),
         (
             "apps/server/src/main.rs".to_owned(),
-            ServerMainTemplate
-                .render()
-                .map_err(|error| format!("无法渲染服务端 main.rs 模板：{error}"))?,
+            normalize_template_output(
+                ServerMainTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染服务端 main.rs 模板：{error}"))?,
+            ),
         ),
         (
             "apps/server/src/config.rs".to_owned(),
-            ServerConfigTemplate
-                .render()
-                .map_err(|error| format!("无法渲染服务端 config.rs 模板：{error}"))?,
+            normalize_template_output(
+                ServerConfigTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染服务端 config.rs 模板：{error}"))?,
+            ),
         ),
         (
             "apps/server/src/routes.rs".to_owned(),
-            ServerRoutesTemplate
-                .render()
-                .map_err(|error| format!("无法渲染服务端 routes.rs 模板：{error}"))?,
+            normalize_template_output(
+                ServerRoutesTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染服务端 routes.rs 模板：{error}"))?,
+            ),
         ),
         (
             "config/server.toml".to_owned(),
-            ExampleServerConfigTemplate
-                .render()
-                .map_err(|error| format!("无法渲染服务端示例配置模板：{error}"))?,
+            normalize_template_output(
+                ExampleServerConfigTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染服务端示例配置模板：{error}"))?,
+            ),
         ),
         (
             format!("config/{project_name}.toml"),
-            ExampleDesktopConfigTemplate
-                .render()
-                .map_err(|error| format!("无法渲染桌面端示例配置模板：{error}"))?,
+            normalize_template_output(
+                ExampleDesktopConfigTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染桌面端示例配置模板：{error}"))?,
+            ),
         ),
     ])
 }
@@ -510,7 +604,7 @@ fn is_interactive_terminal() -> bool {
 
 fn write_scaffold(
     target: &Path,
-    directories: &[&str],
+    directories: &[String],
     files: &[(String, String)],
 ) -> Result<(), String> {
     let mut existing = Vec::new();

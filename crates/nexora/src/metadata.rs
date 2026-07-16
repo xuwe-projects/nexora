@@ -38,6 +38,7 @@ pub struct FeatureMetadata {
     parent: Option<&'static str>,
     order: i32,
     navigation: bool,
+    content_scrollable: bool,
 }
 
 impl FeatureMetadata {
@@ -68,6 +69,7 @@ impl FeatureMetadata {
             parent,
             order,
             navigation,
+            content_scrollable: true,
         }
     }
 
@@ -111,6 +113,25 @@ impl FeatureMetadata {
     /// `false` 只隐藏导航入口，不影响通过路径打开标签、写入历史或参与 deeplink。
     pub const fn navigation(self) -> bool {
         self.navigation
+    }
+
+    /// 设置应用 Shell 是否应为该 Feature 提供外层内容滚动。
+    ///
+    /// 普通页面保留构造时的默认值 `true` 即可。虚拟列表、编辑器或其他自行管理滚动视口的
+    /// 页面应传入 `false`，避免外层与内部组件形成嵌套滚动区域。
+    #[must_use]
+    pub const fn with_content_scrollable(mut self, content_scrollable: bool) -> Self {
+        self.content_scrollable = content_scrollable;
+        self
+    }
+
+    /// 返回应用 Shell 是否应为当前 Feature 提供外层内容滚动。
+    ///
+    /// 默认值为 `true`，适合由 Shell 统一承载滚动的普通页面。虚拟列表、编辑器或其他自行
+    /// 管理滚动视口的页面应通过 `#[nexora(content_scrollable = false)]` 关闭外层滚动，避免
+    /// 形成嵌套滚动区域并破坏内部组件的尺寸计算与滚动交互。
+    pub const fn content_scrollable(self) -> bool {
+        self.content_scrollable
     }
 }
 

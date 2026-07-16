@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gpui::{AppContext as _, Context, Empty, TestAppContext, Window};
+use gpui::{AnyView, AppContext as _, Context, Empty, Render, TestAppContext, Window};
 use nexora::{
     AppRegistry, FeatureContextExt as _, FeatureElement, FeatureRoute, FeatureRuntimeError,
     NavigationContextExt as _, NavigationRequestError, Path, Query, RouteExtractError,
@@ -35,6 +35,16 @@ struct RuntimeFeature {
     page: Option<u64>,
     events: Vec<&'static str>,
     previous_tab: Option<String>,
+    overlay: Option<AnyView>,
+}
+
+#[derive(Default)]
+struct RuntimeOverlay;
+
+impl Render for RuntimeOverlay {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        Empty
+    }
 }
 
 #[derive(Default)]
@@ -61,6 +71,10 @@ impl FeatureElement for RuntimeFeature {
         Empty
     }
 
+    fn panel_overlay(&self) -> Option<AnyView> {
+        self.overlay.clone()
+    }
+
     fn initialize(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Path(path) = cx.path();
         let Query(query) = cx.query();
@@ -68,6 +82,7 @@ impl FeatureElement for RuntimeFeature {
         self.tab = query.tab;
         self.page = query.page;
         self.events.push("initialize");
+        self.overlay = Some(cx.new(|_| RuntimeOverlay).into());
     }
 
     fn activated(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -109,6 +124,13 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
         .unwrap()
         .unwrap();
     let feature = instance.view().downcast::<RuntimeFeature>().unwrap();
+    let overlay = window
+        .update(cx, |_, _, cx| instance.panel_overlay(cx).unwrap())
+        .unwrap();
+    let same_overlay = window
+        .update(cx, |_, _, cx| instance.panel_overlay(cx).unwrap())
+        .unwrap();
+    assert_eq!(overlay.entity_id(), same_overlay.entity_id());
     let observer = cx.new(|cx| {
         cx.observe(&feature, |observer: &mut NotificationObserver, _, _| {
             observer.notifications += 1;

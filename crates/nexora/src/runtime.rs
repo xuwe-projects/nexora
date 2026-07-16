@@ -151,6 +151,18 @@ pub trait FeatureElement: Feature + Sized + Render {
     /// [`Self::initialize`] 或其他明确生命周期中。
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement;
 
+    /// 返回覆盖当前右侧主面板的可选浮层 Entity。
+    ///
+    /// 默认不提供浮层。需要让对话框或临时面板覆盖内容区与 Panel Header、但不遮挡
+    /// Sidebar 和窗口 TitleBar 时，Feature 应在 [`Self::initialize`] 中创建一个长期
+    /// Entity，并在这里始终返回同一个类型擦除视图。浮层的显示、隐藏和内容状态应由
+    /// 该 Entity 自己管理；不要根据 Feature 的临时状态在 `Some` 与 `None` 之间切换。
+    /// 框架会把返回的视图挂到 `WorkspaceLayout` 的 panel overlay 层，而不是要求业务
+    /// Feature 复制或绕过应用 Shell。
+    fn panel_overlay(&self) -> Option<AnyView> {
+        None
+    }
+
     /// 在 Entity 已创建且强类型路由已绑定后执行一次初始化。
     ///
     /// 子 Entity、订阅、焦点句柄和需要随页面释放而取消的任务应在这里创建；不要在
@@ -665,6 +677,7 @@ struct FeatureVTable {
         &mut App,
     ) -> Result<(), FeatureRuntimeError>,
     close: fn(&AnyView, &mut Window, &mut App),
+    panel_overlay: fn(&AnyView, &App) -> Option<AnyView>,
 }
 
 /// 一个由 Nexora 创建并完成类型擦除的 Feature 页面实例。
@@ -688,6 +701,14 @@ impl FeatureInstance {
     /// 返回可直接嵌入 GPUI Element 树的类型擦除页面句柄。
     pub fn view(&self) -> AnyView {
         self.view.clone()
+    }
+
+    /// 返回当前 Feature 希望挂载到右侧主面板层级的长期浮层 Entity。
+    ///
+    /// 没有浮层时返回 `None`；返回的视图由应用 Shell 交给 `WorkspaceLayout` 渲染，
+    /// 因此不会覆盖 Sidebar 或窗口级 TitleBar，并能通过自身 Entity 通知独立刷新。
+    pub fn panel_overlay(&self, cx: &App) -> Option<AnyView> {
+        (self.vtable.panel_overlay)(&self.view, cx)
     }
 
     /// 激活尚未处于活动状态的页面实例。
@@ -813,6 +834,7 @@ where
             deactivate: deactivate_feature::<F>,
             change_route: change_feature_route::<F>,
             close: close_feature::<F>,
+            panel_overlay: feature_panel_overlay::<F>,
         },
         active: false,
         closed: false,
@@ -863,6 +885,13 @@ where
     F: FeatureElement,
 {
     feature_entity::<F>(view).update(cx, |feature, cx| feature.activated(window, cx));
+}
+
+fn feature_panel_overlay<F>(view: &AnyView, cx: &App) -> Option<AnyView>
+where
+    F: FeatureElement,
+{
+    feature_entity::<F>(view).read(cx).panel_overlay()
 }
 
 fn deactivate_feature<F>(view: &AnyView, window: &mut Window, cx: &mut App)

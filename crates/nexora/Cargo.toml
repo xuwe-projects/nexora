@@ -9,6 +9,7 @@ readme = "../../README.md"
 include = [
     "LINTS.md",
     "src/**",
+    "templates/scaffold/README.md",
     "templates/scaffold/features.rs",
     "templates/scaffold/features/home.rs",
     "templates/scaffold/gitignore.askama",
@@ -47,6 +48,7 @@ cli = [
 ]
 derive = ["dep:macros"]
 desktop = [
+    "dep:actions",
     "dep:desktop",
     "dep:gpui",
     "dep:gpui-component",
@@ -67,6 +69,7 @@ account = ["account-client", "account-server", "account-zitadel"]
 
 [dependencies]
 account = { workspace = true, optional = true, default-features = false }
+actions = { workspace = true, optional = true }
 askama = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }

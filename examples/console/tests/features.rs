@@ -963,7 +963,10 @@ fn root_view_exposes_account_menu_actions() {
     assert_eq!(actions[0].kind(), AccountActionKind::SignIn);
     assert_eq!(actions[0].shortcut(), Some("Cmd+Shift+L"));
     assert_eq!(actions[1].kind(), AccountActionKind::Settings);
-    assert_eq!(actions[1].shortcut(), Some("Cmd+,"));
+    assert_eq!(
+        actions[1].shortcut(),
+        Some(actions::settings::shortcut_label())
+    );
 }
 
 #[test]

@@ -4,4 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nexora = { version = "{{ nexora_version }}", default-features = false, features = ["desktop", "derive"] }
+nexora = { {{ nexora_source }}, default-features = false, features = ["desktop", "derive"] }
+
+[patch.crates-io]
+# GPUI 当前仍依赖已被 crates.io 撤回的版本，临时固定到对应源码 revision。
+spin_09 = { package = "spin", git = "https://github.com/mvdnes/spin-rs.git", rev = "502c9dca17c99762184095c9d64c0aedd1db97ff" }
+spin_10 = { package = "spin", git = "https://github.com/mvdnes/spin-rs.git", rev = "4a6cc16c47dbffab0225717056aebb2f06cb163c" }

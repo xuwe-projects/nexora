@@ -76,12 +76,20 @@ impl Drop for TestDirectory {
 fn expected_single_manifest(project_name: &str) -> String {
     askama_source(SINGLE_MANIFEST_TEMPLATE)
         .replace("{{ project_name }}", project_name)
-        .replace("{{ nexora_version }}", env!("CARGO_PKG_VERSION"))
+        .replace("{{ nexora_source }}", &expected_nexora_source())
 }
 
-fn expected_workspace_manifest(account_enabled: bool) -> String {
+fn expected_workspace_manifest(project_name: &str, account_enabled: bool) -> String {
     render_account_condition(WORKSPACE_MANIFEST_TEMPLATE, account_enabled)
-        .replace("{{ nexora_version }}", env!("CARGO_PKG_VERSION"))
+        .replace("{{ project_name }}", project_name)
+        .replace("{{ nexora_source }}", &expected_nexora_source())
+}
+
+fn expected_nexora_source() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .to_string_lossy()
+        .replace('\\', "/");
+    format!("path = \"{path}\"")
 }
 
 fn expected_desktop_manifest(project_name: &str, account_enabled: bool) -> String {
@@ -89,12 +97,13 @@ fn expected_desktop_manifest(project_name: &str, account_enabled: bool) -> Strin
         .replace("{{ project_name }}", project_name)
 }
 
-fn expected_main(account_enabled: bool) -> String {
+fn expected_main(project_name: &str, account_enabled: bool) -> String {
     const START: &str = "{%- if account_enabled -%}\n";
     const ELSE: &str = "\n{%- else -%}\n";
     const END: &str = "\n{%- endif -%}";
 
-    let template = askama_source(MAIN_TEMPLATE)
+    let source = askama_source(MAIN_TEMPLATE);
+    let template = source
         .strip_prefix(START)
         .expect("main.rs 条件模板必须以 account_enabled 分支开始")
         .strip_suffix(END)
@@ -102,11 +111,12 @@ fn expected_main(account_enabled: bool) -> String {
     let (enabled, disabled) = template
         .split_once(ELSE)
         .expect("main.rs 条件模板必须包含无 Account 分支");
-    if account_enabled {
+    let rendered = if account_enabled {
         enabled.to_owned()
     } else {
         disabled.to_owned()
-    }
+    };
+    rendered.replace("{{ project_name }}", project_name)
 }
 
 fn render_account_condition(template: &str, account_enabled: bool) -> String {
@@ -114,7 +124,7 @@ fn render_account_condition(template: &str, account_enabled: bool) -> String {
     const ELSE: &str = "{% else %}";
     const END: &str = "{% endif %}";
 
-    let mut rendered = askama_source(template).to_owned();
+    let mut rendered = askama_source(template);
     while let Some(start) = rendered.find(START) {
         let content_start = start + START.len();
         let end = rendered[content_start..]
@@ -133,8 +143,29 @@ fn render_account_condition(template: &str, account_enabled: bool) -> String {
     rendered
 }
 
-fn askama_source(template: &str) -> &str {
-    template.strip_suffix('\n').unwrap_or(template)
+fn askama_source(template: &str) -> String {
+    let normalized = template.replace("\r\n", "\n").replace('\r', "");
+    normalized
+        .strip_suffix('\n')
+        .unwrap_or(&normalized)
+        .to_owned()
+}
+
+fn assert_valid_manifest(path: &Path) {
+    let contents = fs::read_to_string(path).expect("应能读取生成的 Cargo manifest");
+    assert!(
+        !contents.contains('\r'),
+        "生成的 Cargo manifest 必须使用 LF 行尾：{}",
+        path.display()
+    );
+    contents
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap_or_else(|error| {
+            panic!(
+                "生成的 Cargo manifest 语法无效：{}：{error}",
+                path.display()
+            )
+        });
 }
 
 fn collect_relative_files(root: &Path) -> Vec<PathBuf> {
@@ -218,7 +249,7 @@ fn help_and_version_are_available() {
     let build_help = directory.run(&["help", "build"]);
     assert!(build_help.status.success());
     let build_help = String::from_utf8_lossy(&build_help.stdout);
-    assert!(build_help.contains("nexora build [OPTIONS]"));
+    assert!(build_help.contains("build [OPTIONS]"));
     assert!(build_help.contains("--mode <MODE>"));
     assert!(build_help.contains("--targets <TARGETS>"));
     assert!(build_help.contains("--app-id <APP_ID>"));
@@ -226,7 +257,7 @@ fn help_and_version_are_available() {
     let create_help = directory.run(&["help", "create"]);
     assert!(create_help.status.success());
     let create_help = String::from_utf8_lossy(&create_help.stdout);
-    assert!(create_help.contains("nexora create [OPTIONS] [name]"));
+    assert!(create_help.contains("create [OPTIONS] [name]"));
     assert!(create_help.contains("--layout <LAYOUT>"));
     assert!(create_help.contains("single, workspace"));
     assert!(create_help.contains("--features <FEATURES>"));
@@ -235,7 +266,7 @@ fn help_and_version_are_available() {
     let init_help = directory.run(&["help", "init"]);
     assert!(init_help.status.success());
     let init_help = String::from_utf8_lossy(&init_help.stdout);
-    assert!(init_help.contains("nexora init [OPTIONS] [path]"));
+    assert!(init_help.contains("init [OPTIONS] [path]"));
     assert!(init_help.contains("--layout <LAYOUT>"));
     assert!(init_help.contains("--features <FEATURES>"));
 
@@ -303,6 +334,7 @@ fn create_defaults_to_a_single_package_project() {
     );
 
     let project = directory.path().join("demo-app");
+    assert_valid_manifest(&project.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
         expected_single_manifest("demo-app")
@@ -312,7 +344,7 @@ fn create_defaults_to_a_single_package_project() {
         askama_source(GITIGNORE_TEMPLATE)
     );
     let main = fs::read_to_string(project.join("src/main.rs")).unwrap();
-    assert_eq!(main, expected_main(false));
+    assert_eq!(main, expected_main("demo-app", false));
     assert_eq!(
         fs::read_to_string(project.join("src/features.rs")).unwrap(),
         askama_source(FEATURES_TEMPLATE)
@@ -321,6 +353,11 @@ fn create_defaults_to_a_single_package_project() {
         fs::read_to_string(project.join("src/features/home.rs")).unwrap(),
         askama_source(HOME_FEATURE_TEMPLATE)
     );
+    let readme = fs::read_to_string(project.join("README.md")).unwrap();
+    assert!(!readme.contains('\r'));
+    assert!(readme.contains("# demo-app"));
+    assert!(readme.contains("cargo run"));
+    assert!(!readme.contains("cargo run -p desktop"));
     assert!(!project.join("apps").exists());
     assert_generated_skills(&project);
 
@@ -341,34 +378,42 @@ fn create_can_generate_a_workspace_project() {
     );
 
     let project = directory.path().join("workspace-app");
+    let desktop = project.join("apps/workspace-app");
+    assert_valid_manifest(&project.join("Cargo.toml"));
+    assert_valid_manifest(&desktop.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
-        expected_workspace_manifest(false)
+        expected_workspace_manifest("workspace-app", false)
     );
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).unwrap(),
         askama_source(GITIGNORE_TEMPLATE)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/Cargo.toml")).unwrap(),
+        fs::read_to_string(desktop.join("Cargo.toml")).unwrap(),
         expected_desktop_manifest("workspace-app", false)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap(),
-        expected_main(false)
+        fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
+        expected_main("workspace-app", false)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/features.rs")).unwrap(),
+        fs::read_to_string(desktop.join("src/features.rs")).unwrap(),
         askama_source(FEATURES_TEMPLATE)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/features/home.rs")).unwrap(),
+        fs::read_to_string(desktop.join("src/features/home.rs")).unwrap(),
         askama_source(HOME_FEATURE_TEMPLATE)
     );
+    let readme = fs::read_to_string(project.join("README.md")).unwrap();
+    assert!(!readme.contains('\r'));
+    assert!(readme.contains("# workspace-app"));
+    assert!(readme.contains("cargo run"));
+    assert!(!readme.contains("cargo run -p desktop"));
     assert!(!project.join("src").exists());
     assert!(!project.join("apps/server").exists());
-    assert!(!project.join("apps/desktop/src/account.rs").exists());
-    assert!(!project.join("apps/desktop/src/config.rs").exists());
+    assert!(!desktop.join("src/account.rs").exists());
+    assert!(!desktop.join("src/config.rs").exists());
     assert!(!project.join("config").exists());
     assert_generated_skills(&project);
 }
@@ -396,7 +441,7 @@ fn init_single_preserves_existing_content() {
     );
     assert_eq!(
         fs::read_to_string(project.join("src/main.rs")).unwrap(),
-        expected_main(false)
+        expected_main("existing-app", false)
     );
     assert_generated_skills(&project);
 }
@@ -420,15 +465,16 @@ fn init_can_generate_a_workspace_and_preserve_existing_content() {
     );
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
-        expected_workspace_manifest(false)
+        expected_workspace_manifest("existing-workspace", false)
     );
+    let desktop = project.join("apps/existing-workspace");
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/Cargo.toml")).unwrap(),
+        fs::read_to_string(desktop.join("Cargo.toml")).unwrap(),
         expected_desktop_manifest("existing-workspace", false)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap(),
-        expected_main(false)
+        fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
+        expected_main("existing-workspace", false)
     );
     assert_generated_skills(&project);
 }
@@ -454,21 +500,25 @@ fn workspace_account_feature_generates_a_composable_server() {
     );
 
     let project = directory.path().join("fullstack-app");
+    let desktop = project.join("apps/fullstack-app");
+    assert_valid_manifest(&project.join("Cargo.toml"));
+    assert_valid_manifest(&desktop.join("Cargo.toml"));
+    assert_valid_manifest(&project.join("apps/server/Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
-        expected_workspace_manifest(true)
+        expected_workspace_manifest("fullstack-app", true)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/Cargo.toml")).unwrap(),
+        fs::read_to_string(desktop.join("Cargo.toml")).unwrap(),
         expected_desktop_manifest("fullstack-app", true)
     );
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap(),
-        expected_main(true)
+        fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
+        expected_main("fullstack-app", true)
     );
-    assert!(!project.join("apps/desktop/src/account.rs").exists());
+    assert!(!desktop.join("src/account.rs").exists());
     assert_eq!(
-        fs::read_to_string(project.join("apps/desktop/src/config.rs")).unwrap(),
+        fs::read_to_string(desktop.join("src/config.rs")).unwrap(),
         askama_source(DESKTOP_CONFIG_TEMPLATE)
     );
     assert_eq!(
@@ -495,6 +545,10 @@ fn workspace_account_feature_generates_a_composable_server() {
         fs::read_to_string(project.join("config/fullstack-app.toml")).unwrap(),
         askama_source(EXAMPLE_DESKTOP_CONFIG_TEMPLATE)
     );
+    let readme = fs::read_to_string(project.join("README.md")).unwrap();
+    assert!(!readme.contains('\r'));
+    assert!(readme.contains("cargo run -p server -- config/server.toml"));
+    assert!(readme.contains("cargo run -- config/fullstack-app.toml"));
     assert_generated_skills(&project);
 
     let server_main = fs::read_to_string(project.join("apps/server/src/main.rs")).unwrap();
@@ -528,7 +582,7 @@ fn workspace_account_feature_generates_a_composable_server() {
             .contains("首次连接确认为空的新数据库时改为 true")
     );
 
-    let desktop_main = fs::read_to_string(project.join("apps/desktop/src/main.rs")).unwrap();
+    let desktop_main = fs::read_to_string(desktop.join("src/main.rs")).unwrap();
     assert!(desktop_main.contains("nexora::config::initialize(None)"));
     assert!(desktop_main.contains("account::client::client_config"));
     assert!(desktop_main.contains("AccountAuthenticator::new"));
@@ -539,7 +593,7 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(!desktop_main.contains("AccountRuntime"));
     assert!(!desktop_main.contains("begin_login"));
     assert!(
-        fs::read_to_string(project.join("apps/desktop/src/config.rs"))
+        fs::read_to_string(desktop.join("src/config.rs"))
             .unwrap()
             .contains("#[nexora(account_client)]")
     );
@@ -668,8 +722,8 @@ fn account_without_layout_uses_workspace_in_non_tty_mode() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("项目结构已自动调整为 workspace"));
     let project = directory.path().join("account-app");
-    assert!(!project.join("apps/desktop/src/account.rs").exists());
-    assert!(project.join("apps/desktop/src/config.rs").is_file());
+    assert!(!project.join("apps/account-app/src/account.rs").exists());
+    assert!(project.join("apps/account-app/src/config.rs").is_file());
     assert!(project.join("apps/server/src/main.rs").is_file());
 }
 
@@ -699,7 +753,7 @@ fn account_workspace_failure_does_not_leave_partial_scaffold() {
         "server route sentinel"
     );
     assert!(!project.join("Cargo.toml").exists());
-    assert!(!project.join("apps/desktop").exists());
+    assert!(!project.join("apps/server-route-exists").exists());
     assert!(!project.join("config").exists());
 }
 
@@ -754,21 +808,18 @@ fn workspace_failures_do_not_leave_partial_scaffolds() {
     let directory = TestDirectory::new("workspace-no-partial");
 
     let manifest_project = directory.path().join("desktop-manifest-exists");
-    fs::create_dir_all(manifest_project.join("apps/desktop")).unwrap();
-    fs::write(
-        manifest_project.join("apps/desktop/Cargo.toml"),
-        "manifest sentinel",
-    )
-    .unwrap();
+    let desktop = manifest_project.join("apps/desktop-manifest-exists");
+    fs::create_dir_all(&desktop).unwrap();
+    fs::write(desktop.join("Cargo.toml"), "manifest sentinel").unwrap();
     let manifest_output =
         directory.run(&["init", "desktop-manifest-exists", "--layout", "workspace"]);
     assert!(!manifest_output.status.success());
     assert_eq!(
-        fs::read_to_string(manifest_project.join("apps/desktop/Cargo.toml")).unwrap(),
+        fs::read_to_string(desktop.join("Cargo.toml")).unwrap(),
         "manifest sentinel"
     );
     assert!(!manifest_project.join("Cargo.toml").exists());
-    assert!(!manifest_project.join("apps/desktop/src/main.rs").exists());
+    assert!(!desktop.join("src/main.rs").exists());
 
     let blocked_project = directory.path().join("apps-is-a-file");
     fs::create_dir(&blocked_project).unwrap();

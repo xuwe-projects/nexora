@@ -17,10 +17,12 @@ use syn::{
 /// 为类型生成 Nexora Feature 元数据实现。
 ///
 /// 调用方必须通过 `#[nexora(title = "...", path = "/...")]` 提供标题和路由路径，
-/// 还可以配置 `id`、`section`、`icon`、`parent`、`order` 与 `navigation`。动态路径使用
+/// 还可以配置 `id`、`section`、`icon`、`parent`、`order`、`navigation` 与
+/// `content_scrollable`。动态路径使用
 /// `:name` 声明参数，并且必须显式设置 `path_params = SomeType` 与
 /// `navigation = false`。查询参数类型可以通过 `query_params = SomeType` 声明；不能实现
 /// [`Default`] 的 Feature 可以通过 `factory = SomeType::new` 提供构造函数。
+/// 自行管理滚动视口的页面应设置 `content_scrollable = false`，以关闭 Shell 的外层滚动。
 /// 宏会生成 `gpui::Render` 实现，并把调用转发到 `nexora::FeatureElement::render`；页面
 /// 只需要实现 `nexora::FeatureElement`，不应再手写第二份 `gpui::Render` 实现。
 #[proc_macro_derive(Feature, attributes(nexora))]
@@ -126,6 +128,7 @@ struct FeatureArguments {
     parent: Option<LitStr>,
     order: Option<i32>,
     navigation: Option<LitBool>,
+    content_scrollable: Option<LitBool>,
     path_params: Option<Type>,
     query_params: Option<Type>,
     factory: Option<ExprPath>,
@@ -174,6 +177,11 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     }
     let navigation = arguments
         .navigation
+        .as_ref()
+        .map(LitBool::value)
+        .unwrap_or(true);
+    let content_scrollable = arguments
+        .content_scrollable
         .as_ref()
         .map(LitBool::value)
         .unwrap_or(true);
@@ -230,7 +238,7 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 #parent,
                 #order,
                 #navigation,
-            );
+            ).with_content_scrollable(#content_scrollable);
 
             const REGISTRATION: ::core::option::Option<#nexora::__private::FeatureRegistration> =
                 ::core::option::Option::Some(#nexora::__private::FeatureRegistration::new(
@@ -835,6 +843,14 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 meta.path.span(),
                 "navigation",
             )
+        } else if meta.path.is_ident("content_scrollable") {
+            let content_scrollable = meta.value()?.parse::<LitBool>()?;
+            set_once(
+                &mut arguments.content_scrollable,
+                content_scrollable,
+                meta.path.span(),
+                "content_scrollable",
+            )
         } else if meta.path.is_ident("path_params") {
             let path_params = meta.value()?.parse::<Type>()?;
             set_once(
@@ -860,7 +876,7 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 "factory",
             )
         } else {
-            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、parent、order、navigation、path_params、query_params 和 factory"))
+            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、parent、order、navigation、content_scrollable、path_params、query_params 和 factory"))
         }
     })?;
 

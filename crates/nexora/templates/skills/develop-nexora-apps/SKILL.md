@@ -57,6 +57,8 @@ impl FeatureElement for UserDetailsFeature {
 ```
 
 - 静态可导航 Feature 设置 `title`、`path` 和可选的 `section/icon/order/parent`。
+- 普通页面保持默认外层滚动；虚拟列表、编辑器或 DataTable 已自行管理滚动视口时，设置 `content_scrollable = false`，避免 Shell 产生双层滚动。
+- 需要覆盖内容区与 Panel Header、但保留 Sidebar 和窗口 TitleBar 的对话框时，实现 `FeatureElement::panel_overlay`。浮层必须是在 `initialize` 中创建并长期持有的 Entity，hook 始终返回同一个 `AnyView`；显示、隐藏和内容变化由浮层 Entity 自己管理，不要根据 Feature 临时状态在 `Some` 与 `None` 之间切换。
 - 带 `:name` 的动态路径必须声明 `path_params = T` 并设置 `navigation = false`。查询字段用 `query_params = Q`；`T` 和 `Q` 均通过 `serde::Deserialize` 校验。
 - 在 `FeatureElement` 中用 `FeatureContextExt::path/query`，用 `NavigationContextExt::navigate` 打开 Feature 或 Window。不要另设字符串参数通道。
 - 需要构造子 Entity 时使用 `#[nexora(factory = Type::new)]`，否则让类型实现 `Default`。
@@ -102,6 +104,7 @@ impl Render for AppLogin {
 ```
 
 - `LoginFeature` 只在 `account-client` 下可用，并直接使用 GPUI `Render`；未声明时使用框架默认页。
+- 主窗口 Shell 已统一渲染透明 TitleBar。自定义登录页直接返回内容即可；复用 `ui::LoginGate` 时调用 `.title_bar(false)`，避免重复标题栏。
 - 一个应用最多声明一个自定义 `LoginFeature`，重复声明应当修正，而不是依赖注册顺序。
 - 未登录时 Shell 不创建业务 Feature，并拒绝打开普通业务 Window；固定的 `/settings` 仍可用于修正认证配置。退出会清空 Feature 缓存、Sidebar 插槽和已打开的业务 Window。
 - 生成的 Account workspace 已在 `Application::initialize` 中调用 `nexora::account::client::install_authenticator(authenticator, cx)`。手写入口也必须先从根 Settings 构造 `client_config` 和 `AccountAuthenticator`，再安装一次。

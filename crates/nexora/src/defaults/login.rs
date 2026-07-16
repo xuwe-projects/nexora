@@ -43,6 +43,7 @@ impl Render for DefaultLoginFeature {
         .configured(snapshot.configured)
         .busy(snapshot.busy)
         .status(status)
+        .title_bar(false)
     }
 }
 

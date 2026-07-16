@@ -59,7 +59,8 @@ struct UsersFeature;
     title = "用户详情",
     path = "/users/details/:id",
     path_params = DecodedUserDetailsPath,
-    navigation = false
+    navigation = false,
+    content_scrollable = false
 )]
 struct UserDetailsFeature;
 
@@ -104,9 +105,11 @@ fn derive_exposes_stable_feature_and_window_metadata() {
     assert_eq!(HomeFeature::METADATA.section(), Some("工作台"));
     assert_eq!(HomeFeature::METADATA.icon(), Some("layout-dashboard"));
     assert!(HomeFeature::METADATA.navigation());
+    assert!(HomeFeature::METADATA.content_scrollable());
 
     assert_eq!(UserDetailsFeature::METADATA.id(), "user-details");
     assert!(!UserDetailsFeature::METADATA.navigation());
+    assert!(!UserDetailsFeature::METADATA.content_scrollable());
     assert_eq!(SettingsWindow::METADATA.id(), "settings");
     assert_eq!(SettingsWindow::METADATA.path(), "/settings");
 }

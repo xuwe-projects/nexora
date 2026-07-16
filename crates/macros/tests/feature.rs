@@ -5,6 +5,7 @@ struct FeatureMetadata {
     id: &'static str,
     title: &'static str,
     path: &'static str,
+    content_scrollable: bool,
 }
 
 impl FeatureMetadata {
@@ -22,7 +23,17 @@ impl FeatureMetadata {
         _order: i32,
         _navigation: bool,
     ) -> Self {
-        Self { id, title, path }
+        Self {
+            id,
+            title,
+            path,
+            content_scrollable: true,
+        }
+    }
+
+    const fn with_content_scrollable(mut self, content_scrollable: bool) -> Self {
+        self.content_scrollable = content_scrollable;
+        self
     }
 }
 
@@ -143,7 +154,8 @@ struct UserQuery {
     path = "/users/:id",
     path_params = UserPath,
     query_params = UserQuery,
-    navigation = false
+    navigation = false,
+    content_scrollable = false
 )]
 struct UserFeature {
     rendered: bool,
@@ -245,16 +257,19 @@ fn feature_derive_connects_route_types_factory_and_registration() {
                 id: "home",
                 title: "首页",
                 path: "/",
+                content_scrollable: true,
             },
             FeatureMetadata {
                 id: "factory-feature-definition",
                 title: "工厂页面",
                 path: "/factory",
+                content_scrollable: true,
             },
             FeatureMetadata {
                 id: "user",
                 title: "用户详情",
                 path: "/users/:id",
+                content_scrollable: false,
             },
         ]
     );
