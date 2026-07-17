@@ -1,25 +1,31 @@
-//! Nexora Account 客户端与服务端能力的统一公开入口。
+//! Nexora Account 服务端业务能力的公开入口。
 //!
-//! Cargo feature 只决定编译哪一侧能力：桌面程序使用 `account-client`，服务端使用
-//! `account-server`。服务端 Account 只提供依赖装配、业务用例和可合并 Router，不负责
-//! 监听端口或启动宿主应用。
+//! 桌面认证与 Account HTTP 客户端统一从 [`crate::desktop`] 使用；本模块保留服务端领域
+//! facade。默认 [`crate::Server`] 负责常用模块装配，宿主仍自行组合 Router 和启动 Axum。
 
-#[cfg(feature = "account-server")]
+#[cfg(feature = "server")]
 pub use crate::account_module::{
-    Account, AccountDependencies, AccountError, AccountInitialization,
+    AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
-    IdentityIssuerBindingOutcome, User,
+    IdentityIssuerBindingOutcome, Page, Permission, PermissionDefinition, PermissionKey, Role,
+    SystemRole, User, UserStatus,
     authentication::{AccessTokenVerifier, VerifiedIdentity},
+    authorization::{AuthenticatedUser, Authorized, RequiredPermission},
 };
 
-/// 桌面端 OIDC 登录与账号 HTTP 契约。
-#[cfg(feature = "account-client")]
-pub mod client;
+#[cfg(feature = "desktop")]
+pub(crate) mod client;
 
-/// 服务端 Account Router 与 OIDC Bearer verifier 装配能力。
-#[cfg(feature = "account-server")]
-pub mod server {
-    use std::sync::Arc;
+#[cfg(feature = "server")]
+#[path = "account/setup.rs"]
+mod setup;
+
+/// 服务端 Account Router 与 OIDC Bearer verifier 的内部装配能力。
+///
+/// 应用应使用 [`crate::Server`] 和 [`crate::server`] 暴露的公共服务端 API。
+#[cfg(feature = "server")]
+pub(crate) mod server {
+    use std::{fmt, sync::Arc};
 
     use ::migrate as migration;
     use serde::Deserialize;
@@ -35,7 +41,17 @@ pub mod server {
         config::{__private::ProvidesAccountServerSettings, AccountServerSection, ConfigError},
     };
 
-    pub use migration::{MigrationError, MigrationOptions, MigrationReport};
+    #[cfg(feature = "server")]
+    pub use super::setup::{
+        DefaultSetup, DefaultSetupCompletionRequest, DefaultSetupUnlockRequest, Setup,
+        SetupCompletionRequest, SetupUnlockRequest, setup_routes, setup_routes_with,
+    };
+    #[cfg(feature = "server")]
+    pub use crate::account_module::directory::{
+        DirectoryError, DirectoryUser, ZitadelUserDirectory,
+    };
+
+    pub use migration::{MigrationError, MigrationReport};
 
     /// Account 资源服务器运行所需的标准配置段。
     #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -45,14 +61,37 @@ pub mod server {
         pub oidc: OidcSettings,
     }
 
-    /// OIDC resource server 的 issuer 与 audience 配置。
-    #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+    /// OIDC resource server 与可选 ZITADEL 管理客户端配置。
+    #[derive(Clone, Deserialize, PartialEq, Eq)]
     #[serde(deny_unknown_fields)]
     pub struct OidcSettings {
         /// Provider 的规范 HTTPS issuer URL；本地开发可使用 loopback HTTP。
         pub issuer_url: String,
         /// Access token 的 `aud` claim 必须包含的资源服务标识。
         pub audience: String,
+        /// ZITADEL 中承载本系统角色的 Project ID，与 API Application Client ID 含义不同。
+        #[cfg(feature = "server")]
+        pub project_id: String,
+        /// 服务端调用 ZITADEL UserService 与 ProjectService 使用的服务账号 PAT。
+        ///
+        /// 生产部署应通过 `ACCOUNT__OIDC__PERSONAL_ACCESS_TOKEN` 等密钥注入方式提供，
+        /// 不应把真实令牌提交到配置模板或版本库。
+        #[cfg(feature = "server")]
+        pub personal_access_token: String,
+    }
+
+    impl fmt::Debug for OidcSettings {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut debug = formatter.debug_struct("OidcSettings");
+            debug
+                .field("issuer_url", &self.issuer_url)
+                .field("audience", &self.audience);
+            #[cfg(feature = "server")]
+            debug
+                .field("project_id", &self.project_id)
+                .field("personal_access_token", &"[REDACTED]");
+            debug.finish()
+        }
     }
 
     impl AccountServerSection for Settings {
@@ -92,20 +131,35 @@ pub mod server {
         })
     }
 
+    /// 根据强类型根配置创建 ZITADEL 用户目录与 Project 角色管理客户端。
+    ///
+    /// # Errors
+    ///
+    /// issuer、Project ID、PAT 或 TLS 配置无法用于建立 ZITADEL gRPC 客户端时返回
+    /// [`DirectoryError`]。
+    #[cfg(feature = "server")]
+    pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, DirectoryError>
+    where
+        S: ProvidesAccountServerSettings<AccountServerSettings = Settings>,
+    {
+        let settings = settings.account_server_settings();
+        ZitadelUserDirectory::new(
+            settings.oidc.issuer_url.as_str(),
+            settings.oidc.personal_access_token.as_str(),
+            settings.oidc.project_id.as_str(),
+        )
+    }
+
     /// 对共享 PostgreSQL 连接池执行 Nexora 集中维护的安全向前迁移。
     ///
-    /// 该函数不会创建连接池或启动 HTTP 服务。首次安装空数据库时，宿主必须通过
-    /// [`MigrationOptions::initialize_empty_database`] 显式授权；已有未知 schema、失败迁移
-    /// 或核心表缺失时会 fail closed。
+    /// 该函数不会创建连接池或启动 HTTP 服务。空数据库会自动执行全部迁移；已有未知
+    /// schema、失败迁移或核心表缺失时会 fail closed。
     ///
     /// # Errors
     ///
     /// 数据库状态检查、安全约束或任一向前迁移失败时返回 [`MigrationError`]。
-    pub async fn migrate(
-        pool: &PgPool,
-        options: MigrationOptions,
-    ) -> Result<MigrationReport, MigrationError> {
-        migration::prepare(pool, options).await?.run(pool).await
+    pub async fn migrate(pool: &PgPool) -> Result<MigrationReport, MigrationError> {
+        migration::prepare(pool).await?.run(pool).await
     }
 
     /// Account 服务端依赖装配失败原因。
@@ -155,6 +209,20 @@ pub mod server {
             return Err(ConfigError::invalid_section(
                 "account.server",
                 "oidc.audience 不能为空",
+            ));
+        }
+        #[cfg(feature = "server")]
+        if settings.project_id.trim().is_empty() {
+            return Err(ConfigError::invalid_section(
+                "account.server",
+                "oidc.project_id 不能为空",
+            ));
+        }
+        #[cfg(feature = "server")]
+        if settings.personal_access_token.trim().is_empty() {
+            return Err(ConfigError::invalid_section(
+                "account.server",
+                "oidc.personal_access_token 不能为空",
             ));
         }
         Ok(())

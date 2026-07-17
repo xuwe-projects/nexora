@@ -29,10 +29,12 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub struct LoginGate {
     product_name: SharedString,
     version: SharedString,
+    logo: Arc<Image>,
     configured: bool,
     busy: bool,
     status: Option<SharedString>,
     login_label: SharedString,
+    protection_label: SharedString,
     busy_label: SharedString,
     on_login: ClickHandler,
     on_settings: ClickHandler,
@@ -52,13 +54,16 @@ impl LoginGate {
         on_login: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         on_settings: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
+        let product_name = product_name.into();
         Self {
-            product_name: product_name.into(),
+            login_label: format!("使用 {product_name} 账户登录").into(),
+            protection_label: format!("由 {product_name} 统一身份认证保护").into(),
+            product_name,
             version: version.into(),
+            logo: default_application_logo(),
             configured: true,
             busy: false,
             status: None,
-            login_label: "使用 Nexora 账户登录".into(),
             busy_label: "正在连接认证服务...".into(),
             on_login: Rc::new(on_login),
             on_settings: Rc::new(on_settings),
@@ -66,6 +71,15 @@ impl LoginGate {
             help_url: "https://github.com/xuwe-projects/nexora/issues".into(),
             title_bar: true,
         }
+    }
+
+    /// 覆盖登录页左上角展示的应用 Logo。
+    ///
+    /// 调用方可以使用 `Image::from_bytes` 加载编译进应用的品牌资源；未调用时继续使用
+    /// Nexora 内置 Logo，因此只定制应用名称也能获得完整的默认登录体验。
+    pub fn logo(mut self, logo: Arc<Image>) -> Self {
+        self.logo = logo;
+        self
     }
 
     /// 设置认证是否已经配置；未配置时主按钮保持禁用并提示先进入设置。
@@ -89,6 +103,12 @@ impl LoginGate {
     /// 覆盖主登录按钮文案，便于其它桌面应用沿用布局但使用自己的产品名称。
     pub fn login_label(mut self, label: impl Into<SharedString>) -> Self {
         self.login_label = label.into();
+        self
+    }
+
+    /// 覆盖登录按钮下方的身份认证保护说明。
+    pub fn protection_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.protection_label = label.into();
         self
     }
 
@@ -146,7 +166,7 @@ impl RenderOnce for LoginGate {
                     .top(px(34.0))
                     .gap_3()
                     .items_center()
-                    .child(img(logo_image()).size(px(42.0)))
+                    .child(img(self.logo).size(px(42.0)))
                     .child(
                         div()
                             .text_xl()
@@ -243,7 +263,7 @@ impl RenderOnce for LoginGate {
                                             .size_5()
                                             .text_color(theme.primary),
                                     )
-                                    .child("由 Nexora 统一身份认证保护"),
+                                    .child(self.protection_label),
                             )
                             .when_some(self.status, |this, status| {
                                 this.child(
@@ -289,7 +309,10 @@ impl RenderOnce for LoginGate {
     }
 }
 
-fn logo_image() -> Arc<Image> {
+/// 返回 Nexora 默认应用 Logo 的可复用图片对象。
+///
+/// 框架 Sidebar Header 与登录门禁共享该资源，确保没有提供自定义品牌素材时保持一致。
+pub fn default_application_logo() -> Arc<Image> {
     Arc::new(Image::from_bytes(ImageFormat::Png, LOGO_BYTES.to_vec()))
 }
 

@@ -1,10 +1,10 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
+use gpui::{Context, Empty, IntoElement, Window as GpuiWindow};
 use nexora::{
     AppRegistry, Feature, FeatureElement, FeatureMetadata, NoPath, NoQuery, Path, Query,
     RegistryError, ResolveError, RouteExtractError, RouteTarget, RouteTargetKind, Window,
     WindowElement,
-    gpui::{Context, Empty, IntoElement, Window as GpuiWindow},
 };
 use serde::Deserialize;
 
@@ -129,7 +129,7 @@ fn registry_builds_navigation_and_children_from_metadata() {
         .navigation_features()
         .map(|metadata| metadata.id())
         .collect::<Vec<_>>();
-    assert_eq!(navigation_ids, ["home", "users", "user-roles"]);
+    assert_eq!(&navigation_ids[..3], ["home", "users", "user-roles"]);
     assert_eq!(
         registry
             .children_of("users")

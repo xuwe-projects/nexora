@@ -21,7 +21,7 @@ pub mod panel_header;
 pub mod window_layers;
 
 pub use card::Card;
-pub use login_gate::LoginGate;
+pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;
 pub use window_layers::window_layers;

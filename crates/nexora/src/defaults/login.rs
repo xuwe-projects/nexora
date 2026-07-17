@@ -1,6 +1,6 @@
 //! Account 桌面客户端的默认登录门禁。
 
-use gpui::{AppContext as _, Context, IntoElement, Render, Window};
+use gpui::{AppContext as _, Context, IntoElement, Render, Window, prelude::FluentBuilder as _};
 use ui::LoginGate;
 
 use crate::{__private::LoginFeatureRegistration, NavigationContextExt as _};
@@ -25,12 +25,16 @@ struct DefaultLoginFeature;
 impl Render for DefaultLoginFeature {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = crate::account::client::login_snapshot(cx);
+        let branding = crate::application::application_branding(cx);
         let status = visible_status(snapshot.status.as_ref()).then_some(snapshot.status);
         let settings_target = cx.entity().downgrade();
 
         LoginGate::new(
-            "Nexora",
-            format!("Nexora {}", env!("CARGO_PKG_VERSION")),
+            branding.application_name.clone(),
+            branding.application_version.clone().map_or_else(
+                || branding.application_name.clone(),
+                |version| format!("{} {version}", branding.application_name),
+            ),
             |_, _, cx| {
                 _ = crate::account::client::start_login(cx);
             },
@@ -43,6 +47,8 @@ impl Render for DefaultLoginFeature {
         .configured(snapshot.configured)
         .busy(snapshot.busy)
         .status(status)
+        .login_label(format!("使用 {} 账户登录", branding.application_name))
+        .when_some(branding.logo, |gate, logo| gate.logo(logo.image()))
         .title_bar(false)
     }
 }

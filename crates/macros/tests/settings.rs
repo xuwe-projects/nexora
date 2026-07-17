@@ -6,6 +6,7 @@ mod config {
 
     pub trait Settings {
         const APP_NAME: &'static str;
+        const MANIFEST_DIR: &'static str;
 
         fn validate(&self) -> Result<(), ConfigError>;
     }
@@ -73,6 +74,10 @@ fn settings_derive_uses_calling_package_and_generates_module_providers() {
     };
 
     assert_eq!(ApplicationSettings::APP_NAME, "nexora-macros");
+    assert_eq!(
+        ApplicationSettings::MANIFEST_DIR,
+        env!("CARGO_MANIFEST_DIR")
+    );
     assert!(__private::ProvidesAccountClientSettings::account_client_settings(&settings).valid);
     assert!(__private::ProvidesAccountServerSettings::account_server_settings(&settings).valid);
     assert!(settings.validate().is_ok());

@@ -8,7 +8,7 @@ use gpui::{WindowHandle, WindowOptions};
 use matchit::Router;
 use thiserror::Error;
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 use crate::{__private::LoginFeatureRegistration, LoginFeature as LoginFeatureDefinition};
 use crate::{
     __private::{
@@ -35,13 +35,25 @@ pub struct AppRegistryBuilder {
     windows: Vec<WindowMetadata>,
     window_registrations: Vec<WindowRegistration>,
     settings_windows: Vec<SettingsWindowRegistration>,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     login_features: Vec<LoginFeatureRegistration>,
+    #[cfg(feature = "desktop")]
+    include_account_defaults: bool,
     sidebar_headers: Vec<SidebarHeaderRegistration>,
     sidebar_footers: Vec<SidebarFooterRegistration>,
 }
 
 impl AppRegistryBuilder {
+    /// 设置是否注入 Account 自带的 `/users` 与 `/roles` 回退 Feature。
+    ///
+    /// 应用启动器会根据是否安装了 `AccountAuthenticator` 自动选择注册表；手动构建
+    /// 注册表时只有确实需要 Account 默认页面才应启用。
+    #[cfg(feature = "desktop")]
+    pub const fn account_defaults(mut self, include: bool) -> Self {
+        self.include_account_defaults = include;
+        self
+    }
+
     /// 注册一个实现 [`Feature`] 的业务功能类型。
     pub fn feature<F>(mut self) -> Self
     where
@@ -87,8 +99,8 @@ impl AppRegistryBuilder {
     /// 注册一个 Account 桌面客户端使用的 Login Feature 覆盖类型。
     ///
     /// 同一个注册表最多允许一个覆盖项；没有注册时框架会自动使用默认登录页面。该 API
-    /// 仅在启用 `account-client` 时存在。
-    #[cfg(feature = "account-client")]
+    /// 仅在启用 `desktop` 时存在。
+    #[cfg(feature = "desktop")]
     pub fn login_feature<L>(mut self) -> Self
     where
         L: LoginFeatureDefinition,
@@ -127,6 +139,20 @@ impl AppRegistryBuilder {
     /// 覆盖项重复，或者任意 Feature 与 Window 的路径模式发生冲突时返回
     /// [`RegistryError`]。
     pub fn build(mut self) -> Result<AppRegistry, RegistryError> {
+        #[cfg(feature = "desktop")]
+        if self.include_account_defaults {
+            for registration in crate::defaults::default_account_feature_registrations() {
+                let metadata = registration.metadata();
+                if self.features.iter().any(|feature| {
+                    feature.id() == metadata.id() || feature.path() == metadata.path()
+                }) {
+                    continue;
+                }
+                self.features.push(metadata);
+                self.feature_registrations.push(registration);
+            }
+        }
+
         self.settings_windows
             .sort_by_key(SettingsWindowRegistration::type_name);
         let settings_window = unique_settings_window(self.settings_windows)?
@@ -135,10 +161,10 @@ impl AppRegistryBuilder {
         self.windows.push(settings_window.metadata());
         self.window_registrations.push(settings_window);
 
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         self.login_features
             .sort_by_key(LoginFeatureRegistration::type_name);
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         let login_feature = unique_login_feature(self.login_features)?
             .unwrap_or_else(crate::defaults::default_login_registration);
 
@@ -192,7 +218,7 @@ impl AppRegistryBuilder {
                 .collect(),
             sidebar_header,
             sidebar_footer,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             login_feature,
             routes,
         })
@@ -210,7 +236,7 @@ pub struct AppRegistry {
     window_registrations: HashMap<&'static str, WindowRegistration>,
     sidebar_header: Option<SidebarHeaderRegistration>,
     sidebar_footer: Option<SidebarFooterRegistration>,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     login_feature: LoginFeatureRegistration,
     routes: Router<RouteTarget>,
 }
@@ -240,7 +266,19 @@ impl AppRegistry {
     /// 任意自动发现的元数据无效、专用界面覆盖重复或路由互相冲突时返回
     /// [`RegistryError`]。
     pub fn discover() -> Result<Self, RegistryError> {
-        let mut builder = AppRegistryBuilder::default();
+        Self::discover_with_account_defaults(true)
+    }
+
+    pub(crate) fn discover_for_application(
+        include_account_defaults: bool,
+    ) -> Result<Self, RegistryError> {
+        Self::discover_with_account_defaults(include_account_defaults)
+    }
+
+    fn discover_with_account_defaults(
+        include_account_defaults: bool,
+    ) -> Result<Self, RegistryError> {
+        let mut builder = AppRegistryBuilder::default().account_defaults(include_account_defaults);
         inventory::iter::<crate::__private::FeatureRegistration>
             .into_iter()
             .for_each(|registration| {
@@ -258,7 +296,7 @@ impl AppRegistry {
                 .into_iter()
                 .copied(),
         );
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         builder.login_features.extend(
             inventory::iter::<crate::__private::LoginFeatureRegistration>
                 .into_iter()
@@ -323,7 +361,7 @@ impl AppRegistry {
     ///
     /// 应用没有声明覆盖类型时使用框架默认实现；存在一个覆盖类型时使用该实现。工厂只
     /// 负责创建 Entity，主窗口 Shell 应保存并复用返回的 `AnyView`。
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     pub fn create_login_feature(&self, window: &mut Window, cx: &mut App) -> gpui::AnyView {
         (self.login_feature.factory())(window, cx)
     }
@@ -598,7 +636,7 @@ pub enum RegistryError {
     },
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 fn unique_login_feature(
     registrations: Vec<LoginFeatureRegistration>,
 ) -> Result<Option<LoginFeatureRegistration>, RegistryError> {

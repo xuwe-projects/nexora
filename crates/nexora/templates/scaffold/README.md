@@ -22,3 +22,22 @@ cargo run -p server -- config/server.toml
 cargo run -- config/{{ project_name }}.toml
 ```
 {% endif %}
+
+## 品牌定制
+
+生成的应用名称和版本会自动用于登录页、登录按钮、安全说明与默认 Sidebar Header。
+生成器会把整套图标放到桌面 package 的 `assets/logos`，并默认使用 128px PNG。需要替换
+Logo 时，覆盖资源或修改 `ApplicationOptions` 中的路径：
+
+```rust
+use nexora::ApplicationLogo;
+
+ApplicationOptions::new()
+    .application_name("{{ project_name }}")
+    .application_version(env!("CARGO_PKG_VERSION"))
+    .application_logo(ApplicationLogo::png(include_bytes!(
+        "../assets/logos/logo-icon-128.png"
+    )))
+```
+
+需要替换完整登录布局时，继续使用唯一的 `#[derive(nexora::LoginFeature)]`。

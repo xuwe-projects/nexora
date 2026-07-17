@@ -1,6 +1,6 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 use gpui::Render;
 use gpui::{Context, Empty, IntoElement, Window};
 use nexora::{AppRegistry, RegistryError, WindowElement};
@@ -33,22 +33,22 @@ impl WindowElement for GenericSettingsRoute {
     }
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 #[derive(Default, nexora::LoginFeature)]
 struct AlphaLoginFeature;
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 impl Render for AlphaLoginFeature {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 #[derive(Default, nexora::LoginFeature)]
 struct ZuluLoginFeature;
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 impl Render for ZuluLoginFeature {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
@@ -120,7 +120,7 @@ fn ordinary_window_cannot_take_reserved_settings_path() {
     assert!(matches!(error, RegistryError::RouteConflict { .. }));
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 #[test]
 fn one_login_feature_override_is_accepted() {
     AppRegistry::builder()
@@ -129,7 +129,7 @@ fn one_login_feature_override_is_accepted() {
         .expect("单个应用登录页面应覆盖框架默认实现");
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 #[test]
 fn duplicate_login_feature_overrides_report_sorted_type_names() {
     let error = AppRegistry::builder()

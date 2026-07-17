@@ -1,8 +1,9 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
+use gpui::{Context, Empty, IntoElement, Window, px, size};
 use nexora::{
-    Application as _, ApplicationError, ApplicationOptions, FeatureElement, WindowElement,
-    gpui::{Context, Empty, IntoElement, Window, px, size},
+    Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, FeatureElement,
+    WindowElement,
 };
 
 #[derive(Default, nexora::Feature)]
@@ -46,6 +47,11 @@ fn default_options_are_immediately_usable() {
     assert!(!options.daemon_mode);
     assert_eq!(options.application_name, "Nexora");
     assert_eq!(
+        options.application_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert!(options.application_logo.is_none());
+    assert_eq!(
         options.sidebar_subtitle.as_deref(),
         Some("Desktop workspace")
     );
@@ -66,6 +72,8 @@ fn default_options_are_immediately_usable() {
 fn option_builders_replace_framework_defaults() {
     let options = ApplicationOptions::new()
         .application_name("Nexora Studio")
+        .application_version("2.0.0")
+        .application_logo(ApplicationLogo::png(b"png"))
         .sidebar_subtitle("Project workspace")
         .initial_path("/users")
         .locale("en")
@@ -76,6 +84,8 @@ fn option_builders_replace_framework_defaults() {
         .startup_display_uuid("display-1");
 
     assert_eq!(options.application_name, "Nexora Studio");
+    assert_eq!(options.application_version.as_deref(), Some("2.0.0"));
+    assert!(options.application_logo.is_some());
     assert_eq!(
         options.sidebar_subtitle.as_deref(),
         Some("Project workspace")

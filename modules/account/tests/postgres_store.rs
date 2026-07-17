@@ -5,7 +5,7 @@ use std::sync::Arc;
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
-    IdentityIssuerBindingOutcome, User,
+    IdentityIssuerBindingOutcome, PermissionDefinition, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
 };
 use api::with_http_layers;
@@ -25,6 +25,33 @@ use tower::ServiceExt as _;
 
 const TEST_IDENTITY_ISSUER: &str = "https://id.example.com/";
 const OTHER_IDENTITY_ISSUER: &str = "https://other-id.example.com/";
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn host_facade_registers_permissions_and_creates_roles(pool: PgPool) {
+    let account = test_account(pool).await;
+    let permissions = account
+        .register_permissions(&[PermissionDefinition {
+            key: "projects:archive".to_owned(),
+            name: "归档项目".to_owned(),
+            description: Some("允许归档项目".to_owned()),
+        }])
+        .await
+        .expect("宿主应能注册应用权限");
+    assert_eq!(permissions.len(), 1);
+    assert_eq!(permissions[0].key.as_str(), "projects:archive");
+
+    let role = account
+        .create_role(
+            "project-manager",
+            "项目管理员",
+            Some("管理项目生命周期"),
+            &[permissions[0].id],
+        )
+        .await
+        .expect("宿主应能创建包含应用权限的角色");
+    assert_eq!(role.key, "project-manager");
+    assert_eq!(role.permissions, permissions);
+}
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPool) {
@@ -84,6 +111,19 @@ async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPo
     assert_eq!(profile.user.identity_id, "ordinary-user");
     assert!(profile.roles.is_empty());
     assert!(profile.permissions.is_empty());
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn subject_fallback_does_not_overwrite_existing_display_name(pool: PgPool) {
+    insert_user("User0002", "identity-without-name", &pool).await;
+    sqlx::query("UPDATE account.users SET display_name = '已有展示名' WHERE id = 'User0002'")
+        .execute(&pool)
+        .await
+        .expect("应当可以准备已有展示名");
+
+    let profile = current_profile(&test_account(pool).await, "identity-without-name").await;
+
+    assert_eq!(profile.user.display_name, "已有展示名");
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]

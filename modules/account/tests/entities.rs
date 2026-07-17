@@ -5,7 +5,7 @@ use chrono::Utc;
 use sqlx::{Postgres, Type, TypeInfo};
 
 #[test]
-fn permission_enum_uses_stable_database_keys() {
+fn permission_keys_support_built_in_and_application_defined_values() {
     let cases = [
         (PermissionKey::UsersRead, "users:read"),
         (PermissionKey::UsersRolesWrite, "users:roles.write"),
@@ -20,7 +20,9 @@ fn permission_enum_uses_stable_database_keys() {
         assert_eq!(permission.as_str(), key);
         assert_eq!(PermissionKey::try_from(key), Ok(permission));
     }
-    assert!(PermissionKey::try_from("unknown:permission").is_err());
+    let custom = PermissionKey::try_from("projects:archive").expect("应用权限键应受支持");
+    assert_eq!(custom.as_str(), "projects:archive");
+    assert!(PermissionKey::try_from("Invalid Permission").is_err());
 }
 
 #[test]

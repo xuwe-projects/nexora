@@ -10,11 +10,7 @@ use axum::{
     http::{header::AUTHORIZATION, request::Parts},
 };
 
-use crate::{
-    AccessProfile, AccountError, AccountState, ApiError, ExternalIdentity, PermissionKey,
-    UserStatus,
-    stores::{identities, users},
-};
+use crate::{AccessProfile, Account, AccountError, AccountState, ApiError, PermissionKey};
 
 /// 已通过 Bearer token 验证、本地账号存在性和停用状态检查的当前用户。
 pub struct AuthenticatedUser {
@@ -41,34 +37,11 @@ impl FromRequestParts<AccountState> for AuthenticatedUser {
         state: &AccountState,
     ) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts)?;
-        let identity = state.token_verifier().verify(token).await?;
-        state
-            .verify_identity_issuer(identity.issuer.as_str())
-            .await?;
-        let identity = ExternalIdentity {
-            identity_id: identity.subject,
-            email: identity.email,
-            display_name: identity.display_name,
-            avatar_url: identity.avatar_url,
+        let profile = Account {
+            state: state.clone(),
         }
-        .normalized()?;
-        let user = identities::sync_existing(&identity, state.pool())
-            .await?
-            .ok_or_else(|| {
-                tracing::warn!(
-                    business_operation = "authenticate_local_account",
-                    identity_id = %identity.identity_id,
-                    outcome = "not_registered",
-                    "认证身份没有对应的本地用户，拒绝访问"
-                );
-                AccountError::UserNotRegistered
-            })?;
-        if user.status == UserStatus::Suspended {
-            return Err(AccountError::UserSuspended.into());
-        }
-        let profile = users::query_access_profile(user.id.as_str(), state.pool())
-            .await?
-            .ok_or(AccountError::NotFound("用户"))?;
+        .authenticate(token)
+        .await?;
         Ok(Self { profile })
     }
 }
@@ -103,8 +76,9 @@ where
         state: &AccountState,
     ) -> Result<Self, Self::Rejection> {
         let authenticated = AuthenticatedUser::from_request_parts(parts, state).await?;
-        if !authenticated.profile().allows(P::KEY) {
-            return Err(AccountError::Forbidden(P::KEY).into());
+        let permission = P::KEY;
+        if !authenticated.profile().allows(permission.clone()) {
+            return Err(AccountError::Forbidden(permission).into());
         }
         Ok(Self {
             profile: authenticated.profile,

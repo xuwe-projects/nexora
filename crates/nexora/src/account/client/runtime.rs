@@ -5,10 +5,19 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gpui::{App, AppContext as _, Context, Global, SharedString, Subscription, Window};
+use gpui::{
+    AnyWindowHandle, App, AppContext as _, ClipboardItem, Context, Global, SharedString,
+    Subscription, Window,
+};
+use gpui_component::{
+    IconName, Sizable as _, WindowExt as _, button::Button, notification::Notification,
+};
 use thiserror::Error;
 
-use super::{AccountAuthenticationError, AccountAuthenticator, AccountLogin, PendingAccountLogin};
+use super::{
+    AccountAuthenticationError, AccountAuthenticator, AccountClientError, AccountLogin,
+    AccountSession, PendingAccountLogin,
+};
 use contracts::account::AccessProfileResponse;
 use oidc::OidcSession;
 
@@ -26,6 +35,17 @@ pub struct AccountLoginSnapshot {
     pub busy: bool,
     /// 适合直接显示在登录门禁中的当前状态或最近一次错误。
     pub status: SharedString,
+    /// 最近一次登录失败的结构化信息；成功或开始下一次登录后为 `None`。
+    pub failure: Option<AccountLoginFailure>,
+}
+
+/// 可以安全交给桌面 UI 的 Account 登录失败信息。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountLoginFailure {
+    /// 不包含 token、内部错误链或数据库信息的用户可读说明。
+    pub message: SharedString,
+    /// 服务端返回的可选请求 ID，可用于日志检索和一键复制。
+    pub request_id: Option<SharedString>,
 }
 
 struct AccountLoginState {
@@ -33,8 +53,10 @@ struct AccountLoginState {
     login: Option<AccountLogin>,
     busy: bool,
     status: SharedString,
+    failure: Option<AccountLoginFailure>,
     generation: u64,
     cancellation: Option<Arc<AtomicBool>>,
+    login_window: Option<AnyWindowHandle>,
 }
 
 impl Global for AccountLoginState {}
@@ -68,8 +90,10 @@ pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) 
         login: None,
         busy: false,
         status: "未登录".into(),
+        failure: None,
         generation,
         cancellation: None,
+        login_window: None,
     };
     if cx.has_global::<AccountLoginState>() {
         *cx.global_mut::<AccountLoginState>() = state;
@@ -87,6 +111,7 @@ pub fn login_snapshot(cx: &App) -> AccountLoginSnapshot {
             authenticated: false,
             busy: false,
             status: "未配置 Account 登录".into(),
+            failure: None,
         };
     }
 
@@ -96,6 +121,7 @@ pub fn login_snapshot(cx: &App) -> AccountLoginSnapshot {
         authenticated: state.login.is_some(),
         busy: state.busy,
         status: state.status.clone(),
+        failure: state.failure.clone(),
     }
 }
 
@@ -124,6 +150,21 @@ pub fn login_session(cx: &App) -> Option<&OidcSession> {
         .map(AccountLogin::session)
 }
 
+/// 使用当前短期 access token 创建 Account 业务 API 会话。
+///
+/// 默认用户与角色管理 Feature 使用该接口；自定义 Feature 也可以直接复用全部公开的
+/// 用户、角色和权限方法，而无需自行读取或复制 Bearer token。
+pub fn api_session(cx: &App) -> Option<AccountSession> {
+    let state = cx.try_global::<AccountLoginState>()?;
+    let login = state.login.as_ref()?;
+    Some(
+        state
+            .authenticator
+            .account
+            .session(login.session().tokens().access_token.clone()),
+    )
+}
+
 /// 开始一次 Account Authorization Code + PKCE 登录。
 ///
 /// OIDC discovery、loopback callback、token 交换和 `/me` 校验都在后台执行；授权 URL
@@ -141,12 +182,15 @@ pub fn start_login(cx: &mut App) -> Result<(), AccountLoginRuntimeError> {
     }
 
     let cancellation = Arc::new(AtomicBool::new(false));
+    let login_window = cx.active_window();
     let (authenticator, generation) = {
         let state = cx.global_mut::<AccountLoginState>();
         state.generation = state.generation.wrapping_add(1);
         state.busy = true;
         state.status = "正在连接认证服务...".into();
+        state.failure = None;
         state.cancellation = Some(cancellation.clone());
+        state.login_window = login_window;
         (state.authenticator.clone(), state.generation)
     };
     refresh_login_windows(cx);
@@ -181,6 +225,8 @@ pub fn sign_out(cx: &mut App) {
     state.login = None;
     state.busy = false;
     state.status = "已退出登录".into();
+    state.failure = None;
+    state.login_window = None;
     refresh_login_windows(cx);
 }
 
@@ -231,17 +277,30 @@ fn complete_login(
     if !attempt_is_current(generation, cx) {
         return false;
     }
-    let state = cx.global_mut::<AccountLoginState>();
-    state.busy = false;
-    state.cancellation = None;
     match result {
         Ok(login) => {
+            let state = cx.global_mut::<AccountLoginState>();
+            state.busy = false;
+            state.cancellation = None;
+            state.login_window = None;
             state.login = Some(login);
             state.status = "登录成功".into();
+            state.failure = None;
         }
         Err(error) => {
+            let failure = login_failure(&error);
+            let displayed = push_login_failure_notification(&failure, cx);
+            let state = cx.global_mut::<AccountLoginState>();
+            state.busy = false;
+            state.cancellation = None;
+            state.login_window = None;
             state.login = None;
-            state.status = error.to_string().into();
+            state.status = if displayed {
+                "未登录".into()
+            } else {
+                failure.message.clone()
+            };
+            state.failure = Some(failure);
         }
     }
     refresh_login_windows(cx);
@@ -262,6 +321,66 @@ fn update_status(
     state.status = status.into();
     refresh_login_windows(cx);
     true
+}
+
+struct LoginFailureNotification;
+
+fn login_failure(error: &AccountAuthenticationError) -> AccountLoginFailure {
+    match error {
+        AccountAuthenticationError::Account(AccountClientError::Rejected {
+            message,
+            request_id,
+            ..
+        }) => AccountLoginFailure {
+            message: message.clone().into(),
+            request_id: (!request_id.trim().is_empty() && request_id != "unknown")
+                .then(|| request_id.clone().into()),
+        },
+        AccountAuthenticationError::Account(error) => AccountLoginFailure {
+            message: error.user_message().into(),
+            request_id: None,
+        },
+        AccountAuthenticationError::Oidc(error) => AccountLoginFailure {
+            message: error.to_string().into(),
+            request_id: None,
+        },
+    }
+}
+
+fn push_login_failure_notification(failure: &AccountLoginFailure, cx: &mut App) -> bool {
+    let window_handle = cx
+        .global::<AccountLoginState>()
+        .login_window
+        .or_else(|| cx.active_window());
+    let Some(window_handle) = window_handle else {
+        return false;
+    };
+    let message = failure.request_id.as_ref().map_or_else(
+        || failure.message.clone(),
+        |request_id| format!("{}\n请求 ID：{request_id}", failure.message).into(),
+    );
+    let mut notification = Notification::error(message)
+        .id::<LoginFailureNotification>()
+        .title("登录失败");
+    if let Some(request_id) = failure.request_id.clone() {
+        notification = notification.action(move |_, _, cx| {
+            let request_id = request_id.clone();
+            Button::new("copy-account-login-request-id")
+                .icon(IconName::Copy)
+                .label("复制请求 ID")
+                .small()
+                .on_click(cx.listener(move |notification, _, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(request_id.to_string()));
+                    notification.dismiss(window, cx);
+                }))
+        });
+    }
+
+    window_handle
+        .update(cx, |_, window, cx| {
+            window.push_notification(notification, cx);
+        })
+        .is_ok()
 }
 
 fn attempt_is_current(generation: u64, cx: &App) -> bool {

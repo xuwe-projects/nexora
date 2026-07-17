@@ -19,6 +19,7 @@ const DESKTOP_MANIFEST_TEMPLATE: &str =
 const MAIN_TEMPLATE: &str = include_str!("../templates/scaffold/main.rs");
 const FEATURES_TEMPLATE: &str = include_str!("../templates/scaffold/features.rs");
 const HOME_FEATURE_TEMPLATE: &str = include_str!("../templates/scaffold/features/home.rs");
+const AGENTS_TEMPLATE: &str = include_str!("../templates/scaffold/AGENTS.md");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/scaffold/gitignore.askama");
 const DESKTOP_CONFIG_TEMPLATE: &str =
     include_str!("../templates/scaffold/workspace/apps/desktop/config.rs");
@@ -367,6 +368,10 @@ fn create_defaults_to_a_single_package_project() {
     assert!(readme.contains("# demo-app"));
     assert!(readme.contains("cargo run"));
     assert!(!readme.contains("cargo run -p desktop"));
+    assert_eq!(
+        fs::read_to_string(project.join("AGENTS.md")).unwrap(),
+        askama_source(AGENTS_TEMPLATE)
+    );
     assert!(!project.join("apps").exists());
     assert_generated_skills(&project);
 
@@ -434,6 +439,7 @@ fn init_single_preserves_existing_content() {
     let project = directory.path().join("existing-app");
     fs::create_dir(&project).unwrap();
     fs::write(project.join("README.md"), "keep me").unwrap();
+    fs::write(project.join("AGENTS.md"), "keep my rules").unwrap();
 
     let output = directory.run(&["init", "existing-app"]);
     assert!(
@@ -444,6 +450,10 @@ fn init_single_preserves_existing_content() {
     assert_eq!(
         fs::read_to_string(project.join("README.md")).unwrap(),
         "keep me"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("AGENTS.md")).unwrap(),
+        "keep my rules"
     );
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
@@ -557,6 +567,24 @@ fn workspace_account_feature_generates_a_composable_server() {
         fs::read_to_string(project.join("config/fullstack-app.toml")).unwrap(),
         askama_source(EXAMPLE_DESKTOP_CONFIG_TEMPLATE)
     );
+    let desktop_config = fs::read_to_string(project.join("config/fullstack-app.toml")).unwrap();
+    assert!(desktop_config.contains("[api]"));
+    assert!(desktop_config.contains("endpoint = \"http://127.0.0.1:3000\""));
+    assert!(!desktop_config.contains("[account.api]"));
+    assert!(desktop_config.contains("# OIDC Provider 的 issuer URL"));
+    let server_config = fs::read_to_string(project.join("config/server.toml")).unwrap();
+    assert!(server_config.contains("# HTTP 服务监听 IP"));
+    assert!(server_config.contains("ip = \"127.0.0.1\""));
+    assert!(server_config.contains("port = 3000"));
+    assert!(!server_config.contains("bind ="));
+    assert!(server_config.contains("# PostgreSQL 连接 URL"));
+    assert!(server_config.contains("[setup]"));
+    assert!(server_config.contains("project_id = \"replace-with-zitadel-project-id\""));
+    assert!(
+        server_config
+            .contains("personal_access_token = \"replace-with-zitadel-service-account-pat\"")
+    );
+    assert!(!server_config.contains("initialize_empty_database"));
     let readme = fs::read_to_string(project.join("README.md")).unwrap();
     assert!(!readme.contains('\r'));
     assert!(readme.contains("cargo run -p server -- config/server.toml"));
@@ -564,51 +592,63 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert_generated_skills(&project);
 
     let server_main = fs::read_to_string(project.join("apps/server/src/main.rs")).unwrap();
-    let migrate = server_main
-        .find("account::server::migrate")
-        .expect("服务端应先执行集中迁移");
-    let dependencies = server_main
-        .find("account::server::dependencies")
-        .expect("服务端应装配 Account 依赖");
-    assert!(migrate < dependencies);
-    assert!(server_main.contains("MigrationOptions::new()"));
-    assert!(server_main.contains("initialize_empty_database"));
-    assert!(server_main.contains("Account::new(dependencies)"));
-    assert!(server_main.contains("merge(account.routers::<AppState>())"));
-    assert!(server_main.contains("merge(routes::routers())"));
-    assert!(server_main.contains("with_graceful_shutdown(shutdown_signal())"));
-    assert!(!server_main.contains("Account::run"));
-    assert!(
-        fs::read_to_string(project.join("apps/server/src/config.rs"))
-            .unwrap()
-            .contains("#[nexora(account_server)]")
-    );
-    assert!(
-        fs::read_to_string(project.join("apps/server/src/config.rs"))
-            .unwrap()
-            .contains("#[serde(default)]")
-    );
-    assert!(
-        fs::read_to_string(project.join("config/server.toml"))
-            .unwrap()
-            .contains("首次连接确认为空的新数据库时改为 true")
-    );
+    syn::parse_file(server_main.as_str()).expect("生成的服务端入口必须是有效 Rust 源码");
+    assert!(server_main.contains("use nexora::Server;"));
+    assert!(server_main.contains("Server::new()"));
+    assert!(server_main.contains("PgPoolOptions::new()"));
+    assert!(server_main.contains("server.initialize(&settings, &pool, setup_secret)"));
+    assert!(server_main.contains("Router::new()"));
+    assert!(server_main.contains(".merge(server.routers())"));
+    assert!(server_main.contains(".merge(routes::routers())"));
+    assert!(server_main.contains("tokio::net::TcpListener::bind"));
+    assert!(server_main.contains("(settings.server.ip, settings.server.port)"));
+    assert!(server_main.contains("axum::serve(listener, app).await?"));
+    assert!(!server_main.contains("server.run("));
+    assert!(!server_main.contains("ServerOptions"));
+    assert!(!server_main.contains("nexora::account::server::"));
+    assert!(!server_main.contains("shutdown_signal"));
+    let server_config_source =
+        fs::read_to_string(project.join("apps/server/src/config.rs")).unwrap();
+    syn::parse_file(server_config_source.as_str()).expect("生成的服务端配置必须是有效 Rust 源码");
+    assert!(server_config_source.contains("#[nexora(account_server)]"));
+    assert!(server_config_source.contains("pub(crate) setup: SetupSettings"));
 
     let desktop_main = fs::read_to_string(desktop.join("src/main.rs")).unwrap();
+    syn::parse_file(desktop_main.as_str()).expect("生成的桌面入口必须是有效 Rust 源码");
     assert!(desktop_main.contains("nexora::config::initialize(None)"));
-    assert!(desktop_main.contains("account::client::client_config"));
+    assert!(desktop_main.contains("nexora::desktop::client_config(&settings, &settings.api)"));
     assert!(desktop_main.contains("AccountAuthenticator::new"));
+    assert!(desktop_main.contains(".application_version(env!(\"CARGO_PKG_VERSION\"))"));
+    assert!(desktop_main.contains("../assets/logos/logo-icon-128.png"));
+    assert!(!desktop_main.contains("account_enabled"));
     assert!(desktop_main.contains("authenticator: AccountAuthenticator"));
-    assert!(desktop_main.contains(
-        "nexora::account::client::install_authenticator(self.authenticator.clone(), cx)"
-    ));
+    assert!(
+        desktop_main
+            .contains("nexora::desktop::install_authenticator(self.authenticator.clone(), cx)")
+    );
     assert!(!desktop_main.contains("AccountRuntime"));
     assert!(!desktop_main.contains("begin_login"));
-    assert!(
-        fs::read_to_string(desktop.join("src/config.rs"))
-            .unwrap()
-            .contains("#[nexora(account_client)]")
-    );
+    let desktop_manifest = fs::read_to_string(desktop.join("Cargo.toml")).unwrap();
+    assert!(desktop_manifest.contains("features = [\"desktop\", \"derive\"]"));
+    assert!(!desktop_manifest.contains("account-client"));
+    let server_manifest = fs::read_to_string(project.join("apps/server/Cargo.toml")).unwrap();
+    assert!(server_manifest.contains("features = [\"server\", \"derive\"]"));
+    assert!(server_manifest.contains("sqlx = { workspace = true }"));
+    assert!(!server_manifest.contains("account-server"));
+    assert!(!server_manifest.contains("account-zitadel"));
+    for logo in [
+        "logo-icon-16.png",
+        "logo-icon-128.png",
+        "logo-icon-1024.png",
+        "logo-icon-source.png",
+        "logo-icon.icns",
+        "logo-icon.ico",
+    ] {
+        assert!(desktop.join("assets/logos").join(logo).is_file());
+    }
+    let desktop_config_source = fs::read_to_string(desktop.join("src/config.rs")).unwrap();
+    assert!(desktop_config_source.contains("pub(crate) api:"));
+    assert!(desktop_config_source.contains("#[nexora(account_client)]"));
 }
 
 #[test]

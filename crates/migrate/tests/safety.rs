@@ -4,11 +4,10 @@ mod safety;
 use safety::{DatabaseState, validate_migration_safety};
 
 #[test]
-fn empty_database_requires_explicit_initialization() {
+fn empty_database_allows_first_installation() {
     let state = empty_state();
 
-    assert!(validate_migration_safety(&state, false).is_err());
-    assert!(validate_migration_safety(&state, true).is_ok());
+    assert!(validate_migration_safety(&state).is_ok());
 }
 
 #[test]
@@ -16,8 +15,7 @@ fn unmanaged_account_schema_is_never_initialized_implicitly() {
     let mut state = empty_state();
     state.account_schema_exists = true;
 
-    assert!(validate_migration_safety(&state, false).is_err());
-    assert!(validate_migration_safety(&state, true).is_err());
+    assert!(validate_migration_safety(&state).is_err());
 }
 
 #[test]
@@ -25,7 +23,7 @@ fn failed_migration_record_stops_upgrade() {
     let mut state = complete_state();
     state.applied_migrations.push((4, false));
 
-    assert!(validate_migration_safety(&state, false).is_err());
+    assert!(validate_migration_safety(&state).is_err());
 }
 
 #[test]
@@ -33,7 +31,7 @@ fn missing_core_table_stops_existing_database_upgrade() {
     let mut state = complete_state();
     state.users_exists = false;
 
-    assert!(validate_migration_safety(&state, false).is_err());
+    assert!(validate_migration_safety(&state).is_err());
 }
 
 #[test]
@@ -41,12 +39,12 @@ fn missing_initialization_table_stops_version_three_upgrade() {
     let mut state = complete_state();
     state.system_initialization_exists = false;
 
-    assert!(validate_migration_safety(&state, false).is_err());
+    assert!(validate_migration_safety(&state).is_err());
 }
 
 #[test]
 fn complete_existing_database_allows_forward_upgrade() {
-    assert!(validate_migration_safety(&complete_state(), false).is_ok());
+    assert!(validate_migration_safety(&complete_state()).is_ok());
 }
 
 fn empty_state() -> DatabaseState {

@@ -3,14 +3,17 @@
 //! 模块通过私有运行状态直接持有服务端创建的共享 [`sqlx::PgPool`] 句柄，内部完成
 //! HTTP 与 PostgreSQL store 的装配；宿主服务只负责创建外部依赖并合并路由。
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use axum::Router;
+pub use kernel::Page;
+use kernel::ValidationError;
 use sqlx::PgPool;
 
 /// 提供 Bearer access token 验证端口及 OIDC/JWKS 实现。
 pub mod authentication;
-mod authorization;
+/// 提供 Bearer 认证与权限门禁使用的类型和编译期权限标记。
+pub mod authorization;
 /// 提供账号首次引导所需的外部身份目录适配器。
 #[cfg(feature = "zitadel")]
 pub mod directory;
@@ -26,7 +29,8 @@ pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;
 
 pub use entities::account::{
-    AccessProfile, ExternalIdentity, Permission, PermissionKey, Role, SystemRole, User, UserStatus,
+    AccessProfile, ExternalIdentity, Permission, PermissionDefinition, PermissionKey, Role,
+    SystemRole, User, UserStatus,
 };
 pub use errors::{AccountError, StoreError};
 
@@ -193,6 +197,240 @@ impl Account {
         Ok(stores::roles::query_system(&self.state.pool).await?)
     }
 
+    /// 验证 Bearer access token，并返回已开通且未停用用户的完整授权快照。
+    ///
+    /// 宿主的自定义 Axum 路由可以把可克隆的 `Account` 放入自己的 `AppState`，从请求头提取
+    /// token 后调用本方法，从而复用 Account Router 相同的 issuer 绑定、身份同步和用户状态
+    /// 规则。
+    ///
+    /// # Errors
+    ///
+    /// token 无效或认证服务不可用、issuer 不属于当前部署、身份尚未开通、用户已停用，
+    /// 或数据库访问失败时返回错误。
+    pub async fn authenticate(&self, access_token: &str) -> Result<AccessProfile, AccountError> {
+        self.state.authenticate(access_token).await
+    }
+
+    /// 验证 Bearer token，并要求当前用户拥有指定内置或应用自定义权限。
+    ///
+    /// 超级管理员按 Account 既有规则直接通过；普通用户必须通过角色拥有该权限。应用应先用
+    /// [`Self::register_permissions`] 注册自定义权限，并使用 [`PermissionKey::from_static`]
+    /// 声明稳定权限键。
+    ///
+    /// # Errors
+    ///
+    /// 认证失败或当前用户缺少 `permission` 时返回错误。
+    pub async fn authorize(
+        &self,
+        access_token: &str,
+        permission: PermissionKey,
+    ) -> Result<AccessProfile, AccountError> {
+        let profile = self.authenticate(access_token).await?;
+        if profile.allows(permission.clone()) {
+            Ok(profile)
+        } else {
+            Err(AccountError::Forbidden(permission))
+        }
+    }
+
+    /// 幂等注册应用定义的权限目录，并返回本次注册后的权限实体。
+    ///
+    /// 相同权限键再次注册会更新展示名称和说明，便于应用升级时同步权限元数据。该方法属于
+    /// 可信宿主启动/管理边界，不执行当前用户授权；从 HTTP 请求调用前必须由宿主自行完成
+    /// 管理权限校验。
+    ///
+    /// # Errors
+    ///
+    /// 权限键、名称、说明或集合数量不符合约束，存在重复键，或数据库写入失败时返回错误。
+    pub async fn register_permissions(
+        &self,
+        definitions: &[PermissionDefinition],
+    ) -> Result<Vec<Permission>, AccountError> {
+        validate_permission_definitions(definitions)?;
+        Ok(stores::permissions::register(definitions, &self.state.pool).await?)
+    }
+
+    /// 返回内置权限与应用自定义权限组成的完整目录。
+    ///
+    /// # Errors
+    ///
+    /// 数据库不可访问或权限记录不符合稳定权限键约束时返回错误。
+    pub async fn permissions(&self) -> Result<Vec<Permission>, AccountError> {
+        Ok(stores::permissions::query_all(&self.state.pool).await?)
+    }
+
+    /// 返回系统角色与应用创建的自定义角色，并附带各自直接权限。
+    ///
+    /// # Errors
+    ///
+    /// 数据库不可访问或角色、权限记录无效时返回错误。
+    pub async fn roles(&self) -> Result<Vec<Role>, AccountError> {
+        Ok(stores::roles::query_all(&self.state.pool).await?)
+    }
+
+    /// 按数据库 ID 返回一个角色及其直接权限。
+    ///
+    /// # Errors
+    ///
+    /// 角色不存在、数据库不可访问或角色数据无效时返回错误。
+    pub async fn role(&self, role_id: i64) -> Result<Role, AccountError> {
+        stores::roles::query_by_id(role_id, &self.state.pool)
+            .await?
+            .ok_or(AccountError::NotFound("角色"))
+    }
+
+    /// 创建一个可由应用管理的自定义角色。
+    ///
+    /// 该方法不会执行当前用户授权；HTTP 或其他不可信入口必须先验证调用者拥有角色管理权限。
+    ///
+    /// # Errors
+    ///
+    /// 角色键、名称、说明、权限 ID 集合无效，角色键已存在，权限不存在或数据库失败时返回错误。
+    pub async fn create_role(
+        &self,
+        key: &str,
+        name: &str,
+        description: Option<&str>,
+        permission_ids: &[i64],
+    ) -> Result<Role, AccountError> {
+        handlers::accounts::validate_role_key(key)?;
+        handlers::accounts::validate_role_fields(name, description)?;
+        let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
+        Ok(stores::roles::create(
+            key,
+            name,
+            description,
+            permission_ids.as_slice(),
+            &self.state.pool,
+        )
+        .await?)
+    }
+
+    /// 修改一个自定义角色的名称或说明。
+    ///
+    /// `description` 为 `None` 时保持原值，`Some(None)` 清空说明，`Some(Some(value))` 设置
+    /// 新说明。系统角色始终不可修改。
+    ///
+    /// # Errors
+    ///
+    /// 没有提供任何变更、字段无效、角色不存在、目标是系统角色或数据库失败时返回错误。
+    pub async fn update_role(
+        &self,
+        role_id: i64,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+    ) -> Result<Role, AccountError> {
+        if name.is_none() && description.is_none() {
+            return Err(ValidationError::new("role", "至少需要提供一个要修改的角色字段").into());
+        }
+        let current = self.role(role_id).await?;
+        if current.is_system {
+            return Err(AccountError::Conflict {
+                code: "system_role_immutable",
+                message: "系统角色不可修改或删除",
+            });
+        }
+        let final_name = name.unwrap_or(current.name.as_str());
+        let final_description = description.unwrap_or(current.description.as_deref());
+        handlers::accounts::validate_role_fields(final_name, final_description)?;
+        Ok(stores::roles::update(role_id, name, description, &self.state.pool).await?)
+    }
+
+    /// 删除一个尚未被用户引用的自定义角色。
+    ///
+    /// # Errors
+    ///
+    /// 角色不存在、角色是系统角色、仍被用户引用或数据库失败时返回错误。
+    pub async fn delete_role(&self, role_id: i64) -> Result<(), AccountError> {
+        Ok(stores::roles::delete(role_id, &self.state.pool).await?)
+    }
+
+    /// 原子替换一个自定义角色直接包含的权限集合。
+    ///
+    /// # Errors
+    ///
+    /// 权限数量超限、权限或角色不存在、目标是系统角色或数据库失败时返回错误。
+    pub async fn replace_role_permissions(
+        &self,
+        role_id: i64,
+        permission_ids: &[i64],
+    ) -> Result<Role, AccountError> {
+        let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
+        Ok(
+            stores::roles::replace_permissions(
+                role_id,
+                permission_ids.as_slice(),
+                &self.state.pool,
+            )
+            .await?,
+        )
+    }
+
+    /// 分页返回本地用户目录。
+    ///
+    /// 页码从 1 开始，页大小会限制到 1 至 100。该方法不执行当前用户授权。
+    ///
+    /// # Errors
+    ///
+    /// 页码无效或数据库查询失败时返回错误。
+    pub async fn users(&self, page: u32, page_size: u32) -> Result<Page<User>, AccountError> {
+        let request = handlers::accounts::page_request(page, page_size)?;
+        Ok(stores::users::query_page(request, &self.state.pool)
+            .await
+            .map_err(StoreError::from)?)
+    }
+
+    /// 返回指定用户及其直接角色、合并权限组成的授权快照。
+    ///
+    /// # Errors
+    ///
+    /// 用户不存在、数据库不可访问或授权数据无效时返回错误。
+    pub async fn user_access(&self, user_id: &str) -> Result<AccessProfile, AccountError> {
+        stores::users::query_access_profile(user_id, &self.state.pool)
+            .await?
+            .ok_or(AccountError::NotFound("用户"))
+    }
+
+    /// 更新一个普通用户的访问状态。
+    ///
+    /// # Errors
+    ///
+    /// 用户不存在、目标是超级管理员、操作会停用最后一个管理员或数据库失败时返回错误。
+    pub async fn update_user_status(
+        &self,
+        user_id: &str,
+        status: UserStatus,
+    ) -> Result<User, AccountError> {
+        Ok(stores::users::update_status(user_id, status, &self.state.pool).await?)
+    }
+
+    /// 原子替换一个普通用户的直接角色集合，并保留内置 `member` 角色。
+    ///
+    /// `granted_by` 必须是已经通过宿主认证授权的本地操作者用户 ID。该方法本身不执行当前
+    /// 用户授权，HTTP 或其他不可信入口必须先验证角色管理权限。
+    ///
+    /// # Errors
+    ///
+    /// 用户或角色不存在、角色数量超限、目标是超级管理员、操作会移除最后一个管理员，
+    /// 或数据库失败时返回错误。
+    pub async fn replace_user_roles(
+        &self,
+        user_id: &str,
+        role_ids: &[i64],
+        granted_by: &str,
+    ) -> Result<AccessProfile, AccountError> {
+        let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+        Ok(
+            stores::users::replace_roles(
+                user_id,
+                role_ids.as_slice(),
+                granted_by,
+                &self.state.pool,
+            )
+            .await?,
+        )
+    }
+
     /// 把经过宿主服务确认的外部身份显式开通为普通本地用户。
     ///
     /// 该方法不会验证 access token，也不会自行授予角色。调用方必须先通过可信身份目录、
@@ -239,13 +477,73 @@ impl Account {
     }
 }
 
+fn validate_permission_definitions(
+    definitions: &[PermissionDefinition],
+) -> Result<(), AccountError> {
+    if definitions.len() > 256 {
+        return Err(ValidationError::new("permissions", "权限定义数量不能超过 256").into());
+    }
+    let mut keys = BTreeSet::new();
+    for definition in definitions {
+        let key = PermissionKey::try_from(definition.key.as_str()).map_err(|()| {
+            ValidationError::new(
+                "key",
+                "权限键必须使用 resource:action 格式；两段都必须为 2 到 64 位小写字母、数字、点、下划线或连字符，并以字母开头",
+            )
+        })?;
+        if !keys.insert(key) {
+            return Err(ValidationError::new("key", "同一批权限定义不能包含重复键").into());
+        }
+        if definition.name.trim().is_empty() || definition.name.chars().count() > 100 {
+            return Err(ValidationError::new("name", "权限名称必须为 1 到 100 个字符").into());
+        }
+        if definition
+            .description
+            .as_deref()
+            .is_some_and(|description| description.chars().count() > 1_000)
+        {
+            return Err(ValidationError::new("description", "权限说明不能超过 1000 个字符").into());
+        }
+    }
+    Ok(())
+}
+
 impl AccountState {
     pub(crate) fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    pub(crate) fn token_verifier(&self) -> &dyn AccessTokenVerifier {
-        self.token_verifier.as_ref()
+    pub(crate) async fn authenticate(
+        &self,
+        access_token: &str,
+    ) -> Result<AccessProfile, AccountError> {
+        let identity = self.token_verifier.verify(access_token).await?;
+        self.verify_identity_issuer(identity.issuer.as_str())
+            .await?;
+        let identity = ExternalIdentity {
+            identity_id: identity.subject,
+            email: identity.email,
+            display_name: identity.display_name,
+            avatar_url: identity.avatar_url,
+        }
+        .normalized()?;
+        let user = stores::identities::sync_existing(&identity, self.pool())
+            .await?
+            .ok_or_else(|| {
+                tracing::warn!(
+                    business_operation = "authenticate_local_account",
+                    identity_id = %identity.identity_id,
+                    outcome = "not_registered",
+                    "认证身份没有对应的本地用户，拒绝访问"
+                );
+                AccountError::UserNotRegistered
+            })?;
+        if user.status == UserStatus::Suspended {
+            return Err(AccountError::UserSuspended);
+        }
+        stores::users::query_access_profile(user.id.as_str(), self.pool())
+            .await?
+            .ok_or(AccountError::NotFound("用户"))
     }
 
     pub(crate) async fn provision_user(

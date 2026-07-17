@@ -4,20 +4,20 @@ use semver::Version;
 #[test]
 fn embedded_repository_finds_current_console_changelog() {
     let repository = EmbeddedChangelogRepository::load().unwrap();
-    let version = Version::parse("0.1.0").unwrap();
+    let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
     let entry = repository.find("console", &version, "zh-CN").unwrap();
 
     assert_eq!(entry.version(), &version);
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.locale(), "zh-CN");
-    assert_eq!(entry.source_path(), "0.1.0/console/zh-CN.md");
-    assert!(entry.markdown().contains("桌面工作台"));
+    assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
+    assert!(entry.markdown().contains("登录页"));
 }
 
 #[test]
 fn embedded_repository_supports_multiple_release_components() {
     let repository = EmbeddedChangelogRepository::load().unwrap();
-    let version = Version::parse("0.1.0").unwrap();
+    let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
 
     assert!(repository.find("api", &version, "zh-CN").is_some());
     assert!(repository.find("console", &version, "zh-CN").is_some());
@@ -36,5 +36,5 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         .map(|entry| entry.version().to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(versions, ["0.1.0", "0.0.1"]);
+    assert_eq!(versions, [env!("CARGO_PKG_VERSION"), "0.1.0", "0.0.1"]);
 }

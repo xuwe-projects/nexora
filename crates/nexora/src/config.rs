@@ -5,7 +5,7 @@
 //! 与服务端配置段由派生宏分别标记，避免在同一个 workspace 中因 Cargo feature 合并而
 //! 混淆两端配置。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use configuration::ConfigurationError;
 use configuration::LayeredConfigLoader;
@@ -53,6 +53,8 @@ impl ConfigError {
 pub trait Settings: DeserializeOwned {
     /// 声明配置所属的 Cargo 包名，用于生成默认配置文件路径。
     const APP_NAME: &'static str;
+    /// 声明配置所属 package 的清单目录，用于从子目录启动时定位 workspace 配置。
+    const MANIFEST_DIR: &'static str = ".";
 
     /// 校验框架模块关心的配置段。
     ///
@@ -99,7 +101,7 @@ pub trait AccountServerSection {
 ///
 /// 1. `config_path` 显式传入的路径；
 /// 2. 当前进程第一个命令行参数；
-/// 3. `config/<T::APP_NAME>.toml`。
+/// 3. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
 ///
 /// 文件加载后，无前缀环境变量仍可覆盖同名字段；嵌套字段使用双下划线分隔，这一行为
 /// 与 [`LayeredConfigLoader`] 保持一致。
@@ -134,12 +136,27 @@ where
 {
     let config_path = config_path
         .or_else(|| std::env::args_os().nth(1).map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("config").join(format!("{}.toml", T::APP_NAME)));
+        .unwrap_or_else(default_config_path::<T>);
     let settings = LayeredConfigLoader::<T>::new()
         .with_required_file(config_path)
         .load()?;
     settings.validate()?;
     Ok(settings)
+}
+
+fn default_config_path<T>() -> PathBuf
+where
+    T: Settings,
+{
+    let relative = PathBuf::from("config").join(format!("{}.toml", T::APP_NAME));
+    if relative.is_file() {
+        return relative;
+    }
+    Path::new(T::MANIFEST_DIR)
+        .ancestors()
+        .map(|directory| directory.join(&relative))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or(relative)
 }
 
 /// 派生宏和可选业务模块之间共享的隐藏配置契约。

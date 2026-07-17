@@ -3,6 +3,30 @@
 本项目的重要变更会记录在此文件中。版本格式遵循
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [0.1.1] - 2026-07-17
+
+### Added
+
+- 增加默认 Setup 初始化流程、ZITADEL 人类用户选择、系统超级管理员绑定，以及用户、角色、
+  权限管理能力。
+- 增加可自定义应用品牌的登录页、Account 默认管理页面、Sidebar section 分组和通知错误反馈。
+- 增加基于 VitePress 与 Bun 的中英文文档站及 GitHub Pages 部署工作流。
+- 为生成项目增加带注释的配置、Logo 资源、项目 Rules 与模块化 Feature 开发 Skills。
+
+### Changed
+
+- 服务端由应用自行创建 `PgPool`、`TcpListener` 和 Axum State；Nexora `Server` 只负责迁移、
+  模块初始化和提供可合并 Router。
+- 桌面认证入口收敛到 `nexora::desktop`，服务端配置和扩展入口收敛到 `nexora::server`。
+- `desktop` 与 `server` Cargo feature 分别内置对应 Account 能力，不再要求应用组合内部
+  Account feature。
+- 数据库升级完全依赖 SQLx 迁移历史，删除首次初始化布尔开关。
+
+### Fixed
+
+- 修正生成服务端配置路径、监听 IP/端口配置、用户展示名同步和未初始化系统启动提示。
+- 修正 Sidebar Header/Footer 外壳样式、section 分隔位置和登录失败 request ID 反馈。
+
 ## [0.1.0] - 2026-07-17
 
 Nexora 的首个 early-alpha 源码版本，当前通过 GitHub tag 分发。
@@ -23,4 +47,5 @@ Nexora 的首个 early-alpha 源码版本，当前通过 GitHub tag 分发。
 - 生成项目使用可跨电脑迁移、固定到对应版本 tag 的 Nexora Git 依赖。
 - 修正桌面 Shell 标签右键菜单的窗口上下文与关闭目标处理。
 
+[0.1.1]: https://github.com/xuwe-projects/nexora/releases/tag/v0.1.1
 [0.1.0]: https://github.com/xuwe-projects/nexora/releases/tag/v0.1.0

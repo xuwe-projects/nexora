@@ -1,9 +1,7 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-use nexora::{
-    AppRegistry, Feature, FeatureElement, RouteTargetKind, Window, WindowElement,
-    gpui::{Context, Empty, IntoElement, Window as GpuiWindow},
-};
+use gpui::{Context, Empty, IntoElement, Window as GpuiWindow};
+use nexora::{AppRegistry, Feature, FeatureElement, RouteTargetKind, Window, WindowElement};
 
 #[derive(Default, Feature)]
 #[nexora(title = "自动发现页面", path = "/discovered", section = "测试")]
@@ -29,7 +27,7 @@ impl WindowElement for DiscoveredWindow {
 fn derives_are_discovered_without_a_manual_registration_list() {
     let registry = AppRegistry::discover().unwrap();
 
-    assert_eq!(registry.features(), [DiscoveredFeature::METADATA]);
+    assert!(registry.features().contains(&DiscoveredFeature::METADATA));
     assert_eq!(
         registry
             .windows()

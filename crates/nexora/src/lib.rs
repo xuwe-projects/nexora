@@ -6,14 +6,19 @@
 
 extern crate self as nexora;
 
-#[cfg(feature = "account-server")]
+#[cfg(feature = "server")]
 extern crate account as account_module;
 
-/// 提供按 Cargo feature 启用的 Account 桌面客户端与服务端组合能力。
-#[cfg(any(feature = "account-client", feature = "account-server"))]
+/// 提供 Account 服务端领域、认证授权和管理能力。
+#[cfg(feature = "server")]
 pub mod account;
+#[cfg(all(feature = "desktop", not(feature = "server")))]
+mod account;
 /// 提供派生驱动的强类型配置加载、默认路径和模块配置校验。
 pub mod config;
+/// 提供桌面应用的认证配置、会话与 Account HTTP 客户端能力。
+#[cfg(feature = "desktop")]
+pub mod desktop;
 
 #[cfg(feature = "desktop")]
 mod application;
@@ -27,18 +32,19 @@ mod registry;
 mod route;
 #[cfg(feature = "desktop")]
 mod runtime;
+/// 提供服务端模块初始化、Setup 扩展点与可合并的框架 Router。
+#[cfg(feature = "server")]
+pub mod server;
 
 #[cfg(feature = "desktop")]
-pub use application::{Application, ApplicationError, ApplicationOptions};
-#[cfg(feature = "desktop")]
-pub use gpui;
-#[cfg(all(feature = "account-client", feature = "derive"))]
+pub use application::{Application, ApplicationError, ApplicationLogo, ApplicationOptions};
+#[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]
 pub use macros::Settings;
 #[cfg(all(feature = "derive", feature = "desktop"))]
 pub use macros::{Feature, SettingsWindow, SidebarFooter, SidebarHeader, Window};
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 pub use metadata::LoginFeature;
 #[cfg(feature = "desktop")]
 pub use metadata::{
@@ -61,7 +67,7 @@ pub use runtime::{
     WindowRoute, WindowRuntimeError,
 };
 #[cfg(feature = "server")]
-pub use {axum, sqlx, tokio, tracing};
+pub use server::{Server, ServerError};
 
 /// 派生宏用于完成自动注册的内部兼容层。
 ///
@@ -84,7 +90,7 @@ pub mod __private {
         runtime::{WindowInstance, WindowRuntimeError},
     };
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     pub use crate::runtime::create_login_feature;
     #[cfg(feature = "desktop")]
     pub use crate::runtime::{create_feature, create_sidebar_slot, create_window, window_options};
@@ -122,18 +128,18 @@ pub mod __private {
     }
 
     /// 派生宏写入 Login Feature 注册表的类型擦除 Entity 工厂。
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     pub type LoginFeatureFactory = fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView;
 
     /// 一条由 `#[derive(LoginFeature)]` 自动提交的应用级覆盖注册。
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     #[derive(Debug, Clone, Copy)]
     pub struct LoginFeatureRegistration {
         type_name: &'static str,
         factory: LoginFeatureFactory,
     }
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     impl LoginFeatureRegistration {
         /// 创建包含实现类型名称和 Entity 工厂的 Login Feature 覆盖记录。
         pub const fn new(type_name: &'static str, factory: LoginFeatureFactory) -> Self {
@@ -298,7 +304,7 @@ pub mod __private {
 
     #[cfg(feature = "desktop")]
     inventory::collect!(FeatureRegistration);
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     inventory::collect!(LoginFeatureRegistration);
     #[cfg(feature = "desktop")]
     inventory::collect!(SettingsWindowRegistration);

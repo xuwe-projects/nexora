@@ -168,7 +168,7 @@ fn settings_window_options(cx: &App) -> WindowOptions {
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
     };
-    desktop::apply_window_display_preference(
+    ::desktop::apply_window_display_preference(
         &mut options,
         None,
         Some(size(px(860.0), px(680.0))),

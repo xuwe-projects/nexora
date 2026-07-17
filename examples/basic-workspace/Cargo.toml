@@ -10,6 +10,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", default-features = false }
 nexora = { path = "../../crates/nexora", default-features = false }
 
 [patch.crates-io]

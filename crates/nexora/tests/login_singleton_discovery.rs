@@ -1,4 +1,4 @@
-#![cfg(feature = "account-client")]
+#![cfg(feature = "desktop")]
 
 use gpui::{Context, Empty, IntoElement, Render, Window};
 use nexora::{AppRegistry, RegistryError};

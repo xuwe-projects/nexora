@@ -1,4 +1,4 @@
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 mod client {
     use std::{
         io::{Read as _, Write as _},
@@ -7,27 +7,29 @@ mod client {
     };
 
     use nexora::{
-        account::client::{
-            AccountClient, ApiSettings, OidcSettings, Settings, client_config, oidc_config,
-        },
         config::Settings as _,
+        desktop::{
+            AccountClient, AccountOidcSettings, AccountSettings, ApiSettings, client_config,
+            oidc_config,
+        },
     };
     use serde::Deserialize;
 
     #[derive(Debug, Deserialize, nexora::Settings)]
     struct DesktopSettings {
+        api: ApiSettings,
         #[nexora(account_client)]
-        account: Settings,
+        account: AccountSettings,
     }
 
     #[test]
     fn derived_desktop_settings_build_oidc_config() {
         let settings = DesktopSettings {
-            account: Settings {
-                api: ApiSettings {
-                    endpoint: "http://127.0.0.1:3000".to_owned(),
-                },
-                oidc: OidcSettings {
+            api: ApiSettings {
+                endpoint: "http://127.0.0.1:3000".to_owned(),
+            },
+            account: AccountSettings {
+                oidc: AccountOidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     client_id: "desktop-client".to_owned(),
                     scopes: vec!["openid".to_owned(), "profile".to_owned()],
@@ -39,18 +41,19 @@ mod client {
         settings.validate().expect("有效桌面配置应通过校验");
         let oidc = oidc_config(&settings).expect("派生配置应能创建 OIDC 配置");
         assert_eq!(oidc.client_id(), "desktop-client");
-        let client = client_config(&settings).expect("派生配置应能创建完整 Account 客户端配置");
+        let client = client_config(&settings, &settings.api)
+            .expect("派生配置应能创建完整 Account 客户端配置");
         assert_eq!(client.api_endpoint().as_str(), "http://127.0.0.1:3000/");
     }
 
     #[test]
-    fn desktop_settings_reject_remote_http_api_endpoint() {
+    fn client_config_rejects_remote_http_api_endpoint() {
         let settings = DesktopSettings {
-            account: Settings {
-                api: ApiSettings {
-                    endpoint: "http://api.example.com".to_owned(),
-                },
-                oidc: OidcSettings {
+            api: ApiSettings {
+                endpoint: "http://api.example.com".to_owned(),
+            },
+            account: AccountSettings {
+                oidc: AccountOidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     client_id: "desktop-client".to_owned(),
                     scopes: vec!["openid".to_owned()],
@@ -59,8 +62,8 @@ mod client {
             },
         };
 
-        assert!(settings.validate().is_err());
-        assert!(client_config(&settings).is_err());
+        assert!(settings.validate().is_ok());
+        assert!(client_config(&settings, &settings.api).is_err());
     }
 
     #[test]
@@ -97,9 +100,9 @@ mod client {
             String::from_utf8_lossy(&request[..size]).into_owned()
         });
         let settings = DesktopSettings {
-            account: Settings {
-                api: ApiSettings { endpoint },
-                oidc: OidcSettings {
+            api: ApiSettings { endpoint },
+            account: AccountSettings {
+                oidc: AccountOidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     client_id: "desktop-client".to_owned(),
                     scopes: vec!["openid".to_owned()],
@@ -107,7 +110,7 @@ mod client {
                 },
             },
         };
-        let config = client_config(&settings).expect("测试客户端配置应有效");
+        let config = client_config(&settings, &settings.api).expect("测试客户端配置应有效");
         let profile = AccountClient::new(&config)
             .expect("应能创建 Account 客户端")
             .session("access-token")
@@ -125,11 +128,15 @@ mod client {
     }
 }
 
-#[cfg(feature = "account-server")]
+#[cfg(feature = "server")]
 mod server {
     use nexora::{
-        account::server::{OidcSettings, Settings},
+        account::{Account, PermissionDefinition, PermissionKey},
         config::Settings as _,
+        server::{
+            AccountOidcSettings as OidcSettings, AccountSettings as Settings, DirectoryUser, Setup,
+            SetupCompletionRequest, SetupUnlockRequest,
+        },
     };
     use serde::Deserialize;
 
@@ -146,6 +153,10 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     audience: "nexora-api".to_owned(),
+                    #[cfg(feature = "server")]
+                    project_id: "project-1".to_owned(),
+                    #[cfg(feature = "server")]
+                    personal_access_token: "test-personal-access-token".to_owned(),
                 },
             },
         };
@@ -160,6 +171,10 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     audience: "  ".to_owned(),
+                    #[cfg(feature = "server")]
+                    project_id: "project-1".to_owned(),
+                    #[cfg(feature = "server")]
+                    personal_access_token: "test-personal-access-token".to_owned(),
                 },
             },
         };
@@ -174,6 +189,10 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "http://127.0.0.1:8080".to_owned(),
                     audience: "nexora-api".to_owned(),
+                    #[cfg(feature = "server")]
+                    project_id: "project-1".to_owned(),
+                    #[cfg(feature = "server")]
+                    personal_access_token: "test-personal-access-token".to_owned(),
                 },
             },
         };
@@ -182,11 +201,130 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "http://identity.example.com".to_owned(),
                     audience: "nexora-api".to_owned(),
+                    #[cfg(feature = "server")]
+                    project_id: "project-1".to_owned(),
+                    #[cfg(feature = "server")]
+                    personal_access_token: "test-personal-access-token".to_owned(),
                 },
             },
         };
 
         assert!(loopback.validate().is_ok());
         assert!(remote.validate().is_err());
+    }
+
+    #[test]
+    fn nexora_facade_exposes_host_account_management_and_authorization() {
+        fn assert_capabilities(account: &Account) {
+            let definitions = [PermissionDefinition {
+                key: "projects:read".to_owned(),
+                name: "查看项目".to_owned(),
+                description: None,
+            }];
+            _ = account.register_permissions(&definitions);
+            _ = account.create_role("project-reader", "项目查看者", None, &[]);
+            _ = account.permissions();
+            _ = account.roles();
+            _ = account.users(1, 20);
+            _ = account.authorize("access-token", PermissionKey::from_static("projects:read"));
+        }
+
+        _ = assert_capabilities as fn(&Account);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn zitadel_settings_require_project_and_pat_without_exposing_pat_in_debug() {
+        let settings = ServerSettings {
+            account: Settings {
+                oidc: OidcSettings {
+                    issuer_url: "https://identity.example.com".to_owned(),
+                    audience: "nexora-api".to_owned(),
+                    project_id: String::new(),
+                    personal_access_token: "secret-personal-access-token".to_owned(),
+                },
+            },
+        };
+
+        assert!(settings.validate().is_err());
+        let debug = format!("{:?}", settings.account.oidc);
+        assert!(!debug.contains("secret-personal-access-token"));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn custom_setup_can_define_required_form_models_and_into_responses() {
+        fn assert_setup<T: Setup>() {}
+
+        assert_setup::<CustomSetup>();
+    }
+
+    #[cfg(feature = "server")]
+    #[derive(Deserialize)]
+    struct CustomUnlock {
+        passphrase: String,
+    }
+
+    #[cfg(feature = "server")]
+    impl SetupUnlockRequest for CustomUnlock {
+        fn setup_secret(&self) -> &str {
+            self.passphrase.as_str()
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[derive(Deserialize)]
+    struct CustomCompletion {
+        token: String,
+        administrator: String,
+    }
+
+    #[cfg(feature = "server")]
+    impl SetupCompletionRequest for CustomCompletion {
+        fn setup_token(&self) -> &str {
+            self.token.as_str()
+        }
+
+        fn super_admin_identity_id(&self) -> &str {
+            self.administrator.as_str()
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[derive(Clone)]
+    struct CustomSetup;
+
+    #[cfg(feature = "server")]
+    impl Setup for CustomSetup {
+        type UnlockRequest = CustomUnlock;
+        type CompletionRequest = CustomCompletion;
+
+        fn unlock_response(&self, _error: Option<&str>) -> impl axum::response::IntoResponse {
+            axum::http::StatusCode::OK
+        }
+
+        fn selection_response(
+            &self,
+            _users: &[DirectoryUser],
+            _setup_token: &str,
+        ) -> impl axum::response::IntoResponse {
+            axum::http::StatusCode::OK
+        }
+
+        fn completed_response(
+            &self,
+            _super_admin: &DirectoryUser,
+        ) -> impl axum::response::IntoResponse {
+            axum::http::StatusCode::OK
+        }
+
+        fn error_response(&self) -> impl axum::response::IntoResponse {
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        }
+
+        fn not_found_response(&self) -> impl axum::response::IntoResponse {
+            axum::http::StatusCode::NOT_FOUND
+        }
     }
 }

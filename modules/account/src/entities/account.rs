@@ -1,6 +1,6 @@
 //! 账号模块的数据库实体、持久化枚举与组合查询结果。
 
-use std::{collections::BTreeSet, fmt};
+use std::{borrow::Cow, collections::BTreeSet, fmt};
 
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, Type};
@@ -61,40 +61,44 @@ impl ExternalIdentity {
     }
 }
 
-/// 账号模块支持的封闭权限键集合。
+/// 账号模块使用的稳定权限键。
 ///
-/// 枚举变体与 `account.permissions.key` 中的内置值一一对应，授权代码使用枚举而不是
-/// 任意字符串，避免权限键拼写错误。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PermissionKey {
-    /// 查看用户列表、用户详情及其角色。
-    UsersRead,
-    /// 为用户授予或撤销角色。
-    UsersRolesWrite,
-    /// 启用或停用用户访问。
-    UsersStatusWrite,
-    /// 把经过管理员确认的外部身份显式开通为本地用户。
-    UsersProvision,
-    /// 查看角色及角色包含的权限。
-    RolesRead,
-    /// 创建、修改、删除自定义角色并配置权限。
-    RolesWrite,
-    /// 查看系统支持的权限目录。
-    PermissionsRead,
-}
+/// 内置权限通过关联常量提供；应用也可以注册符合相同命名规则的自定义权限，例如
+/// `projects:read` 或 `invoices:approval.write`。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PermissionKey(Cow<'static, str>);
 
+#[allow(
+    non_upper_case_globals,
+    reason = "保留早期公开枚举变体风格的源码兼容名称"
+)]
 impl PermissionKey {
+    /// 从应用代码中的静态字符串声明权限标记。
+    ///
+    /// 该构造函数用于实现 [`crate::authorization::RequiredPermission`] 的关联常量；应用仍应
+    /// 通过 [`crate::Account::register_permissions`] 注册同名权限，并遵守小写资源与操作键格式。
+    pub const fn from_static(value: &'static str) -> Self {
+        Self(Cow::Borrowed(value))
+    }
+
+    /// 查看用户列表、用户详情及其角色。
+    pub const UsersRead: Self = Self(Cow::Borrowed("users:read"));
+    /// 为用户授予或撤销角色。
+    pub const UsersRolesWrite: Self = Self(Cow::Borrowed("users:roles.write"));
+    /// 启用或停用用户访问。
+    pub const UsersStatusWrite: Self = Self(Cow::Borrowed("users:status.write"));
+    /// 把经过管理员确认的外部身份显式开通为本地用户。
+    pub const UsersProvision: Self = Self(Cow::Borrowed("users:provision"));
+    /// 查看角色及角色包含的权限。
+    pub const RolesRead: Self = Self(Cow::Borrowed("roles:read"));
+    /// 创建、修改、删除自定义角色并配置权限。
+    pub const RolesWrite: Self = Self(Cow::Borrowed("roles:write"));
+    /// 查看系统支持的权限目录。
+    pub const PermissionsRead: Self = Self(Cow::Borrowed("permissions:read"));
+
     /// 返回数据库和授权日志使用的稳定权限键。
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::UsersRead => "users:read",
-            Self::UsersRolesWrite => "users:roles.write",
-            Self::UsersStatusWrite => "users:status.write",
-            Self::UsersProvision => "users:provision",
-            Self::RolesRead => "roles:read",
-            Self::RolesWrite => "roles:write",
-            Self::PermissionsRead => "permissions:read",
-        }
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
     }
 }
 
@@ -102,15 +106,26 @@ impl TryFrom<&str> for PermissionKey {
     type Error = ();
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "users:read" => Ok(Self::UsersRead),
-            "users:roles.write" => Ok(Self::UsersRolesWrite),
-            "users:status.write" => Ok(Self::UsersStatusWrite),
-            "users:provision" => Ok(Self::UsersProvision),
-            "roles:read" => Ok(Self::RolesRead),
-            "roles:write" => Ok(Self::RolesWrite),
-            "permissions:read" => Ok(Self::PermissionsRead),
-            _ => Err(()),
+        let value = value.trim();
+        let valid_segment = |segment: &str| {
+            let mut characters = segment.chars();
+            (2..=64).contains(&segment.len())
+                && characters
+                    .next()
+                    .is_some_and(|character| character.is_ascii_lowercase())
+                && characters.all(|character| {
+                    character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || matches!(character, '.' | '_' | '-')
+                })
+        };
+        let valid = value.split_once(':').is_some_and(|(resource, action)| {
+            !action.contains(':') && valid_segment(resource) && valid_segment(action)
+        });
+        if valid {
+            Ok(Self(Cow::Owned(value.to_owned())))
+        } else {
+            Err(())
         }
     }
 }
@@ -119,6 +134,17 @@ impl fmt::Display for PermissionKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+/// 应用注册一个权限目录项时提供的稳定定义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionDefinition {
+    /// 授权判断使用的稳定键，例如 `projects:read`。
+    pub key: String,
+    /// 面向管理界面展示的权限名称。
+    pub name: String,
+    /// 可选的权限用途说明。
+    pub description: Option<String>,
 }
 
 /// PostgreSQL `account.user_status` 对应的用户访问状态。

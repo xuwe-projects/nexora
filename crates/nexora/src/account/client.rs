@@ -31,23 +31,22 @@ pub use contracts::account as contract;
 pub use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache, PendingOidcLogin};
 pub(crate) use runtime::observe_authentication_in;
 pub use runtime::{
-    AccountLoginRuntimeError, AccountLoginSnapshot, install_authenticator, is_authenticated,
-    login_profile, login_session, login_snapshot, sign_out, start_login,
+    AccountLoginFailure, AccountLoginRuntimeError, AccountLoginSnapshot, api_session,
+    install_authenticator, is_authenticated, login_profile, login_session, login_snapshot,
+    sign_out, start_login,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// 桌面 Account 模块需要的业务 API 与 OIDC public client 配置。
+/// 桌面 Account 模块需要的 OIDC public client 配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
-    /// Account Router 所在的宿主 HTTP 服务配置。
-    pub api: ApiSettings,
     /// 标准 OIDC Authorization Code + PKCE 客户端配置。
     pub oidc: OidcSettings,
 }
 
-/// 桌面客户端访问宿主 Account API 的配置。
+/// 桌面根配置中访问宿主 HTTP API 的配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiSettings {
@@ -72,7 +71,7 @@ pub struct OidcSettings {
 
 impl AccountClientSection for Settings {
     fn validate_account_client(&self) -> Result<(), ConfigError> {
-        client_config_from(self)
+        oidc_config_from(self)
             .map(|_| ())
             .map_err(|error| ConfigError::invalid_section("account.client", error.to_string()))
     }
@@ -115,17 +114,20 @@ pub enum AccountClientConfigError {
     ),
 }
 
-/// 从派生宏标记的桌面 Account 配置段创建完整客户端配置。
+/// 从根 API 配置与派生宏标记的桌面 Account 配置段创建完整客户端配置。
 ///
 /// # Errors
 ///
 /// 根配置没有使用 `#[nexora(account_client)]` 标记标准 [`Settings`] 字段时无法通过编译；
 /// OIDC 或 API endpoint 无效时返回 [`AccountClientConfigError`]。
-pub fn client_config<S>(settings: &S) -> Result<AccountClientConfig, AccountClientConfigError>
+pub fn client_config<S>(
+    settings: &S,
+    api: &ApiSettings,
+) -> Result<AccountClientConfig, AccountClientConfigError>
 where
     S: ProvidesAccountClientSettings<AccountClientSettings = Settings>,
 {
-    client_config_from(settings.account_client_settings())
+    client_config_from(settings.account_client_settings(), api)
 }
 
 /// 从派生宏标记的桌面 Account 配置段创建已校验的 [`OidcConfig`]。
@@ -143,10 +145,11 @@ where
 
 fn client_config_from(
     settings: &Settings,
+    api: &ApiSettings,
 ) -> Result<AccountClientConfig, AccountClientConfigError> {
     Ok(AccountClientConfig {
         oidc: oidc_config_from(settings)?,
-        api_endpoint: validated_api_endpoint(settings.api.endpoint.as_str())?,
+        api_endpoint: validated_api_endpoint(api.endpoint.as_str())?,
     })
 }
 

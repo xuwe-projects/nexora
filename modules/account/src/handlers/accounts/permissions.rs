@@ -4,10 +4,9 @@ use axum::{Json, extract::State};
 use contracts::{account::PermissionResponse, collection::ItemsResponse};
 
 use crate::{
-    AccountState, ApiError,
+    Account, AccountState, ApiError,
     authorization::{Authorized, accounts::ReadPermissions},
     handlers::accounts::permission_response,
-    stores,
 };
 
 /// 返回系统支持的完整权限目录。
@@ -15,7 +14,8 @@ pub(crate) async fn list_permissions(
     _authorization: Authorized<ReadPermissions>,
     State(state): State<AccountState>,
 ) -> Result<Json<ItemsResponse<PermissionResponse>>, ApiError> {
-    let items = stores::permissions::query_all(state.pool())
+    let items = Account { state }
+        .permissions()
         .await?
         .into_iter()
         .map(permission_response)

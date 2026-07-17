@@ -6,7 +6,7 @@ use std::{error::Error, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use configuration::LayeredConfigLoader;
-use migrate::{MigrationOptions, prepare};
+use migrate::prepare;
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 
@@ -18,10 +18,6 @@ struct Arguments {
     /// 指定数据库配置文件；默认读取 `config/server.toml`。
     #[arg(value_name = "FILE")]
     config: Option<PathBuf>,
-
-    /// 明确允许在没有迁移历史和业务 schema 的空数据库上执行首次安装。
-    #[arg(long)]
-    initialize_empty_database: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,11 +50,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .with_required_file(config_path)
         .load()?;
     let pool = PgPoolOptions::new().connect(&config.database.url).await?;
-    let plan = prepare(
-        &pool,
-        MigrationOptions::new().initialize_empty_database(arguments.initialize_empty_database),
-    )
-    .await?;
+    let plan = prepare(&pool).await?;
     let target = plan.target();
     eprintln!(
         "数据库迁移目标: database={}, server={}:{}, 已应用={}，待应用={:?}",

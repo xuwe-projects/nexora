@@ -13,10 +13,7 @@ pub(crate) struct DatabaseState {
     pub(crate) system_initialization_exists: bool,
 }
 
-pub(crate) fn validate_migration_safety(
-    state: &DatabaseState,
-    initialize_empty_database: bool,
-) -> Result<(), io::Error> {
+pub(crate) fn validate_migration_safety(state: &DatabaseState) -> Result<(), io::Error> {
     if state.applied_migrations.iter().any(|(_, success)| !success) {
         return Err(io::Error::other(
             "检测到失败的迁移记录，拒绝继续；请先完成数据库事故排查",
@@ -32,11 +29,6 @@ pub(crate) fn validate_migration_safety(
         if state.account_schema_exists {
             return Err(io::Error::other(
                 "检测到 account schema 但没有迁移历史，拒绝接管或重建现有数据库",
-            ));
-        }
-        if !initialize_empty_database {
-            return Err(io::Error::other(
-                "目标数据库没有迁移历史；首次安装必须显式传入 --initialize-empty-database",
             ));
         }
         return Ok(());

@@ -1,7 +1,5 @@
-use nexora::{
-    Feature, FeatureElement,
-    gpui::{Context, IntoElement, Window, div, prelude::*},
-};
+use gpui::{Context, IntoElement, Window, div, prelude::*};
+use nexora::{Feature, FeatureElement};
 
 #[derive(Default, Feature)]
 #[nexora(

@@ -14,27 +14,6 @@ use crate::safety::{DatabaseState, validate_migration_safety};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-/// 准备迁移时使用的显式安全选项。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MigrationOptions {
-    initialize_empty_database: bool,
-}
-
-impl MigrationOptions {
-    /// 创建默认拒绝接管空数据库的迁移选项。
-    pub const fn new() -> Self {
-        Self {
-            initialize_empty_database: false,
-        }
-    }
-
-    /// 明确允许在没有迁移历史和业务 schema 的空数据库上执行首次安装。
-    pub const fn initialize_empty_database(mut self, allow: bool) -> Self {
-        self.initialize_empty_database = allow;
-        self
-    }
-}
-
 /// 已通过 fail-closed 安全检查、可以执行的迁移计划。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationPlan {
@@ -154,20 +133,16 @@ pub enum MigrationError {
 
 /// 检查目标数据库并创建一个可执行的向前迁移计划。
 ///
-/// 空数据库只有在 [`MigrationOptions::initialize_empty_database`] 被明确设为 `true` 时
-/// 才能通过；已有 account schema 却没有迁移历史、存在失败记录或核心表缺失时始终拒绝。
+/// 空数据库会作为首次安装自动执行全部迁移；已有 account schema 却没有迁移历史、
+/// 存在失败记录或核心表缺失时始终拒绝。
 ///
 /// # Errors
 ///
 /// 无法读取数据库状态，或目标数据库未通过安全检查时返回错误。
-pub async fn prepare(
-    pool: &PgPool,
-    options: MigrationOptions,
-) -> Result<MigrationPlan, MigrationError> {
+pub async fn prepare(pool: &PgPool) -> Result<MigrationPlan, MigrationError> {
     let target = migration_target(pool).await?;
     let state = database_state(pool).await?;
-    validate_migration_safety(&state, options.initialize_empty_database)
-        .map_err(MigrationError::Safety)?;
+    validate_migration_safety(&state).map_err(MigrationError::Safety)?;
 
     let applied = state
         .applied_migrations

@@ -18,6 +18,56 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use dialoguer::{Confirm, Input, Select};
 
 const DEFAULT_PROJECT_NAME: &str = "nexora-app";
+const LOGO_ASSETS: &[(&str, &[u8])] = &[
+    (
+        "logo-icon-16.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-16.png"),
+    ),
+    (
+        "logo-icon-24.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-24.png"),
+    ),
+    (
+        "logo-icon-32.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-32.png"),
+    ),
+    (
+        "logo-icon-48.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-48.png"),
+    ),
+    (
+        "logo-icon-64.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-64.png"),
+    ),
+    (
+        "logo-icon-128.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-128.png"),
+    ),
+    (
+        "logo-icon-256.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-256.png"),
+    ),
+    (
+        "logo-icon-512.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-512.png"),
+    ),
+    (
+        "logo-icon-1024.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-1024.png"),
+    ),
+    (
+        "logo-icon-source.png",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-source.png"),
+    ),
+    (
+        "logo-icon.icns",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon.icns"),
+    ),
+    (
+        "logo-icon.ico",
+        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon.ico"),
+    ),
+];
 
 // Cargo 发布包会强制排除任何包含子 Cargo.toml 的目录，因此清单模板使用
 // `.askama` 语义后缀；脚手架写出时仍命名为 Cargo.toml。
@@ -67,6 +117,10 @@ struct ReadmeTemplate<'a> {
     project_name: &'a str,
     account_enabled: bool,
 }
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/AGENTS.md", escape = "none")]
+struct AgentsTemplate;
 
 #[derive(askama::Template)]
 #[template(path = "scaffold/gitignore.askama", escape = "none")]
@@ -323,6 +377,11 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
         .render()
         .map_err(|error| format!("无法渲染 README.md 模板：{error}"))?,
     );
+    let agents = normalize_template_output(
+        AgentsTemplate
+            .render()
+            .map_err(|error| format!("无法渲染 AGENTS.md 模板：{error}"))?,
+    );
     let gitignore = normalize_template_output(
         GitignoreTemplate
             .render()
@@ -340,7 +399,12 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 .render()
                 .map_err(|error| format!("无法渲染 Cargo.toml 模板：{error}"))?,
             );
-            let mut directories = vec!["src".to_owned(), "src/features".to_owned()];
+            let mut directories = vec![
+                "src".to_owned(),
+                "src/features".to_owned(),
+                "assets".to_owned(),
+                "assets/logos".to_owned(),
+            ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
                 ("Cargo.toml".to_owned(), manifest),
@@ -348,9 +412,11 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 ("src/features.rs".to_owned(), features_module),
                 ("src/features/home.rs".to_owned(), home_feature),
             ];
-            append_readme_if_missing(target, &mut files, readme)?;
+            append_file_if_missing(target, &mut files, "README.md", readme)?;
+            append_file_if_missing(target, &mut files, "AGENTS.md", agents)?;
             append_agent_skills(&mut directories, &mut files)?;
-            write_scaffold(target, &directories, &files)
+            let binary_files = logo_asset_files("");
+            write_scaffold(target, &directories, &files, &binary_files)
         }
         Layout::Workspace => {
             let manifest = normalize_template_output(
@@ -376,6 +442,8 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 desktop_directory.clone(),
                 format!("{desktop_directory}/src"),
                 format!("{desktop_directory}/src/features"),
+                format!("{desktop_directory}/assets"),
+                format!("{desktop_directory}/assets/logos"),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
@@ -397,11 +465,25 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 files.extend(render_account_workspace_templates(project_name)?);
             }
 
-            append_readme_if_missing(target, &mut files, readme)?;
+            append_file_if_missing(target, &mut files, "README.md", readme)?;
+            append_file_if_missing(target, &mut files, "AGENTS.md", agents)?;
             append_agent_skills(&mut directories, &mut files)?;
-            write_scaffold(target, &directories, &files)
+            let binary_files = logo_asset_files(desktop_directory.as_str());
+            write_scaffold(target, &directories, &files, &binary_files)
         }
     }
+}
+
+fn logo_asset_files(package_directory: &str) -> Vec<(String, &'static [u8])> {
+    let prefix = if package_directory.is_empty() {
+        "assets/logos".to_owned()
+    } else {
+        format!("{package_directory}/assets/logos")
+    };
+    LOGO_ASSETS
+        .iter()
+        .map(|(name, contents)| (format!("{prefix}/{name}"), *contents))
+        .collect()
 }
 
 fn append_agent_skills(
@@ -417,13 +499,14 @@ fn append_agent_skills(
     Ok(())
 }
 
-fn append_readme_if_missing(
+fn append_file_if_missing(
     target: &Path,
     files: &mut Vec<(String, String)>,
-    readme: String,
+    relative_path: &str,
+    contents: String,
 ) -> Result<(), String> {
-    if !path_exists(&target.join("README.md"))? {
-        files.push(("README.md".to_owned(), readme));
+    if !path_exists(&target.join(relative_path))? {
+        files.push((relative_path.to_owned(), contents));
     }
     Ok(())
 }
@@ -597,9 +680,14 @@ fn write_scaffold(
     target: &Path,
     directories: &[String],
     files: &[(String, String)],
+    binary_files: &[(String, &'static [u8])],
 ) -> Result<(), String> {
     let mut existing = Vec::new();
-    for (relative_path, _) in files {
+    for relative_path in files
+        .iter()
+        .map(|(path, _)| path)
+        .chain(binary_files.iter().map(|(path, _)| path))
+    {
         if path_exists(&target.join(relative_path))? {
             existing.push(relative_path.as_str());
         }
@@ -635,6 +723,14 @@ fn write_scaffold(
     for (relative_path, contents) in files {
         let path = target.join(relative_path);
         if let Err(error) = write_new_file(&path, contents.as_bytes()) {
+            remove_created_scaffold(&created_files, &created_directories);
+            return Err(error);
+        }
+        created_files.push(path);
+    }
+    for (relative_path, contents) in binary_files {
+        let path = target.join(relative_path);
+        if let Err(error) = write_new_file(&path, contents) {
             remove_created_scaffold(&created_files, &created_directories);
             return Err(error);
         }

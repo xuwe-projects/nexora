@@ -23,7 +23,7 @@ pub(crate) async fn sync_existing(
         r#"
         UPDATE account.users
         SET email = COALESCE($2, email),
-            display_name = $3,
+            display_name = CASE WHEN $3 = $1 THEN display_name ELSE $3 END,
             avatar_url = COALESCE($4, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()
@@ -141,7 +141,7 @@ async fn update_existing(
         r#"
         UPDATE account.users
         SET email = COALESCE($2, email),
-            display_name = $3,
+            display_name = CASE WHEN $3 = $1 THEN display_name ELSE $3 END,
             avatar_url = COALESCE($4, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()

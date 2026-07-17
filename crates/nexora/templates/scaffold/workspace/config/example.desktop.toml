@@ -1,8 +1,14 @@
-[account.api]
+# 桌面客户端访问宿主 HTTP API 的配置。
+[api]
+# API 根地址。本机开发可使用 loopback HTTP；远程部署必须使用 HTTPS，且不能包含路径、查询参数或片段。
 endpoint = "http://127.0.0.1:3000"
 
 [account.oidc]
+# OIDC Provider 的 issuer URL，必须与其 discovery 文档中的 issuer 完全一致。
 issuer_url = "https://identity.example.com"
+# 桌面 OIDC public client 的 Client ID；不要填写 Client Secret。
 client_id = "nexora-desktop"
+# 登录时申请的 OIDC scopes；按 Provider 与业务授权要求增删。
 scopes = ["openid", "profile", "email", "offline_access"]
+# 本地回调 URI，必须预先登记到 OIDC Provider；端口 0 表示运行时选择空闲端口。
 redirect_uri = "http://127.0.0.1:0/auth/callback"

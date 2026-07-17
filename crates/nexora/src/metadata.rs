@@ -162,8 +162,8 @@ pub trait Window: 'static {
 ///
 /// `#[derive(nexora::LoginFeature)]` 会为直接实现 [`gpui::Render`] 的具体类型生成本标记
 /// 实现并提交用户覆盖注册。每个最终应用最多只能定义一个覆盖项；没有定义时框架使用
-/// `account-client` 自带的默认登录页面。Login Feature 不属于路径路由、主导航或标签页。
-#[cfg(feature = "account-client")]
+/// `desktop` 自带的默认登录页面。Login Feature 不属于路径路由、主导航或标签页。
+#[cfg(feature = "desktop")]
 pub trait LoginFeature: gpui::Render + 'static {
     /// 派生宏生成的类型擦除登录页面注册记录。
     #[doc(hidden)]

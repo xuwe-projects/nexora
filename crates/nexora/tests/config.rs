@@ -80,6 +80,10 @@ fn settings_derive_records_calling_package_and_exposes_account_sections() {
 
     assert_eq!(ApplicationSettings::APP_NAME, env!("CARGO_PKG_NAME"));
     assert_eq!(
+        ApplicationSettings::MANIFEST_DIR,
+        env!("CARGO_MANIFEST_DIR")
+    );
+    assert_eq!(
         ProvidesAccountClientSettings::account_client_settings(&settings).client_id,
         "desktop"
     );

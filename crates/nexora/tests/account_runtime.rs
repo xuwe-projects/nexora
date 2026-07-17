@@ -1,17 +1,18 @@
-#![cfg(feature = "account-client")]
+#![cfg(feature = "desktop")]
 
 use gpui::TestAppContext;
-use nexora::account::client::{
-    AccountAuthenticator, AccountLoginRuntimeError, ApiSettings, OidcSettings, Settings,
-    client_config, install_authenticator, login_profile, login_session, login_snapshot, sign_out,
-    start_login,
+use nexora::desktop::{
+    AccountAuthenticator, AccountLoginRuntimeError, AccountOidcSettings, AccountSettings,
+    ApiSettings, client_config, install_authenticator, login_profile, login_session,
+    login_snapshot, sign_out, start_login,
 };
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, nexora::Settings)]
 struct DesktopSettings {
+    api: ApiSettings,
     #[nexora(account_client)]
-    account: Settings,
+    account: AccountSettings,
 }
 
 #[gpui::test]
@@ -25,11 +26,11 @@ fn account_login_runtime_exposes_unconfigured_installed_and_signed_out_states(
         assert_eq!(start_login(cx), Err(AccountLoginRuntimeError::NotInstalled));
 
         let settings = DesktopSettings {
-            account: Settings {
-                api: ApiSettings {
-                    endpoint: "http://127.0.0.1:3000".to_owned(),
-                },
-                oidc: OidcSettings {
+            api: ApiSettings {
+                endpoint: "http://127.0.0.1:3000".to_owned(),
+            },
+            account: AccountSettings {
+                oidc: AccountOidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     client_id: "desktop-client".to_owned(),
                     scopes: vec!["openid".to_owned(), "profile".to_owned()],
@@ -37,7 +38,8 @@ fn account_login_runtime_exposes_unconfigured_installed_and_signed_out_states(
                 },
             },
         };
-        let config = client_config(&settings).expect("测试 Account 客户端配置应有效");
+        let config =
+            client_config(&settings, &settings.api).expect("测试 Account 客户端配置应有效");
         let authenticator = AccountAuthenticator::new(&config).expect("测试认证协调器应能离线构造");
         install_authenticator(authenticator, cx);
 

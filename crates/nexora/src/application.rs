@@ -9,16 +9,19 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-#[cfg(feature = "account-client")]
+use ::desktop::{
+    Application as DesktopApplication, ApplicationOptions as DesktopApplicationOptions,
+};
+#[cfg(feature = "desktop")]
 use actions::account::{self as account_actions, AccountActionKind, SignInAccount, SignOutAccount};
 use actions::{settings::OpenSettings, window as window_actions};
 use configuration::UserConfigStore;
-use desktop::{Application as DesktopApplication, ApplicationOptions as DesktopApplicationOptions};
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, Context, IntoElement as _, MouseButton, Pixels, Render, ScrollHandle,
-    Size, Subscription, WeakEntity, Window, WindowOptions, div, prelude::*, px, size,
+    AnyElement, AnyView, App, Context, Global, Image, ImageFormat, IntoElement as _, MouseButton,
+    Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity, Window, WindowOptions, div, img,
+    prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
@@ -28,12 +31,12 @@ use gpui_component::{
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{
-        Sidebar, SidebarCollapsible, SidebarHeader as SidebarHeaderContainer, SidebarMenu,
-        SidebarMenuItem,
+        Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader as SidebarHeaderContainer,
+        SidebarMenu, SidebarMenuItem,
     },
     tab::{Tab, TabBar},
 };
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 use gpui_component::{
     avatar::Avatar, menu::DropdownMenu as _, sidebar::SidebarFooter as SidebarFooterContainer,
 };
@@ -41,6 +44,45 @@ use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ui::{PanelHeader, layout::WorkspaceLayout};
+
+/// 应用默认品牌区域使用的 PNG Logo。
+///
+/// Logo 字节应通过 `include_bytes!` 编译进最终桌面程序，避免运行时依赖当前工作目录。
+/// 完全自定义登录页时仍可使用 `LoginFeature` 覆盖默认实现。
+#[derive(Clone, Copy, Debug)]
+pub struct ApplicationLogo {
+    bytes: &'static [u8],
+}
+
+impl ApplicationLogo {
+    /// 从编译期 PNG 字节创建应用 Logo。
+    pub const fn png(bytes: &'static [u8]) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn image(self) -> std::sync::Arc<Image> {
+        std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, self.bytes.to_vec()))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ApplicationBranding {
+    pub(crate) application_name: String,
+    pub(crate) application_version: Option<String>,
+    pub(crate) logo: Option<ApplicationLogo>,
+}
+
+impl Global for ApplicationBranding {}
+
+pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
+    cx.try_global::<ApplicationBranding>()
+        .cloned()
+        .unwrap_or_else(|| ApplicationBranding {
+            application_name: "Nexora".to_owned(),
+            application_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            logo: None,
+        })
+}
 
 use crate::{
     AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationContextExt as _,
@@ -56,6 +98,10 @@ use crate::{
 pub struct ApplicationOptions {
     /// 应用在系统菜单和默认 Sidebar Header 中展示的名称。
     pub application_name: String,
+    /// 默认登录页左下角展示的应用版本号。
+    pub application_version: Option<String>,
+    /// 默认登录页和 Sidebar Header 共享的可选 PNG Logo。
+    pub application_logo: Option<ApplicationLogo>,
     /// 默认 Sidebar Header 中位于应用名称下方的说明文字。
     ///
     /// 应用注册自定义 `SidebarHeader` 时不会显示该文字。
@@ -91,6 +137,8 @@ impl Default for ApplicationOptions {
     fn default() -> Self {
         Self {
             application_name: "Nexora".to_owned(),
+            application_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            application_logo: None,
             sidebar_subtitle: Some("Desktop workspace".to_owned()),
             daemon_mode: false,
             activate: true,
@@ -116,6 +164,18 @@ impl ApplicationOptions {
     /// 设置应用在系统菜单和默认 Sidebar Header 中展示的名称。
     pub fn application_name(mut self, application_name: impl Into<String>) -> Self {
         self.application_name = application_name.into();
+        self
+    }
+
+    /// 设置默认登录页左下角展示的应用版本号。
+    pub fn application_version(mut self, application_version: impl Into<String>) -> Self {
+        self.application_version = Some(application_version.into());
+        self
+    }
+
+    /// 设置默认登录页和 Sidebar Header 使用的 PNG Logo。
+    pub const fn application_logo(mut self, application_logo: ApplicationLogo) -> Self {
+        self.application_logo = Some(application_logo);
         self
     }
 
@@ -287,6 +347,8 @@ pub trait Application: Sized + 'static {
 struct PreparedApplication {
     registry: AppRegistry,
     initial_route: RouteMatch,
+    account_registry: AppRegistry,
+    account_initial_route: RouteMatch,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -358,7 +420,7 @@ impl Drop for PreferencesWriter {
 fn prepare_application(
     options: &ApplicationOptions,
 ) -> Result<PreparedApplication, ApplicationError> {
-    let registry = AppRegistry::discover()?;
+    let registry = AppRegistry::discover_for_application(false)?;
     let initial_route = registry
         .resolve(options.initial_path.as_str())
         .map_err(|source| ApplicationError::InitialRoute {
@@ -372,9 +434,19 @@ fn prepare_application(
         });
     }
 
+    let account_registry = AppRegistry::discover_for_application(true)?;
+    let account_initial_route = account_registry
+        .resolve(options.initial_path.as_str())
+        .map_err(|source| ApplicationError::InitialRoute {
+            path: options.initial_path.clone(),
+            source,
+        })?;
+
     Ok(PreparedApplication {
         registry,
         initial_route,
+        account_registry,
+        account_initial_route,
     })
 }
 
@@ -386,9 +458,13 @@ where
     let PreparedApplication {
         registry,
         initial_route,
+        account_registry,
+        account_initial_route,
     } = prepare_application(&options)?;
     let locale = options.locale.clone();
     let application_name = options.application_name.clone();
+    let application_version = options.application_version.clone();
+    let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
     let preferences_store = UserConfigStore::for_local_application(
         "com",
@@ -407,11 +483,16 @@ where
         options: options.into_desktop_options(),
         locale,
         application_name,
+        application_version,
+        application_logo,
+        account_enabled: false,
         sidebar_subtitle,
         preferences_store,
         pinned_tab_paths,
         registry: Some(registry),
         initial_route: Some(initial_route),
+        account_registry: Some(account_registry),
+        account_initial_route: Some(account_initial_route),
     };
 
     DesktopApplication::run(adapter);
@@ -423,11 +504,16 @@ struct ApplicationAdapter<A> {
     options: DesktopApplicationOptions,
     locale: String,
     application_name: String,
+    application_version: Option<String>,
+    application_logo: Option<ApplicationLogo>,
+    account_enabled: bool,
     sidebar_subtitle: Option<String>,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
     registry: Option<AppRegistry>,
     initial_route: Option<RouteMatch>,
+    account_registry: Option<AppRegistry>,
+    account_initial_route: Option<RouteMatch>,
 }
 
 impl<A> DesktopApplication for ApplicationAdapter<A>
@@ -446,13 +532,20 @@ where
 
     fn initialize(&mut self, cx: &mut App) {
         gpui_component::set_locale(self.locale.as_str());
+        cx.set_global(ApplicationBranding {
+            application_name: self.application_name.clone(),
+            application_version: self.application_version.clone(),
+            logo: self.application_logo,
+        });
         actions::init();
         actions::settings::bind_keys(cx);
         cx.on_action(|_: &OpenSettings, cx| {
             _ = cx.navigate("/settings");
         });
-        #[cfg(feature = "account-client")]
-        {
+        window_actions::init(self.application_name.clone(), cx);
+        self.application.initialize(cx);
+        self.account_enabled = crate::account::client::login_snapshot(cx).configured;
+        if self.account_enabled {
             account_actions::bind_keys(cx);
             cx.on_action(|_: &SignInAccount, cx| {
                 let snapshot = crate::account::client::login_snapshot(cx);
@@ -464,8 +557,6 @@ where
                 crate::account::client::sign_out(cx);
             });
         }
-        window_actions::init(self.application_name.clone(), cx);
-        self.application.initialize(cx);
     }
 
     fn build_root_view(
@@ -473,16 +564,29 @@ where
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::Entity<Self::RootView> {
-        let registry = self
-            .registry
-            .take()
-            .expect("Nexora 主窗口注册表只能被消费一次");
-        let initial_route = self
-            .initial_route
-            .take()
-            .expect("Nexora 主窗口首路由只能被消费一次");
+        let (registry, initial_route) = if self.account_enabled {
+            (
+                self.account_registry
+                    .take()
+                    .expect("Nexora Account 主窗口注册表只能被消费一次"),
+                self.account_initial_route
+                    .take()
+                    .expect("Nexora Account 主窗口首路由只能被消费一次"),
+            )
+        } else {
+            (
+                self.registry
+                    .take()
+                    .expect("Nexora 主窗口注册表只能被消费一次"),
+                self.initial_route
+                    .take()
+                    .expect("Nexora 主窗口首路由只能被消费一次"),
+            )
+        };
 
         let application_name = self.application_name.clone();
+        let application_logo = self.application_logo;
+        let account_enabled = self.account_enabled;
         let sidebar_subtitle = self.sidebar_subtitle.clone();
         let preferences_store = self.preferences_store.clone();
         let pinned_tab_paths = std::mem::take(&mut self.pinned_tab_paths);
@@ -492,6 +596,8 @@ where
                 initial_route,
                 ApplicationShellConfig {
                     application_name,
+                    application_logo,
+                    account_enabled,
                     sidebar_subtitle,
                     preferences_store,
                     pinned_tab_paths,
@@ -511,7 +617,7 @@ enum NavigationError {
     Feature(#[from] FeatureRuntimeError),
     #[error(transparent)]
     Window(#[from] WindowRuntimeError),
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     #[error("未登录时不能打开独立窗口 `{path}`")]
     AuthenticationRequired { path: String },
 }
@@ -568,6 +674,8 @@ impl Eq for ShellRoute {}
 
 struct ApplicationShellConfig {
     application_name: String,
+    application_logo: Option<ApplicationLogo>,
+    account_enabled: bool,
     sidebar_subtitle: Option<String>,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
@@ -576,6 +684,8 @@ struct ApplicationShellConfig {
 struct ApplicationShell {
     registry: AppRegistry,
     application_name: String,
+    application_logo: Option<ApplicationLogo>,
+    account_enabled: bool,
     sidebar_subtitle: Option<String>,
     initial_route: ShellRoute,
     active_route: ShellRoute,
@@ -588,19 +698,19 @@ struct ApplicationShell {
     navigation_history_index: usize,
     preferences_writer: Option<PreferencesWriter>,
     feature_instances: HashMap<String, FeatureInstance>,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     login_feature: AnyView,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     authenticated: bool,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     auth_identity: Option<String>,
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     business_windows: Vec<WindowHandle<gpui_component::Root>>,
     sidebar_header: Option<AnyView>,
     sidebar_footer: Option<AnyView>,
     navigation_error: Option<String>,
-    #[cfg(feature = "account-client")]
-    _authentication_subscription: Subscription,
+    #[cfg(feature = "desktop")]
+    _authentication_subscription: Option<Subscription>,
     _release_subscription: Option<Subscription>,
 }
 
@@ -614,6 +724,8 @@ impl ApplicationShell {
     ) -> Self {
         let ApplicationShellConfig {
             application_name,
+            application_logo,
+            account_enabled,
             sidebar_subtitle,
             preferences_store,
             pinned_tab_paths,
@@ -646,14 +758,16 @@ impl ApplicationShell {
         if !opened_tabs.contains(&initial_route) {
             opened_tabs.push(initial_route.clone());
         }
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         let login_feature = registry.create_login_feature(window, cx);
-        #[cfg(feature = "account-client")]
-        let authenticated = crate::account::client::is_authenticated(cx);
-        #[cfg(feature = "account-client")]
-        let auth_identity = crate::account::client::login_profile(cx)
+        #[cfg(feature = "desktop")]
+        let authenticated = !account_enabled || crate::account::client::is_authenticated(cx);
+        #[cfg(feature = "desktop")]
+        let auth_identity = account_enabled
+            .then(|| crate::account::client::login_profile(cx))
+            .flatten()
             .map(|profile| profile.user.identity_id.clone());
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         let (sidebar_header, sidebar_footer) = if authenticated {
             (
                 registry.create_sidebar_header(window, cx),
@@ -662,30 +776,31 @@ impl ApplicationShell {
         } else {
             (None, None)
         };
-        #[cfg(not(feature = "account-client"))]
+        #[cfg(not(feature = "desktop"))]
         let sidebar_header = registry.create_sidebar_header(window, cx);
-        #[cfg(not(feature = "account-client"))]
+        #[cfg(not(feature = "desktop"))]
         let sidebar_footer = registry.create_sidebar_footer(window, cx);
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         let (feature_instances, navigation_error) = if authenticated {
             create_initial_feature(&registry, initial_route.route().clone(), window, cx)
         } else {
             (HashMap::new(), None)
         };
-        #[cfg(not(feature = "account-client"))]
+        #[cfg(not(feature = "desktop"))]
         let (feature_instances, navigation_error) =
             create_initial_feature(&registry, initial_route.route().clone(), window, cx);
-        #[cfg(feature = "account-client")]
-        let _authentication_subscription =
+        #[cfg(feature = "desktop")]
+        let _authentication_subscription = account_enabled.then(|| {
             crate::account::client::observe_authentication_in(window, cx, |this, window, cx| {
                 this.authentication_changed(window, cx);
-            });
+            })
+        });
         let _release_subscription = Some(cx.on_release_in(window, |this, window, cx| {
             clear_navigation_handler(cx);
             for (_, mut instance) in this.feature_instances.drain() {
                 instance.close(window, cx);
             }
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             this.close_business_windows(cx);
             this.preferences_writer = None;
         }));
@@ -695,6 +810,8 @@ impl ApplicationShell {
         Self {
             registry,
             application_name,
+            application_logo,
+            account_enabled,
             sidebar_subtitle,
             initial_route: initial_route.clone(),
             active_route: initial_route.clone(),
@@ -707,25 +824,28 @@ impl ApplicationShell {
             navigation_history_index: 0,
             preferences_writer,
             feature_instances,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             login_feature,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             authenticated,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             auth_identity,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             business_windows: Vec::new(),
             sidebar_header,
             sidebar_footer,
             navigation_error,
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             _authentication_subscription,
             _release_subscription,
         }
     }
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     fn authentication_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.account_enabled {
+            return;
+        }
         let authenticated = crate::account::client::is_authenticated(cx);
         let auth_identity = crate::account::client::login_profile(cx)
             .map(|profile| profile.user.identity_id.clone());
@@ -760,14 +880,14 @@ impl ApplicationShell {
         cx.notify();
     }
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     fn close_business_windows(&mut self, cx: &mut App) {
         for handle in self.business_windows.drain(..) {
             _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     }
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     fn activate_selected_feature(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_route = self.active_route.clone();
         match self.ensure_feature_instance(&active_route, window, cx) {
@@ -966,13 +1086,13 @@ impl ApplicationShell {
         cx: &mut Context<Self>,
     ) -> Result<(), NavigationError> {
         if route.target().kind() == RouteTargetKind::Window {
-            #[cfg(feature = "account-client")]
-            if !self.authenticated && route.target().id() != "settings" {
+            #[cfg(feature = "desktop")]
+            if self.account_enabled && !self.authenticated && route.target().id() != "settings" {
                 return Err(NavigationError::AuthenticationRequired {
                     path: route.concrete_path().to_owned(),
                 });
             }
-            #[cfg(feature = "account-client")]
+            #[cfg(feature = "desktop")]
             {
                 let is_settings = route.target().id() == "settings";
                 let handle = self.registry.open_window(route, cx)?;
@@ -982,7 +1102,7 @@ impl ApplicationShell {
                     self.business_windows.push(handle);
                 }
             }
-            #[cfg(not(feature = "account-client"))]
+            #[cfg(not(feature = "desktop"))]
             self.registry.open_window(route, cx)?;
             self.navigation_error = None;
             cx.notify();
@@ -990,8 +1110,8 @@ impl ApplicationShell {
         }
 
         let route = ShellRoute::new(route);
-        #[cfg(feature = "account-client")]
-        if !self.authenticated {
+        #[cfg(feature = "desktop")]
+        if self.account_enabled && !self.authenticated {
             self.navigate_to_route(route, true);
             self.navigation_error = None;
             cx.notify();
@@ -1372,16 +1492,12 @@ impl ApplicationShell {
             .gap_2()
             .min_w_0()
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size_7()
-                    .flex_shrink_0()
-                    .rounded_sm()
-                    .bg(theme.tokens.sidebar_primary)
-                    .text_color(theme.sidebar_primary_foreground)
-                    .child(Icon::new(IconName::ChartPie).size_4()),
+                img(self
+                    .application_logo
+                    .map(ApplicationLogo::image)
+                    .unwrap_or_else(ui::default_application_logo))
+                .size_7()
+                .flex_shrink_0(),
             )
             .child(
                 div()
@@ -1407,7 +1523,7 @@ impl ApplicationShell {
             .into_any_element()
     }
 
-    #[cfg(feature = "account-client")]
+    #[cfg(feature = "desktop")]
     fn render_default_account_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = crate::account::client::login_profile(cx);
         let display_name = profile
@@ -1460,21 +1576,22 @@ impl ApplicationShell {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
-        let navigation_menus = self
-            .navigation_sections()
+        let navigation_sections = self.navigation_sections();
+        let navigation_section_count = navigation_sections.len();
+        let navigation_groups = navigation_sections
             .into_iter()
             .enumerate()
-            .map(|(index, (_, items))| {
+            .map(|(index, (section, items))| {
                 let menu = SidebarMenu::new().children(
                     items
                         .into_iter()
                         .map(|metadata| self.render_navigation_item(metadata, cx)),
                 );
-                if index == 0 {
-                    menu
+                SidebarGroup::new(section).child(if index + 1 < navigation_section_count {
+                    menu.pb_3().border_b_1().border_color(sidebar_border)
                 } else {
-                    menu.pt_3().border_t_1().border_color(sidebar_border)
-                }
+                    menu
+                })
             })
             .collect::<Vec<_>>();
         let header = self
@@ -1487,15 +1604,14 @@ impl ApplicationShell {
             .size_full()
             .collapsible(SidebarCollapsible::None)
             .header(
-                SidebarHeaderContainer::new()
-                    .p_0()
-                    .py_1()
+                div()
+                    .w_full()
                     .pb_3()
                     .border_b_1()
                     .border_color(sidebar_border)
-                    .child(header),
+                    .child(SidebarHeaderContainer::new().child(header)),
             )
-            .children(navigation_menus);
+            .children(navigation_groups);
         let sidebar = if let Some(footer) = self.sidebar_footer.as_ref() {
             sidebar.footer(
                 div()
@@ -1503,11 +1619,11 @@ impl ApplicationShell {
                     .pt_3()
                     .border_t_1()
                     .border_color(sidebar_border)
-                    .child(footer.clone()),
+                    .child(SidebarFooterContainer::new().w_full().child(footer.clone())),
             )
         } else {
-            #[cfg(feature = "account-client")]
-            {
+            #[cfg(feature = "desktop")]
+            if self.account_enabled {
                 sidebar.footer(
                     div()
                         .w_full()
@@ -1516,9 +1632,7 @@ impl ApplicationShell {
                         .border_color(sidebar_border)
                         .child(self.render_default_account_footer(cx)),
                 )
-            }
-            #[cfg(not(feature = "account-client"))]
-            {
+            } else {
                 sidebar
             }
         };
@@ -2023,7 +2137,7 @@ impl ApplicationShell {
     }
 }
 
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 fn account_icon(kind: AccountActionKind) -> IconName {
     match kind {
         AccountActionKind::SignIn => IconName::CircleUser,
@@ -2038,8 +2152,8 @@ fn feature_icon(icon: Option<&str>) -> Icon {
 
 impl Render for ApplicationShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-        #[cfg(feature = "account-client")]
-        let content = if !self.authenticated {
+        #[cfg(feature = "desktop")]
+        let content = if self.account_enabled && !self.authenticated {
             let navigation_error = self.navigation_error.clone();
             div()
                 .relative()
@@ -2068,7 +2182,7 @@ impl Render for ApplicationShell {
         } else {
             self.render_workspace(window, cx)
         };
-        #[cfg(not(feature = "account-client"))]
+        #[cfg(not(feature = "desktop"))]
         let content = self.render_workspace(window, cx);
 
         let root = div()
@@ -2076,7 +2190,7 @@ impl Render for ApplicationShell {
             .size_full()
             .child(content)
             .children(ui::window_layers(window, cx));
-        #[cfg(feature = "account-client")]
+        #[cfg(feature = "desktop")]
         let root = root.key_context(account_actions::CONTEXT);
         root.into_any_element()
     }

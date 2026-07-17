@@ -124,10 +124,8 @@ pub trait WindowElement: WindowDefinition + Sized + Render {
 /// # Examples
 ///
 /// ```no_run
-/// use nexora::{
-///     FeatureElement,
-///     gpui::{Context, Empty, IntoElement, Window},
-/// };
+/// use gpui::{Context, Empty, IntoElement, Window};
+/// use nexora::FeatureElement;
 ///
 /// #[derive(Default, nexora::Feature)]
 /// #[nexora(title = "首页", path = "/")]
@@ -537,7 +535,7 @@ where
 ///
 /// 登录页面不是普通路由 Feature，不会绑定路径参数或进入标签生命周期；Entity 由主窗口
 /// Shell 创建一次并持续复用，具体状态仍由实现类型自行持有。
-#[cfg(feature = "account-client")]
+#[cfg(feature = "desktop")]
 #[doc(hidden)]
 pub fn create_login_feature<T>(
     window: &mut Window,

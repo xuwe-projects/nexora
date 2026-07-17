@@ -5,7 +5,9 @@ edition.workspace = true
 
 [dependencies]
 axum = { workspace = true }
-nexora = { workspace = true, features = ["server", "derive", "account-server"] }
+nexora = { workspace = true, features = ["server", "derive"] }
 serde = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

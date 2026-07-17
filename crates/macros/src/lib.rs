@@ -52,7 +52,7 @@ pub fn derive_window(input: TokenStream) -> TokenStream {
 /// 为直接实现 `gpui::Render` 的类型注册 Account 登录页覆盖实现。
 ///
 /// 一个应用最多只能派生一个 Login Feature。没有应用级实现时，Nexora 会使用
-/// `account-client` 提供的默认登录页；`#[nexora(factory = Type::new)]` 可以覆盖默认的
+/// `desktop` feature 提供的默认登录页；`#[nexora(factory = Type::new)]` 可以覆盖默认的
 /// [`Default`] 构造方式。
 #[proc_macro_derive(LoginFeature, attributes(nexora))]
 pub fn derive_login_feature(input: TokenStream) -> TokenStream {
@@ -665,6 +665,7 @@ fn expand_settings(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     Ok(quote! {
         impl #impl_generics #nexora::config::Settings for #ident #type_generics #where_clause {
             const APP_NAME: &'static str = env!("CARGO_PKG_NAME");
+            const MANIFEST_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
 
             fn validate(
                 &self,

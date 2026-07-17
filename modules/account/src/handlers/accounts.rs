@@ -22,7 +22,7 @@ const MAX_DESCRIPTION_LENGTH: usize = 1_000;
 const MAX_ROLE_PERMISSIONS: usize = 256;
 const MAX_USER_ROLES: usize = 64;
 
-pub(super) fn page_request(page: u32, page_size: u32) -> Result<PageRequest, AccountError> {
+pub(crate) fn page_request(page: u32, page_size: u32) -> Result<PageRequest, AccountError> {
     if page == 0 {
         return Err(invalid("page", "页码必须从 1 开始"));
     }
@@ -30,7 +30,7 @@ pub(super) fn page_request(page: u32, page_size: u32) -> Result<PageRequest, Acc
         .ok_or_else(|| invalid("page", "分页参数必须大于零"))
 }
 
-pub(super) fn validate_role_key(key: &str) -> Result<(), AccountError> {
+pub(crate) fn validate_role_key(key: &str) -> Result<(), AccountError> {
     let valid_length = (2..=64).contains(&key.len());
     let mut characters = key.chars();
     let valid_first = characters
@@ -49,7 +49,7 @@ pub(super) fn validate_role_key(key: &str) -> Result<(), AccountError> {
     }
 }
 
-pub(super) fn validate_role_fields(
+pub(crate) fn validate_role_fields(
     name: &str,
     description: Option<&str>,
 ) -> Result<(), AccountError> {
@@ -62,11 +62,11 @@ pub(super) fn validate_role_fields(
     Ok(())
 }
 
-pub(super) fn role_permission_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
+pub(crate) fn role_permission_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
     deduplicate_ids(ids, MAX_ROLE_PERMISSIONS, "permission_ids")
 }
 
-pub(super) fn user_role_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
+pub(crate) fn user_role_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
     deduplicate_ids(ids, MAX_USER_ROLES, "role_ids")
 }
 

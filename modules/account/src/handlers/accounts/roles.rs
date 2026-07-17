@@ -14,15 +14,12 @@ use contracts::{
 };
 
 use crate::{
-    AccountError, AccountState, ApiError,
+    Account, AccountError, AccountState, ApiError,
     authorization::{
         Authorized,
         accounts::{ReadRoles, WriteRoles},
     },
-    handlers::accounts::{
-        role_permission_ids, role_response, validate_role_fields, validate_role_key,
-    },
-    stores,
+    handlers::accounts::role_response,
 };
 
 /// 返回全部角色及其直接权限。
@@ -30,7 +27,8 @@ pub(crate) async fn list_roles(
     _authorization: Authorized<ReadRoles>,
     State(state): State<AccountState>,
 ) -> Result<Json<ItemsResponse<RoleResponse>>, ApiError> {
-    let items = stores::roles::query_all(state.pool())
+    let items = Account { state }
+        .roles()
         .await?
         .into_iter()
         .map(role_response)
@@ -44,9 +42,7 @@ pub(crate) async fn get_role(
     State(state): State<AccountState>,
     ApiPath(role_id): ApiPath<i64>,
 ) -> Result<Json<RoleResponse>, ApiError> {
-    let role = stores::roles::query_by_id(role_id, state.pool())
-        .await?
-        .ok_or(AccountError::NotFound("角色"))?;
+    let role = Account { state }.role(role_id).await?;
     Ok(Json(role_response(role)))
 }
 
@@ -56,17 +52,14 @@ pub(crate) async fn create_role(
     State(state): State<AccountState>,
     ApiJson(request): ApiJson<CreateRoleRequest>,
 ) -> Result<Response, ApiError> {
-    validate_role_key(request.key.as_str())?;
-    validate_role_fields(request.name.as_str(), request.description.as_deref())?;
-    let permission_ids = role_permission_ids(request.permission_ids)?;
-    let role = stores::roles::create(
-        request.key.as_str(),
-        request.name.as_str(),
-        request.description.as_deref(),
-        &permission_ids,
-        state.pool(),
-    )
-    .await?;
+    let role = Account { state }
+        .create_role(
+            request.key.as_str(),
+            request.name.as_str(),
+            request.description.as_deref(),
+            request.permission_ids.as_slice(),
+        )
+        .await?;
     let location = format!("/roles/{}", role.id);
     Ok((
         StatusCode::CREATED,
@@ -90,26 +83,14 @@ pub(crate) async fn update_role(
         ))
         .into());
     }
-    let current = stores::roles::query_by_id(role_id, state.pool())
-        .await?
-        .ok_or(AccountError::NotFound("角色"))?;
-    if current.is_system {
-        return Err(AccountError::Conflict {
-            code: "system_role_immutable",
-            message: "系统角色不可修改或删除",
-        }
-        .into());
-    }
     let description = match &request.description {
         PatchField::Missing => None,
         PatchField::Null => Some(None),
         PatchField::Value(value) => Some(Some(value.as_str())),
     };
-    let final_name = request.name.as_deref().unwrap_or(current.name.as_str());
-    let final_description = description.unwrap_or(current.description.as_deref());
-    validate_role_fields(final_name, final_description)?;
-    let role =
-        stores::roles::update(role_id, request.name.as_deref(), description, state.pool()).await?;
+    let role = Account { state }
+        .update_role(role_id, request.name.as_deref(), description)
+        .await?;
     Ok(Json(role_response(role)))
 }
 
@@ -119,7 +100,7 @@ pub(crate) async fn delete_role(
     State(state): State<AccountState>,
     ApiPath(role_id): ApiPath<i64>,
 ) -> Result<StatusCode, ApiError> {
-    stores::roles::delete(role_id, state.pool()).await?;
+    Account { state }.delete_role(role_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -130,7 +111,8 @@ pub(crate) async fn replace_role_permissions(
     ApiPath(role_id): ApiPath<i64>,
     ApiJson(request): ApiJson<ReplaceRolePermissionsRequest>,
 ) -> Result<Json<RoleResponse>, ApiError> {
-    let permission_ids = role_permission_ids(request.permission_ids)?;
-    let role = stores::roles::replace_permissions(role_id, &permission_ids, state.pool()).await?;
+    let role = Account { state }
+        .replace_role_permissions(role_id, request.permission_ids.as_slice())
+        .await?;
     Ok(Json(role_response(role)))
 }

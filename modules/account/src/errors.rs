@@ -74,6 +74,13 @@ impl StoreError {
 /// 账号与授权用例向 API 层返回的领域错误。
 #[derive(Debug, Error)]
 pub enum AccountError {
+    /// Bearer access token 无法通过签名、issuer、audience 或有效期校验。
+    #[error("Bearer access token 验证失败")]
+    Verification(
+        /// OIDC verifier 返回的结构化失败原因。
+        #[from]
+        VerificationError,
+    ),
     /// 外部身份缺少稳定 identity ID 或必要展示字段。
     #[error("认证身份不完整")]
     InvalidIdentity,
@@ -161,6 +168,7 @@ impl From<StoreError> for AccountError {
 impl From<AccountError> for ApiError {
     fn from(error: AccountError) -> Self {
         match error {
+            AccountError::Verification(error) => Self::from(error),
             AccountError::InvalidIdentity => {
                 Self::unauthorized("invalid_identity", "认证身份不完整")
             }
