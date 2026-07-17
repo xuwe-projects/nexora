@@ -1,6 +1,7 @@
 //! Nexora 应用的强类型配置加载与模块配置契约。
 //!
-//! 应用通过 `#[derive(nexora::Settings)]` 声明根配置类型，再调用 [`initialize`] 按
+//! 应用通过 `#[derive(nexora::Settings)]` 声明根配置类型，再调用
+//! `nexora::config::initialize` 按
 //! “显式路径、首个命令行参数、包名默认路径”的优先级加载 TOML 文件。Account 客户端
 //! 与服务端配置段由派生宏分别标记，避免在同一个 workspace 中因 Cargo feature 合并而
 //! 混淆两端配置。

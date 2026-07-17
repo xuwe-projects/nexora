@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.2.0
+  version: 0.3.0
   description: 基于 OIDC Bearer token 与本地 PostgreSQL RBAC 的管理 API。
 servers:
   - url: http://127.0.0.1:3000
@@ -59,6 +59,42 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: provisionUser
+      summary: 开通外部身份并建立初始用户角色关联
+      description: >-
+        管理员确认 OIDC 外部身份后创建本地用户，并在同一事务中建立 role_ids 指定的
+        初始角色关联；role_ids 缺省时创建不带业务角色的用户。空集合只要求
+        users:provision，非空集合还要求 users:roles.write。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProvisionUserRequest"
+      responses:
+        "201":
+          description: 用户已开通；Location 指向用户资源
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
   /users/{user_id}:
     parameters:
       - $ref: "#/components/parameters/UserId"
@@ -184,6 +220,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
@@ -520,6 +558,36 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/UserStatus"
+    ProvisionUserRequest:
+      type: object
+      additionalProperties: false
+      required: [identity_id, display_name]
+      properties:
+        identity_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: 当前部署绑定的 OIDC issuer 中稳定且唯一的 subject
+        email:
+          type: [string, "null"]
+          format: email
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        avatar_url:
+          type: [string, "null"]
+          format: uri
+        role_ids:
+          type: array
+          default: []
+          maxItems: 64
+          uniqueItems: true
+          description: 创建用户时原子建立的初始业务角色集合；缺省时使用空集合
+          items:
+            type: integer
+            format: int64
+            minimum: 1
     ReplaceUserRoles:
       type: object
       additionalProperties: false
@@ -550,6 +618,7 @@ components:
           maxLength: 1000
         permission_ids:
           type: array
+          default: []
           maxItems: 256
           uniqueItems: true
           items:

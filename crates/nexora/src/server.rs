@@ -16,8 +16,10 @@ pub use crate::account::server::{
     ZitadelUserDirectory, dependencies, setup_routes, setup_routes_with, user_directory,
 };
 pub use crate::account::{
-    AccessProfile, AccountError, ExternalIdentity, Permission, PermissionDefinition, Role, User,
-    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
+    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, ExternalIdentity,
+    Permission, PermissionDefinition, PermissionKey, RequiredPermission, Role, User,
+    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
+    replace_user_roles,
 };
 
 /// 可组合 Nexora 默认模块与应用 Router 的服务端实例。
@@ -118,6 +120,22 @@ impl Server {
                 routes.setup_secret.as_str(),
             ))
             .merge(routes.account.routers::<S>())
+    }
+
+    /// 返回已经初始化的 Account 业务 facade 的可克隆句柄。
+    ///
+    /// 宿主可把返回值放入自己的 Axum State，并为 [`crate::account::Account`] 实现
+    /// `axum::extract::FromRef<AppState>`，随后直接在自定义 handler 中使用
+    /// [`crate::account::AuthenticatedUser`] 或 [`crate::account::Authorized`]。克隆句柄只会
+    /// 复用初始化时传入的同一个 [`PgPool`]，不会创建第二个连接池或改变框架 Router 的认证
+    /// 授权语义。
+    ///
+    /// [`Self::initialize`] 成功前返回 `None`。
+    #[must_use]
+    pub fn account(&self) -> Option<crate::account::Account> {
+        self.account_routes
+            .as_ref()
+            .map(|routes| routes.account.clone())
     }
 
     /// 当系统尚未完成初始化时，根据宿主已经绑定的地址返回 Setup 页面 URL。

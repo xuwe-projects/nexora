@@ -130,14 +130,16 @@ mod client {
 
 #[cfg(feature = "server")]
 mod server {
+    use axum::{Router, extract::FromRef, http::StatusCode, routing::get};
     use nexora::{
-        account::{Account, PermissionDefinition, PermissionKey},
+        Server,
         config::Settings as _,
         server::{
-            AccountOidcSettings as OidcSettings, AccountSettings as Settings, DirectoryUser,
-            ExternalIdentity, Setup, SetupCompletionRequest, SetupUnlockRequest,
-            create_permissions, create_role, create_user, migrations, replace_role_permissions,
-            replace_user_roles,
+            Account, AccountOidcSettings as OidcSettings, AccountSettings as Settings,
+            AuthenticatedUser, Authorized, DirectoryUser, ExternalIdentity, PermissionDefinition,
+            PermissionKey, RequiredPermission, Setup, SetupCompletionRequest, SetupUnlockRequest,
+            create_permissions, create_role, create_user, create_user_with_roles, migrations,
+            replace_role_permissions, replace_user_roles,
         },
     };
     use serde::Deserialize;
@@ -146,6 +148,31 @@ mod server {
     struct ServerSettings {
         #[nexora(account_server)]
         account: Settings,
+    }
+
+    #[derive(Clone)]
+    struct HostState {
+        account: Account,
+    }
+
+    impl FromRef<HostState> for Account {
+        fn from_ref(state: &HostState) -> Self {
+            state.account.clone()
+        }
+    }
+
+    struct ReadProjects;
+
+    impl RequiredPermission for ReadProjects {
+        const KEY: PermissionKey = PermissionKey::from_static("projects:read");
+    }
+
+    async fn authenticated_handler(_authenticated: AuthenticatedUser) -> StatusCode {
+        StatusCode::OK
+    }
+
+    async fn authorized_handler(_authorization: Authorized<ReadProjects>) -> StatusCode {
+        StatusCode::NO_CONTENT
     }
 
     #[test]
@@ -235,6 +262,17 @@ mod server {
     }
 
     #[test]
+    fn server_account_extractors_accept_a_host_defined_state() {
+        let router: Router<HostState> = Router::new()
+            .route("/profile", get(authenticated_handler))
+            .route("/projects", get(authorized_handler));
+        drop(router);
+
+        let server = Server::new();
+        assert!(server.account().is_none());
+    }
+
+    #[test]
     fn server_facade_exposes_pool_based_account_management_and_migrations() {
         fn assert_management_api(pool: &sqlx::PgPool) {
             let identity = ExternalIdentity {
@@ -249,7 +287,8 @@ mod server {
                 description: None,
             }];
 
-            _ = create_user(pool, identity);
+            _ = create_user(pool, identity.clone());
+            _ = create_user_with_roles(pool, identity, &[], "Admin001");
             _ = create_permissions(pool, &definitions);
             _ = create_role(pool, "project-reader", "项目查看者", None, &[]);
             _ = replace_role_permissions(pool, 1, &[]);

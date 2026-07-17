@@ -45,10 +45,72 @@ collisions across sources, and runs one SQLx `Migrator` before calling
 the application's own Axum State, so the application owns merge order and middleware boundaries.
 Omit `.merge(server.routers())` when Nexora/Account HTTP routes are not needed.
 
-Trusted host code can also call `nexora::server::{create_user, create_permissions, create_role,
-replace_role_permissions, replace_user_roles}` with the application's one `PgPool`. User creation
-provisions an already-confirmed `ExternalIdentity` and does not add a local password model. The two
-`replace_*` functions atomically replace the complete relation set rather than appending entries.
+Trusted host code can also call `nexora::server::{create_user, create_user_with_roles,
+create_permissions, create_role, replace_role_permissions, replace_user_roles}` with the
+application's one `PgPool`. User creation provisions an already-confirmed `ExternalIdentity` and
+does not add a local password model. `create_user_with_roles` additionally accepts initial business
+roles and a local `granted_by` user ID, then creates the user, retains the built-in `member` role,
+and writes role grants in one transaction. The two `replace_*` functions atomically replace the
+complete relation set rather than appending entries. These pool-first APIs do not authorize the
+current request and must only be called from an already-authorized trusted host boundary.
+
+## Reuse Account from application State
+
+When application routers need Nexora authentication or authorization, call `server.account()`
+after successful initialization, store the handle in the final State, and implement
+`FromRef<AppState> for Account`:
+
+```rust
+use axum::extract::FromRef;
+use nexora::server::{Account, Authorized, PermissionKey, RequiredPermission};
+use sqlx::PgPool;
+
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    account: Account,
+}
+
+impl FromRef<AppState> for Account {
+    fn from_ref(state: &AppState) -> Self {
+        state.account.clone()
+    }
+}
+
+struct ReadFactories;
+
+impl RequiredPermission for ReadFactories {
+    const KEY: PermissionKey = PermissionKey::from_static("factories:read");
+}
+
+async fn list_factories(authorization: Authorized<ReadFactories>) {
+    let current_user_id = authorization.profile().user.id.as_str();
+    // Use current_user_id for business audit columns.
+}
+
+server
+    .initialize(&settings, &pool, settings.setup.secret()?)
+    .await?;
+let account = server.account().expect("Server has been initialized");
+let state = AppState {
+    pool: pool.clone(),
+    account,
+};
+
+let app = Router::new()
+    .merge(server.routers())
+    .merge(application_routes())
+    .with_state(state);
+```
+
+`Server::account()` returns `None` before initialization. Cloning the Account handle continues to
+reuse the same pool. Custom handlers can extract `AuthenticatedUser` directly or declare a
+permission with `Authorized<P>`. Both reuse framework bearer-token verification, local user status,
+and merged permissions without exposing the token to business code.
+
+The default `POST /users` requires only `users:provision` when `role_ids` is empty and additionally
+requires `users:roles.write` when it is non-empty. Trusted hosts calling pool-first APIs must enforce
+equivalent authorization themselves.
 
 After binding, `server.setup_url(listener.local_addr()?)` can be used to log the pending Setup URL.
 It only formats the already-bound address and never owns the listener or service lifecycle.

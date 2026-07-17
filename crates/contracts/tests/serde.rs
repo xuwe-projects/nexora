@@ -96,15 +96,36 @@ fn provision_user_request_uses_explicit_snake_case_identity_id() {
         email: Some("user@example.com".to_owned()),
         display_name: "测试用户".to_owned(),
         avatar_url: None,
+        role_ids: vec![7, 11],
     };
 
     let json = serde_json::to_value(&request).expect("用户开通请求应当可以序列化");
     assert_eq!(json["identity_id"], "user-1");
+    assert_eq!(json["role_ids"], json!([7, 11]));
     assert!(json.get("identityId").is_none());
     assert_eq!(
         serde_json::from_value::<ProvisionUserRequest>(json).expect("用户开通请求应当可以反序列化"),
         request
     );
+
+    let compatible = serde_json::from_value::<ProvisionUserRequest>(json!({
+        "identity_id": "legacy-user",
+        "email": null,
+        "display_name": "旧客户端用户",
+        "avatar_url": null
+    }))
+    .expect("旧客户端省略初始角色时应当保持兼容");
+    assert!(compatible.role_ids.is_empty());
+
+    let empty_roles = ProvisionUserRequest {
+        identity_id: "user-with-default-role".to_owned(),
+        email: None,
+        display_name: "默认成员".to_owned(),
+        avatar_url: None,
+        role_ids: Vec::new(),
+    };
+    let empty_roles_json = serde_json::to_value(empty_roles).expect("空初始角色请求应当可以序列化");
+    assert!(empty_roles_json.get("role_ids").is_none());
 }
 
 #[test]

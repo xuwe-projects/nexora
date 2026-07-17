@@ -16,6 +16,9 @@ pub struct ProvisionUserRequest {
     pub display_name: String,
     /// 身份提供方返回的可选头像 URL。
     pub avatar_url: Option<String>,
+    /// 创建用户时直接授予的角色 ID 集合；省略时使用 Account 的默认成员角色。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_ids: Vec<i64>,
 }
 
 /// 创建自定义角色的请求正文。

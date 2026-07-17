@@ -6,13 +6,33 @@ pub mod accounts;
 use std::marker::PhantomData;
 
 use axum::{
-    extract::FromRequestParts,
+    extract::{FromRef, FromRequestParts},
     http::{header::AUTHORIZATION, request::Parts},
 };
 
-use crate::{AccessProfile, Account, AccountError, AccountState, ApiError, PermissionKey};
+use crate::{AccessProfile, Account, AccountError, ApiError, PermissionKey};
 
 /// 已通过 Bearer token 验证、本地账号存在性和停用状态检查的当前用户。
+///
+/// Account 自带 Router 会自动提供内部状态。宿主自定义 Router 使用自己的 State 时，只需
+/// 让 [`Account`] 实现从该 State 的 [`FromRef`] 提取，extractor 就会复用同一个 Account
+/// 实例及其认证规则：
+///
+/// ```rust
+/// use account::Account;
+/// use axum::extract::FromRef;
+///
+/// #[derive(Clone)]
+/// struct AppState {
+///     account: Account,
+/// }
+///
+/// impl FromRef<AppState> for Account {
+///     fn from_ref(state: &AppState) -> Self {
+///         state.account.clone()
+///     }
+/// }
+/// ```
 pub struct AuthenticatedUser {
     profile: AccessProfile,
 }
@@ -29,19 +49,16 @@ impl AuthenticatedUser {
     }
 }
 
-impl FromRequestParts<AccountState> for AuthenticatedUser {
+impl<S> FromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+    Account: FromRef<S>,
+{
     type Rejection = ApiError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AccountState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts)?;
-        let profile = Account {
-            state: state.clone(),
-        }
-        .authenticate(token)
-        .await?;
+        let profile = Account::from_ref(state).authenticate(token).await?;
         Ok(Self { profile })
     }
 }
@@ -53,6 +70,9 @@ pub trait RequiredPermission: Send + Sync {
 }
 
 /// 已认证且拥有 `P` 标记所要求权限的当前用户。
+///
+/// State 组合规则与 [`AuthenticatedUser`] 相同；`P` 只负责在编译期声明当前 handler 需要的
+/// 稳定权限键。
 pub struct Authorized<P> {
     profile: AccessProfile,
     permission: PhantomData<P>,
@@ -65,16 +85,15 @@ impl<P> Authorized<P> {
     }
 }
 
-impl<P> FromRequestParts<AccountState> for Authorized<P>
+impl<S, P> FromRequestParts<S> for Authorized<P>
 where
     P: RequiredPermission,
+    S: Send + Sync,
+    Account: FromRef<S>,
 {
     type Rejection = ApiError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AccountState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let authenticated = AuthenticatedUser::from_request_parts(parts, state).await?;
         let permission = P::KEY;
         if !authenticated.profile().allows(permission.clone()) {

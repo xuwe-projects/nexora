@@ -4,13 +4,10 @@
 //! `inventory` 主动提交注册记录。
 
 #[cfg(feature = "desktop")]
-#[path = "defaults/account.rs"]
 mod account;
 #[cfg(feature = "desktop")]
-#[path = "defaults/login.rs"]
 mod login;
 #[cfg(feature = "desktop")]
-#[path = "defaults/settings.rs"]
 mod settings;
 
 #[cfg(feature = "desktop")]

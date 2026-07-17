@@ -5,16 +5,20 @@ use std::sync::Arc;
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
-    IdentityIssuerBindingOutcome, PermissionDefinition, User,
+    IdentityIssuerBindingOutcome, PermissionDefinition, PermissionKey, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
-    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
+    authorization::{AuthenticatedUser, Authorized, RequiredPermission},
+    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
+    replace_user_roles,
 };
 use api::with_http_layers;
 use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
+    extract::{FromRef, State},
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
+    routing::get,
 };
 use contracts::account::{
     AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest, UpdateUserStatusRequest,
@@ -26,6 +30,24 @@ use tower::ServiceExt as _;
 
 const TEST_IDENTITY_ISSUER: &str = "https://id.example.com/";
 const OTHER_IDENTITY_ISSUER: &str = "https://other-id.example.com/";
+
+#[derive(Clone)]
+struct HostState {
+    account: Account,
+    pool: PgPool,
+}
+
+impl FromRef<HostState> for Account {
+    fn from_ref(state: &HostState) -> Self {
+        state.account.clone()
+    }
+}
+
+struct ReadFactories;
+
+impl RequiredPermission for ReadFactories {
+    const KEY: PermissionKey = PermissionKey::from_static("factories:read");
+}
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
@@ -65,6 +87,60 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
         .expect("宿主应能替换用户角色关联");
     assert_eq!(profile.user, user);
     assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn provisioning_with_initial_roles_is_atomic(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let grantor = account
+        .provision_user(identity("grantor"))
+        .await
+        .expect("测试授权人应当可以开通");
+    let role = account
+        .create_role("factory-operator", "工厂操作员", None, &[])
+        .await
+        .expect("测试角色应当可以创建");
+
+    let user = create_user_with_roles(
+        &pool,
+        identity("factory-user"),
+        &[role.id],
+        grantor.id.as_str(),
+    )
+    .await
+    .expect("用户与初始角色应当在同一操作中创建");
+    let profile = account
+        .user_access(user.id.as_str())
+        .await
+        .expect("应当可以读取新用户授权快照");
+    assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
+    assert!(
+        profile
+            .roles
+            .iter()
+            .any(|assigned| assigned.key == "member")
+    );
+    let grantors = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT DISTINCT granted_by FROM account.user_roles WHERE user_id = $1",
+    )
+    .bind(user.id.as_str())
+    .fetch_all(&pool)
+    .await
+    .expect("应当可以读取初始角色授权人");
+    assert_eq!(grantors, vec![Some(grantor.id.clone())]);
+
+    let error = account
+        .provision_user_with_roles(identity("rollback-user"), &[i64::MAX], grantor.id.as_str())
+        .await
+        .expect_err("不存在的初始角色必须使整个开通操作失败");
+    assert!(matches!(error, AccountError::NotFound("角色")));
+    let user_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM account.users WHERE identity_id = 'rollback-user')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对事务回滚结果");
+    assert!(!user_exists);
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
@@ -125,6 +201,52 @@ async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPo
     assert_eq!(profile.user.identity_id, "ordinary-user");
     assert!(profile.roles.is_empty());
     assert!(profile.permissions.is_empty());
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn host_state_extractors_share_account_authentication_and_authorization(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let user = account
+        .provision_user(identity("host-user"))
+        .await
+        .expect("宿主测试用户应当可以开通");
+    let app = host_router(&account, pool.clone());
+
+    assert_eq!(
+        get_with_token(app.clone(), "/host/profile", "host-user").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_with_token(app.clone(), "/me", "host-user").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_with_token(app.clone(), "/host/factories", "host-user").await,
+        StatusCode::FORBIDDEN
+    );
+
+    let permissions = account
+        .register_permissions(&[PermissionDefinition {
+            key: "factories:read".to_owned(),
+            name: "查看工厂".to_owned(),
+            description: None,
+        }])
+        .await
+        .expect("宿主应当可以注册业务权限");
+    let role = account
+        .create_role("factory-reader", "工厂查看者", None, &[permissions[0].id])
+        .await
+        .expect("宿主应当可以创建业务角色");
+    account
+        .replace_user_roles(user.id.as_str(), &[role.id], user.id.as_str())
+        .await
+        .expect("宿主应当可以授予业务角色");
+
+    assert_eq!(
+        get_with_token(app.clone(), "/host/factories", "host-user").await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(get_without_token(app, "/host/health").await, StatusCode::OK);
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
@@ -451,12 +573,17 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         .provision_user(identity("ordinary-member"))
         .await
         .expect("普通成员身份应当可以预先开通");
+    let initial_role = account
+        .create_role("production-planner", "生产计划员", None, &[])
+        .await
+        .expect("初始业务角色应当可以创建");
 
     let request = ProvisionUserRequest {
         identity_id: "provisioned-user".to_owned(),
         email: Some("provisioned-user@example.com".to_owned()),
         display_name: "已开通用户".to_owned(),
         avatar_url: None,
+        role_ids: vec![initial_role.id],
     };
     let forbidden = request_json(
         &account,
@@ -486,6 +613,40 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
 
     let profile = current_profile(&account, "provisioned-user").await;
     assert_eq!(profile.user.identity_id, "provisioned-user");
+    assert!(profile.roles.iter().any(|role| role.id == initial_role.id));
+    let granted_by = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT granted_by FROM account.user_roles WHERE user_id = $1 AND role_id = $2",
+    )
+    .bind(profile.user.id.as_str())
+    .bind(initial_role.id)
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以读取 HTTP 开通写入的角色授权人");
+    assert_eq!(granted_by, Some(administrator.id.clone()));
+
+    let invalid_request = ProvisionUserRequest {
+        identity_id: "rollback-http-user".to_owned(),
+        email: None,
+        display_name: "应回滚用户".to_owned(),
+        avatar_url: None,
+        role_ids: vec![i64::MAX],
+    };
+    let invalid = request_json(
+        &account,
+        Method::POST,
+        "/users".to_owned(),
+        "administrator",
+        &invalid_request,
+    )
+    .await;
+    assert_eq!(invalid, StatusCode::NOT_FOUND);
+    let rollback_user_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM account.users WHERE identity_id = 'rollback-http-user'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对 HTTP 开通事务回滚结果");
+    assert_eq!(rollback_user_count, 0);
 
     let repeated = request_json(
         &account,
@@ -496,6 +657,120 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
     )
     .await;
     assert_eq!(repeated, StatusCode::CONFLICT);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn provisioning_initial_roles_requires_role_management_permission(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let provision_permission_id = permission_id("users:provision", &pool).await;
+    let roles_write_permission_id = permission_id("users:roles.write", &pool).await;
+    let provision_only_role = account
+        .create_role(
+            "user-provisioner",
+            "用户开通员",
+            None,
+            &[provision_permission_id],
+        )
+        .await
+        .expect("应当可以创建仅开通用户的测试角色");
+    let user_manager_role = account
+        .create_role(
+            "user-manager",
+            "用户管理员",
+            None,
+            &[provision_permission_id, roles_write_permission_id],
+        )
+        .await
+        .expect("应当可以创建同时管理用户角色的测试角色");
+    let initial_role = account
+        .create_role("factory-reader", "工厂查看者", None, &[])
+        .await
+        .expect("应当可以创建待授予的初始角色");
+    let provisioner = account
+        .provision_user(identity("provision-only"))
+        .await
+        .expect("应当可以开通仅开通用户的操作者");
+    account
+        .replace_user_roles(
+            provisioner.id.as_str(),
+            &[provision_only_role.id],
+            provisioner.id.as_str(),
+        )
+        .await
+        .expect("应当可以授予用户开通权限");
+    let user_manager = account
+        .provision_user(identity("user-manager"))
+        .await
+        .expect("应当可以开通用户管理员");
+    account
+        .replace_user_roles(
+            user_manager.id.as_str(),
+            &[user_manager_role.id],
+            user_manager.id.as_str(),
+        )
+        .await
+        .expect("应当可以授予用户与角色管理权限");
+
+    let empty_roles = ProvisionUserRequest {
+        identity_id: "empty-role-user".to_owned(),
+        email: None,
+        display_name: "默认成员用户".to_owned(),
+        avatar_url: None,
+        role_ids: Vec::new(),
+    };
+    assert_eq!(
+        request_json(
+            &account,
+            Method::POST,
+            "/users".to_owned(),
+            "provision-only",
+            &empty_roles,
+        )
+        .await,
+        StatusCode::CREATED
+    );
+
+    let denied_roles = ProvisionUserRequest {
+        identity_id: "denied-role-user".to_owned(),
+        email: None,
+        display_name: "越权角色用户".to_owned(),
+        avatar_url: None,
+        role_ids: vec![initial_role.id],
+    };
+    let denied = request_json_response(
+        &account,
+        Method::POST,
+        "/users".to_owned(),
+        "provision-only",
+        &denied_roles,
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let denied_body = to_bytes(denied.into_body(), 16 * 1024)
+        .await
+        .expect("权限拒绝响应应当可以读取");
+    let denied_error: ErrorEnvelope =
+        serde_json::from_slice(&denied_body).expect("权限拒绝应当符合公共错误契约");
+    assert_eq!(denied_error.error.code, "permission_denied");
+
+    let allowed_roles = ProvisionUserRequest {
+        identity_id: "allowed-role-user".to_owned(),
+        email: None,
+        display_name: "已授权角色用户".to_owned(),
+        avatar_url: None,
+        role_ids: vec![initial_role.id],
+    };
+    assert_eq!(
+        request_json(
+            &account,
+            Method::POST,
+            "/users".to_owned(),
+            "user-manager",
+            &allowed_roles,
+        )
+        .await,
+        StatusCode::CREATED
+    );
 }
 
 async fn test_account(pool: PgPool) -> Account {
@@ -510,6 +785,66 @@ async fn test_account(pool: PgPool) -> Account {
 
 fn router(account: &Account) -> Router {
     with_http_layers(account.routers::<()>())
+}
+
+fn host_router(account: &Account, pool: PgPool) -> Router {
+    with_http_layers(
+        Router::new()
+            .merge(account.routers::<HostState>())
+            .route("/host/health", get(host_health))
+            .route("/host/profile", get(host_profile))
+            .route("/host/factories", get(host_factories)),
+    )
+    .with_state(HostState {
+        account: account.clone(),
+        pool,
+    })
+}
+
+async fn host_profile(authenticated: AuthenticatedUser) -> StatusCode {
+    if authenticated.profile().user.identity_id == "host-user" {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+async fn host_factories(_authorization: Authorized<ReadFactories>) -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+async fn host_health(State(state): State<HostState>) -> StatusCode {
+    match state.pool.acquire().await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+async fn get_with_token(router: Router, uri: &str, token: &str) -> StatusCode {
+    router
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("宿主路由应当返回响应")
+        .status()
+}
+
+async fn get_without_token(router: Router, uri: &str) -> StatusCode {
+    router
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("宿主路由应当返回响应")
+        .status()
 }
 
 async fn initialize_account(account: &Account, identity_id: &str) -> User {
@@ -588,6 +923,14 @@ async fn system_role_id(key: &str, pool: &PgPool) -> i64 {
         .fetch_one(pool)
         .await
         .expect("系统角色应当存在")
+}
+
+async fn permission_id(key: &str, pool: &PgPool) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM account.permissions WHERE key = $1")
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("测试权限应当存在")
 }
 
 async fn insert_user(id: &str, identity_id: &str, pool: &PgPool) {

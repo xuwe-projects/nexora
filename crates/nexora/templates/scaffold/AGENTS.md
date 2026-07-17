@@ -73,6 +73,9 @@ src/features/users/components/table.rs
   再使用唯一 SQLx `Migrator` 执行一次；禁止分别运行框架和应用 Migrator。
 - 使用 `server.initialize(&settings, &pool, setup_secret)` 初始化框架模块；该方法只装配
   Account、ZITADEL 与 Router，不执行迁移。
+- 业务 Router 需要复用 Account 认证授权时，在初始化成功后调用 `server.account()`，把返回
+  的 `Account` 句柄放入最终 State，并实现 `FromRef<AppState> for Account`；直接使用
+  `AuthenticatedUser` 或 `Authorized<P>`，不要复制 token 校验和权限合并逻辑。
 - 应用通过 `Router::new().merge(server.routers()).merge(application_routes)` 决定路由
   组合和中间件边界；不需要 Nexora HTTP 路由时不合并 `server.routers()`。
 - `Server` 不得绑定端口、持有监听器或调用 `axum::serve`。应用自行创建 `TcpListener`、
@@ -94,6 +97,9 @@ src/features/users/components/table.rs
 - 使用 HTTP 状态码表达结果。错误响应保持稳定错误码、用户消息和 request ID，不返回
   SQL、堆栈、内部路径、令牌或 Provider 细节。
 - 认证、授权和资源归属都必须校验；使用权限能力，不在 handler 中硬编码角色名称。
+- 用户、角色、权限及其关联直接使用 Nexora Account。可信宿主调用 `nexora::server` 的
+  pool-first API；需要创建时原子授予初始角色时使用 `create_user_with_roles`，并在调用前
+  完成当前操作者授权。
 - 配置模板只放带注释的占位值。真实 PAT、setup secret、数据库密码和 token 不得提交或
   输出到日志；生产秘密通过环境变量或密钥系统注入。
 

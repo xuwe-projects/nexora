@@ -16,9 +16,9 @@ use contracts::{
 };
 
 use crate::{
-    Account, AccountState, ApiError, ExternalIdentity,
+    Account, AccountError, AccountState, ApiError, ExternalIdentity,
     authorization::{
-        Authorized,
+        Authorized, RequiredPermission,
         accounts::{ProvisionUsers, ReadUsers, WriteUserRoles, WriteUserStatus},
     },
     handlers::accounts::{access_profile_response, user_page_response, user_response, user_status},
@@ -26,17 +26,37 @@ use crate::{
 
 /// 显式开通一个经过管理员确认的外部身份。
 pub(crate) async fn provision_user(
-    _authorization: Authorized<ProvisionUsers>,
+    authorization: Authorized<ProvisionUsers>,
     State(state): State<AccountState>,
     ApiJson(request): ApiJson<ProvisionUserRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let ProvisionUserRequest {
+        identity_id,
+        email,
+        display_name,
+        avatar_url,
+        role_ids,
+    } = request;
+    let roles_write_permission = <WriteUserRoles as RequiredPermission>::KEY;
+    if !role_ids.is_empty()
+        && !authorization
+            .profile()
+            .allows(roles_write_permission.clone())
+    {
+        return Err(AccountError::Forbidden(roles_write_permission).into());
+    }
+    let granted_by = authorization.profile().user.id.clone();
     let user = Account { state }
-        .provision_user(ExternalIdentity {
-            identity_id: request.identity_id,
-            email: request.email,
-            display_name: request.display_name,
-            avatar_url: request.avatar_url,
-        })
+        .provision_user_with_roles(
+            ExternalIdentity {
+                identity_id,
+                email,
+                display_name,
+                avatar_url,
+            },
+            role_ids.as_slice(),
+            granted_by.as_str(),
+        )
         .await?;
     let location = format!("/users/{}", user.id);
     Ok((

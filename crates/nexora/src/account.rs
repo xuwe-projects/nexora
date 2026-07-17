@@ -11,7 +11,8 @@ pub use crate::account_module::{
     SystemRole, User, UserStatus,
     authentication::{AccessTokenVerifier, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
-    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
+    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
+    replace_user_roles,
 };
 
 #[cfg(feature = "desktop")]

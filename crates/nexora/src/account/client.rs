@@ -386,7 +386,7 @@ impl AccountSession {
         self.send_json(request)
     }
 
-    /// 显式开通一个已经由管理员确认的 OIDC 外部身份。
+    /// 显式开通一个已经由管理员确认的 OIDC 外部身份，并原子授予请求中的初始角色。
     ///
     /// # Errors
     ///

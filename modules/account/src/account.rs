@@ -5,7 +5,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use axum::Router;
+use axum::{Router, extract::FromRef};
 pub use kernel::Page;
 use kernel::ValidationError;
 use sqlx::PgPool;
@@ -109,6 +109,14 @@ pub(crate) struct AccountState {
     token_verifier: Arc<dyn AccessTokenVerifier>,
 }
 
+impl FromRef<AccountState> for Account {
+    fn from_ref(state: &AccountState) -> Self {
+        Self {
+            state: state.clone(),
+        }
+    }
+}
+
 /// 使用宿主共享连接池幂等创建或更新应用权限目录。
 ///
 /// 相同权限键再次提交时会更新展示名称和说明。该函数复用 Account 的字段校验和 PostgreSQL
@@ -181,6 +189,32 @@ pub async fn create_user(pool: &PgPool, identity: ExternalIdentity) -> Result<Us
         .normalized()
         .map_err(|_| ValidationError::new("identity", "identity ID 或展示资料不符合约束"))?;
     Ok(stores::identities::provision(&identity, pool).await?)
+}
+
+/// 使用宿主共享连接池原子创建本地用户并授予初始角色。
+///
+/// `role_ids` 表示创建时直接授予的业务角色，Account 会自动补充内置 `member` 角色；
+/// `granted_by` 必须是已经由宿主认证授权的本地操作者用户 ID，并写入每条用户角色关系。
+/// 本函数不执行当前请求授权，只应从可信宿主启动或管理边界调用。
+///
+/// # Errors
+///
+/// 身份字段或角色数量无效、身份已经开通、任一角色或授权人不存在，或事务中的任一写入
+/// 失败时返回 [`AccountError`]；失败不会留下用户或部分角色关系。
+pub async fn create_user_with_roles(
+    pool: &PgPool,
+    identity: ExternalIdentity,
+    role_ids: &[i64],
+    granted_by: &str,
+) -> Result<User, AccountError> {
+    let identity = identity
+        .normalized()
+        .map_err(|_| ValidationError::new("identity", "identity ID 或展示资料不符合约束"))?;
+    let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+    Ok(
+        stores::identities::provision_with_roles(&identity, role_ids.as_slice(), granted_by, pool)
+            .await?,
+    )
 }
 
 /// 使用宿主共享连接池原子替换普通用户的直接角色集合。
@@ -508,6 +542,26 @@ impl Account {
     /// 身份字段无效、同一 identity ID 已经开通，或数据库不可访问时返回 [`AccountError`]。
     pub async fn provision_user(&self, identity: ExternalIdentity) -> Result<User, AccountError> {
         create_user(&self.state.pool, identity).await
+    }
+
+    /// 在同一数据库事务中开通外部身份并授予初始角色。
+    ///
+    /// `role_ids` 表示创建时直接授予的业务角色；Account 仍会自动加入内置 `member` 角色。
+    /// `granted_by` 必须是已经通过宿主认证授权的本地操作者用户 ID，并会写入每条角色关系的
+    /// 授权审计字段。该方法本身不校验当前请求权限，不可信入口应先要求
+    /// `users:provision`。
+    ///
+    /// # Errors
+    ///
+    /// 身份字段或角色数量无效、身份已经开通、任一角色或授权人不存在，或事务中的任一写入
+    /// 失败时返回错误；失败不会留下用户或部分角色关系。
+    pub async fn provision_user_with_roles(
+        &self,
+        identity: ExternalIdentity,
+        role_ids: &[i64],
+        granted_by: &str,
+    ) -> Result<User, AccountError> {
+        create_user_with_roles(&self.state.pool, identity, role_ids, granted_by).await
     }
 
     /// 把经过身份目录或认证流程确认的用户设为唯一超级管理员。

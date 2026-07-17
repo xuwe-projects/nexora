@@ -3,7 +3,27 @@
 use nexora::{AppRegistry, RouteTargetKind};
 
 #[cfg(feature = "desktop")]
+use gpui::{AnyView, Context, Modifiers, Render, TestAppContext, Window, div, prelude::*};
+
+#[cfg(feature = "desktop")]
 struct CustomUsersFeature;
+
+#[cfg(feature = "desktop")]
+struct DefaultAccountFeatureTestRoot {
+    content: AnyView,
+    overlay: AnyView,
+}
+
+#[cfg(feature = "desktop")]
+impl Render for DefaultAccountFeatureTestRoot {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        div()
+            .relative()
+            .size_full()
+            .child(self.content.clone())
+            .child(self.overlay.clone())
+    }
+}
 
 #[cfg(feature = "desktop")]
 impl nexora::Feature for CustomUsersFeature {
@@ -84,4 +104,98 @@ fn application_feature_with_reserved_path_replaces_only_matching_default() {
         "custom-users"
     );
     assert_eq!(registry.resolve("/roles").unwrap().target().id(), "roles");
+}
+
+#[cfg(feature = "desktop")]
+#[gpui::test]
+fn default_users_feature_keeps_overlay_stable_and_blocks_unprivileged_provision(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let registry = AppRegistry::builder()
+        .account_defaults(true)
+        .build()
+        .expect("Account 默认用户页面应当可以注册");
+    let route = registry
+        .resolve("/users")
+        .expect("默认用户页面应当可以解析");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let instance = registry
+            .create_feature(route, window, cx)
+            .expect("默认用户页面应当可以创建");
+        let overlay = instance
+            .panel_overlay(cx)
+            .expect("默认用户页面应当始终保留开通对话框 Entity");
+        let same_overlay = instance
+            .panel_overlay(cx)
+            .expect("重复读取仍应返回开通对话框 Entity");
+        assert_eq!(overlay.entity_id(), same_overlay.entity_id());
+        DefaultAccountFeatureTestRoot {
+            content: instance.view(),
+            overlay,
+        }
+    });
+
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let open_button = cx
+        .debug_bounds("open-default-account-user-dialog")
+        .expect("默认用户页面应当渲染开通按钮");
+    cx.simulate_click(open_button.center(), Modifiers::none());
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+
+    assert!(
+        cx.debug_bounds("panel-dialog-overlay").is_none(),
+        "未登录或没有 users:provision 权限时不能打开用户开通弹窗"
+    );
+}
+
+#[cfg(feature = "desktop")]
+#[gpui::test]
+fn default_roles_feature_keeps_overlay_stable_and_blocks_unprivileged_creation(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let registry = AppRegistry::builder()
+        .account_defaults(true)
+        .build()
+        .expect("Account 默认角色页面应当可以注册");
+    let route = registry
+        .resolve("/roles")
+        .expect("默认角色页面应当可以解析");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let instance = registry
+            .create_feature(route, window, cx)
+            .expect("默认角色页面应当可以创建");
+        let overlay = instance
+            .panel_overlay(cx)
+            .expect("默认角色页面应当始终保留创建对话框 Entity");
+        let same_overlay = instance
+            .panel_overlay(cx)
+            .expect("重复读取仍应返回创建对话框 Entity");
+        assert_eq!(overlay.entity_id(), same_overlay.entity_id());
+        DefaultAccountFeatureTestRoot {
+            content: instance.view(),
+            overlay,
+        }
+    });
+
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let open_button = cx
+        .debug_bounds("open-default-account-role-dialog")
+        .expect("默认角色页面应当渲染创建按钮");
+    cx.simulate_click(open_button.center(), Modifiers::none());
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+
+    assert!(
+        cx.debug_bounds("panel-dialog-overlay").is_none(),
+        "未登录或没有 roles:write 权限时不能打开角色创建弹窗"
+    );
 }

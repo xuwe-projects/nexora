@@ -46,7 +46,31 @@ pub(crate) async fn provision(
     pool: &PgPool,
 ) -> Result<User, StoreError> {
     let mut transaction = pool.begin().await?;
-    if query_existing(identity, &mut transaction).await?.is_some() {
+    let user = insert_new(identity, &mut transaction).await?;
+    transaction.commit().await?;
+    Ok(user)
+}
+
+/// 在同一事务中创建用户并写入初始角色及授权人。
+pub(crate) async fn provision_with_roles(
+    identity: &ExternalIdentity,
+    role_ids: &[i64],
+    granted_by: &str,
+    pool: &PgPool,
+) -> Result<User, StoreError> {
+    let mut transaction = pool.begin().await?;
+    let user = insert_new(identity, &mut transaction).await?;
+    super::users::grant_initial_roles(user.id.as_str(), role_ids, granted_by, &mut transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(user)
+}
+
+async fn insert_new(
+    identity: &ExternalIdentity,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<User, StoreError> {
+    if query_existing(identity, transaction).await?.is_some() {
         return Err(StoreError::Conflict("user_already_provisioned"));
     }
 
@@ -72,13 +96,12 @@ pub(crate) async fn provision(
         .bind(identity.email.as_deref())
         .bind(identity.display_name.as_str())
         .bind(identity.avatar_url.as_deref())
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?;
         if let Some(user) = inserted {
-            transaction.commit().await?;
             return Ok(user);
         }
-        if query_existing(identity, &mut transaction).await?.is_some() {
+        if query_existing(identity, transaction).await?.is_some() {
             return Err(StoreError::Conflict("user_already_provisioned"));
         }
     }

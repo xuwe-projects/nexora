@@ -120,7 +120,9 @@ impl Render for AppLogin {
 - 不需要自定义构造时派生 `Default`；否则使用 `#[nexora(factory = AppLogin::new)]`，构造函数签名为 `fn new(&mut Window, &mut Context<Self>) -> Self`。
 - 多个 Login 覆盖在 `AppRegistry::discover/build` 时返回 `RegistryError::DuplicateLoginFeature`，不会按链接顺序任选一个。
 - Account 客户端默认注入 `/users` 与 `/roles` 管理 Feature，并放在“访问控制” section。
-  应用声明相同 ID 或路径的普通 `Feature` 即可逐页替换默认实现，不需要新的专用派生宏。
+  用户页支持开通已确认的 OIDC 身份、初始角色、状态和直接角色管理；角色页支持自定义角色
+  创建、元数据编辑、完整权限替换和删除。应用声明相同 ID 或路径的普通 `Feature` 即可逐页
+  替换默认实现，不需要新的专用派生宏。
 
 Nexora 桌面端也默认提供 `/settings` 设置窗口。需要替换完整设置体验时，只声明一个 `#[derive(nexora::SettingsWindow)]` 并实现现有的 `WindowElement`：
 
@@ -213,10 +215,13 @@ impl nexora::Application for DesktopApplication {
   组合最终 Router，自行创建 `TcpListener` 并调用 `axum::serve(listener, app)`。`Server` 只
   装配框架模块，不接管监听、TLS、日志或关闭策略。
 - 生成模板直接使用 `PgPool` 作为最小 Axum State；业务依赖更多时由应用定义自己的可克隆
-  State，`server.routers()` 会适配该 State。系统尚未初始化时，应用可在监听成功后使用
+  State，`server.routers()` 会适配该 State。业务 Router 需要 Account extractor 时，在
+  `initialize` 成功后用 `server.account()` 取得 Account 句柄，放入最终 State，并实现
+  `FromRef<AppState> for Account`；随后直接使用 `AuthenticatedUser` 或 `Authorized<P>`。
+  系统尚未初始化时，应用可在监听成功后使用
   `server.setup_url(listener.local_addr()?)` 输出 `/setup` URL。
 - 默认初始化页面使用 `nexora::server::setup_routes`；需要自定义请求字段与响应时实现 `nexora::server::Setup`，再调用 `setup_routes_with`。关联请求类型必须分别实现 `SetupUnlockRequest` 与 `SetupCompletionRequest`，框架固定校验 secret、一次性 token 和超级管理员 identity ID。
-- 可信宿主通过 `nexora::server::{create_user, create_permissions, create_role, replace_role_permissions, replace_user_roles}` 和唯一 `PgPool` 管理 Account 数据；`create_user` 接收已确认的 `ExternalIdentity`，不创建本地密码。自定义路由把 `Account` 放入自己的 State 后使用 `authenticate`/`authorize` 复用认证授权规则。从 HTTP 调用这些管理函数前必须自行完成授权。
+- 可信宿主通过 `nexora::server::{create_user, create_user_with_roles, create_permissions, create_role, replace_role_permissions, replace_user_roles}` 和唯一 `PgPool` 管理 Account 数据；两个用户创建函数都接收已确认的 `ExternalIdentity`，不创建本地密码。`create_user_with_roles` 还接收初始业务角色与本地 `granted_by` 用户 ID，并原子写入用户及角色关系。从 HTTP 调用这些管理函数前必须自行完成授权。
 - SQLx 会让空数据库执行全部迁移，并根据 `_sqlx_migrations` 只升级待执行版本；不要增加需要人工切换的首次初始化布尔配置。
 
 ## 使用 CLI 和验证

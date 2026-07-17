@@ -33,8 +33,8 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     text: "版本发布",
     items: [
       { text: "更新日志", link: "/changelog/" },
-      { text: "0.2.0", link: "/changelog/0.2.0" },
-      { text: "从 0.1.2 升级", link: "/changelog/0.2.0#从-012-升级" },
+      { text: "0.3.0", link: "/changelog/0.3.0" },
+      { text: "从 0.2.0 升级", link: "/changelog/0.3.0#从-020-升级" },
     ],
   },
 ];
@@ -70,8 +70,8 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     text: "Releases",
     items: [
       { text: "Changelog", link: "/en/changelog/" },
-      { text: "0.2.0", link: "/en/changelog/0.2.0" },
-      { text: "Upgrade from 0.1.2", link: "/en/changelog/0.2.0#upgrade-from-012" },
+      { text: "0.3.0", link: "/en/changelog/0.3.0" },
+      { text: "Upgrade from 0.2.0", link: "/en/changelog/0.3.0#upgrade-from-020" },
     ],
   },
 ];

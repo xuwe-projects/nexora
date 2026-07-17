@@ -138,6 +138,32 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 }
 ```
 
+应用已经安装 Nexora Account 时，不要再手写上面的认证 extractor。先在
+`Server::initialize` 成功后取得 Account 句柄，并让自定义 State 可以提取它：
+
+```rust
+use axum::extract::FromRef;
+use nexora::server::Account;
+
+#[derive(Clone)]
+struct AppState {
+    account: Account,
+}
+
+impl FromRef<AppState> for Account {
+    fn from_ref(state: &AppState) -> Self {
+        state.account.clone()
+    }
+}
+
+let account = server.account().expect("Server 已完成初始化");
+let state = AppState { account };
+```
+
+handler 随后直接使用 `nexora::server::AuthenticatedUser` 或
+`nexora::server::Authorized<P>`。`profile().user.id` 是当前 Nexora 本地用户 ID；框架统一
+处理 bearer token、本地账号状态和权限集合，不向业务层暴露 token。
+
 ## 管理状态与并发
 
 - `AppState` 只保存已构造完成且可克隆的依赖，不读取配置或执行启动 I/O。

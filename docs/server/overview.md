@@ -47,10 +47,68 @@ TLS、日志与关闭策略均由应用决定。
 能适配应用自己的 Axum State；顶层组合顺序和中间件仍由应用决定。不需要 Nexora/Account
 HTTP 路由时，不调用 `.merge(server.routers())` 即可。
 
-可信宿主还可以直接使用 `nexora::server::{create_user, create_permissions, create_role,
-replace_role_permissions, replace_user_roles}` 管理 Account 表。所有函数接收宿主唯一
-`&PgPool`；创建用户使用已确认的 `ExternalIdentity`，不会引入本地密码模型。两个
-`replace_*` 函数表示原子替换完整关联集合，而不是增量追加。
+可信宿主还可以直接使用 `nexora::server::{create_user, create_user_with_roles,
+create_permissions, create_role, replace_role_permissions, replace_user_roles}` 管理 Account
+表。所有函数接收宿主唯一 `&PgPool`；创建用户使用已确认的 `ExternalIdentity`，不会引入
+本地密码模型。`create_user_with_roles` 额外接收初始业务角色和本地 `granted_by` 用户 ID，
+在同一事务中创建用户、保留内置 `member` 角色并写入角色关联。两个 `replace_*` 函数表示
+原子替换完整关联集合，而不是增量追加。这些 pool-first API 不执行当前请求授权，只能在已经
+完成认证授权的可信宿主边界调用。
+
+## 在应用 State 中复用 Account
+
+业务 Router 需要复用 Nexora 认证授权时，在 `initialize` 成功后调用 `server.account()`，把
+返回的句柄放入最终 State，并实现 `FromRef<AppState> for Account`：
+
+```rust
+use axum::extract::FromRef;
+use nexora::server::{Account, Authorized, PermissionKey, RequiredPermission};
+use sqlx::PgPool;
+
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    account: Account,
+}
+
+impl FromRef<AppState> for Account {
+    fn from_ref(state: &AppState) -> Self {
+        state.account.clone()
+    }
+}
+
+struct ReadFactories;
+
+impl RequiredPermission for ReadFactories {
+    const KEY: PermissionKey = PermissionKey::from_static("factories:read");
+}
+
+async fn list_factories(authorization: Authorized<ReadFactories>) {
+    let current_user_id = authorization.profile().user.id.as_str();
+    // 使用 current_user_id 写入业务审计字段。
+}
+
+server
+    .initialize(&settings, &pool, settings.setup.secret()?)
+    .await?;
+let account = server.account().expect("Server 已完成初始化");
+let state = AppState {
+    pool: pool.clone(),
+    account,
+};
+
+let app = Router::new()
+    .merge(server.routers())
+    .merge(application_routes())
+    .with_state(state);
+```
+
+`Server::account()` 在初始化前返回 `None`；克隆 Account 句柄仍只复用同一个连接池。自定义
+handler 可以直接提取 `AuthenticatedUser`，或使用 `Authorized<P>` 声明权限。两者都会复用
+框架的 bearer token 校验、本地用户状态和权限合并规则，不向业务代码暴露 token。
+
+默认 `POST /users` 在 `role_ids` 为空时只要求 `users:provision`；非空时还要求
+`users:roles.write`。可信宿主直接调用 pool-first API 时必须自行执行等价授权。
 
 初始化后可用 `server.setup_url(listener.local_addr()?)` 判断是否需要输出 Setup 提示；它只
 根据已经绑定的地址生成 URL，不接管监听器或服务生命周期。

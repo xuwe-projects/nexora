@@ -11,7 +11,7 @@ fn embedded_repository_finds_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
-    assert!(entry.markdown().contains("没有功能变化"));
+    assert!(entry.markdown().contains("默认访问控制管理"));
 }
 
 #[test]
@@ -40,6 +40,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.2.0",
             "0.1.2",
             "0.1.1",
             "0.1.0",
