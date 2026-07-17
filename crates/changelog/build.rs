@@ -1,3 +1,3 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../../changelogs");
+    println!("cargo:rerun-if-changed=../../docs/changelog/components");
 }

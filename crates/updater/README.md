@@ -58,7 +58,8 @@ updater::open_update_dialog(config, window, cx);
 ```
 
 `latest.json` 由 `nexora build` 根据 `.app.zip`、SHA-256、文件大小和
-`changelogs/<version>/<component>/<locale>.md` 自动生成；仓库中的 example 只描述协议形状。
+`docs/changelog/components/<version>/<component>/<locale>.md` 自动生成；仓库中的 example 只
+描述协议形状。
 默认使用相对 URL，发布时把安装包、校验文件、`notes/` 和 `latest.json` 上传到同一个 OSS 前缀即可。
 本机 macOS 可以用 `nexora build --targets macos` 生成 Apple Silicon 和 Intel 两个 artifact；
 Windows 与 Linux 产物应由对应系统的 runner 构建后再合并到最终清单。

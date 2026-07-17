@@ -5,6 +5,25 @@ order: 2
 
 # CLI
 
+## Installation
+
+Install a published GitHub tag:
+
+```bash
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 --locked --force --no-default-features --features cli --bin nexora
+```
+
+Install the current local checkout from the Nexora repository root:
+
+```bash
+cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+```
+
+These single-line commands work in Unix shells, PowerShell, and CMD. GitHub CI installs the CLI and
+runs `nexora --version` on both Ubuntu and Windows.
+
+## Commands
+
 ```text
 nexora create <name> --layout single
 nexora create <name> --layout workspace
@@ -29,4 +48,6 @@ current repository or a locally installed CLI does not require a release tag.
 
 Both `nexora create` and `nexora init` generate a root `AGENTS.md` plus `.agents/skills`. The root
 file contains always-on architectural constraints, while Skills provide task-specific workflows.
-`init` preserves existing project rules and Skill files.
+`init` preserves existing project rules and Skill files. The generated `publish-nexora-release`
+Skill covers version bumps, complete release notes, contributor and Issue/PR attribution,
+previous-to-current upgrade guides, and the tag/Release publishing gates.

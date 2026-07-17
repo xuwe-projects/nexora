@@ -41,3 +41,9 @@ ApplicationOptions::new()
 ```
 
 需要替换完整登录布局时，继续使用唯一的 `#[derive(nexora::LoginFeature)]`。
+
+## 发布版本
+
+项目生成时已经包含 `.agents/skills/publish-nexora-release`。发布新版本时使用该 Skill 整理
+完整改动、处理人与关联 Issue/PR，只编写上一版本到当前版本的升级说明，并在全部门禁通过后
+推送 tag 和创建 GitHub Release。

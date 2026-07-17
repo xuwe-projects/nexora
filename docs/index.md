@@ -19,8 +19,14 @@ features:
   - title: 可选的 Account 体验
     details: 默认登录门禁、用户管理、角色权限管理与可覆盖的页面实现。
   - title: 可组合服务端
-    details: Server 负责连接池、迁移、Account、Setup、日志和优雅关闭，业务 Router 继续由应用定义。
+    details: Server 负责迁移、Account、Setup 与 Router 组合；连接池、监听器和服务生命周期由应用掌控。
 ---
+
+## 一张图了解 Nexora
+
+工作区、外观设置与登录体验使用同一套应用品牌，并同时支持浅色和深色模式。
+
+<ProductShowcase locale="zh" />
 
 ::: warning Early alpha
 Nexora 目前仍在快速演进，公开 API 可能发生破坏性调整。

@@ -29,6 +29,14 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
       { text: "CLI", link: "/reference/cli" },
     ],
   },
+  {
+    text: "版本发布",
+    items: [
+      { text: "更新日志", link: "/changelog/" },
+      { text: "0.1.2", link: "/changelog/0.1.2" },
+      { text: "从 0.1.1 升级", link: "/changelog/0.1.2#从-011-升级" },
+    ],
+  },
 ];
 
 const enSidebar: DefaultTheme.SidebarItem[] = [
@@ -58,6 +66,14 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
       { text: "CLI", link: "/en/reference/cli" },
     ],
   },
+  {
+    text: "Releases",
+    items: [
+      { text: "Changelog", link: "/en/changelog/" },
+      { text: "0.1.2", link: "/en/changelog/0.1.2" },
+      { text: "Upgrade from 0.1.1", link: "/en/changelog/0.1.2#upgrade-from-011" },
+    ],
+  },
 ];
 
 const sharedTheme: DefaultTheme.Config = {
@@ -85,6 +101,7 @@ export default defineConfig({
           { text: "桌面端", link: "/desktop/application" },
           { text: "服务端", link: "/server/overview" },
           { text: "CLI", link: "/reference/cli" },
+          { text: "更新日志", link: "/changelog/" },
         ],
         sidebar: zhSidebar,
         outline: { label: "本页目录" },
@@ -113,6 +130,7 @@ export default defineConfig({
           { text: "Desktop", link: "/en/desktop/application" },
           { text: "Server", link: "/en/server/overview" },
           { text: "CLI", link: "/en/reference/cli" },
+          { text: "Releases", link: "/en/changelog/" },
         ],
         sidebar: enSidebar,
         editLink: {

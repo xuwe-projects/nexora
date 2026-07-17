@@ -93,7 +93,7 @@ fn build_outputs_update_package_and_manifest_by_default() {
     assert_eq!(
         plan.changelog_path(),
         PathBuf::from(format!(
-            "changelogs/{}/console/zh-CN.md",
+            "docs/changelog/components/{}/console/zh-CN.md",
             env!("CARGO_PKG_VERSION")
         ))
         .as_path()

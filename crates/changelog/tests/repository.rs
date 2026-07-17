@@ -11,7 +11,7 @@ fn embedded_repository_finds_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
-    assert!(entry.markdown().contains("登录页"));
+    assert!(entry.markdown().contains("组合视图"));
 }
 
 #[test]
@@ -36,5 +36,8 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         .map(|entry| entry.version().to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(versions, [env!("CARGO_PKG_VERSION"), "0.1.0", "0.0.1"]);
+    assert_eq!(
+        versions,
+        [env!("CARGO_PKG_VERSION"), "0.1.1", "0.1.0", "0.0.1"]
+    );
 }

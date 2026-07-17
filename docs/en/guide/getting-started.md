@@ -5,16 +5,27 @@ order: 2
 
 # Quick Start
 
-## Install the local CLI
+## Install the CLI
 
-Run this from the Nexora repository root:
+Install the current release from GitHub:
 
 ```bash
-cargo install --path crates/nexora --locked --force \
-  --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 --locked --force --no-default-features --features cli --bin nexora
 ```
 
-For a released Git tag, replace `--path` with `--git` and `--tag`.
+Framework contributors can install their local checkout from the repository root:
+
+```bash
+cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+```
+
+Both commands are intentionally single-line and work in Bash, zsh, PowerShell, and CMD. Rustup
+normally configures Cargo's executable directory. If `nexora` is not found, add
+`$HOME/.cargo/bin` on Unix or `%USERPROFILE%\.cargo\bin` on Windows to `PATH`.
+
+```bash
+nexora --version
+```
 
 ## Create a desktop application
 

@@ -1,6 +1,6 @@
 //! 应用更新日志的嵌入、解析与查询能力。
 //!
-//! 更新日志内容统一存放在 workspace 根目录的 `changelogs` 中，并采用
+//! 更新日志内容统一存放在 `docs/changelog/components` 中，并采用
 //! `<version>/<component>/<locale>.md` 路径约定。该 crate 会在编译时嵌入这些文件，
 //! 让桌面程序可以在不访问文件系统和网络的情况下展示当前版本更新内容。
 
@@ -9,7 +9,8 @@ use std::{error::Error, fmt, path::Path};
 use include_dir::{Dir, include_dir};
 use semver::Version;
 
-static CHANGELOGS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../changelogs");
+static CHANGELOGS: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../docs/changelog/components");
 
 /// 一条可供应用展示的版本更新日志。
 ///
@@ -52,7 +53,7 @@ impl ChangelogEntry {
         self.markdown
     }
 
-    /// 返回该条目在 `changelogs` 目录下的相对源文件路径。
+    /// 返回该条目在 `docs/changelog/components` 目录下的相对源文件路径。
     ///
     /// 该路径主要用于校验错误、开发工具提示和测试，不表示运行时真实文件一定存在。
     pub fn source_path(&self) -> &str {

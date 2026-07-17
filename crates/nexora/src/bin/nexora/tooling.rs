@@ -347,7 +347,7 @@ impl BuildPlan {
 
     /// 返回本次构建尝试复制的源更新日志路径。
     ///
-    /// 默认路径是 `changelogs/<version>/<component>/<locale>.md`。
+    /// 默认路径是 `docs/changelog/components/<version>/<component>/<locale>.md`。
     pub fn changelog_path(&self) -> &Path {
         &self.changelog_path
     }
@@ -527,7 +527,7 @@ fn build_single_plan(config: BuildConfig, host_arch: &str) -> CliResult<BuildPla
         .notes_component
         .unwrap_or_else(|| config.package.clone());
     let notes_locale = config.notes_locale;
-    let changelog_path = PathBuf::from("changelogs")
+    let changelog_path = PathBuf::from("docs/changelog/components")
         .join(&app_version)
         .join(&notes_component)
         .join(format!("{notes_locale}.md"));

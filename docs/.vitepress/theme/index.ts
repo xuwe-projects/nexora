@@ -1,10 +1,12 @@
 import DefaultTheme from "vitepress/theme";
 import type { Theme } from "vitepress";
+import ProductShowcase from "./ProductShowcase.vue";
 import "./style.css";
 
 const theme: Theme = {
   extends: DefaultTheme,
-  enhanceApp() {
+  enhanceApp({ app }) {
+    app.component("ProductShowcase", ProductShowcase);
     if (typeof window === "undefined") return;
 
     const base = import.meta.env.BASE_URL;
