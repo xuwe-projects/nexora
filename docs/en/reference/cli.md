@@ -10,7 +10,7 @@ order: 2
 Install a published GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:
@@ -19,8 +19,8 @@ Install the current local checkout from the Nexora repository root:
 cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
-These single-line commands work in Unix shells, PowerShell, and CMD. GitHub CI installs the CLI and
-runs `nexora --version` on both Ubuntu and Windows.
+These commands use no shell-specific line continuation or environment-variable syntax, so the same
+single line works in Unix shells, PowerShell, and CMD.
 
 ## Commands
 

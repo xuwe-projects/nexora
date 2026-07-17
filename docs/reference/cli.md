@@ -10,7 +10,7 @@ order: 2
 从 GitHub tag 安装正式发布版本：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 从 Nexora 仓库根目录安装当前本地源码：
@@ -19,8 +19,8 @@ cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 --locke
 cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
-以上单行命令同时兼容 Unix Shell、PowerShell 与 CMD。GitHub CI 会在 Ubuntu 和 Windows 上
-实际安装并运行 `nexora --version`。
+以上命令不使用 Shell 专属的续行或环境变量语法，可直接作为单行命令用于 Unix Shell、
+PowerShell 与 CMD。
 
 ## 命令
 
