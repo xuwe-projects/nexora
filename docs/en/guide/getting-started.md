@@ -10,7 +10,7 @@ order: 2
 Install the current release from GitHub:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.2 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.2.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 Framework contributors can install their local checkout from the repository root:

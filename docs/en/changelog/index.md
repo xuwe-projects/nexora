@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.2.0: host Account management and unified migrations](./0.2.0)
 - [0.1.2: documentation showcase and repeatable releases](./0.1.2)
 - [0.1.1: full-stack Account and host ownership](./0.1.1)
 - [0.1.0: first early-alpha source release](./0.1.0)
