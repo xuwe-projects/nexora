@@ -2,6 +2,7 @@
 name = "updater"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 async-channel = { workspace = true }

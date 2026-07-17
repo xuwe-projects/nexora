@@ -11,6 +11,9 @@
 ```bash
 cargo run
 ```
+
+首次构建会生成 `Cargo.lock`。应用项目应提交该文件，并在 CI 和部署中使用
+`cargo run --locked`、`cargo build --locked` 等命令保持完整依赖图稳定。
 {% if account_enabled %}
 首次启动前，请先完善 `config/server.toml` 和 `config/{{ project_name }}.toml`，然后分别启动服务端与桌面端：
 

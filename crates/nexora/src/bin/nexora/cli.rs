@@ -433,20 +433,11 @@ fn normalize_template_output(contents: String) -> String {
 }
 
 fn nexora_dependency_source() -> String {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let is_workspace_source = manifest_dir.file_name() == Some(OsStr::new("nexora"))
-        && manifest_dir.parent().and_then(Path::file_name) == Some(OsStr::new("crates"))
-        && manifest_dir
-            .parent()
-            .and_then(Path::parent)
-            .is_some_and(|root| root.join("Cargo.toml").is_file());
-
-    if is_workspace_source {
-        let path = manifest_dir.to_string_lossy().replace('\\', "/");
-        format!("path = \"{path}\"")
-    } else {
-        format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))
-    }
+    format!(
+        "git = \"{}\", tag = \"v{}\"",
+        env!("CARGO_PKG_REPOSITORY"),
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn render_account_workspace_templates(project_name: &str) -> Result<Vec<(String, String)>, String> {

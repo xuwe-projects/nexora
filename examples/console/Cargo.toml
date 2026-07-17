@@ -2,6 +2,7 @@
 name = "console"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [package.metadata.bundle]
 icon = ["assets/logos/logo-icon.icns"]

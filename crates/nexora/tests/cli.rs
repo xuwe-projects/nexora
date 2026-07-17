@@ -86,10 +86,11 @@ fn expected_workspace_manifest(project_name: &str, account_enabled: bool) -> Str
 }
 
 fn expected_nexora_source() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .to_string_lossy()
-        .replace('\\', "/");
-    format!("path = \"{path}\"")
+    format!(
+        "git = \"{}\", tag = \"v{}\"",
+        env!("CARGO_PKG_REPOSITORY"),
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn expected_desktop_manifest(project_name: &str, account_enabled: bool) -> String {
@@ -166,6 +167,13 @@ fn assert_valid_manifest(path: &Path) {
                 path.display()
             )
         });
+}
+
+fn assert_portable_nexora_dependency(path: &Path) {
+    let contents = fs::read_to_string(path).expect("应能读取生成的 Cargo manifest");
+    assert!(contents.contains(&expected_nexora_source()));
+    assert!(!contents.contains(env!("CARGO_MANIFEST_DIR")));
+    assert!(!contents.contains("nexora = { path ="));
 }
 
 fn collect_relative_files(root: &Path) -> Vec<PathBuf> {
@@ -335,6 +343,7 @@ fn create_defaults_to_a_single_package_project() {
 
     let project = directory.path().join("demo-app");
     assert_valid_manifest(&project.join("Cargo.toml"));
+    assert_portable_nexora_dependency(&project.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
         expected_single_manifest("demo-app")
@@ -380,6 +389,7 @@ fn create_can_generate_a_workspace_project() {
     let project = directory.path().join("workspace-app");
     let desktop = project.join("apps/workspace-app");
     assert_valid_manifest(&project.join("Cargo.toml"));
+    assert_portable_nexora_dependency(&project.join("Cargo.toml"));
     assert_valid_manifest(&desktop.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
@@ -439,6 +449,7 @@ fn init_single_preserves_existing_content() {
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
         expected_single_manifest("existing-app")
     );
+    assert_portable_nexora_dependency(&project.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("src/main.rs")).unwrap(),
         expected_main("existing-app", false)
@@ -467,6 +478,7 @@ fn init_can_generate_a_workspace_and_preserve_existing_content() {
         fs::read_to_string(project.join("Cargo.toml")).unwrap(),
         expected_workspace_manifest("existing-workspace", false)
     );
+    assert_portable_nexora_dependency(&project.join("Cargo.toml"));
     let desktop = project.join("apps/existing-workspace");
     assert_eq!(
         fs::read_to_string(desktop.join("Cargo.toml")).unwrap(),

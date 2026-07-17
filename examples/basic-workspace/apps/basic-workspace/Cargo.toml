@@ -1,9 +1,8 @@
 [package]
-name = "changelog"
+name = "basic-workspace"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
-include_dir = { workspace = true }
-semver = { workspace = true }
+nexora = { workspace = true, features = ["desktop", "derive"] }

@@ -1314,7 +1314,7 @@ impl RootView {
                 .tooltip("取消置顶")
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    _ = action_root.update_in(cx, |this, _, cx| {
+                    _ = action_root.update(cx, |this, cx| {
                         this.toggle_pin_location(&action_location);
                         this.persist_pinned_tabs(cx);
                         cx.notify();
@@ -1327,9 +1327,9 @@ impl RootView {
                 .xsmall()
                 .icon(IconName::Close)
                 .tooltip("关闭标签")
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    _ = action_root.update_in(cx, |this, window, cx| {
+                    _ = action_root.update(cx, |this, cx| {
                         if let Err(error) = this.close_tab_location_in(&action_location, window, cx)
                         {
                             tracing::error!(error = %error, "无法关闭 Feature 标签");
@@ -1347,7 +1347,7 @@ impl RootView {
             .label(location.title())
             .suffix(h_flex().gap_1().child(action))
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                _ = context_root.update_in(cx, |this, _, _| {
+                _ = context_root.update(cx, |this, _| {
                     this.tab_context_feature = Some(location.clone());
                 });
             })
@@ -1526,18 +1526,14 @@ impl RootView {
                             let Some(root) = root_view.upgrade() else {
                                 return menu;
                             };
+                            let Some(location) = root
+                                .update(cx, |this, _| this.tab_context_feature.take())
+                            else {
+                                return menu;
+                            };
 
-                            let Some((
-                                location,
-                                pinned,
-                                can_close_left,
-                                can_close_right,
-                                can_close_other,
-                            )) = ({
+                            let Some((pinned, can_close_left, can_close_right, can_close_other)) = ({
                                 let root = root.read(cx);
-                                let Some(location) = root.tab_context_feature.clone() else {
-                                    return menu;
-                                };
                                 let Some(index) = root.tab_index(&location) else {
                                     return menu;
                                 };
@@ -1556,7 +1552,6 @@ impl RootView {
                                 });
 
                                 Some((
-                                    location.clone(),
                                     root.is_location_pinned(&location),
                                     can_close_left,
                                     can_close_right,
@@ -1571,8 +1566,8 @@ impl RootView {
                                 .item(PopupMenuItem::new("关闭").icon(IconName::Close).on_click({
                                     let root_view = root_view.clone();
                                     let location = location.clone();
-                                    move |_, _, cx| {
-                                        _ = root_view.update_in(cx, |this, window, cx| {
+                                    move |_, window, cx| {
+                                        _ = root_view.update(cx, |this, cx| {
                                             if let Err(error) =
                                                 this.close_tab_location_in(&location, window, cx)
                                             {
@@ -1591,20 +1586,17 @@ impl RootView {
                                         .on_click({
                                             let root_view = root_view.clone();
                                             let location = location.clone();
-                                            move |_, _, cx| {
-                                                _ = root_view.update_in(
-                                                    cx,
-                                                    |this, window, cx| {
-                                                        if let Err(error) = this
-                                                            .close_tabs_to_left_location_in(
-                                                                &location, window, cx,
-                                                            )
-                                                        {
-                                                            tracing::error!(error = %error, "无法关闭左侧 Feature 标签");
-                                                        }
-                                                        cx.notify();
-                                                    },
-                                                );
+                                            move |_, window, cx| {
+                                                _ = root_view.update(cx, |this, cx| {
+                                                    if let Err(error) = this
+                                                        .close_tabs_to_left_location_in(
+                                                            &location, window, cx,
+                                                        )
+                                                    {
+                                                        tracing::error!(error = %error, "无法关闭左侧 Feature 标签");
+                                                    }
+                                                    cx.notify();
+                                                });
                                             }
                                         }),
                                 )
@@ -1615,20 +1607,17 @@ impl RootView {
                                         .on_click({
                                             let root_view = root_view.clone();
                                             let location = location.clone();
-                                            move |_, _, cx| {
-                                                _ = root_view.update_in(
-                                                    cx,
-                                                    |this, window, cx| {
-                                                        if let Err(error) = this
-                                                            .close_tabs_to_right_location_in(
-                                                                &location, window, cx,
-                                                            )
-                                                        {
-                                                            tracing::error!(error = %error, "无法关闭右侧 Feature 标签");
-                                                        }
-                                                        cx.notify();
-                                                    },
-                                                );
+                                            move |_, window, cx| {
+                                                _ = root_view.update(cx, |this, cx| {
+                                                    if let Err(error) = this
+                                                        .close_tabs_to_right_location_in(
+                                                            &location, window, cx,
+                                                        )
+                                                    {
+                                                        tracing::error!(error = %error, "无法关闭右侧 Feature 标签");
+                                                    }
+                                                    cx.notify();
+                                                });
                                             }
                                         }),
                                 )
@@ -1638,20 +1627,17 @@ impl RootView {
                                         .on_click({
                                             let root_view = root_view.clone();
                                             let location = location.clone();
-                                            move |_, _, cx| {
-                                                _ = root_view.update_in(
-                                                    cx,
-                                                    |this, window, cx| {
-                                                        if let Err(error) = this
-                                                            .close_other_tab_locations_in(
-                                                                &location, window, cx,
-                                                            )
-                                                        {
-                                                            tracing::error!(error = %error, "无法关闭其他 Feature 标签");
-                                                        }
-                                                        cx.notify();
-                                                    },
-                                                );
+                                            move |_, window, cx| {
+                                                _ = root_view.update(cx, |this, cx| {
+                                                    if let Err(error) = this
+                                                        .close_other_tab_locations_in(
+                                                            &location, window, cx,
+                                                        )
+                                                    {
+                                                        tracing::error!(error = %error, "无法关闭其他 Feature 标签");
+                                                    }
+                                                    cx.notify();
+                                                });
                                             }
                                         }),
                                 )
@@ -1667,7 +1653,7 @@ impl RootView {
                                         let root_view = root_view.clone();
                                         let location = location.clone();
                                         move |_, _, cx| {
-                                            _ = root_view.update_in(cx, |this, _, cx| {
+                                            _ = root_view.update(cx, |this, cx| {
                                                 this.toggle_pin_location(&location);
                                                 this.persist_pinned_tabs(cx);
                                                 cx.notify();

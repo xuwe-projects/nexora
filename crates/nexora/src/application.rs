@@ -1537,7 +1537,7 @@ impl ApplicationShell {
                 .tooltip("取消置顶")
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    _ = action_shell.update_in(cx, |this, _, cx| {
+                    _ = action_shell.update(cx, |this, cx| {
                         this.toggle_pin_route(&action_route);
                         cx.notify();
                     });
@@ -1549,9 +1549,9 @@ impl ApplicationShell {
                 .xsmall()
                 .icon(IconName::Close)
                 .tooltip("关闭标签")
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    _ = action_shell.update_in(cx, |this, window, cx| {
+                    _ = action_shell.update(cx, |this, cx| {
                         this.close_tab_route_in(&action_route, window, cx);
                     });
                 })
@@ -1564,7 +1564,7 @@ impl ApplicationShell {
             .label(route.title())
             .suffix(h_flex().gap_1().child(action))
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                _ = context_shell.update_in(cx, |this, _, _| {
+                _ = context_shell.update(cx, |this, _| {
                     this.tab_context_route = Some(route.clone());
                 });
             })
@@ -1612,8 +1612,8 @@ impl ApplicationShell {
             .item(PopupMenuItem::new("关闭").icon(IconName::Close).on_click({
                 let shell = shell.clone();
                 let route = route.clone();
-                move |_, _, cx| {
-                    _ = shell.update_in(cx, |this, window, cx| {
+                move |_, window, cx| {
+                    _ = shell.update(cx, |this, cx| {
                         this.close_tab_route_in(&route, window, cx);
                     });
                 }
@@ -1626,8 +1626,8 @@ impl ApplicationShell {
                     .on_click({
                         let shell = shell.clone();
                         let route = route.clone();
-                        move |_, _, cx| {
-                            _ = shell.update_in(cx, |this, window, cx| {
+                        move |_, window, cx| {
+                            _ = shell.update(cx, |this, cx| {
                                 this.close_tabs_to_left_in(&route, window, cx);
                             });
                         }
@@ -1640,8 +1640,8 @@ impl ApplicationShell {
                     .on_click({
                         let shell = shell.clone();
                         let route = route.clone();
-                        move |_, _, cx| {
-                            _ = shell.update_in(cx, |this, window, cx| {
+                        move |_, window, cx| {
+                            _ = shell.update(cx, |this, cx| {
                                 this.close_tabs_to_right_in(&route, window, cx);
                             });
                         }
@@ -1653,8 +1653,8 @@ impl ApplicationShell {
                     .on_click({
                         let shell = shell.clone();
                         let route = route.clone();
-                        move |_, _, cx| {
-                            _ = shell.update_in(cx, |this, window, cx| {
+                        move |_, window, cx| {
+                            _ = shell.update(cx, |this, cx| {
                                 this.close_other_tabs_in(&route, window, cx);
                             });
                         }
@@ -1670,7 +1670,7 @@ impl ApplicationShell {
                 .checked(pinned)
                 .on_click({
                     move |_, _, cx| {
-                        _ = shell.update_in(cx, |this, _, cx| {
+                        _ = shell.update(cx, |this, cx| {
                             this.toggle_pin_route(&route);
                             cx.notify();
                         });
