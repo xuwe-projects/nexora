@@ -10,7 +10,9 @@ Axum 服务端和独立业务模块，用于共同验证框架边界与真实应
 
 ## 快速开始
 
-需要支持 Rust 2024 edition 的稳定 Rust 工具链。当前版本从 GitHub tag 安装同名 CLI：
+需要支持 Rust 2024 edition 的稳定 Rust 工具链。当前版本从 GitHub tag 安装同名 CLI。
+
+macOS 和 Linux 使用以下命令：
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
@@ -18,6 +20,38 @@ cargo install --git https://github.com/xuwe-projects/nexora \
   --no-default-features --features cli --bin nexora
 nexora --version
 ```
+
+Windows PowerShell 不支持使用 `\` 续行，建议直接执行单行命令：
+
+```powershell
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.1.0 nexora --locked --no-default-features --features cli --bin nexora
+nexora --version
+```
+
+需要多行输入时，使用 PowerShell 反引号续行，并确保反引号后没有空格：
+
+```powershell
+cargo install `
+  --git https://github.com/xuwe-projects/nexora `
+  --tag v0.1.0 nexora `
+  --locked `
+  --no-default-features `
+  --features cli `
+  --bin nexora
+```
+
+Windows 安装前应确保 Rust stable 与 Git 可用：
+
+```powershell
+rustup update stable
+rustup default stable-x86_64-pc-windows-msvc
+rustc --version
+cargo --version
+git --version
+```
+
+若提示找不到 `link.exe`，安装 Visual Studio 2022 Build Tools，并选择“使用 C++ 的桌面开发”；
+若安装成功后仍找不到 `nexora` 命令，确认 `%USERPROFILE%\.cargo\bin` 已加入 `PATH`。
 
 创建一个 workspace 桌面项目并直接启动：
 
