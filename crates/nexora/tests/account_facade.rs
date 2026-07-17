@@ -134,8 +134,10 @@ mod server {
         account::{Account, PermissionDefinition, PermissionKey},
         config::Settings as _,
         server::{
-            AccountOidcSettings as OidcSettings, AccountSettings as Settings, DirectoryUser, Setup,
-            SetupCompletionRequest, SetupUnlockRequest,
+            AccountOidcSettings as OidcSettings, AccountSettings as Settings, DirectoryUser,
+            ExternalIdentity, Setup, SetupCompletionRequest, SetupUnlockRequest,
+            create_permissions, create_role, create_user, migrations, replace_role_permissions,
+            replace_user_roles,
         },
     };
     use serde::Deserialize;
@@ -230,6 +232,38 @@ mod server {
         }
 
         _ = assert_capabilities as fn(&Account);
+    }
+
+    #[test]
+    fn server_facade_exposes_pool_based_account_management_and_migrations() {
+        fn assert_management_api(pool: &sqlx::PgPool) {
+            let identity = ExternalIdentity {
+                identity_id: "identity-1".to_owned(),
+                email: None,
+                display_name: "测试用户".to_owned(),
+                avatar_url: None,
+            };
+            let definitions = [PermissionDefinition {
+                key: "projects:read".to_owned(),
+                name: "查看项目".to_owned(),
+                description: None,
+            }];
+
+            _ = create_user(pool, identity);
+            _ = create_permissions(pool, &definitions);
+            _ = create_role(pool, "project-reader", "项目查看者", None, &[]);
+            _ = replace_role_permissions(pool, 1, &[]);
+            _ = replace_user_roles(pool, "User0001", &[], "Admin001");
+        }
+
+        _ = assert_management_api as fn(&sqlx::PgPool);
+        let migrations = migrations();
+        assert!(!migrations.is_empty());
+        assert!(
+            migrations
+                .iter()
+                .any(|migration| migration.migration_type.is_up_migration())
+        );
     }
 
     #[cfg(feature = "server")]

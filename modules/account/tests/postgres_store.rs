@@ -7,6 +7,7 @@ use account::{
     AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
     IdentityIssuerBindingOutcome, PermissionDefinition, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
+    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
 };
 use api::with_http_layers;
 use async_trait::async_trait;
@@ -27,30 +28,43 @@ const TEST_IDENTITY_ISSUER: &str = "https://id.example.com/";
 const OTHER_IDENTITY_ISSUER: &str = "https://other-id.example.com/";
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
-async fn host_facade_registers_permissions_and_creates_roles(pool: PgPool) {
-    let account = test_account(pool).await;
-    let permissions = account
-        .register_permissions(&[PermissionDefinition {
+async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
+    let permissions = create_permissions(
+        &pool,
+        &[PermissionDefinition {
             key: "projects:archive".to_owned(),
             name: "归档项目".to_owned(),
             description: Some("允许归档项目".to_owned()),
-        }])
-        .await
-        .expect("宿主应能注册应用权限");
+        }],
+    )
+    .await
+    .expect("宿主应能注册应用权限");
     assert_eq!(permissions.len(), 1);
     assert_eq!(permissions[0].key.as_str(), "projects:archive");
 
-    let role = account
-        .create_role(
-            "project-manager",
-            "项目管理员",
-            Some("管理项目生命周期"),
-            &[permissions[0].id],
-        )
+    let role = create_role(
+        &pool,
+        "project-manager",
+        "项目管理员",
+        Some("管理项目生命周期"),
+        &[],
+    )
+    .await
+    .expect("宿主应能创建自定义角色");
+    let role = replace_role_permissions(&pool, role.id, &[permissions[0].id])
         .await
-        .expect("宿主应能创建包含应用权限的角色");
+        .expect("宿主应能替换角色权限关联");
     assert_eq!(role.key, "project-manager");
     assert_eq!(role.permissions, permissions);
+
+    let user = create_user(&pool, identity("host-managed-user"))
+        .await
+        .expect("宿主应能开通外部身份对应的本地用户");
+    let profile = replace_user_roles(&pool, user.id.as_str(), &[role.id], user.id.as_str())
+        .await
+        .expect("宿主应能替换用户角色关联");
+    assert_eq!(profile.user, user);
+    assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]

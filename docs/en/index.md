@@ -19,7 +19,7 @@ features:
   - title: Optional Account experience
     details: A default login gate, user management, role and permission pages, with application overrides.
   - title: Composable server
-    details: Server composes migrations, Account, Setup, and routers while the application owns its pool, listener, and lifecycle.
+    details: Server composes Account, Setup, and routers while the application combines framework and business migrations and owns its pool, listener, and lifecycle.
 ---
 
 ## Nexora at a glance

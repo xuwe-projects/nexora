@@ -22,9 +22,10 @@ pub(crate) struct InitializedServer {
     pub(crate) system_initialized: bool,
 }
 
-/// 创建唯一 PostgreSQL 连接池、初始化 OIDC verifier、绑定部署 issuer 并装配账号模块。
+/// 创建唯一 PostgreSQL 连接池、执行统一迁移、初始化 OIDC verifier 并装配账号模块。
 ///
-/// 数据库结构由独立的 `migrate` 程序管理；本函数不会在服务启动时隐式修改 schema。
+/// 本示例只包含 Nexora 自身迁移，因此直接用完整框架列表构造一个 SQLx `Migrator`。宿主
+/// 应用还必须先合并自己的业务迁移并检查版本冲突，不能依次运行两个 Migrator。
 ///
 /// # Errors
 ///
@@ -37,6 +38,10 @@ pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, Boot
         .connect(config.database.url.as_str())
         .await
         .map_err(BootstrapError::Database)?;
+    sqlx::migrate::Migrator::with_migrations(migrate::migrations())
+        .run(&pool)
+        .await
+        .map_err(BootstrapError::Migration)?;
     let verifier = OidcAccessTokenVerifier::discover(
         config.oidc.issuer_url.as_str(),
         config.oidc.audience.clone(),
@@ -91,6 +96,13 @@ pub enum BootstrapError {
         /// SQLx 返回的底层连接错误，仅用于脱敏后的错误链诊断。
         #[source]
         sqlx::Error,
+    ),
+    /// SQLx 无法使用统一迁移清单升级数据库结构。
+    #[error("无法应用服务端数据库迁移")]
+    Migration(
+        /// SQLx Migrator 返回的底层错误，仅用于启动诊断。
+        #[source]
+        sqlx::migrate::MigrateError,
     ),
     /// OIDC discovery 或 JWKS 初始化失败。
     #[error("无法初始化 OIDC access token 验证器")]

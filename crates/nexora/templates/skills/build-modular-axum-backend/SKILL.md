@@ -70,6 +70,8 @@ description: 使用 Cargo 工作区、Axum 0.8、SQLx/PostgreSQL、模块独立 
    - 每个新表必须使用 `COMMENT ON TABLE` 和 `COMMENT ON COLUMN` 完整记录表与全部字段语义；类型、约束、索引、函数和触发器也要记录用途。
    - PostgreSQL ENUM 必须创建在模块 schema 中，使用 `COMMENT ON TYPE` 描述类型，并在 DDL 中逐项注明每个枚举值的中文含义。
    - 迁移版本号必须全局唯一；禁止在 `migrations/` 下按模块建立子目录，因为 SQLx 默认不会递归扫描。
+   - `crates/migrate` 的执行入口接收 `nexora::server::migrations()` 返回的框架迁移，与应用
+     迁移合并并拒绝版本冲突，再构造唯一 SQLx `Migrator`；禁止依次运行两个 Migrator。
    - 把仅用于本地验证的测试数据放在 `crates/migrate/seeds/<module>/`，禁止混入生产迁移。
    - 业务模块和仓库根目录不得保存零散建表 SQL，也不得创建根目录 `sql/`。
    - 正常迁移只允许向前追加，禁止使用 `DROP TABLE` 重置已有结构。

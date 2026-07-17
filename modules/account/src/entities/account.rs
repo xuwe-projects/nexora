@@ -76,7 +76,7 @@ impl PermissionKey {
     /// 从应用代码中的静态字符串声明权限标记。
     ///
     /// 该构造函数用于实现 [`crate::authorization::RequiredPermission`] 的关联常量；应用仍应
-    /// 通过 [`crate::Account::register_permissions`] 注册同名权限，并遵守小写资源与操作键格式。
+    /// 通过 [`crate::create_permissions`] 注册同名权限，并遵守小写资源与操作键格式。
     pub const fn from_static(value: &'static str) -> Self {
         Self(Cow::Borrowed(value))
     }

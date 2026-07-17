@@ -11,6 +11,7 @@ pub use crate::account_module::{
     SystemRole, User, UserStatus,
     authentication::{AccessTokenVerifier, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
+    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
 };
 
 #[cfg(feature = "desktop")]
@@ -27,7 +28,6 @@ mod setup;
 pub(crate) mod server {
     use std::{fmt, sync::Arc};
 
-    use ::migrate as migration;
     use serde::Deserialize;
     use sqlx::PgPool;
     use thiserror::Error;
@@ -50,8 +50,6 @@ pub(crate) mod server {
     pub use crate::account_module::directory::{
         DirectoryError, DirectoryUser, ZitadelUserDirectory,
     };
-
-    pub use migration::{MigrationError, MigrationReport};
 
     /// Account 资源服务器运行所需的标准配置段。
     #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -148,18 +146,6 @@ pub(crate) mod server {
             settings.oidc.personal_access_token.as_str(),
             settings.oidc.project_id.as_str(),
         )
-    }
-
-    /// 对共享 PostgreSQL 连接池执行 Nexora 集中维护的安全向前迁移。
-    ///
-    /// 该函数不会创建连接池或启动 HTTP 服务。空数据库会自动执行全部迁移；已有未知
-    /// schema、失败迁移或核心表缺失时会 fail closed。
-    ///
-    /// # Errors
-    ///
-    /// 数据库状态检查、安全约束或任一向前迁移失败时返回 [`MigrationError`]。
-    pub async fn migrate(pool: &PgPool) -> Result<MigrationReport, MigrationError> {
-        migration::prepare(pool).await?.run(pool).await
     }
 
     /// Account 服务端依赖装配失败原因。

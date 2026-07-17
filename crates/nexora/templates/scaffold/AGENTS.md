@@ -69,8 +69,10 @@ src/features/users/components/table.rs
 
 - 应用在 composition root 中创建并持有唯一 `PgPool` 和最终 Axum State；不得在
   `Server::new`、handler 或业务模块里隐式创建第二个连接池。
-- 使用 `server.initialize(&settings, &pool, setup_secret)` 初始化框架模块；只升级数据库
-  时使用 `server.migrate(&pool)`。
+- 先把 `nexora::server::migrations()` 返回的框架迁移与应用迁移合并，拒绝跨来源版本冲突，
+  再使用唯一 SQLx `Migrator` 执行一次；禁止分别运行框架和应用 Migrator。
+- 使用 `server.initialize(&settings, &pool, setup_secret)` 初始化框架模块；该方法只装配
+  Account、ZITADEL 与 Router，不执行迁移。
 - 应用通过 `Router::new().merge(server.routers()).merge(application_routes)` 决定路由
   组合和中间件边界；不需要 Nexora HTTP 路由时不合并 `server.routers()`。
 - `Server` 不得绑定端口、持有监听器或调用 `axum::serve`。应用自行创建 `TcpListener`、

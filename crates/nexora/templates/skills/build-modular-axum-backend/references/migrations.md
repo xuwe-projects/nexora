@@ -34,7 +34,9 @@ migrations/202607150002_warehouse_create_warehouses.sql
 migrations/account/202607150001_create_accounts.sql
 ```
 
-所有模块迁移共用一套全局版本顺序和 `_sqlx_migrations` 表。通过文件名中的模块名实现归类，不要给不同模块分配独立迁移目录或独立版本空间。
+所有应用模块与 `nexora::server::migrations()` 返回的框架迁移共用一套全局版本顺序和
+`_sqlx_migrations` 表。通过文件名中的模块名实现归类，不要给不同模块或框架分配独立
+迁移记录表。宿主组合迁移时必须拒绝跨来源版本冲突。
 
 ## 迁移文件规则
 
@@ -137,7 +139,8 @@ REFERENCES account.accounts(id)
 
 ## migrate crate
 
-把 `migrate` 作为工作区二进制 crate：
+把 `migrate` 作为工作区 library crate；需要独立维护命令时可在同 package 增加 bin，但
+服务端启动必须调用同一 library 入口：
 
 ```toml
 [package]
@@ -152,28 +155,32 @@ sqlx.workspace = true
 tokio.workspace = true
 ```
 
-迁移程序读取调用方指定的配置文件，没有参数时默认使用 `config/server.toml`，然后运行内嵌迁移：
+library 入口接收由 composition root 传入的框架迁移，和内嵌应用迁移合并；先按来源检查
+版本冲突，再只构造并运行一个 SQLx `Migrator`：
 
 ```rust
-let settings = LayeredConfigLoader::<MigrationConfig>::new()
-    .with_required_file(config_path)
-    .load()?;
+static APPLICATION_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-let pool = PgPoolOptions::new()
-    .connect(&settings.database.url)
-    .await?;
-
-sqlx::migrate!("./migrations").run(&pool).await?;
+pub async fn run(
+    pool: &PgPool,
+    mut framework_migrations: Vec<Migration>,
+) -> Result<(), MigrationError> {
+    let application_migrations = APPLICATION_MIGRATOR.iter().cloned().collect::<Vec<_>>();
+    reject_cross_source_version_conflicts(&framework_migrations, &application_migrations)?;
+    framework_migrations.extend(application_migrations);
+    Migrator::with_migrations(framework_migrations).run(pool).await?;
+    Ok(())
+}
 ```
 
-`MigrationConfig` 由 migrate crate 自己定义，不要依赖 `examples/server` 的配置类型。
+`migrate` crate 不读取 Account 配置，也不依赖后端应用类型；连接池和框架迁移均由宿主传入。
 
 ## 执行和验证
 
 只在用户明确要求迁移目标数据库时运行：
 
 ```bash
-cargo run -p migrate -- config/server.toml
+cargo run -p server -- config/server.toml
 ```
 
 测试数据必须通过独立、显式的命令导入，不能由生产迁移程序自动执行。执行前说明目标数据库以及写入影响。

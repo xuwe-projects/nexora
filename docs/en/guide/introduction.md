@@ -14,7 +14,8 @@ gpui-component, Axum, or SQLx.
 - Applications depend on and import `gpui` and `gpui_component` directly.
 - `nexora` provides Feature, Window, Application, Server, configuration, and Account contracts.
 - The server creates one `PgPool`, shared by Nexora modules and application routers.
-- Migrations run before the server accepts traffic.
+- Nexora exposes framework migrations through `server::migrations()`; the host combines them with
+  business migrations and runs one SQLx `Migrator` before accepting traffic.
 
 ## Public features
 

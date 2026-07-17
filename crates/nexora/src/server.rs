@@ -11,18 +11,20 @@ use thiserror::Error;
 
 pub use crate::account::server::{
     AccountServerInitializationError, DefaultSetup, DefaultSetupCompletionRequest,
-    DefaultSetupUnlockRequest, DirectoryError, DirectoryUser, MigrationError, MigrationReport,
-    OidcSettings as AccountOidcSettings, Settings as AccountSettings, Setup,
-    SetupCompletionRequest, SetupUnlockRequest, ZitadelUserDirectory, dependencies, migrate,
-    setup_routes, setup_routes_with, user_directory,
+    DefaultSetupUnlockRequest, DirectoryError, DirectoryUser, OidcSettings as AccountOidcSettings,
+    Settings as AccountSettings, Setup, SetupCompletionRequest, SetupUnlockRequest,
+    ZitadelUserDirectory, dependencies, setup_routes, setup_routes_with, user_directory,
+};
+pub use crate::account::{
+    AccessProfile, AccountError, ExternalIdentity, Permission, PermissionDefinition, Role, User,
+    create_permissions, create_role, create_user, replace_role_permissions, replace_user_roles,
 };
 
 /// 可组合 Nexora 默认模块与应用 Router 的服务端实例。
 ///
-/// 应用创建自己的 [`PgPool`] 与 Axum State，再调用 [`Self::initialize`] 完成迁移和当前
-/// 框架模块装配；只执行数据库升级时可以单独调用 [`Self::migrate`]。随后通过
-/// `Router::new().merge(server.routers())` 组合最终 Router，并使用标准
-/// `axum::serve(listener, app)` 启动服务。
+/// 应用创建自己的 [`PgPool`] 与 Axum State，在调用 [`Self::initialize`] 前先把
+/// [`migrations`] 返回的框架迁移与业务迁移组合为一个 SQLx `Migrator` 并执行。随后通过
+/// `Router::new().merge(server.routers())` 组合最终 Router，并使用标准 `axum::serve` 启动。
 pub struct Server {
     account_routes: Option<AccountRoutes>,
     setup_required: bool,
@@ -43,22 +45,12 @@ impl Server {
         }
     }
 
-    /// 使用应用创建的 PostgreSQL 连接池执行全部待执行迁移。
-    ///
-    /// SQLx 根据 `_sqlx_migrations` 自动跳过已成功执行的版本；本方法不会创建、替换或
-    /// 关闭连接池。
-    ///
-    /// # Errors
-    ///
-    /// 数据库状态检查失败、安全约束不满足或迁移执行失败时返回错误。
-    pub async fn migrate(&self, pool: &PgPool) -> Result<MigrationReport, ServerError> {
-        Ok(crate::account::server::migrate(pool).await?)
-    }
-
     /// 使用应用提供的资源初始化 Nexora 服务端模块。
     ///
-    /// 当前默认初始化依次执行数据库迁移以及 Account、ZITADEL、Setup 路由装配。未来 OSS、
-    /// 缓存等框架模块也应收口在这一生命周期，而不是重新塞回 [`Self::new`]。
+    /// 当前默认初始化只装配 Account、ZITADEL 与 Setup 路由，不执行数据库迁移。宿主必须
+    /// 先把 [`migrations`] 与应用迁移组合成一个 SQLx `Migrator`，再使用同一个 `pool`
+    /// 执行迁移并调用本方法。未来 OSS、缓存等框架模块也应收口在这一生命周期，而不是
+    /// 重新塞回 [`Self::new`]。
     ///
     /// 初始化已经完成时会同步 ZITADEL Project 系统角色；未完成时记录等待 Setup 的状态，
     /// 供宿主在监听成功后通过 [`Self::setup_url`] 输出可访问的 `/setup` 地址。
@@ -78,7 +70,6 @@ impl Server {
                 AccountServerSettings = crate::account::server::Settings,
             >,
     {
-        self.migrate(pool).await?;
         self.initialize_account(settings, pool, setup_secret).await
     }
 
@@ -147,14 +138,6 @@ impl Default for Server {
 /// Nexora 默认服务端初始化失败原因。
 #[derive(Debug, Error)]
 pub enum ServerError {
-    /// Nexora 集中迁移失败。
-    #[cfg(feature = "server")]
-    #[error("服务端数据库迁移失败")]
-    Migration(
-        /// 迁移安全检查或 SQLx 执行过程返回的原始错误。
-        #[from]
-        crate::account::server::MigrationError,
-    ),
     /// Account OIDC 与部署 issuer 依赖装配失败。
     #[cfg(feature = "server")]
     #[error("Account 服务端依赖初始化失败")]
@@ -179,6 +162,15 @@ pub enum ServerError {
         #[from]
         crate::account::server::DirectoryError,
     ),
+}
+
+/// 返回 Nexora 服务端模块维护的全部嵌入式 SQLx 迁移。
+///
+/// 宿主应把返回列表与自己的业务迁移合并，拒绝跨来源版本冲突，并构造唯一的 SQLx
+/// `Migrator` 执行一次。该函数只克隆内嵌迁移元数据，不访问数据库，也不创建连接池。
+#[must_use]
+pub fn migrations() -> Vec<sqlx::migrate::Migration> {
+    ::migrate::migrations()
 }
 
 fn setup_url(address: SocketAddr) -> String {

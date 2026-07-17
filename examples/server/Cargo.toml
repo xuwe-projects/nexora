@@ -12,6 +12,7 @@ clap = { workspace = true }
 configuration = { workspace = true }
 contracts = { workspace = true }
 logging = { workspace = true }
+migrate = { workspace = true, default-features = false }
 rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }

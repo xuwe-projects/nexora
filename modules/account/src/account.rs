@@ -109,6 +109,100 @@ pub(crate) struct AccountState {
     token_verifier: Arc<dyn AccessTokenVerifier>,
 }
 
+/// 使用宿主共享连接池幂等创建或更新应用权限目录。
+///
+/// 相同权限键再次提交时会更新展示名称和说明。该函数复用 Account 的字段校验和 PostgreSQL
+/// Store，不创建连接池，也不执行当前用户授权；只应从可信宿主启动或管理边界调用。
+///
+/// # Errors
+///
+/// 权限键、名称、说明或集合数量不符合约束，批次包含重复键，或数据库写入失败时返回
+/// [`AccountError`]。
+pub async fn create_permissions(
+    pool: &PgPool,
+    definitions: &[PermissionDefinition],
+) -> Result<Vec<Permission>, AccountError> {
+    validate_permission_definitions(definitions)?;
+    Ok(stores::permissions::register(definitions, pool).await?)
+}
+
+/// 使用宿主共享连接池创建一个可由应用管理的自定义角色。
+///
+/// `permission_ids` 是角色创建后直接包含的完整权限集合；角色与权限写入由 Account Store
+/// 在同一事务中完成。该函数不执行当前用户授权，不允许创建系统角色。
+///
+/// # Errors
+///
+/// 角色键、名称、说明或权限 ID 集合无效，角色键已存在，权限不存在，或数据库写入失败时
+/// 返回 [`AccountError`]。
+pub async fn create_role(
+    pool: &PgPool,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError> {
+    handlers::accounts::validate_role_key(key)?;
+    handlers::accounts::validate_role_fields(name, description)?;
+    let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
+    Ok(stores::roles::create(key, name, description, permission_ids.as_slice(), pool).await?)
+}
+
+/// 使用宿主共享连接池原子替换自定义角色的直接权限集合。
+///
+/// `permission_ids` 表示替换后的完整集合，而不是增量添加列表。空集合会清除该自定义角色的
+/// 全部直接权限；系统角色始终不可修改。
+///
+/// # Errors
+///
+/// 权限数量超限、权限或角色不存在、目标为系统角色，或数据库事务失败时返回
+/// [`AccountError`]。
+pub async fn replace_role_permissions(
+    pool: &PgPool,
+    role_id: i64,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError> {
+    let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
+    Ok(stores::roles::replace_permissions(role_id, permission_ids.as_slice(), pool).await?)
+}
+
+/// 使用宿主共享连接池创建一个已经由宿主确认的外部身份对应的本地用户。
+///
+/// 本函数只在 `account.users` 中开通用户，不创建本地密码，也不会替宿主验证身份来源。
+/// 调用方必须先从当前部署绑定的身份目录、管理员操作或其他可信规则获得
+/// [`ExternalIdentity`]。
+///
+/// # Errors
+///
+/// 身份字段不符合约束、同一 identity ID 已经开通，或数据库事务失败时返回
+/// [`AccountError`]。
+pub async fn create_user(pool: &PgPool, identity: ExternalIdentity) -> Result<User, AccountError> {
+    let identity = identity
+        .normalized()
+        .map_err(|_| ValidationError::new("identity", "identity ID 或展示资料不符合约束"))?;
+    Ok(stores::identities::provision(&identity, pool).await?)
+}
+
+/// 使用宿主共享连接池原子替换普通用户的直接角色集合。
+///
+/// `role_ids` 表示替换后的完整业务角色集合；Account 会按既有规则保留内置 `member` 角色。
+/// `granted_by` 必须是已经由宿主认证授权的本地操作者用户 ID。该函数不自行验证当前请求，
+/// 因此不可信入口必须先完成用户角色管理授权。
+///
+/// # Errors
+///
+/// 用户、角色或操作者不存在，角色数量超限，目标为超级管理员，操作会移除最后一个管理员，
+/// 或数据库事务失败时返回 [`AccountError`]。
+pub async fn replace_user_roles(
+    pool: &PgPool,
+    user_id: &str,
+    role_ids: &[i64],
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError> {
+    let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+    Ok(stores::users::replace_roles(user_id, role_ids.as_slice(), granted_by, pool).await?)
+}
+
 impl Account {
     /// 原子绑定当前部署唯一允许使用的 OIDC issuer，或核对既有绑定。
     ///
@@ -246,8 +340,7 @@ impl Account {
         &self,
         definitions: &[PermissionDefinition],
     ) -> Result<Vec<Permission>, AccountError> {
-        validate_permission_definitions(definitions)?;
-        Ok(stores::permissions::register(definitions, &self.state.pool).await?)
+        create_permissions(&self.state.pool, definitions).await
     }
 
     /// 返回内置权限与应用自定义权限组成的完整目录。
@@ -293,17 +386,7 @@ impl Account {
         description: Option<&str>,
         permission_ids: &[i64],
     ) -> Result<Role, AccountError> {
-        handlers::accounts::validate_role_key(key)?;
-        handlers::accounts::validate_role_fields(name, description)?;
-        let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
-        Ok(stores::roles::create(
-            key,
-            name,
-            description,
-            permission_ids.as_slice(),
-            &self.state.pool,
-        )
-        .await?)
+        create_role(&self.state.pool, key, name, description, permission_ids).await
     }
 
     /// 修改一个自定义角色的名称或说明。
@@ -355,15 +438,7 @@ impl Account {
         role_id: i64,
         permission_ids: &[i64],
     ) -> Result<Role, AccountError> {
-        let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
-        Ok(
-            stores::roles::replace_permissions(
-                role_id,
-                permission_ids.as_slice(),
-                &self.state.pool,
-            )
-            .await?,
-        )
+        replace_role_permissions(&self.state.pool, role_id, permission_ids).await
     }
 
     /// 分页返回本地用户目录。
@@ -419,16 +494,7 @@ impl Account {
         role_ids: &[i64],
         granted_by: &str,
     ) -> Result<AccessProfile, AccountError> {
-        let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
-        Ok(
-            stores::users::replace_roles(
-                user_id,
-                role_ids.as_slice(),
-                granted_by,
-                &self.state.pool,
-            )
-            .await?,
-        )
+        replace_user_roles(&self.state.pool, user_id, role_ids, granted_by).await
     }
 
     /// 把经过宿主服务确认的外部身份显式开通为普通本地用户。
@@ -441,7 +507,7 @@ impl Account {
     ///
     /// 身份字段无效、同一 identity ID 已经开通，或数据库不可访问时返回 [`AccountError`]。
     pub async fn provision_user(&self, identity: ExternalIdentity) -> Result<User, AccountError> {
-        self.state.provision_user(identity).await
+        create_user(&self.state.pool, identity).await
     }
 
     /// 把经过身份目录或认证流程确认的用户设为唯一超级管理员。
@@ -544,16 +610,6 @@ impl AccountState {
         stores::users::query_access_profile(user.id.as_str(), self.pool())
             .await?
             .ok_or(AccountError::NotFound("用户"))
-    }
-
-    pub(crate) async fn provision_user(
-        &self,
-        identity: ExternalIdentity,
-    ) -> Result<User, AccountError> {
-        let identity = identity.normalized().map_err(|_| {
-            kernel::ValidationError::new("identity", "identity ID 或展示资料不符合约束")
-        })?;
-        Ok(stores::identities::provision(&identity, &self.pool).await?)
     }
 
     pub(crate) async fn verify_identity_issuer(

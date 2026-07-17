@@ -1,7 +1,8 @@
-//! Nexora 工作区的集中式 PostgreSQL 迁移运行时。
+//! Nexora 工作区的 PostgreSQL 迁移清单与维护工具。
 //!
-//! 迁移文件仍由本 crate 统一拥有。服务端应用既可以使用同包的 `migrate` 命令，也可以
-//! 通过 [`prepare`] 在自己的 composition root 中执行完全相同的安全检查和向前迁移。
+//! 迁移文件由本 crate 统一拥有。框架使用方通过 [`migrations`] 取得所有嵌入式迁移，和
+//! 宿主业务迁移合并为一个 SQLx `Migrator` 后只执行一次；本仓库维护者仍可使用同包的
+//! `migrate` 命令与 [`prepare`] 检查 Nexora 自身数据库。
 
 mod safety;
 
@@ -13,6 +14,16 @@ use thiserror::Error;
 use crate::safety::{DatabaseState, validate_migration_safety};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+/// 返回 Nexora 维护的全部嵌入式 SQLx 迁移。
+///
+/// 返回值包含可逆迁移的 up/down 文件，并为每次调用创建独立列表。宿主应在 composition
+/// root 中把该列表与应用迁移合并，检查跨来源版本冲突，再使用同一个 SQLx `Migrator`
+/// 执行；Nexora 的 Account 或 `Server` 初始化不会自行运行这些迁移。
+#[must_use]
+pub fn migrations() -> Vec<sqlx::migrate::Migration> {
+    MIGRATOR.iter().cloned().collect()
+}
 
 /// 已通过 fail-closed 安全检查、可以执行的迁移计划。
 #[derive(Debug, Clone, PartialEq, Eq)]

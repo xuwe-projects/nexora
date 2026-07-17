@@ -14,6 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(settings.database.max_connections)
         .connect(settings.database.url.as_str())
         .await?;
+    let framework_migrations = nexora::server::migrations();
+    sqlx::migrate::Migrator::with_migrations(framework_migrations)
+        .run(&pool)
+        .await?;
     let mut server = Server::new();
     server.initialize(&settings, &pool, setup_secret).await?;
     let app = Router::new()

@@ -46,7 +46,7 @@ pub async fn initialize(config: &ServerConfig) -> Result<AppState, BootstrapErro
     )
     .await?;
 
-    migrate::run(database.pool()).await?;
+    migrate::run(database.pool(), nexora::server::migrations()).await?;
 
     let token_verifier = Arc::new(OidcAccessTokenVerifier::discover(
         config.oidc.issuer_url.as_str(),

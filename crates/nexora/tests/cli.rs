@@ -600,7 +600,18 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(server_main.contains("use nexora::Server;"));
     assert!(server_main.contains("Server::new()"));
     assert!(server_main.contains("PgPoolOptions::new()"));
+    assert!(server_main.contains("nexora::server::migrations()"));
+    assert!(server_main.contains("Migrator::with_migrations(framework_migrations)"));
+    assert!(server_main.contains(".run(&pool)"));
     assert!(server_main.contains("server.initialize(&settings, &pool, setup_secret)"));
+    assert!(
+        server_main
+            .find("Migrator::with_migrations")
+            .expect("生成入口必须组合迁移")
+            < server_main
+                .find("server.initialize")
+                .expect("生成入口必须初始化 Server")
+    );
     assert!(server_main.contains("Router::new()"));
     assert!(server_main.contains(".merge(server.routers())"));
     assert!(server_main.contains(".merge(routes::routers())"));
@@ -638,6 +649,8 @@ fn workspace_account_feature_generates_a_composable_server() {
     let server_manifest = fs::read_to_string(project.join("apps/server/Cargo.toml")).unwrap();
     assert!(server_manifest.contains("features = [\"server\", \"derive\"]"));
     assert!(server_manifest.contains("sqlx = { workspace = true }"));
+    let workspace_manifest = fs::read_to_string(project.join("Cargo.toml")).unwrap();
+    assert!(workspace_manifest.contains("features = [\"migrate\", \"postgres\""));
     assert!(!server_manifest.contains("account-server"));
     assert!(!server_manifest.contains("account-zitadel"));
     for logo in [
