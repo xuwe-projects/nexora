@@ -41,10 +41,10 @@ The generator copies the PNG, ICNS, and ICO icon set into the desktop package's 
 directory. Changing the name, version, or logo does not require a custom login feature. Use the
 singleton `LoginFeature` override only when replacing the complete layout.
 
-A custom `SidebarHeader` is appended after the default brand instead of replacing it. The Shell owns
-the header boundary and divider but does not add interaction styles. Use stable-ID `SidebarRegion`
-values so a non-interactive logo and an interactive application context selector remain separate hit
-regions.
+A custom `SidebarHeader` replaces the default brand area. The Shell owns the header boundary and
+divider but does not add interaction styles. When the header should show both brand and application
+context, compose stable-ID `SidebarRegion` values inside the custom header so a non-interactive logo
+and an interactive selector remain separate hit regions.
 
 ## Automatic Account detection
 

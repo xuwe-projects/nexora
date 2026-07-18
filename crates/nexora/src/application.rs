@@ -93,11 +93,11 @@ use crate::{
 /// 并以中文和根路径 `/` 启动。应用只需要覆盖与自身产品有关的字段。
 #[derive(Debug)]
 pub struct ApplicationOptions {
-    /// 应用在系统菜单和默认 Sidebar Header 中展示的名称。
+    /// 应用在系统菜单中展示的名称；未注册自定义 `SidebarHeader` 时也用于默认 Header。
     pub application_name: String,
     /// 默认登录页左下角展示的应用版本号。
     pub application_version: Option<String>,
-    /// 默认登录页和 Sidebar Header 共享的可选 PNG Logo。
+    /// 默认登录页和未被自定义 `SidebarHeader` 替换的 Sidebar Header 共享的可选 PNG Logo。
     pub application_logo: Option<ApplicationLogo>,
     /// 默认 Sidebar Header 中位于应用名称下方的说明文字。
     ///
@@ -1613,6 +1613,17 @@ impl ApplicationShell {
             .into_any_element()
     }
 
+    fn render_sidebar_header_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(sidebar_header) = self.sidebar_header.as_ref() {
+            return sidebar_header.clone().into_any_element();
+        }
+
+        SidebarRegion::new("nexora-sidebar-brand")
+            .py_2()
+            .child(self.render_default_sidebar_header(cx))
+            .into_any_element()
+    }
+
     #[cfg(feature = "desktop")]
     fn render_default_account_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = crate::account::client::login_profile(cx);
@@ -1685,9 +1696,6 @@ impl ApplicationShell {
                 )
             })
             .collect::<Vec<_>>();
-        let brand = SidebarRegion::new("nexora-sidebar-brand")
-            .py_2()
-            .child(self.render_default_sidebar_header(cx));
         let header = v_flex()
             .w_full()
             .gap_2()
@@ -1695,8 +1703,7 @@ impl ApplicationShell {
             .pb_3()
             .border_b_1()
             .border_color(sidebar_border)
-            .child(brand)
-            .children(self.sidebar_header.clone());
+            .child(self.render_sidebar_header_content(cx));
 
         let footer = if let Some(footer) = self.sidebar_footer.as_ref() {
             Some(

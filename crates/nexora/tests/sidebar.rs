@@ -140,18 +140,37 @@ fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
         "默认 Footer 必须在自身实现中显式声明 hover"
     );
 
+    let header_content = APPLICATION_SOURCE
+        .split_once("fn render_sidebar_header_content")
+        .and_then(|(_, source)| source.split_once("#[cfg(feature = \"desktop\")]"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Header 内容选择实现");
+    assert!(
+        header_content.contains("if let Some(sidebar_header) = self.sidebar_header.as_ref()"),
+        "Shell 必须优先使用应用自定义 SidebarHeader"
+    );
+    assert!(
+        header_content.contains("return sidebar_header.clone().into_any_element();"),
+        "应用自定义 SidebarHeader 必须替换默认品牌内容"
+    );
+    assert!(
+        header_content.contains("SidebarRegion::new(\"nexora-sidebar-brand\")"),
+        "没有自定义 SidebarHeader 时 Shell 才渲染默认品牌区域"
+    );
+
     let sidebar = APPLICATION_SOURCE
         .split_once("fn render_sidebar")
         .and_then(|(_, source)| source.split_once("fn render_tab"))
         .map(|(source, _)| source)
         .expect("应当可以定位 Sidebar Shell 实现");
-    let brand_position = sidebar
-        .find("nexora-sidebar-brand")
-        .expect("Shell 必须保留默认品牌区域");
-    let custom_position = sidebar
-        .find(".children(self.sidebar_header.clone())")
-        .expect("Shell 必须在品牌之后追加应用 Header Context");
-    assert!(brand_position < custom_position);
+    assert!(
+        sidebar.contains(".child(self.render_sidebar_header_content(cx))"),
+        "Sidebar Shell 必须通过统一分支渲染 Header 内容"
+    );
+    assert!(
+        !sidebar.contains(".children(self.sidebar_header.clone())"),
+        "Sidebar Shell 不得把自定义 Header 追加在默认品牌之后"
+    );
     assert!(sidebar.contains(".border_b_1()"));
     assert!(sidebar.contains(".border_t_1()"));
     assert!(sidebar.contains(".gap_2()"));
