@@ -24,15 +24,13 @@ use gpui::{
     prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-    StyledExt as _, TitleBar,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     alert::Alert,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle},
-    collapsible::Collapsible,
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
-    scroll::ScrollableElement as _,
+    sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
     tab::{Tab, TabBar},
     v_flex,
 };
@@ -1452,23 +1450,17 @@ impl ApplicationShell {
         &self,
         metadata: FeatureMetadata,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> SidebarMenuItem {
         let path = metadata.path();
-        Button::new(format!("nexora-navigation-feature-{}", metadata.id()))
-            .ghost()
-            .small()
-            .w_full()
-            .justify_start()
-            .selected(self.active_target_id() == metadata.id())
+        SidebarMenuItem::new(metadata.title())
             .icon(feature_icon(metadata.icon()))
-            .label(metadata.title())
+            .active(self.active_target_id() == metadata.id())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Err(error) = this.open_path(path, window, cx) {
                     this.navigation_error = Some(error.to_string());
                 }
                 cx.notify();
             }))
-            .into_any_element()
     }
 
     fn active_target_id(&self) -> &'static str {
@@ -1495,7 +1487,7 @@ impl ApplicationShell {
         &self,
         metadata: NavigationGroupMetadata,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> SidebarMenuItem {
         let group_id = metadata.id();
         let expanded = self.expanded_navigation_groups.contains(group_id);
         let children = self
@@ -1503,48 +1495,22 @@ impl ApplicationShell {
             .into_iter()
             .map(|entry| self.render_navigation_entry(entry, cx))
             .collect::<Vec<_>>();
-        let header = Button::new(format!("nexora-navigation-group-{group_id}"))
-            .ghost()
-            .small()
-            .w_full()
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(feature_icon(metadata.icon()))
-                    .child(div().flex_1().min_w_0().truncate().child(metadata.title()))
-                    .child(Icon::new(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })),
-            )
+
+        SidebarMenuItem::new(metadata.title())
+            .icon(feature_icon(metadata.icon()))
+            .default_open(expanded)
+            .click_to_toggle(true)
+            .children(children)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_navigation_group(group_id, cx);
-            }));
-
-        Collapsible::new()
-            .open(expanded)
-            .child(header)
-            .content(
-                v_flex()
-                    .ml_3p5()
-                    .pl_2p5()
-                    .py_0p5()
-                    .gap_1()
-                    .border_l_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .children(children),
-            )
-            .into_any_element()
+            }))
     }
 
     fn render_navigation_entry(
         &self,
         entry: NavigationEntry,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> SidebarMenuItem {
         match entry {
             NavigationEntry::Group(metadata) => self.render_navigation_group(metadata, cx),
             NavigationEntry::Feature(metadata) => self.render_navigation_feature(metadata, cx),
@@ -1707,30 +1673,16 @@ impl ApplicationShell {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
         let navigation_sections = self.navigation_sections();
-        let navigation_section_count = navigation_sections.len();
         let navigation_groups = navigation_sections
             .into_iter()
-            .enumerate()
-            .map(|(index, (section, items))| {
-                let menu = v_flex().gap_1().children(
-                    items
-                        .into_iter()
-                        .map(|entry| self.render_navigation_entry(entry, cx)),
-                );
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .h_8()
-                            .px_2()
-                            .text_xs()
-                            .text_color(cx.theme().sidebar_foreground.opacity(0.7))
-                            .child(section),
-                    )
-                    .child(menu)
-                    .when(index + 1 < navigation_section_count, |this| {
-                        this.pb_3().border_b_1().border_color(sidebar_border)
-                    })
+            .map(|(section, items)| {
+                SidebarGroup::new(section).child(
+                    SidebarMenu::new().children(
+                        items
+                            .into_iter()
+                            .map(|entry| self.render_navigation_entry(entry, cx)),
+                    ),
+                )
             })
             .collect::<Vec<_>>();
         let brand = SidebarRegion::new("nexora-sidebar-brand")
@@ -1740,6 +1692,9 @@ impl ApplicationShell {
             .w_full()
             .gap_2()
             .px_2()
+            .pb_3()
+            .border_b_1()
+            .border_color(sidebar_border)
             .child(brand)
             .children(self.sidebar_header.clone());
 
@@ -1748,8 +1703,6 @@ impl ApplicationShell {
                 div()
                     .w_full()
                     .pt_3()
-                    .pb_3()
-                    .px_3()
                     .border_t_1()
                     .border_color(sidebar_border)
                     .child(footer.clone())
@@ -1762,8 +1715,6 @@ impl ApplicationShell {
                     div()
                         .w_full()
                         .pt_3()
-                        .pb_3()
-                        .px_3()
                         .border_t_1()
                         .border_color(sidebar_border)
                         .child(self.render_default_account_footer(cx))
@@ -1776,38 +1727,12 @@ impl ApplicationShell {
             None
         };
 
-        v_flex()
-            .id("nexora-sidebar")
+        Sidebar::new("nexora-sidebar")
             .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .bg(cx.theme().tokens.sidebar)
-            .text_color(cx.theme().sidebar_foreground)
-            .border_r_1()
-            .border_color(sidebar_border)
-            .child(
-                div()
-                    .w_full()
-                    .pt_3()
-                    .pb_3()
-                    .px_3()
-                    .border_b_1()
-                    .border_color(sidebar_border)
-                    .child(header),
-            )
-            .child(
-                v_flex()
-                    .id("nexora-sidebar-navigation")
-                    .flex_1()
-                    .min_h_0()
-                    .px_3()
-                    .py_3()
-                    .gap_3()
-                    .overflow_y_scrollbar()
-                    .children(navigation_groups),
-            )
-            .when_some(footer, |this, footer| this.child(footer))
+            .collapsible(SidebarCollapsible::None)
+            .header(header)
+            .children(navigation_groups)
+            .when_some(footer, |this, footer| this.footer(footer))
             .into_any_element()
     }
 

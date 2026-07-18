@@ -7,6 +7,7 @@ title: 更新日志
 每个版本页面都包含完整改动、GitHub 处理人、确实关联的 Issue/PR、兼容性说明，以及从上一
 版本升级到当前版本的操作。
 
+- [0.5.2：修复 Sidebar 导航对齐](./0.5.2)
 - [0.5.1：修复 FormDialog 提交禁用语义](./0.5.1)
 - [0.5.0：NavigationGroup、FormDialog 与 ZITADEL 用户闭环](./0.5.0)
 - [0.4.1：OpenAPI 静态发布修复](./0.4.1)

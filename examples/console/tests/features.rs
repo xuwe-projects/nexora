@@ -705,8 +705,8 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.version().to_string(), env!("CARGO_PKG_VERSION"));
     assert_eq!(entry.locale(), "zh-CN");
-    assert!(entry.markdown().contains("FormDialog"));
-    assert!(entry.markdown().contains("submit_disabled"));
+    assert!(entry.markdown().contains("Sidebar"));
+    assert!(entry.markdown().contains("gpui-component"));
     assert!(!entry.markdown().contains("TabBar"));
     assert!(!entry.markdown().contains("DMG"));
 }

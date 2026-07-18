@@ -10,7 +10,7 @@ order: 2
 从 GitHub tag 安装正式发布版本：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.5.1 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.5.2 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 从 Nexora 仓库根目录安装当前本地源码：

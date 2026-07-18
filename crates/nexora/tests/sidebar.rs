@@ -94,6 +94,41 @@ fn duplicate_sidebar_slots_return_structured_registry_errors() {
 }
 
 #[test]
+fn shell_uses_gpui_component_sidebar_for_navigation() {
+    let sidebar = APPLICATION_SOURCE
+        .split_once("fn render_sidebar")
+        .and_then(|(_, source)| source.split_once("fn render_tab"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Shell 实现");
+
+    for required in [
+        "Sidebar::new(\"nexora-sidebar\")",
+        "SidebarGroup::new(section)",
+        "SidebarMenu::new().children(",
+    ] {
+        assert!(
+            sidebar.contains(required),
+            "Sidebar Shell 必须使用官方组件：{required}"
+        );
+    }
+    assert!(
+        APPLICATION_SOURCE.contains("SidebarMenuItem::new(metadata.title())"),
+        "Sidebar 导航项必须使用官方 SidebarMenuItem"
+    );
+
+    for forbidden in [
+        "v_flex()\n            .id(\"nexora-sidebar\")",
+        "Button::new(format!(\"nexora-navigation-feature-{}\"",
+        "Button::new(format!(\"nexora-navigation-group-",
+    ] {
+        assert!(
+            !sidebar.contains(forbidden),
+            "Sidebar Shell 不得手写官方组件已有的导航能力：{forbidden}"
+        );
+    }
+}
+
+#[test]
 fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
     let default_footer = APPLICATION_SOURCE
         .split_once("fn render_default_account_footer")
