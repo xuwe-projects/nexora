@@ -707,7 +707,7 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.locale(), "zh-CN");
     assert!(!entry.markdown().contains("Sidebar"));
     assert!(!entry.markdown().contains("TabBar"));
-    assert!(entry.markdown().contains("DataTable"));
+    assert!(entry.markdown().contains("OpenAPI"));
     assert!(!entry.markdown().contains("DMG"));
 }
 

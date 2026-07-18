@@ -135,7 +135,7 @@ setup 会先幂等确保 `admin`、`auditor`、`member` 等全部本地系统角
 | `roles:write` | 管理自定义角色及其权限 |
 | `permissions:read` | 查看权限目录 |
 
-REST 契约位于 [`docs/openapi.yaml`](../docs/openapi.yaml)。除 `/health` 外均需要 Bearer token；
+REST 契约位于 [`docs/public/openapi.yaml`](../docs/public/openapi.yaml)。除 `/health` 外均需要 Bearer token；
 认证失败返回 `401`，权限不足返回 `403`，字段校验失败返回 `422`，资源冲突返回 `409`。
 数据库集成测试默认不要求本机 PostgreSQL；可用测试实例准备好后运行：
 
