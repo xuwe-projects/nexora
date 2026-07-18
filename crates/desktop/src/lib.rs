@@ -2,14 +2,38 @@
 //!
 //! 该模块负责统一创建 GPUI 应用、初始化 `gpui-component`，并根据应用配置打开主窗口。
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use gpui::{
-    App, AppContext, Bounds, DisplayId, Entity, Pixels, QuitMode, Render, Size, Window,
-    WindowBounds, WindowOptions, px, size,
+    App, AppContext, AssetSource, Bounds, DisplayId, Entity, Pixels, QuitMode, Render,
+    SharedString, Size, Window, WindowBounds, WindowOptions, px, size,
 };
 use gpui_platform::application;
 use reqwest_client::ReqwestClient;
+
+const ROTATE_CCW_ICON_PATH: &str = "icons/rotate-ccw.svg";
+const ROTATE_CCW_ICON: &[u8] = include_bytes!("../assets/icons/rotate-ccw.svg");
+
+struct DesktopAssets {
+    components: gpui_component_assets::Assets,
+}
+
+impl AssetSource for DesktopAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if path == ROTATE_CCW_ICON_PATH {
+            return Ok(Some(Cow::Borrowed(ROTATE_CCW_ICON)));
+        }
+        self.components.load(path)
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        let mut assets = self.components.list(path)?;
+        if ROTATE_CCW_ICON_PATH.starts_with(path) {
+            assets.push(ROTATE_CCW_ICON_PATH.into());
+        }
+        Ok(assets)
+    }
+}
 
 /// 桌面应用运行时选项。
 ///
@@ -267,7 +291,9 @@ where
     let plan = runtime_plan(desktop_application.options());
 
     application()
-        .with_assets(gpui_component_assets::Assets)
+        .with_assets(DesktopAssets {
+            components: gpui_component_assets::Assets,
+        })
         .with_http_client(Arc::new(ReqwestClient::new()))
         .with_quit_mode(plan.quit_mode)
         .run(move |cx| {

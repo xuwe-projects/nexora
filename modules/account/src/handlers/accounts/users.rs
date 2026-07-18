@@ -32,6 +32,7 @@ pub(crate) async fn provision_user(
 ) -> Result<impl IntoResponse, ApiError> {
     let ProvisionUserRequest {
         identity_id,
+        username,
         email,
         display_name,
         avatar_url,
@@ -50,6 +51,7 @@ pub(crate) async fn provision_user(
         .provision_user_with_roles(
             ExternalIdentity {
                 identity_id,
+                username,
                 email,
                 display_name,
                 avatar_url,

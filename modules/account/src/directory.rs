@@ -58,6 +58,7 @@ impl DirectoryUser {
     pub fn into_external_identity(self) -> ExternalIdentity {
         ExternalIdentity {
             identity_id: self.identity_id,
+            username: Some(self.username),
             email: self.email,
             display_name: self.display_name,
             avatar_url: self.avatar_url,

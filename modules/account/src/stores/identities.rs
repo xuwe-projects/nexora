@@ -22,17 +22,19 @@ pub(crate) async fn sync_existing(
     Ok(sqlx::query_as::<_, User>(
         r#"
         UPDATE account.users
-        SET email = COALESCE($2, email),
-            display_name = CASE WHEN $3 = $1 THEN display_name ELSE $3 END,
-            avatar_url = COALESCE($4, avatar_url),
+        SET username = COALESCE($2, username),
+            email = COALESCE($3, email),
+            display_name = CASE WHEN $4 = $1 THEN display_name ELSE $4 END,
+            avatar_url = COALESCE($5, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
     .bind(identity.identity_id.as_str())
+    .bind(identity.username.as_deref())
     .bind(identity.email.as_deref())
     .bind(identity.display_name.as_str())
     .bind(identity.avatar_url.as_deref())
@@ -81,18 +83,20 @@ async fn insert_new(
             INSERT INTO account.users (
                 id,
                 identity_id,
+                username,
                 email,
                 display_name,
                 avatar_url
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, email, display_name, avatar_url, status,
+            RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
         .bind(user_id)
         .bind(identity.identity_id.as_str())
+        .bind(identity.username.as_deref())
         .bind(identity.email.as_deref())
         .bind(identity.display_name.as_str())
         .bind(identity.avatar_url.as_deref())
@@ -126,18 +130,20 @@ pub(super) async fn upsert(
             INSERT INTO account.users (
                 id,
                 identity_id,
+                username,
                 email,
                 display_name,
                 avatar_url
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, email, display_name, avatar_url, status,
+            RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
         .bind(user_id)
         .bind(identity.identity_id.as_str())
+        .bind(identity.username.as_deref())
         .bind(identity.email.as_deref())
         .bind(identity.display_name.as_str())
         .bind(identity.avatar_url.as_deref())
@@ -163,17 +169,19 @@ async fn update_existing(
     sqlx::query_as::<_, User>(
         r#"
         UPDATE account.users
-        SET email = COALESCE($2, email),
-            display_name = CASE WHEN $3 = $1 THEN display_name ELSE $3 END,
-            avatar_url = COALESCE($4, avatar_url),
+        SET username = COALESCE($2, username),
+            email = COALESCE($3, email),
+            display_name = CASE WHEN $4 = $1 THEN display_name ELSE $4 END,
+            avatar_url = COALESCE($5, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
     .bind(identity.identity_id.as_str())
+    .bind(identity.username.as_deref())
     .bind(identity.email.as_deref())
     .bind(identity.display_name.as_str())
     .bind(identity.avatar_url.as_deref())
@@ -187,7 +195,7 @@ async fn query_existing(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, email, display_name, avatar_url, status,
+        SELECT id, identity_id, username, email, display_name, avatar_url, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE identity_id = $1

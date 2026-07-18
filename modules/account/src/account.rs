@@ -642,6 +642,7 @@ impl AccountState {
             .await?;
         let identity = ExternalIdentity {
             identity_id: identity.subject,
+            username: identity.username,
             email: identity.email,
             display_name: identity.display_name,
             avatar_url: identity.avatar_url,

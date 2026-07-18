@@ -43,6 +43,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let response = UserResponse {
         id: "Ab3xY9qP".to_owned(),
         identity_id: "user-1".to_owned(),
+        username: Some("tester".to_owned()),
         email: Some("user@example.com".to_owned()),
         display_name: "测试用户".to_owned(),
         avatar_url: None,
@@ -57,6 +58,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     assert_eq!(json["id"], "Ab3xY9qP");
     assert_eq!(json["status"], "suspended");
     assert_eq!(json["identity_id"], "user-1");
+    assert_eq!(json["username"], "tester");
     assert_eq!(json["is_super_admin"], false);
     assert_eq!(json["created_at"], now);
     assert!(json["created_at"].is_i64());
@@ -93,6 +95,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
 fn provision_user_request_uses_explicit_snake_case_identity_id() {
     let request = ProvisionUserRequest {
         identity_id: "user-1".to_owned(),
+        username: Some("tester".to_owned()),
         email: Some("user@example.com".to_owned()),
         display_name: "测试用户".to_owned(),
         avatar_url: None,
@@ -101,6 +104,7 @@ fn provision_user_request_uses_explicit_snake_case_identity_id() {
 
     let json = serde_json::to_value(&request).expect("用户开通请求应当可以序列化");
     assert_eq!(json["identity_id"], "user-1");
+    assert_eq!(json["username"], "tester");
     assert_eq!(json["role_ids"], json!([7, 11]));
     assert!(json.get("identityId").is_none());
     assert_eq!(
@@ -116,9 +120,11 @@ fn provision_user_request_uses_explicit_snake_case_identity_id() {
     }))
     .expect("旧客户端省略初始角色时应当保持兼容");
     assert!(compatible.role_ids.is_empty());
+    assert!(compatible.username.is_none());
 
     let empty_roles = ProvisionUserRequest {
         identity_id: "user-with-default-role".to_owned(),
+        username: None,
         email: None,
         display_name: "默认成员".to_owned(),
         avatar_url: None,

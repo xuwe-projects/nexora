@@ -11,6 +11,7 @@ use crate::{AccountError, StoreError};
 const MAX_IDENTITY_ID_LENGTH: usize = 255;
 const MAX_IDENTITY_ISSUER_LENGTH: usize = 2_048;
 const MAX_IDENTITY_NAME_LENGTH: usize = 200;
+const MAX_USERNAME_LENGTH: usize = 200;
 const MAX_EMAIL_LENGTH: usize = 320;
 const MAX_AVATAR_URL_LENGTH: usize = 2_048;
 
@@ -19,6 +20,8 @@ const MAX_AVATAR_URL_LENGTH: usize = 2_048;
 pub struct ExternalIdentity {
     /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
+    /// 身份服务返回的可选登录用户名。
+    pub username: Option<String>,
     /// 身份服务返回的可选邮箱。
     pub email: Option<String>,
     /// 面向用户界面展示的名称。
@@ -39,6 +42,9 @@ impl ExternalIdentity {
         let display_name = self.display_name.trim();
         let valid = !identity_id.is_empty()
             && identity_id.len() <= MAX_IDENTITY_ID_LENGTH
+            && self.username.as_deref().is_none_or(|username| {
+                !username.trim().is_empty() && username.chars().count() <= MAX_USERNAME_LENGTH
+            })
             && !display_name.is_empty()
             && display_name.chars().count() <= MAX_IDENTITY_NAME_LENGTH
             && self
@@ -54,6 +60,7 @@ impl ExternalIdentity {
         }
         Ok(Self {
             identity_id: identity_id.to_owned(),
+            username: self.username.as_deref().map(str::trim).map(str::to_owned),
             email: self.email.clone(),
             display_name: display_name.to_owned(),
             avatar_url: self.avatar_url.clone(),
@@ -164,6 +171,8 @@ pub struct User {
     pub id: String,
     /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
+    /// 身份提供方中的可选登录用户名。
+    pub username: Option<String>,
     /// 可选展示邮箱。
     pub email: Option<String>,
     /// 用户展示名称。

@@ -580,6 +580,7 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
 
     let request = ProvisionUserRequest {
         identity_id: "provisioned-user".to_owned(),
+        username: Some("provisioned-user".to_owned()),
         email: Some("provisioned-user@example.com".to_owned()),
         display_name: "已开通用户".to_owned(),
         avatar_url: None,
@@ -626,6 +627,7 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
 
     let invalid_request = ProvisionUserRequest {
         identity_id: "rollback-http-user".to_owned(),
+        username: Some("rollback-http-user".to_owned()),
         email: None,
         display_name: "应回滚用户".to_owned(),
         avatar_url: None,
@@ -713,6 +715,7 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
 
     let empty_roles = ProvisionUserRequest {
         identity_id: "empty-role-user".to_owned(),
+        username: Some("empty-role-user".to_owned()),
         email: None,
         display_name: "默认成员用户".to_owned(),
         avatar_url: None,
@@ -732,6 +735,7 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
 
     let denied_roles = ProvisionUserRequest {
         identity_id: "denied-role-user".to_owned(),
+        username: Some("denied-role-user".to_owned()),
         email: None,
         display_name: "越权角色用户".to_owned(),
         avatar_url: None,
@@ -755,6 +759,7 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
 
     let allowed_roles = ProvisionUserRequest {
         identity_id: "allowed-role-user".to_owned(),
+        username: Some("allowed-role-user".to_owned()),
         email: None,
         display_name: "已授权角色用户".to_owned(),
         avatar_url: None,
@@ -952,6 +957,7 @@ async fn insert_user(id: &str, identity_id: &str, pool: &PgPool) {
 fn identity(identity_id: &str) -> ExternalIdentity {
     ExternalIdentity {
         identity_id: identity_id.to_owned(),
+        username: Some(identity_id.to_owned()),
         email: Some(format!("{identity_id}@example.com")),
         display_name: identity_id.to_owned(),
         avatar_url: None,
@@ -971,6 +977,7 @@ impl AccessTokenVerifier for TokenIdentityVerifier {
         Ok(VerifiedIdentity {
             issuer: issuer.to_owned(),
             subject: subject.to_owned(),
+            username: Some(token.to_owned()),
             email: Some(format!("{token}@example.com")),
             display_name: token.to_owned(),
             avatar_url: None,

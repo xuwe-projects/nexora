@@ -12,7 +12,7 @@ fn exported_migrations_include_all_framework_versions_and_are_independent() {
             .filter(|migration| migration.migration_type.is_up_migration())
             .map(|migration| migration.version)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([1, 2, 3, 4, 5])
+        BTreeSet::from([1, 2, 3, 4, 5, 6])
     );
 
     first.pop();

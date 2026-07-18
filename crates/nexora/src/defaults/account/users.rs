@@ -2,7 +2,7 @@
 
 mod components;
 
-use gpui::{AnyView, AppContext as _, Context, Entity, IntoElement, Render, Window};
+use gpui::{AppContext as _, Context, Entity, IntoElement, Render, Window};
 
 use crate::{
     Feature, FeatureElement, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NoPath,
@@ -43,7 +43,7 @@ impl Render for DefaultUsersFeature {
 
 impl FeatureElement for DefaultUsersFeature {
     fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let page = cx.new(UsersPage::new);
+        let page = cx.new(|cx| UsersPage::new(window, cx));
         let dialog = cx.new(|cx| ProvisionUserDialog::new(page.downgrade(), window, cx));
         page.update(cx, |page, cx| {
             page.set_provision_dialog(dialog.downgrade(), cx);
@@ -56,10 +56,6 @@ impl FeatureElement for DefaultUsersFeature {
         if let Some(page) = &self.page {
             page.update(cx, UsersPage::load_if_needed);
         }
-    }
-
-    fn panel_overlay(&self) -> Option<AnyView> {
-        self.provision_dialog.clone().map(Into::into)
     }
 
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

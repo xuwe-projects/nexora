@@ -1,151 +1,373 @@
-//! 默认用户列表表格。
+//! 默认用户列表数据表。
 
-use gpui::{IntoElement, RenderOnce, WeakEntity, div, prelude::*, px};
+use std::collections::BTreeSet;
+
+use gpui::{
+    AnyElement, App, Context, Div, Entity, IntoElement, Render, Stateful, WeakEntity, Window, div,
+    prelude::*, px,
+};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
+    avatar::Avatar,
     button::Button,
     h_flex,
-    table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow},
+    table::{Column, DataTable, TableDelegate, TableState},
+    tag::Tag,
     v_flex,
 };
 
-use crate::desktop::contract::{UserResponse, UserStatus};
+use crate::{
+    defaults::account::has_permission,
+    desktop::contract::{UserResponse, UserStatus},
+};
+use ui::Card;
 
 use super::UsersPage;
 
-#[derive(IntoElement)]
 pub(in crate::defaults::account::users) struct UsersTable {
-    users: Vec<UserResponse>,
-    busy_user_id: Option<String>,
-    role_editor_busy: bool,
-    can_change_status: bool,
-    can_manage_roles: bool,
-    page: WeakEntity<UsersPage>,
+    state: Entity<TableState<UsersTableDelegate>>,
 }
 
 impl UsersTable {
     pub(super) fn new(
-        users: Vec<UserResponse>,
-        busy_user_id: Option<String>,
-        role_editor_busy: bool,
-        can_change_status: bool,
-        can_manage_roles: bool,
         page: WeakEntity<UsersPage>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Self {
-        Self {
-            users,
-            busy_user_id,
-            role_editor_busy,
-            can_change_status,
-            can_manage_roles,
-            page,
-        }
+        let delegate = UsersTableDelegate::new(page);
+        let state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .sortable(false)
+                .col_movable(false)
+                .col_selectable(false)
+                .row_selectable(false)
+        });
+        Self { state }
+    }
+
+    pub(super) fn replace_rows(
+        &mut self,
+        users: Vec<UserResponse>,
+        total: i64,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.delegate_mut().users = users;
+            state.delegate_mut().total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(super) fn append_rows(
+        &mut self,
+        users: Vec<UserResponse>,
+        total: i64,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+            let existing_ids = delegate
+                .users
+                .iter()
+                .map(|user| user.id.clone())
+                .collect::<BTreeSet<_>>();
+            delegate.users.extend(
+                users
+                    .into_iter()
+                    .filter(|user| !existing_ids.contains(&user.id)),
+            );
+            delegate.total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(super) fn update_user(&mut self, updated: UserResponse, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if let Some(user) = state
+                .delegate_mut()
+                .users
+                .iter_mut()
+                .find(|user| user.id == updated.id)
+            {
+                *user = updated;
+                cx.notify();
+            }
+        });
+    }
+
+    pub(super) fn len(&self, cx: &App) -> usize {
+        self.state.read(cx).delegate().users.len()
+    }
+
+    pub(super) fn refresh(&self, cx: &mut Context<Self>) {
+        self.state.update(cx, |_, cx| cx.notify());
+        cx.notify();
     }
 }
 
-impl RenderOnce for UsersTable {
-    fn render(self, _window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        let rows = self.users.into_iter().map(|user| {
-            let role_user_id = user.id.clone();
-            let status_user_id = user.id.clone();
-            let role_page = self.page.clone();
-            let status_page = self.page.clone();
-            let mutation_busy = self.busy_user_id.is_some();
-            let current_user_busy = self.busy_user_id.as_deref() == Some(user.id.as_str());
-            let is_active = user.status == UserStatus::Active;
-            let status_label = if is_active { "已启用" } else { "已停用" };
-            let status_action = if is_active { "停用" } else { "启用" };
-            let target_status = if is_active {
-                UserStatus::Suspended
-            } else {
-                UserStatus::Active
-            };
-            let account_label = if user.is_super_admin {
-                format!("{} · 超级管理员", user.display_name)
-            } else {
-                user.display_name.clone()
-            };
+impl Render for UsersTable {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().min_h_0().child(
+            Card::new()
+                .size_full()
+                .overflow_hidden()
+                .child(DataTable::new(&self.state).stripe(true).bordered(false)),
+        )
+    }
+}
 
-            TableRow::new()
-                .child(
-                    TableCell::new().child(
-                        v_flex().gap_1().child(account_label).child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(user.id),
-                        ),
-                    ),
-                )
-                .child(TableCell::new().child(user.email.unwrap_or_else(|| "—".to_owned())))
-                .child(TableCell::new().w(px(88.)).child(status_label))
-                .child(TableCell::new().child(user.identity_id))
-                .child(
-                    TableCell::new().w(px(220.)).child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new(format!("default-user-roles-{role_user_id}"))
-                                    .small()
-                                    .label("管理角色")
-                                    .disabled(
-                                        user.is_super_admin
-                                            || mutation_busy
-                                            || self.role_editor_busy
-                                            || !self.can_manage_roles,
-                                    )
-                                    .tooltip(if self.can_manage_roles {
-                                        "完整替换用户的直接角色集合"
-                                    } else {
-                                        "需要 users:roles.write 与 roles:read 权限"
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        _ = role_page.update(cx, |page, cx| {
-                                            page.manage_roles(role_user_id.clone(), cx);
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new(format!("default-user-status-{status_user_id}"))
-                                    .small()
-                                    .outline()
-                                    .label(status_action)
-                                    .loading(current_user_busy)
-                                    .disabled(
-                                        user.is_super_admin
-                                            || mutation_busy
-                                            || !self.can_change_status,
-                                    )
-                                    .tooltip(if self.can_change_status {
-                                        status_action
-                                    } else {
-                                        "需要 users:status.write 权限"
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        _ = status_page.update(cx, |page, cx| {
-                                            page.set_user_status(
-                                                status_user_id.clone(),
-                                                target_status,
-                                                cx,
-                                            );
-                                        });
-                                    }),
-                            ),
-                    ),
-                )
-        });
+struct UsersTableDelegate {
+    columns: Vec<Column>,
+    users: Vec<UserResponse>,
+    total: usize,
+    page: WeakEntity<UsersPage>,
+}
 
-        Table::new()
+impl UsersTableDelegate {
+    fn new(page: WeakEntity<UsersPage>) -> Self {
+        Self {
+            columns: vec![
+                Column::new("user", "用户")
+                    .width(px(260.))
+                    .min_width(px(220.))
+                    .fixed_left(),
+                Column::new("username", "登录用户名")
+                    .width(px(180.))
+                    .min_width(px(140.)),
+                Column::new("email", "邮箱")
+                    .width(px(220.))
+                    .min_width(px(180.)),
+                Column::new("status", "状态")
+                    .width(px(110.))
+                    .min_width(px(96.)),
+                Column::new("actions", "操作")
+                    .width(px(220.))
+                    .min_width(px(220.))
+                    .selectable(false),
+            ],
+            users: Vec::new(),
+            total: 0,
+            page,
+        }
+    }
+
+    fn render_user(&self, user: &UserResponse, cx: &App) -> AnyElement {
+        let avatar = Avatar::new().name(user.display_name.clone()).small();
+        let avatar = if let Some(avatar_url) = user.avatar_url.clone() {
+            avatar.src(avatar_url)
+        } else {
+            avatar
+        };
+        h_flex()
+            .h_full()
+            .min_w_0()
+            .gap_2()
+            .child(avatar)
             .child(
-                TableHeader::new().child(
-                    TableRow::new()
-                        .child(TableHead::new().child("用户"))
-                        .child(TableHead::new().child("邮箱"))
-                        .child(TableHead::new().w(px(88.)).child("状态"))
-                        .child(TableHead::new().child("Identity ID"))
-                        .child(TableHead::new().w(px(220.)).child("操作")),
-                ),
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(div().truncate().child(user.display_name.clone()))
+                            .when(user.is_super_admin, |this| {
+                                this.child(Tag::info().small().rounded_full().child("超级管理员"))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(user.id.clone()),
+                    ),
             )
-            .child(TableBody::new().children(rows))
+            .into_any_element()
+    }
+
+    fn render_actions(&self, user: &UserResponse, cx: &mut App) -> AnyElement {
+        let role_user_id = user.id.clone();
+        let status_user_id = user.id.clone();
+        let role_page = self.page.clone();
+        let status_page = self.page.clone();
+        let mutation_busy = self
+            .page
+            .upgrade()
+            .is_some_and(|page| page.read(cx).has_active_mutation(cx));
+        let current_user_busy = self
+            .page
+            .upgrade()
+            .is_some_and(|page| page.read(cx).is_user_busy(user.id.as_str()));
+        let can_manage_roles =
+            has_permission(cx, "users:roles.write") && has_permission(cx, "roles:read");
+        let can_change_status = has_permission(cx, "users:status.write");
+        let is_active = user.status == UserStatus::Active;
+        let status_action = if is_active { "停用" } else { "启用" };
+        let target_status = if is_active {
+            UserStatus::Suspended
+        } else {
+            UserStatus::Active
+        };
+
+        h_flex()
+            .h_full()
+            .gap_2()
+            .child(
+                Button::new(format!("default-user-roles-{role_user_id}"))
+                    .small()
+                    .label("管理角色")
+                    .disabled(user.is_super_admin || mutation_busy || !can_manage_roles)
+                    .tooltip(if can_manage_roles {
+                        "完整替换用户的直接角色集合"
+                    } else {
+                        "需要 users:roles.write 与 roles:read 权限"
+                    })
+                    .on_click(move |_, _, cx| {
+                        _ = role_page.update(cx, |page, cx| {
+                            page.manage_roles(role_user_id.clone(), cx);
+                        });
+                    }),
+            )
+            .child(
+                Button::new(format!("default-user-status-{status_user_id}"))
+                    .small()
+                    .outline()
+                    .label(status_action)
+                    .loading(current_user_busy)
+                    .disabled(user.is_super_admin || mutation_busy || !can_change_status)
+                    .tooltip(if can_change_status {
+                        status_action
+                    } else {
+                        "需要 users:status.write 权限"
+                    })
+                    .on_click(move |_, _, cx| {
+                        _ = status_page.update(cx, |page, cx| {
+                            page.set_user_status(status_user_id.clone(), target_status, cx);
+                        });
+                    }),
+            )
+            .into_any_element()
+    }
+}
+
+impl TableDelegate for UsersTableDelegate {
+    fn columns_count(&self, _cx: &App) -> usize {
+        self.columns.len()
+    }
+
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.users.len()
+    }
+
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        self.columns[col_ix].clone()
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let id = self
+            .users
+            .get(row_ix)
+            .map(|user| format!("default-user-row-{}", user.id))
+            .unwrap_or_else(|| format!("default-user-row-missing-{row_ix}"));
+        div().id(id)
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let Some(user) = self.users.get(row_ix).cloned() else {
+            return div().into_any_element();
+        };
+        match col_ix {
+            0 => self.render_user(&user, cx),
+            1 => user
+                .username
+                .as_deref()
+                .map(|username| format!("@{username}"))
+                .unwrap_or_else(|| "未绑定".to_owned())
+                .into_any_element(),
+            2 => user
+                .email
+                .clone()
+                .unwrap_or_else(|| "—".to_owned())
+                .into_any_element(),
+            3 => match user.status {
+                UserStatus::Active => Tag::success()
+                    .small()
+                    .rounded_full()
+                    .child("已启用")
+                    .into_any_element(),
+                UserStatus::Suspended => Tag::warning()
+                    .small()
+                    .rounded_full()
+                    .child("已停用")
+                    .into_any_element(),
+            },
+            4 => self.render_actions(&user, cx),
+            _ => div().into_any_element(),
+        }
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .text_color(cx.theme().muted_foreground)
+            .child("暂无用户")
+            .child(div().text_xs().child("点击右上角“创建用户”添加第一个用户"))
+    }
+
+    fn loading(&self, cx: &App) -> bool {
+        self.users.is_empty()
+            && self
+                .page
+                .upgrade()
+                .is_some_and(|page| page.read(cx).is_loading())
+    }
+
+    fn has_more(&self, cx: &App) -> bool {
+        self.users.len() < self.total
+            && self
+                .page
+                .upgrade()
+                .is_some_and(|page| !page.read(cx).is_loading())
+    }
+
+    fn load_more(&mut self, _window: &mut Window, cx: &mut Context<TableState<Self>>) {
+        _ = self.page.update(cx, UsersPage::load_next_page);
+    }
+
+    fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
+        let Some(user) = self.users.get(row_ix) else {
+            return String::new();
+        };
+        match col_ix {
+            0 => user.display_name.clone(),
+            1 => user.username.clone().unwrap_or_default(),
+            2 => user.email.clone().unwrap_or_default(),
+            3 => match user.status {
+                UserStatus::Active => "已启用".to_owned(),
+                UserStatus::Suspended => "已停用".to_owned(),
+            },
+            _ => String::new(),
+        }
     }
 }

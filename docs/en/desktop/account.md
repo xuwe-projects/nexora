@@ -31,11 +31,13 @@ an authenticator gets neither the login gate nor the default `/users` and `/role
 
 ## Default management capabilities
 
-`/users` lists and refreshes users, provisions OIDC identities already confirmed by an
-administrator, selects initial roles, activates or suspends regular users, and completely replaces
-a regular user's direct role set. Provisioning does not create an Identity Provider account or add
-a local password. An empty initial role set requires only `users:provision`; a non-empty set also
-requires `users:roles.write`. Listing choices and editing a user's roles also require `roles:read`.
+`/users` uses a card-styled DataTable with avatars, login usernames, status indicators, and
+bottom-triggered continuous loading; refresh restarts from page one. It creates OIDC users already
+confirmed by an administrator, selects initial roles, activates or suspends regular users, and
+completely replaces a regular user's direct role set. Creation does not add an Identity Provider
+account or local password. The username is management metadata while stable `identity_id` remains
+the authentication binding. An empty initial role set requires only `users:provision`; a non-empty
+set also requires `users:roles.write`. Listing choices and editing roles also require `roles:read`.
 
 `/roles` lists roles and the permission catalog, creates custom roles with initial permissions,
 edits names and descriptions, completely replaces permission sets, and deletes custom roles.

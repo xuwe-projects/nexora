@@ -20,6 +20,7 @@ use serde::Deserialize;
 const USER_JSON: &str = r#"{
     "id":"User0001",
     "identity_id":"subject-1",
+    "username":"tester",
     "email":"user@example.com",
     "display_name":"测试用户",
     "avatar_url":null,
@@ -45,6 +46,7 @@ const ACCESS_PROFILE_JSON: &str = r#"{
     "user":{
         "id":"User0001",
         "identity_id":"subject-1",
+        "username":"tester",
         "email":"user@example.com",
         "display_name":"测试用户",
         "avatar_url":null,
@@ -72,6 +74,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
     let user = session(endpoint)
         .provision_user(&ProvisionUserRequest {
             identity_id: "subject-1".to_owned(),
+            username: Some("tester".to_owned()),
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
             avatar_url: None,
@@ -84,7 +87,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
     assert_request(&request, "POST", "/users");
     assert_eq!(
         request_body(&request),
-        r#"{"identity_id":"subject-1","email":"user@example.com","display_name":"测试用户","avatar_url":null,"role_ids":[7,9]}"#
+        r#"{"identity_id":"subject-1","username":"tester","email":"user@example.com","display_name":"测试用户","avatar_url":null,"role_ids":[7,9]}"#
     );
 }
 

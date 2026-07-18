@@ -191,7 +191,7 @@ pub(crate) async fn initialize(
         UPDATE account.users
         SET is_super_admin = TRUE, status = $2, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, identity_id, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -245,7 +245,7 @@ where
         .ok_or(StoreError::InvalidData("系统初始化状态"))?;
     let user = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, email, display_name, avatar_url, status,
+        SELECT id, identity_id, username, email, display_name, avatar_url, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE id = $1 AND is_super_admin

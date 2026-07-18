@@ -30,10 +30,12 @@ nexora::desktop::install_authenticator(authenticator, cx);
 
 ## 默认管理能力
 
-`/users` 支持查看和刷新用户、开通已经由管理员确认的 OIDC 身份、创建时选择初始角色、
-启用或停用普通用户，以及完整替换普通用户的直接角色集合。开通操作不会在 Identity
-Provider 创建账号，也不会引入本地密码。空初始角色只要求 `users:provision`；非空集合还
-要求 `users:roles.write`。角色选择和后续用户角色编辑还需要 `roles:read`。
+`/users` 使用卡片化 DataTable 展示头像、登录用户名和状态，并在滚动接近底部时继续加载；
+刷新会从第一页重新读取。页面支持创建已经由管理员确认的 OIDC 用户、创建时选择初始角色、
+启用或停用普通用户，以及完整替换普通用户的直接角色集合。创建操作不会在 Identity
+Provider 创建账号，也不会引入本地密码；登录用户名用于管理识别，认证绑定仍以稳定
+`identity_id` 为准。空初始角色只要求 `users:provision`；非空集合还要求
+`users:roles.write`。角色选择和后续用户角色编辑还需要 `roles:read`。
 
 `/roles` 支持查看角色与权限目录、创建带初始权限的自定义角色、编辑名称和说明、完整替换
 权限集合，以及删除自定义角色。创建角色及其初始权限、更新、权限替换和删除统一使用

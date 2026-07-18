@@ -63,6 +63,7 @@ async fn protected_resource_rejects_missing_bearer_token_before_database_access(
     let invalid_identity = account
         .provision_user(ExternalIdentity {
             identity_id: " ".to_owned(),
+            username: None,
             email: None,
             display_name: "测试用户".to_owned(),
             avatar_url: None,
@@ -93,6 +94,7 @@ impl AccessTokenVerifier for StaticVerifier {
         Ok(VerifiedIdentity {
             issuer: "https://id.example.com/".to_owned(),
             subject: "test-user".to_owned(),
+            username: Some("test-user".to_owned()),
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
             avatar_url: None,

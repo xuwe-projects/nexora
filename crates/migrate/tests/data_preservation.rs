@@ -8,6 +8,47 @@ const MIGRATION_3: &str =
     include_str!("../migrations/0003_account_rework_system_initialization.up.sql");
 const MIGRATION_4: &str = include_str!("../migrations/0004_account_change_identifier_types.up.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_account_bind_identity_issuer.up.sql");
+const MIGRATION_6: &str = include_str!("../migrations/0006_account_add_username.up.sql");
+
+#[sqlx::test(migrations = false)]
+async fn username_upgrade_preserves_existing_users_and_allows_binding(pool: PgPool) {
+    apply(&pool, MIGRATION_1).await;
+    apply(&pool, MIGRATION_2).await;
+    apply(&pool, MIGRATION_3).await;
+    apply(&pool, MIGRATION_4).await;
+    apply(&pool, MIGRATION_5).await;
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name)
+        VALUES ('Legacy01', 'legacy-subject', '遗留用户')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备没有用户名的遗留用户");
+
+    apply(&pool, MIGRATION_6).await;
+
+    let username = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT username FROM account.users WHERE id = 'Legacy01'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("新增用户名列后应当可以读取遗留用户");
+    assert_eq!(username, None);
+
+    sqlx::query("UPDATE account.users SET username = 'legacy-user' WHERE id = 'Legacy01'")
+        .execute(&pool)
+        .await
+        .expect("迁移后应当可以绑定登录用户名");
+    let username = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT username FROM account.users WHERE id = 'Legacy01'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("绑定后应当可以读取登录用户名");
+    assert_eq!(username.as_deref(), Some("legacy-user"));
+}
 
 #[sqlx::test(migrations = false)]
 async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) {

@@ -14,6 +14,8 @@ pub struct VerifiedIdentity {
     pub issuer: String,
     /// issuer 内稳定且唯一的 subject。
     pub subject: String,
+    /// 身份提供方返回的可选登录用户名。
+    pub username: Option<String>,
     /// 可选邮箱，只用于本地资料展示。
     pub email: Option<String>,
     /// 适合本地界面展示的名称。

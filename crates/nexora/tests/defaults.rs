@@ -15,6 +15,11 @@ struct DefaultAccountFeatureTestRoot {
 }
 
 #[cfg(feature = "desktop")]
+struct DefaultFeatureTestRoot {
+    content: AnyView,
+}
+
+#[cfg(feature = "desktop")]
 impl Render for DefaultAccountFeatureTestRoot {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
         div()
@@ -22,6 +27,13 @@ impl Render for DefaultAccountFeatureTestRoot {
             .size_full()
             .child(self.content.clone())
             .child(self.overlay.clone())
+    }
+}
+
+#[cfg(feature = "desktop")]
+impl Render for DefaultFeatureTestRoot {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        div().relative().size_full().child(self.content.clone())
     }
 }
 
@@ -108,7 +120,7 @@ fn application_feature_with_reserved_path_replaces_only_matching_default() {
 
 #[cfg(feature = "desktop")]
 #[gpui::test]
-fn default_users_feature_keeps_overlay_stable_and_blocks_unprivileged_provision(
+fn default_users_feature_uses_standard_dialog_and_blocks_unprivileged_creation(
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_component::init);
@@ -123,16 +135,12 @@ fn default_users_feature_keeps_overlay_stable_and_blocks_unprivileged_provision(
         let instance = registry
             .create_feature(route, window, cx)
             .expect("默认用户页面应当可以创建");
-        let overlay = instance
-            .panel_overlay(cx)
-            .expect("默认用户页面应当始终保留开通对话框 Entity");
-        let same_overlay = instance
-            .panel_overlay(cx)
-            .expect("重复读取仍应返回开通对话框 Entity");
-        assert_eq!(overlay.entity_id(), same_overlay.entity_id());
-        DefaultAccountFeatureTestRoot {
+        assert!(
+            instance.panel_overlay(cx).is_none(),
+            "创建用户应使用 gpui-component 标准 Dialog，不再注入面板自制弹层"
+        );
+        DefaultFeatureTestRoot {
             content: instance.view(),
-            overlay,
         }
     });
 
@@ -149,7 +157,7 @@ fn default_users_feature_keeps_overlay_stable_and_blocks_unprivileged_provision(
 
     assert!(
         cx.debug_bounds("panel-dialog-overlay").is_none(),
-        "未登录或没有 users:provision 权限时不能打开用户开通弹窗"
+        "未登录或没有 users:provision 权限时不能打开创建用户 Dialog"
     );
 }
 

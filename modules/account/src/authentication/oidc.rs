@@ -164,6 +164,7 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
         Ok(VerifiedIdentity {
             issuer: self.identity_issuer.clone(),
             subject: claims.subject,
+            username: claims.preferred_username,
             email: claims.email,
             display_name,
             avatar_url: claims.picture,

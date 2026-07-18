@@ -10,6 +10,9 @@ use crate::{pagination::PageResponse, patch::PatchField};
 pub struct ProvisionUserRequest {
     /// 当前部署绑定的 OIDC issuer 中稳定且唯一的 identity ID（subject）。
     pub identity_id: String,
+    /// 身份提供方中的可选登录用户名；省略时仍可通过稳定 identity ID 完成绑定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     /// 身份提供方返回的可选邮箱。
     pub email: Option<String>,
     /// 面向用户界面展示的名称。
@@ -99,6 +102,9 @@ pub struct UserResponse {
     pub id: String,
     /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
     pub identity_id: String,
+    /// 身份提供方中的可选登录用户名。
+    #[serde(default)]
+    pub username: Option<String>,
     /// 可选展示邮箱。
     pub email: Option<String>,
     /// 用户展示名称。

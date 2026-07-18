@@ -93,6 +93,7 @@ pub(super) fn user_response(user: User) -> UserResponse {
     UserResponse {
         id: user.id,
         identity_id: user.identity_id,
+        username: user.username,
         email: user.email,
         display_name: user.display_name,
         avatar_url: user.avatar_url,

@@ -277,6 +277,7 @@ mod server {
         fn assert_management_api(pool: &sqlx::PgPool) {
             let identity = ExternalIdentity {
                 identity_id: "identity-1".to_owned(),
+                username: Some("tester".to_owned()),
                 email: None,
                 display_name: "测试用户".to_owned(),
                 avatar_url: None,

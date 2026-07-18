@@ -20,7 +20,11 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
   },
   {
     text: "服务端",
-    items: [{ text: "Server 与 Router", link: "/server/overview" }],
+    items: [
+      { text: "Server 与 Router", link: "/server/overview" },
+      { text: "HTTP API 完整参考", link: "/server/http-api" },
+      { text: "Rust 服务端 API", link: "/server/rust-api" },
+    ],
   },
   {
     text: "参考",
@@ -33,8 +37,8 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     text: "版本发布",
     items: [
       { text: "更新日志", link: "/changelog/" },
-      { text: "0.3.0", link: "/changelog/0.3.0" },
-      { text: "从 0.2.0 升级", link: "/changelog/0.3.0#从-020-升级" },
+      { text: "0.4.0", link: "/changelog/0.4.0" },
+      { text: "从 0.3.1 升级", link: "/changelog/0.4.0#从-031-升级" },
     ],
   },
 ];
@@ -57,7 +61,11 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
   },
   {
     text: "Server",
-    items: [{ text: "Server and Routers", link: "/en/server/overview" }],
+    items: [
+      { text: "Server and Routers", link: "/en/server/overview" },
+      { text: "Complete HTTP API", link: "/en/server/http-api" },
+      { text: "Rust server API", link: "/en/server/rust-api" },
+    ],
   },
   {
     text: "Reference",
@@ -70,8 +78,8 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     text: "Releases",
     items: [
       { text: "Changelog", link: "/en/changelog/" },
-      { text: "0.3.0", link: "/en/changelog/0.3.0" },
-      { text: "Upgrade from 0.2.0", link: "/en/changelog/0.3.0#upgrade-from-020" },
+      { text: "0.4.0", link: "/en/changelog/0.4.0" },
+      { text: "Upgrade from 0.3.1", link: "/en/changelog/0.4.0#upgrade-from-031" },
     ],
   },
 ];

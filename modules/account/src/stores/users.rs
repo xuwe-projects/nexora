@@ -15,7 +15,7 @@ use crate::{
 pub(crate) async fn query_by_id(user_id: &str, pool: &PgPool) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, email, display_name, avatar_url, status,
+        SELECT id, identity_id, username, email, display_name, avatar_url, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE id = $1
@@ -37,7 +37,7 @@ pub(crate) async fn query_page(
     let offset = i64::from(request.number().saturating_sub(1)) * i64::from(request.size());
     let items = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, email, display_name, avatar_url, status,
+        SELECT id, identity_id, username, email, display_name, avatar_url, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         ORDER BY created_at DESC, id DESC
@@ -117,7 +117,7 @@ pub(crate) async fn update_status(
         UPDATE account.users
         SET status = $2, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, identity_id, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )

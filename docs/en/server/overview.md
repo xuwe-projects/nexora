@@ -5,6 +5,14 @@ order: 1
 
 # Server and Routers
 
+References:
+
+- [Complete HTTP API reference](./http-api) covers every route, permission, request, response,
+  error code, and example.
+- [Complete Rust server API reference](./rust-api) covers `nexora::server` lifecycle, facades,
+  pool-first functions, extractors, and Setup extension points.
+- [OpenAPI 3.1](../../openapi.yaml) is the machine-readable HTTP contract.
+
 The generated server entry point only loads configuration and composes application routers:
 
 ```rust
@@ -109,8 +117,10 @@ permission with `Authorized<P>`. Both reuse framework bearer-token verification,
 and merged permissions without exposing the token to business code.
 
 The default `POST /users` requires only `users:provision` when `role_ids` is empty and additionally
-requires `users:roles.write` when it is non-empty. Trusted hosts calling pool-first APIs must enforce
-equivalent authorization themselves.
+requires `users:roles.write` when it is non-empty. Requests may include optional `username`
+metadata for the Identity Provider login name; stable authentication binding, conflict detection,
+and login lookup continue to use only `identity_id`. Trusted hosts calling pool-first APIs must
+enforce equivalent authorization themselves.
 
 After binding, `server.setup_url(listener.local_addr()?)` can be used to log the pending Setup URL.
 It only formats the already-bound address and never owns the listener or service lifecycle.

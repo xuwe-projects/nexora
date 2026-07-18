@@ -1,15 +1,40 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.3.1
-  description: 基于 OIDC Bearer token 与本地 PostgreSQL RBAC 的管理 API。
+  version: 0.4.0
+  license:
+    name: MIT OR Apache-2.0
+    identifier: MIT OR Apache-2.0
+  description: >-
+    Nexora 默认 Setup SSR 流程、Account 管理 API 与仓库完整服务端示例的健康检查契约。
+    Account API 基于 OIDC Bearer token 与本地 PostgreSQL RBAC；username 仅是可更新元数据，
+    稳定身份绑定始终使用当前 issuer 范围内的 identity_id。
 servers:
   - url: http://127.0.0.1:3000
+    description: 本地示例；实际地址由宿主应用决定
+tags:
+  - name: Setup
+    description: 系统首次初始化期间可用的默认 SSR HTML 流程
+  - name: Health
+    description: 宿主示例提供的健康检查，不属于 Server::routers()
+  - name: Current account
+    description: 当前认证用户的本地授权快照
+  - name: Users
+    description: 本地用户、访问状态与直接角色
+  - name: Roles
+    description: 系统角色与自定义角色
+  - name: Permissions
+    description: 内置和宿主注册的权限目录
 paths:
   /health:
     get:
+      tags: [Health]
       operationId: getHealth
       summary: 检查 API 与 PostgreSQL 是否可用
+      description: >-
+        该路由由仓库完整宿主示例提供，不属于 nexora::server::Server::routers()。
+        CLI 生成的最小宿主只保证 200/503 状态，不承诺 JSON 正文。
+      security: []
       responses:
         "200":
           description: 服务可用
@@ -19,8 +44,90 @@ paths:
                 $ref: "#/components/schemas/Health"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /setup:
+    get:
+      tags: [Setup]
+      operationId: showSetup
+      summary: 显示默认系统初始化页面
+      description: 系统初始化完成后永久返回 404。默认实现返回 HTML；自定义 Setup 可替换表现层。
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SetupHtml"
+        "404":
+          $ref: "#/components/responses/SetupClosed"
+        "500":
+          $ref: "#/components/responses/SetupInternalError"
+    post:
+      tags: [Setup]
+      operationId: unlockSetup
+      summary: 使用 setup secret 解锁超级管理员选择页
+      description: >-
+        secret 校验成功后从 ZITADEL 读取启用的人类用户，并签发 32 字节随机、15 分钟有效的
+        一次性 setup token。默认 HTML 输入将 secret 限制为最多 1024 个字符。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/SetupUnlockRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SetupHtml"
+        "401":
+          description: setup secret 不正确；返回带错误提示的 HTML 表单
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/SetupClosed"
+        "500":
+          $ref: "#/components/responses/SetupInternalError"
+        "503":
+          description: ZITADEL 中没有可用于初始化的启用状态人类用户
+          content:
+            text/html:
+              schema:
+                type: string
+  /setup/complete:
+    post:
+      tags: [Setup]
+      operationId: completeSetup
+      summary: 核对目录用户并设置唯一超级管理员
+      description: >-
+        框架再次从 ZITADEL 核对所选用户，幂等同步系统角色，在 PostgreSQL 事务中设置唯一
+        超级管理员，成功后清除 setup session 并永久关闭 Setup 路由。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/SetupCompletionRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SetupHtml"
+        "401":
+          description: setup token 无效或已过期
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/SetupClosed"
+        "422":
+          description: 所选用户不存在、未启用或不是人类用户
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          $ref: "#/components/responses/SetupInternalError"
   /me:
     get:
+      tags: [Current account]
       operationId: getCurrentUser
       summary: 校验本地账号并返回当前用户、角色与合并权限
       description: >-
@@ -39,10 +146,16 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/AccountAccessForbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /users:
     get:
+      tags: [Users]
       operationId: listUsers
       summary: 分页列出用户
+      description: 要求 users:read；page_size 会限制到 1 至 100。
       security:
         - bearerAuth: []
       parameters:
@@ -55,11 +168,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
+      tags: [Users]
       operationId: provisionUser
       summary: 开通外部身份并建立初始用户角色关联
       description: >-
@@ -85,6 +207,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -95,12 +219,22 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /users/{user_id}:
     parameters:
       - $ref: "#/components/parameters/UserId"
     get:
+      tags: [Users]
       operationId: getUser
       summary: 返回用户授权详情
+      description: 要求 users:read。
       security:
         - bearerAuth: []
       responses:
@@ -116,9 +250,17 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     patch:
+      tags: [Users]
       operationId: updateUserStatus
       summary: 启用或停用用户
+      description: >-
+        要求 users:status.write。不能修改超级管理员，也不能停用会导致系统失去最后一个
+        启用管理员的用户。
       security:
         - bearerAuth: []
       requestBody:
@@ -134,6 +276,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -142,12 +286,26 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /users/{user_id}/roles:
     parameters:
       - $ref: "#/components/parameters/UserId"
     put:
+      tags: [Users]
       operationId: replaceUserRoles
       summary: 原子替换用户角色
+      description: >-
+        要求 users:roles.write。role_ids 是替换后的完整业务角色集合；空数组会移除业务角色，
+        但保留内置 member。超级管理员不可挂载角色。
       security:
         - bearerAuth: []
       requestBody:
@@ -163,6 +321,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AccessProfile"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -171,10 +331,22 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /roles:
     get:
+      tags: [Roles]
       operationId: listRoles
       summary: 列出角色及其权限
+      description: 要求 roles:read。
       security:
         - bearerAuth: []
       responses:
@@ -194,9 +366,15 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
+      tags: [Roles]
       operationId: createRole
       summary: 创建自定义角色
+      description: 要求 roles:write；角色与初始权限关联在同一事务中写入。
       security:
         - bearerAuth: []
       requestBody:
@@ -216,6 +394,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -226,12 +406,22 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /roles/{role_id}:
     parameters:
       - $ref: "#/components/parameters/RoleId"
     get:
+      tags: [Roles]
       operationId: getRole
       summary: 返回角色及其权限
+      description: 要求 roles:read。
       security:
         - bearerAuth: []
       responses:
@@ -241,15 +431,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     patch:
+      tags: [Roles]
       operationId: updateRole
       summary: 修改自定义角色元数据
+      description: >-
+        要求 roles:write。description 缺失表示保持，null 表示清空，字符串表示设置；
+        系统角色不可修改。
       security:
         - bearerAuth: []
       requestBody:
@@ -265,6 +465,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -275,14 +477,26 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationFailed"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     delete:
+      tags: [Roles]
       operationId: deleteRole
       summary: 删除未被引用的自定义角色
+      description: 要求 roles:write；系统角色或仍被用户引用的角色不可删除。
       security:
         - bearerAuth: []
       responses:
         "204":
           description: 角色已删除
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -291,12 +505,19 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /roles/{role_id}/permissions:
     parameters:
       - $ref: "#/components/parameters/RoleId"
     put:
+      tags: [Roles]
       operationId: replaceRolePermissions
       summary: 原子替换自定义角色权限
+      description: >-
+        要求 roles:write。permission_ids 是替换后的完整直接权限集合；空数组会清空。
       security:
         - bearerAuth: []
       requestBody:
@@ -312,6 +533,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -320,10 +543,22 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /permissions:
     get:
+      tags: [Permissions]
       operationId: listPermissions
       summary: 列出权限目录
+      description: 要求 permissions:read；HTTP 接口只读，宿主使用 Rust API 注册权限。
       security:
         - bearerAuth: []
       responses:
@@ -343,6 +578,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 components:
   securitySchemes:
     bearerAuth:
@@ -354,6 +593,7 @@ components:
       name: user_id
       in: path
       required: true
+      description: Nexora 本地生成的 8 位大小写字母与数字用户 ID
       schema:
         type: string
         pattern: "^[A-Za-z0-9]{8}$"
@@ -363,6 +603,7 @@ components:
       name: role_id
       in: path
       required: true
+      description: PostgreSQL BIGSERIAL 角色 ID
       schema:
         type: integer
         format: int64
@@ -370,6 +611,7 @@ components:
     Page:
       name: page
       in: query
+      description: 从 1 开始的页码
       schema:
         type: integer
         minimum: 1
@@ -377,12 +619,69 @@ components:
     PageSize:
       name: page_size
       in: query
+      description: 期望页大小；服务端实际值限制为 1 至 100
       schema:
         type: integer
         minimum: 1
         maximum: 100
         default: 25
   responses:
+    SetupHtml:
+      description: 默认 Setup HTML 页面；自定义 Setup 可替换正文表现
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+        Content-Security-Policy:
+          schema:
+            type: string
+        X-Content-Type-Options:
+          schema:
+            type: string
+            const: nosniff
+      content:
+        text/html:
+          schema:
+            type: string
+    SetupClosed:
+      description: 系统已经完成初始化，Setup 路由永久关闭
+      content:
+        text/html:
+          schema:
+            type: string
+    SetupInternalError:
+      description: 初始化状态、目录同步或数据库操作失败；详细原因只写入服务端日志
+      content:
+        text/html:
+          schema:
+            type: string
+    BadRequest:
+      description: JSON 语法、path 或 query 参数无法解析
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            invalid_json:
+              value:
+                error:
+                  code: invalid_json_body
+                  message: JSON 请求正文无效
+                  details: {}
+                  request_id: req_01JZ7V4M1K8F9Q2T6Y3B5C7D8E
+    PayloadTooLarge:
+      description: 宿主安装 64 KiB 正文上限后，请求正文超过限制
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    UnsupportedMediaType:
+      description: JSON 接口缺少或使用了不支持的 Content-Type
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
     Unauthorized:
       description: Bearer token 缺失、无效或已过期
       headers:
@@ -393,12 +692,28 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            missing_token:
+              value:
+                error:
+                  code: missing_access_token
+                  message: 缺少 Bearer token
+                  details: {}
+                  request_id: req_01JZ7V4M1K8F9Q2T6Y3B5C7D8E
     Forbidden:
-      description: 用户已停用或缺少权限
+      description: 用户已停用、未开通或缺少权限
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            permission_denied:
+              value:
+                error:
+                  code: permission_denied
+                  message: 没有执行该操作的权限
+                  details: {}
+                  request_id: req_01JZ7V4M1K8F9Q2T6Y3B5C7D8E
     AccountAccessForbidden:
       description: 本地账号不存在（account_not_registered）或用户已停用（account_suspended）
       content:
@@ -423,6 +738,21 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            invalid_field:
+              value:
+                error:
+                  code: validation_failed
+                  message: 字段没有通过校验
+                  details:
+                    field: name
+                  request_id: req_01JZ7V4M1K8F9Q2T6Y3B5C7D8E
+    InternalError:
+      description: 数据库或内部操作失败；响应不包含 SQL、路径或堆栈
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
     ServiceUnavailable:
       description: PostgreSQL 或身份提供方暂时不可用
       content:
@@ -430,11 +760,37 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    SetupUnlockRequest:
+      type: object
+      additionalProperties: false
+      required: [secret]
+      properties:
+        secret:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 1024
+          description: 服务端安全配置中的 setup secret；禁止记录或提交到版本库
+    SetupCompletionRequest:
+      type: object
+      additionalProperties: false
+      required: [setup_token, identity_id]
+      properties:
+        setup_token:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: 解锁步骤签发的 32 字节随机一次性 token，15 分钟有效
+        identity_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: 将被目录二次核对的 ZITADEL 人类用户 ID
     Health:
       type: object
       required: [status]
       properties:
         status:
+          type: string
           const: ok
     UserStatus:
       type: string
@@ -450,15 +806,26 @@ components:
           maxLength: 8
         identity_id:
           type: string
+          minLength: 1
+          maxLength: 255
           description: 认证授权服务中与用户对应的稳定唯一 ID
+        username:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+          description: 认证授权服务中的可选登录用户名
         email:
           type: [string, "null"]
           format: email
+          maxLength: 320
         display_name:
           type: string
+          minLength: 1
+          maxLength: 200
         avatar_url:
           type: [string, "null"]
           format: uri
+          maxLength: 2048
         status:
           $ref: "#/components/schemas/UserStatus"
         is_super_admin:
@@ -487,10 +854,14 @@ components:
         key:
           type: string
           pattern: "^[a-z][a-z0-9._-]+:[a-z][a-z0-9._-]+$"
+          description: resource:action 格式的稳定权限键
         name:
           type: string
+          minLength: 1
+          maxLength: 100
         description:
           type: [string, "null"]
+          maxLength: 1000
     Role:
       type: object
       required: [id, key, name, is_system, permissions, created_at, updated_at]
@@ -501,10 +872,15 @@ components:
           minimum: 1
         key:
           type: string
+          minLength: 2
+          maxLength: 64
         name:
           type: string
+          minLength: 1
+          maxLength: 100
         description:
           type: [string, "null"]
+          maxLength: 1000
         is_system:
           type: boolean
         permissions:
@@ -547,10 +923,15 @@ components:
           properties:
             number:
               type: integer
+              minimum: 1
             size:
               type: integer
+              minimum: 1
+              maximum: 100
             total:
               type: integer
+              format: int64
+              minimum: 0
     UpdateUserStatus:
       type: object
       additionalProperties: false
@@ -568,9 +949,15 @@ components:
           minLength: 1
           maxLength: 255
           description: 当前部署绑定的 OIDC issuer 中稳定且唯一的 subject
+        username:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+          description: 与稳定 identity ID 一同保存的可选登录用户名
         email:
           type: [string, "null"]
           format: email
+          maxLength: 320
         display_name:
           type: string
           minLength: 1
@@ -578,6 +965,7 @@ components:
         avatar_url:
           type: [string, "null"]
           format: uri
+          maxLength: 2048
         role_ids:
           type: array
           default: []
