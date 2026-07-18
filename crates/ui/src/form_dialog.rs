@@ -309,6 +309,9 @@ impl FormDialog {
     }
 
     /// 设置提交按钮是否因业务条件禁用。
+    ///
+    /// 本设置不影响取消按钮；只有 [`FormDialogState::set_submitting`] 表示请求正在执行时，
+    /// 取消、关闭和提交才会一起禁用。
     pub fn submit_disabled(mut self, disabled: bool) -> Self {
         self.submit_disabled = disabled;
         self
@@ -439,19 +442,21 @@ impl RenderOnce for FormDialog {
                     .gap_2()
                     .child(
                         Button::new("form-dialog-cancel")
+                            .debug_selector(|| "form-dialog-cancel".into())
                             .outline()
                             .label(self.cancel_label)
-                            .disabled(submitting || self.submit_disabled)
+                            .disabled(submitting)
                             .on_click(move |event, window, cx| {
                                 cancel_from_button(event, window, cx);
                             }),
                     )
                     .child(
                         Button::new("form-dialog-submit")
+                            .debug_selector(|| "form-dialog-submit".into())
                             .primary()
                             .label(self.submit_label)
                             .loading(submitting)
-                            .disabled(submitting)
+                            .disabled(submitting || self.submit_disabled)
                             .on_click(move |event, window, cx| {
                                 on_submit(event, window, cx);
                             }),

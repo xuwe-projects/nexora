@@ -50,8 +50,10 @@ impl Editor {
 
 渲染时使用 `FormDialog::new(id, state, title, content, on_submit)`。`on_submit` 没有默认业务
 行为，调用方必须实现；可用 `description`、`cancel_label`、`submit_label`、
-`submit_disabled` 和 `on_cancel` 定制。默认取消会检查全部草稿：无修改时关闭，有修改时列出
-未保存字段与当前草稿并要求确认。自定义取消可以从同一个状态读取：
+`submit_disabled` 和 `on_cancel` 定制。`submit_disabled(true)` 只禁用提交按钮，取消仍可用于
+退出或处理草稿；只有 `set_submitting(true)` 会同时禁用取消、关闭和重复提交。默认取消会
+检查全部草稿：无修改时关闭，有修改时列出未保存字段与当前草稿并要求确认。自定义取消可以
+从同一个状态读取：
 
 - `is_dirty()`：是否有任意未保存字段；
 - `unsaved_fields()`：按稳定字段键排序的原值与草稿；

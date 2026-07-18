@@ -17,8 +17,9 @@ the active Feature panel, leaving the Sidebar available.
 Keep a long-lived `Entity<FormDialogState>` next to input entities. Record each input change with
 `set_field_draft`. The default cancel path closes a clean form and presents field names and draft
 values before discarding a dirty form. `is_dirty`, `unsaved_fields`, and `draft_values` are available
-to custom cancel handlers. Business code must implement `on_submit`, use `set_submitting` around
-asynchronous work, call `mark_saved` after success, and then `close`.
+to custom cancel handlers. `submit_disabled(true)` only disables submit and keeps cancel available;
+`set_submitting(true)` blocks cancel, close, and duplicate submit while work is in flight. Business
+code must implement `on_submit`, call `mark_saved` after success, and then `close`.
 
 Create the form component in `FeatureElement::initialize` and always return the same overlay Entity
 from `panel_overlay`; do not create inputs, subscriptions, or tasks from `render`.
