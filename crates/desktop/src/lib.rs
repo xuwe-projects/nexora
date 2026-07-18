@@ -2,7 +2,7 @@
 //!
 //! 该模块负责统一创建 GPUI 应用、初始化 `gpui-component`，并根据应用配置打开主窗口。
 
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, fmt, sync::Arc};
 
 use gpui::{
     App, AppContext, AssetSource, Bounds, DisplayId, Entity, Pixels, QuitMode, Render,
@@ -15,23 +15,99 @@ const ROTATE_CCW_ICON_PATH: &str = "icons/rotate-ccw.svg";
 const ROTATE_CCW_ICON: &[u8] = include_bytes!("../assets/icons/rotate-ccw.svg");
 
 struct DesktopAssets {
+    application: Option<ApplicationAssets>,
     components: gpui_component_assets::Assets,
 }
 
 impl AssetSource for DesktopAssets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let mut first_error = None;
+        if let Some(application) = &self.application {
+            match application.load(path) {
+                Ok(Some(asset)) => return Ok(Some(asset)),
+                Ok(None) => {}
+                Err(error) => first_error = Some(error),
+            }
+        }
+
         if path == ROTATE_CCW_ICON_PATH {
             return Ok(Some(Cow::Borrowed(ROTATE_CCW_ICON)));
         }
-        self.components.load(path)
+
+        match self.components.load(path) {
+            Ok(Some(asset)) => Ok(Some(asset)),
+            Ok(None) => first_error.map_or(Ok(None), Err),
+            Err(error) => Err(first_error.unwrap_or(error)),
+        }
     }
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        let mut assets = self.components.list(path)?;
-        if ROTATE_CCW_ICON_PATH.starts_with(path) {
-            assets.push(ROTATE_CCW_ICON_PATH.into());
+        let mut assets = self
+            .application
+            .as_ref()
+            .map(|application| application.list(path))
+            .transpose()?
+            .unwrap_or_default();
+        push_asset_path(&mut assets, ROTATE_CCW_ICON_PATH, path);
+        for asset in self.components.list(path)? {
+            push_unique_asset(&mut assets, asset);
         }
         Ok(assets)
+    }
+}
+
+fn push_asset_path(assets: &mut Vec<SharedString>, asset_path: &'static str, prefix: &str) {
+    if asset_path.starts_with(prefix) {
+        push_unique_asset(assets, asset_path.into());
+    }
+}
+
+fn push_unique_asset(assets: &mut Vec<SharedString>, asset: SharedString) {
+    if !assets.iter().any(|existing| existing == &asset) {
+        assets.push(asset);
+    }
+}
+
+/// 应用提供给 GPUI 的额外静态资源源。
+///
+/// Nexora 会把该资源源和框架内置图标、`gpui-component-assets` 默认图标组合后注册到
+/// GPUI。应用通常使用 `rust_embed` 在自己的 crate 中实现 [`AssetSource`]，再通过
+/// [`Application::with_asset_source`] 或上层 `nexora::ApplicationOptions` 的资产配置传入。
+///
+/// 资源路径应与 GPUI 元素使用的路径一致。比如侧边栏 Feature 图标默认按
+/// `icons/{name}.svg` 读取，因此应用可以把自定义图标嵌入到 `assets/icons/*.svg`。
+#[derive(Clone)]
+pub struct ApplicationAssets {
+    source: Arc<dyn AssetSource>,
+}
+
+impl ApplicationAssets {
+    /// 从一个 GPUI 资源源创建可复用的应用资产配置。
+    ///
+    /// 传入的资源源会在启动时注册到 GPUI 平台层；它必须是线程安全且拥有 `'static`
+    /// 生命周期。需要在运行器启动前设置，不能在 [`Application::initialize`] 中补注册。
+    pub fn new(source: impl AssetSource) -> Self {
+        Self {
+            source: Arc::new(source),
+        }
+    }
+}
+
+impl AssetSource for ApplicationAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        self.source.load(path)
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        self.source.list(path)
+    }
+}
+
+impl fmt::Debug for ApplicationAssets {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApplicationAssets")
+            .finish_non_exhaustive()
     }
 }
 
@@ -68,6 +144,11 @@ pub struct ApplicationOptions {
     /// 该值会在 GPUI 初始化后与当前已连接显示器匹配。目标显示器不存在或 UUID 无法读取时，
     /// 运行器会回退到系统主显示器；不要在这里保存仅当前进程有效的 [`DisplayId`]。
     pub startup_display_uuid: Option<String>,
+    /// 应用额外提供的 GPUI 静态资源。
+    ///
+    /// 运行器会在进入 GPUI 事件循环前把它和框架、组件库的默认资源合并。该字段用于
+    /// 应用自定义 SVG 图标、图片或其他通过 `svg().path(...)`、`img(...)` 读取的资源。
+    pub application_assets: Option<ApplicationAssets>,
 }
 
 /// 桌面应用抽象。
@@ -169,6 +250,15 @@ pub trait Application: Sized + 'static {
     /// 则安全回退到系统主显示器。
     fn with_startup_display_uuid(mut self, display_uuid: impl Into<String>) -> Self {
         self.options_mut().startup_display_uuid = Some(display_uuid.into());
+        self
+    }
+
+    /// 设置应用提供给 GPUI 的额外静态资源源。
+    ///
+    /// 该配置必须在调用 [`Self::run`] 前完成。运行器会优先查询应用资源，再回退到 Nexora
+    /// 与 `gpui-component-assets` 的内置资源，因此应用可以覆盖同名资源路径。
+    fn with_asset_source(mut self, asset_source: impl AssetSource) -> Self {
+        self.options_mut().application_assets = Some(ApplicationAssets::new(asset_source));
         self
     }
 }
@@ -289,9 +379,11 @@ where
     A: Application,
 {
     let plan = runtime_plan(desktop_application.options());
+    let application_assets = desktop_application.options().application_assets.clone();
 
     application()
         .with_assets(DesktopAssets {
+            application: application_assets,
             components: gpui_component_assets::Assets,
         })
         .with_http_client(Arc::new(ReqwestClient::new()))
@@ -312,6 +404,7 @@ where
                 window_size,
                 window_min_size,
                 startup_display_uuid,
+                application_assets: _,
             } = std::mem::take(desktop_application.options_mut());
 
             let mut window_options = window_options.unwrap_or_default();

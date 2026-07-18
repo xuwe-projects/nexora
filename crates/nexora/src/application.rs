@@ -9,6 +9,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+pub use ::desktop::ApplicationAssets;
 use ::desktop::{
     Application as DesktopApplication, ApplicationOptions as DesktopApplicationOptions,
 };
@@ -19,9 +20,9 @@ use configuration::UserConfigStore;
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, Context, Global, Image, ImageFormat, IntoElement as _, MouseButton,
-    Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity, Window, WindowOptions, div, img,
-    prelude::*, px, size,
+    AnyElement, AnyView, App, AssetSource, Context, Global, Image, ImageFormat, IntoElement as _,
+    MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity, Window,
+    WindowOptions, div, img, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
@@ -122,6 +123,12 @@ pub struct ApplicationOptions {
     ///
     /// 对应显示器不存在时，底层桌面运行时会安全回退到系统主显示器。
     pub startup_display_uuid: Option<String>,
+    /// 应用额外提供给 GPUI 的静态资源。
+    ///
+    /// 资源会在 `gpui-component` 初始化前注册，并优先于 Nexora 和组件库的默认资源查找。
+    /// 应用可用它嵌入 `assets/icons/**/*.svg`，再通过 `#[nexora(icon = "...")]` 或
+    /// `Icon::default().path(...)` 使用。
+    pub application_assets: Option<ApplicationAssets>,
     /// `gpui-component` 使用的界面语言，例如 `zh-CN` 或 `en`。
     pub locale: String,
     /// 主窗口创建后首先打开的 Feature 路径或 deeplink。
@@ -146,6 +153,7 @@ impl Default for ApplicationOptions {
             window_size: Some(size(px(900.0), px(640.0))),
             window_min_size: Some(size(px(640.0), px(480.0))),
             startup_display_uuid: None,
+            application_assets: None,
             locale: "zh-CN".to_owned(),
             initial_path: "/".to_owned(),
         }
@@ -230,6 +238,16 @@ impl ApplicationOptions {
         self
     }
 
+    /// 设置应用提供给 GPUI 的额外静态资源源。
+    ///
+    /// 该资源源会在进入 GPUI 事件循环前与 Nexora 内置资源、`gpui-component-assets`
+    /// 默认图标合并。应用资源优先级最高，因此可以覆盖同名默认资源。该方法通常配合
+    /// `rust_embed` 使用，把桌面 package 的 `assets/icons/**/*.svg` 编译进最终程序。
+    pub fn application_assets(mut self, assets: impl AssetSource) -> Self {
+        self.application_assets = Some(ApplicationAssets::new(assets));
+        self
+    }
+
     fn into_desktop_options(self) -> DesktopApplicationOptions {
         let mut window_options = self.window_options.unwrap_or_default();
         if window_options.titlebar.is_none() {
@@ -242,6 +260,7 @@ impl ApplicationOptions {
             window_size: self.window_size,
             window_min_size: self.window_min_size,
             startup_display_uuid: self.startup_display_uuid,
+            application_assets: self.application_assets,
         }
     }
 }

@@ -403,6 +403,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 "src".to_owned(),
                 "src/features".to_owned(),
                 "assets".to_owned(),
+                "assets/icons".to_owned(),
                 "assets/logos".to_owned(),
             ];
             let mut files = vec![
@@ -443,6 +444,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 format!("{desktop_directory}/src"),
                 format!("{desktop_directory}/src/features"),
                 format!("{desktop_directory}/assets"),
+                format!("{desktop_directory}/assets/icons"),
                 format!("{desktop_directory}/assets/logos"),
             ];
             let mut files = vec![

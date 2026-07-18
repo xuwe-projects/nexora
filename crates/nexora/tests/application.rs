@@ -1,6 +1,8 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-use gpui::{Context, Empty, IntoElement, Window, px, size};
+use std::borrow::Cow;
+
+use gpui::{AssetSource, Context, Empty, IntoElement, SharedString, Window, px, size};
 use nexora::{
     Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, FeatureElement,
     WindowElement,
@@ -22,6 +24,24 @@ struct SettingsWindow;
 impl WindowElement for SettingsWindow {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
+    }
+}
+
+struct TestAssets;
+
+impl AssetSource for TestAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        match path {
+            "icons/app.svg" => Ok(Some(Cow::Borrowed(b"<svg/>"))),
+            _ => Ok(None),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(["icons/app.svg"]
+            .into_iter()
+            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .collect())
     }
 }
 
@@ -51,6 +71,7 @@ fn default_options_are_immediately_usable() {
         Some(env!("CARGO_PKG_VERSION"))
     );
     assert!(options.application_logo.is_none());
+    assert!(options.application_assets.is_none());
     assert_eq!(
         options.sidebar_subtitle.as_deref(),
         Some("Desktop workspace")
@@ -74,6 +95,7 @@ fn option_builders_replace_framework_defaults() {
         .application_name("Nexora Studio")
         .application_version("2.0.0")
         .application_logo(ApplicationLogo::png(b"png"))
+        .application_assets(TestAssets)
         .sidebar_subtitle("Project workspace")
         .initial_path("/users")
         .locale("en")
@@ -90,6 +112,7 @@ fn option_builders_replace_framework_defaults() {
         options.sidebar_subtitle.as_deref(),
         Some("Project workspace")
     );
+    assert!(options.application_assets.is_some());
     assert_eq!(options.initial_path, "/users");
     assert_eq!(options.locale, "en");
     assert_eq!(options.window_size, Some(size(px(1280.0), px(800.0))));

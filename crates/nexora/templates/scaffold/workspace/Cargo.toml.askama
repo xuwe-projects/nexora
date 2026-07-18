@@ -13,7 +13,8 @@ edition = "2024"
 [workspace.dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", default-features = false }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "031555662e99a1b5a549990b47f246d475b8288a" }
-nexora = { {{ nexora_source }}, default-features = false }{% if account_enabled %}
+nexora = { {{ nexora_source }}, default-features = false }
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }{% if account_enabled %}
 axum = "0.8.9"
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["migrate", "postgres", "runtime-tokio", "tls-rustls-ring-native-roots"] }

@@ -7,4 +7,5 @@ edition.workspace = true
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 nexora = { workspace = true, features = ["desktop", "derive"] }
+rust-embed = { workspace = true }
 {% if account_enabled %}serde = { workspace = true }{% endif %}

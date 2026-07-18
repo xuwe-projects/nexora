@@ -37,7 +37,9 @@ mod runtime;
 pub mod server;
 
 #[cfg(feature = "desktop")]
-pub use application::{Application, ApplicationError, ApplicationLogo, ApplicationOptions};
+pub use application::{
+    Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
+};
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]

@@ -2,10 +2,35 @@
 mod config;
 mod features;
 
-use gpui::App;
+use std::borrow::Cow;
+
+use gpui::{App, AssetSource, SharedString};
 use nexora::{
     Application as _, ApplicationLogo, ApplicationOptions, desktop::AccountAuthenticator,
 };
+use rust_embed::RustEmbed;
+
+#[derive(RustEmbed)]
+#[folder = "$CARGO_MANIFEST_DIR/assets"]
+#[include = "icons/**/*.svg"]
+#[allow_missing = true]
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if path.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Self::get(path).map(|file| file.data))
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(Self::iter()
+            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .collect())
+    }
+}
 
 struct DesktopApplication {
     authenticator: AccountAuthenticator,
@@ -19,6 +44,7 @@ impl nexora::Application for DesktopApplication {
             .application_logo(ApplicationLogo::png(include_bytes!(
                 "../assets/logos/logo-icon-128.png"
             )))
+            .application_assets(AppAssets)
             .initial_path("/")
             .window_size(900.0, 640.0)
     }
@@ -39,7 +65,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 {%- else -%}
 mod features;
 
+use std::borrow::Cow;
+
+use gpui::{AssetSource, SharedString};
 use nexora::{Application as _, ApplicationLogo, ApplicationOptions};
+use rust_embed::RustEmbed;
+
+#[derive(RustEmbed)]
+#[folder = "$CARGO_MANIFEST_DIR/assets"]
+#[include = "icons/**/*.svg"]
+#[allow_missing = true]
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if path.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Self::get(path).map(|file| file.data))
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(Self::iter()
+            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .collect())
+    }
+}
 
 struct DesktopApplication;
 
@@ -51,6 +103,7 @@ impl nexora::Application for DesktopApplication {
             .application_logo(ApplicationLogo::png(include_bytes!(
                 "../assets/logos/logo-icon-128.png"
             )))
+            .application_assets(AppAssets)
             .initial_path("/")
             .window_size(900.0, 640.0)
     }

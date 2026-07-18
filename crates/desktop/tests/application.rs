@@ -1,10 +1,12 @@
+use std::borrow::Cow;
+
 use desktop::{
     Application, ApplicationOptions, apply_window_display_preference, centered_window_bounds,
     find_display_id_by_uuid,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, Render, TestAppContext, Window, div,
-    point, px, size,
+    App, AppContext, AssetSource, Bounds, Context, Entity, IntoElement, Render, SharedString,
+    TestAppContext, Window, div, point, px, size,
 };
 
 #[derive(Default)]
@@ -33,6 +35,24 @@ struct TestView;
 impl Render for TestView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+    }
+}
+
+struct TestAssets;
+
+impl AssetSource for TestAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        match path {
+            "icons/app.svg" => Ok(Some(Cow::Borrowed(b"<svg/>"))),
+            _ => Ok(None),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(["icons/app.svg"]
+            .into_iter()
+            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .collect())
     }
 }
 
@@ -67,6 +87,25 @@ fn with_startup_display_uuid_stores_stable_identifier() {
     assert_eq!(
         app.options().startup_display_uuid.as_deref(),
         Some("display-uuid")
+    );
+}
+
+#[test]
+fn with_asset_source_stores_application_assets() {
+    let app = TestApplication::default().with_asset_source(TestAssets);
+    let assets = app
+        .options()
+        .application_assets
+        .as_ref()
+        .expect("应当保存应用资产源");
+
+    assert_eq!(
+        assets.load("icons/app.svg").unwrap().unwrap().as_ref(),
+        b"<svg/>"
+    );
+    assert_eq!(
+        assets.list("icons/").unwrap(),
+        vec![SharedString::from("icons/app.svg")]
     );
 }
 

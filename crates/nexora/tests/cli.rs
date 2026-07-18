@@ -359,6 +359,9 @@ fn create_defaults_to_a_single_package_project() {
     );
     let main = fs::read_to_string(project.join("src/main.rs")).unwrap();
     assert_eq!(main, expected_main("demo-app", false));
+    assert!(main.contains("#[derive(RustEmbed)]"));
+    assert!(main.contains(".application_assets(AppAssets)"));
+    assert!(project.join("assets/icons").is_dir());
     assert_eq!(
         fs::read_to_string(project.join("src/features.rs")).unwrap(),
         askama_source(FEATURES_TEMPLATE)
@@ -416,6 +419,10 @@ fn create_can_generate_a_workspace_project() {
         fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
         expected_main("workspace-app", false)
     );
+    let desktop_main = fs::read_to_string(desktop.join("src/main.rs")).unwrap();
+    assert!(desktop_main.contains("#[derive(RustEmbed)]"));
+    assert!(desktop_main.contains(".application_assets(AppAssets)"));
+    assert!(desktop.join("assets/icons").is_dir());
     assert_eq!(
         fs::read_to_string(desktop.join("src/features.rs")).unwrap(),
         askama_source(FEATURES_TEMPLATE)
@@ -635,6 +642,8 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(desktop_main.contains("AccountAuthenticator::new"));
     assert!(desktop_main.contains(".application_version(env!(\"CARGO_PKG_VERSION\"))"));
     assert!(desktop_main.contains("../assets/logos/logo-icon-128.png"));
+    assert!(desktop_main.contains("#[derive(RustEmbed)]"));
+    assert!(desktop_main.contains(".application_assets(AppAssets)"));
     assert!(!desktop_main.contains("account_enabled"));
     assert!(desktop_main.contains("authenticator: AccountAuthenticator"));
     assert!(
@@ -645,11 +654,13 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(!desktop_main.contains("begin_login"));
     let desktop_manifest = fs::read_to_string(desktop.join("Cargo.toml")).unwrap();
     assert!(desktop_manifest.contains("features = [\"desktop\", \"derive\"]"));
+    assert!(desktop_manifest.contains("rust-embed = { workspace = true }"));
     assert!(!desktop_manifest.contains("account-client"));
     let server_manifest = fs::read_to_string(project.join("apps/server/Cargo.toml")).unwrap();
     assert!(server_manifest.contains("features = [\"server\", \"derive\"]"));
     assert!(server_manifest.contains("sqlx = { workspace = true }"));
     let workspace_manifest = fs::read_to_string(project.join("Cargo.toml")).unwrap();
+    assert!(workspace_manifest.contains("rust-embed = { version = \"8.7.2\""));
     assert!(workspace_manifest.contains("features = [\"migrate\", \"postgres\""));
     assert!(!server_manifest.contains("account-server"));
     assert!(!server_manifest.contains("account-zitadel"));
@@ -663,6 +674,7 @@ fn workspace_account_feature_generates_a_composable_server() {
     ] {
         assert!(desktop.join("assets/logos").join(logo).is_file());
     }
+    assert!(desktop.join("assets/icons").is_dir());
     let desktop_config_source = fs::read_to_string(desktop.join("src/config.rs")).unwrap();
     assert!(desktop_config_source.contains("pub(crate) api:"));
     assert!(desktop_config_source.contains("#[nexora(account_client)]"));

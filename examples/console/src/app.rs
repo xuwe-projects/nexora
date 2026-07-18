@@ -50,6 +50,7 @@ impl Console {
                 }),
                 daemon_mode: false,
                 startup_display_uuid: None,
+                application_assets: None,
             },
         }
     }

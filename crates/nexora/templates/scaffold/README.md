@@ -42,6 +42,20 @@ ApplicationOptions::new()
 
 需要替换完整登录布局时，继续使用唯一的 `#[derive(nexora::LoginFeature)]`。
 
+## 自定义图标
+
+桌面入口会把 `assets/icons/**/*.svg` 编译进应用，并注册为 GPUI 资源。Feature 或导航目录
+可以直接引用不带 `icons/` 前缀和 `.svg` 后缀的路径：
+
+```rust
+#[derive(Default, nexora::Feature)]
+#[nexora(title = "仓库", path = "/warehouses", icon = "warehouse")]
+struct WarehousesFeature;
+```
+
+上例会读取 `assets/icons/warehouse.svg`。需要分组命名时，可以放到子目录，例如
+`assets/icons/app/warehouse.svg` 对应 `icon = "app/warehouse"`。
+
 ## 发布版本
 
 项目生成时已经包含 `.agents/skills/publish-nexora-release`。发布新版本时使用该 Skill 整理
