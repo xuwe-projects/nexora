@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.6.0: SidebarHeader slot replacement semantics](./0.6.0)
 - [0.5.2: Sidebar navigation alignment fix](./0.5.2)
 - [0.5.1: FormDialog submit-disabled behavior fix](./0.5.1)
 - [0.5.0: NavigationGroup, FormDialog, and managed ZITADEL users](./0.5.0)
