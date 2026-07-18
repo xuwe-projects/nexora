@@ -15,6 +15,13 @@ pub(crate) async fn register(
     if definitions.is_empty() {
         return Ok(Vec::new());
     }
+    let mut transaction = pool.begin().await?;
+    let administrator_role_id = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM account.roles WHERE key = 'admin' AND is_system = TRUE FOR SHARE",
+    )
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(StoreError::NotFound("系统管理员角色"))?;
     let mut query =
         QueryBuilder::<Postgres>::new("INSERT INTO account.permissions (key, name, description) ");
     query.push_values(definitions, |mut row, definition| {
@@ -36,13 +43,31 @@ pub(crate) async fn register(
         RETURNING id, key, name, description
         "#,
     );
-    query
+    let permissions = query
         .build_query_as::<PermissionRow>()
-        .fetch_all(pool)
+        .fetch_all(&mut *transaction)
         .await?
         .into_iter()
         .map(Permission::try_from)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let permission_ids = permissions
+        .iter()
+        .map(|permission| permission.id)
+        .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        INSERT INTO account.role_permissions (role_id, permission_id)
+        SELECT $1, permission_id
+        FROM UNNEST($2::bigint[]) AS requested(permission_id)
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(administrator_role_id)
+    .bind(permission_ids)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(permissions)
 }
 
 /// 按稳定权限键返回完整权限目录。

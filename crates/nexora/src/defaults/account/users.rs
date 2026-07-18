@@ -2,14 +2,16 @@
 
 mod components;
 
-use gpui::{AppContext as _, Context, Entity, IntoElement, Render, Window};
+use gpui::{
+    AnyView, AppContext as _, Context, Entity, IntoElement, Render, Window, div, prelude::*,
+};
 
 use crate::{
     Feature, FeatureElement, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NoPath,
     NoQuery, RouteMatch,
 };
 
-use self::components::{ProvisionUserDialog, UsersPage};
+use self::components::{ProvisionUserDialog, UserRoleEditor, UsersPage};
 
 pub(super) const USERS_METADATA: FeatureMetadata = FeatureMetadata::new(
     "users",
@@ -25,7 +27,20 @@ pub(super) const USERS_METADATA: FeatureMetadata = FeatureMetadata::new(
 #[derive(Default)]
 struct DefaultUsersFeature {
     page: Option<Entity<UsersPage>>,
-    provision_dialog: Option<Entity<ProvisionUserDialog>>,
+    dialog_layer: Option<Entity<UsersDialogLayer>>,
+}
+
+struct UsersDialogLayer {
+    provision_dialog: Entity<ProvisionUserDialog>,
+    role_editor: Entity<UserRoleEditor>,
+}
+
+impl Render for UsersDialogLayer {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .children([self.provision_dialog.clone().into_any_element()])
+            .child(self.role_editor.clone())
+    }
 }
 
 impl Feature for DefaultUsersFeature {
@@ -48,14 +63,23 @@ impl FeatureElement for DefaultUsersFeature {
         page.update(cx, |page, cx| {
             page.set_provision_dialog(dialog.downgrade(), cx);
         });
+        let role_editor = page.read(cx).role_editor();
+        let dialog_layer = cx.new(|_| UsersDialogLayer {
+            provision_dialog: dialog,
+            role_editor,
+        });
         self.page = Some(page);
-        self.provision_dialog = Some(dialog);
+        self.dialog_layer = Some(dialog_layer);
     }
 
     fn activated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(page) = &self.page {
             page.update(cx, UsersPage::load_if_needed);
         }
+    }
+
+    fn panel_overlay(&self) -> Option<AnyView> {
+        self.dialog_layer.clone().map(Into::into)
     }
 
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

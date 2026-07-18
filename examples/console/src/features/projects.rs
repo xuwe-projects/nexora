@@ -18,7 +18,7 @@ use ui::Card;
 #[nexora(
     title = "项目",
     path = "/projects",
-    section = "工作台",
+    group = "project-management",
     icon = "folder-open",
     order = 10
 )]

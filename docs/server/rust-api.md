@@ -131,6 +131,7 @@ sqlx::migrate::Migrator::with_migrations(migrations)
 | --- | --- |
 | `issuer_url` | Provider 规范 issuer；生产必须 HTTPS，loopback 开发可用 HTTP |
 | `audience` | access token `aud` 必须包含的资源服务标识 |
+| `organization_id` | `POST /users` 创建人类用户的 ZITADEL Organization ID |
 | `project_id` | ZITADEL 中承载系统角色的 Project ID，不是 API Application Client ID |
 | `personal_access_token` | 调用 ZITADEL UserService/ProjectService 的服务账号 PAT；Debug 会脱敏 |
 
@@ -153,7 +154,7 @@ issuer；不执行迁移、创建 Router 或启动服务。`PgPool` 是廉价克
 pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, DirectoryError>
 ```
 
-根据标准配置创建 ZITADEL gRPC 用户目录与 Project 角色客户端。配置 URL、PAT、Project ID
+根据标准配置创建 ZITADEL gRPC 用户目录与 Project 角色客户端。配置 URL、PAT、Organization ID、Project ID
 或 TLS 失败时返回 `DirectoryError`。
 
 ### `ZitadelUserDirectory`
@@ -162,10 +163,16 @@ pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, Directory
 
 | 方法 | 入参 | 出参 | 说明 |
 | --- | --- | --- | --- |
-| `new` | issuer、PAT、Project ID | `Result<Self, DirectoryError>` | 创建 TLS/loopback gRPC channel；PAT metadata 标记为 sensitive |
+| `new` | issuer、PAT、Organization ID、Project ID | `Result<Self, DirectoryError>` | 创建 TLS/loopback gRPC channel；PAT metadata 标记为 sensitive |
 | `ensure_project_roles` | `&[SystemRole]` | `Result<(), DirectoryError>` | 逐项幂等创建 Project 角色；AlreadyExists 按成功处理 |
 | `list_active_human_users` | 无 | `Result<Vec<DirectoryUser>, DirectoryError>` | 分页读取启用的人类用户，最多 10,000 项，按名称/用户名/ID 排序 |
 | `active_human_user` | identity ID | `Result<Option<DirectoryUser>, DirectoryError>` | 按 ID 二次核对启用人类用户 |
+
+该类型同时实现 `IdentityDirectory`：`identity` 读取当前用户资料；`create_human_identity`
+使用 `CreateHumanIdentity { username, given_name, family_name, email, display_name }` 调用
+UserService v2 创建人类用户并请求默认邮箱验证；`delete_identity` 用于本地事务失败后的补偿。
+错误稳定映射为 `Conflict`、`NotFound` 或 `Unavailable`，不会把 PAT 或 Provider 内部响应返回
+给 HTTP 客户端。
 
 `DirectoryUser` 包含 `identity_id`、`username`、`display_name`、可选 `email` 和
 `avatar_url`；`into_external_identity()` 会保留这些可信目录资料。所有 gRPC 请求使用 15 秒
@@ -205,7 +212,7 @@ pub async fn authorize(
 
 | 方法 | 输入 | 输出 | 语义 |
 | --- | --- | --- | --- |
-| `register_permissions` | `&[PermissionDefinition]` | `Vec<Permission>` | 按 key 幂等创建或更新权限元数据 |
+| `register_permissions` | `&[PermissionDefinition]` | `Vec<Permission>` | 按 key 幂等创建或更新，并在同一事务中授予系统管理员 |
 | `permissions` | 无 | `Vec<Permission>` | 完整权限目录 |
 | `roles` | 无 | `Vec<Role>` | 全部角色及直接权限 |
 | `role` | `role_id: i64` | `Role` | 不存在返回 `NotFound` |
@@ -215,11 +222,17 @@ pub async fn authorize(
 | `replace_role_permissions` | role ID、完整 permission IDs | `Role` | 原子替换；空数组清空 |
 | `users` | page、page_size | `Page<User>` | page 从 1 开始，size 限制到 1..=100 |
 | `user_access` | user ID | `AccessProfile` | 用户、直接角色与合并权限 |
+| `refresh_user_from_directory` | identity ID | `AccessProfile` | 同步目录用户名、邮箱、展示名、头像与最近登录时间，不创建陌生用户 |
 | `update_user_status` | user ID、`UserStatus` | `User` | 超级管理员和最后管理员受保护 |
 | `replace_user_roles` | user ID、完整 role IDs、granted_by | `AccessProfile` | 原子替换并保留 `member` |
 | `provision_user` | `ExternalIdentity` | `User` | 不验证身份来源，不自动授权角色 |
 | `provision_user_with_roles` | identity、role IDs、granted_by | `User` | 用户与初始角色在同一事务中创建 |
+| `create_managed_user_with_roles` | `CreateHumanIdentity`、role IDs、granted_by | `User` | 先创建 Provider 用户，再事务绑定本地账号；失败时尽力删除 Provider 用户 |
 | `routers::<S>` | 无 | `Router<S>` | 注入 Account 私有 State，无 I/O |
+
+`AccountDependencies.identity_directory` 控制上述目录同步和托管创建；`Server::initialize`
+会自动注入 ZITADEL 实现。直接构造 Account 且设为 `None` 时，`refresh_user_from_directory`
+保留本地资料，而托管创建明确返回目录不可用，不会回退为接收裸 identity ID。
 
 这些 facade 写方法不执行“当前请求是否有权调用”的检查；Account 自带 HTTP handler 会用
 `Authorized<P>` 执行权限门禁，宿主直接调用时必须先做等价授权。
@@ -347,6 +360,20 @@ async fn list_factories(auth: Authorized<ReadFactories>) {
 | `display_name` | `String` | trim 后非空，最多 200 个字符 |
 | `avatar_url` | `Option<String>` | 最多 2048 字节 |
 
+### `CreateHumanIdentity` 与 `IdentityDirectory`
+
+| 字段 | 类型 | 约束/用途 |
+| --- | --- | --- |
+| `username` | `String` | 1 至 200 个字符；ZITADEL Organization 内唯一登录名 |
+| `given_name` | `String` | 1 至 200 个字符 |
+| `family_name` | `String` | 1 至 200 个字符 |
+| `email` | `String` | 合法主邮箱，最多 200 个字符 |
+| `display_name` | `Option<String>` | 可选；最多 200 个字符 |
+
+`IdentityDirectory` 是服务端目录端口，包含 `identity`、`create_human_identity` 与
+`delete_identity` 三个异步方法；`IdentityDirectoryError` 稳定区分 `Conflict`、`NotFound`
+和 `Unavailable`。应用可以注入其他 Provider 实现，默认 Server 注入 ZITADEL。
+
 ### 结果实体
 
 - `User`：本地 ID、identity、username、展示资料、状态、超级管理员标记和 UTC 时间。
@@ -414,7 +441,8 @@ fn super_admin_identity_id(&self) -> &str;
 - 组合与配置：`Server`、`ServerError`、`AccountSettings`、`AccountOidcSettings`、
   `AccountServerInitializationError`、`migrations`、`dependencies`、`user_directory`；
 - Account facade 与实体：`Account`、`AccountError`、`AccessProfile`、`ExternalIdentity`、
-  `User`、`Role`、`Permission`、`PermissionDefinition`、`PermissionKey`；
+  `CreateHumanIdentity`、`IdentityDirectory`、`IdentityDirectoryError`、`User`、`Role`、
+  `Permission`、`PermissionDefinition`、`PermissionKey`；
 - 认证授权：`AuthenticatedUser`、`Authorized<P>`、`RequiredPermission`；
 - 可信宿主函数：`create_permissions`、`create_role`、`create_user`、
   `create_user_with_roles`、`replace_role_permissions`、`replace_user_roles`；
@@ -422,3 +450,6 @@ fn super_admin_identity_id(&self) -> &str;
   `DefaultSetupCompletionRequest`、`Setup`、`SetupUnlockRequest`、`SetupCompletionRequest`、
   `setup_routes`、`setup_routes_with`、`DirectoryUser`、`DirectoryError`、
   `ZitadelUserDirectory`。
+
+全部 HTTP 入参、出参、状态码和错误 envelope 见 [HTTP API 完整参考](./http-api) 与
+[OpenAPI 3.1](../openapi.yaml)。

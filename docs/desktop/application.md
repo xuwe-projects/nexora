@@ -40,6 +40,11 @@ ApplicationOptions::new().application_logo(ApplicationLogo::png(include_bytes!(
 版本或 Logo 不需要覆盖登录页。需要替换完整布局时，再实现唯一的
 `#[derive(nexora::LoginFeature)]`。
 
+自定义 `SidebarHeader` 会追加在默认品牌区域之后，不再替换品牌。Shell 固定保留 Header
+结构边界与下方分隔线，但不会给自定义区域增加 hover 或点击语义。使用
+`SidebarRegion::new("application-context")` 可以让品牌与应用 Context 成为两个稳定、独立的
+命中区域；Logo 没有动作时可以完全没有 hover，工厂选择器则可以自行添加 hover 与 Popover。
+
 ## Account 自动发现
 
 `desktop` 会编译 Account 客户端，但普通应用默认不显示认证门禁。应用在

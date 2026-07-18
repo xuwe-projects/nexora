@@ -192,8 +192,11 @@ Authorization: Bearer <access_token>
 
 ### `GET /me`
 
-验证 Bearer token、本地账号和状态，返回当前用户的 `AccessProfile`。该接口不要求额外权限，
-也不会为陌生身份自动创建用户。
+验证 Bearer token、本地账号和状态，然后通过配置的 ZITADEL UserService v2 gRPC 按
+`identity_id` 读取最新人类用户，原子同步 `username`、邮箱、展示名、头像与最近登录时间，
+最后返回 `AccessProfile`。该接口不要求额外权限，也不会为陌生身份自动创建用户；目录中
+不存在该身份时返回 `404 identity_not_found`，目录暂时不可用时返回
+`503 identity_provider_unavailable`。
 
 ```bash
 curl -H "Authorization: Bearer $ACCESS_TOKEN" http://127.0.0.1:3000/me
@@ -223,34 +226,38 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 
 ### `POST /users`
 
-显式开通已经由管理员确认的外部身份。权限：`users:provision`；`role_ids` 非空时额外要求
-`users:roles.write`。创建用户、内置 `member` 角色和初始角色关联在同一事务中完成。
+在服务端后台调用 ZITADEL UserService v2 gRPC 创建人类用户，并把返回的 identity ID 绑定到
+Nexora Account。权限：`users:provision`；`role_ids` 非空时额外要求 `users:roles.write`。
+Provider 创建成功后，本地用户、内置 `member` 角色和初始角色关联在同一数据库事务中完成；
+本地事务失败时服务端会尽力删除刚创建的 Provider 用户作为补偿。
 
 | body 字段 | 类型 | 必填 | 约束 |
 | --- | --- | --- | --- |
-| `identity_id` | string | 是 | trim 后非空，最多 255 字节；必须是当前 issuer 的稳定 subject |
-| `username` | string/null | 否 | trim 后非空，最多 200 个字符；仅为元数据 |
-| `email` | string/null | 否 | 可省略或为 `null`，最多 320 字节 |
-| `display_name` | string | 是 | trim 后非空，最多 200 个字符 |
-| `avatar_url` | string/null | 否 | 可省略或为 `null`，最多 2048 字节 |
+| `username` | string | 是 | trim 后 1 至 200 个字符；在 ZITADEL Organization 中唯一 |
+| `given_name` | string | 是 | trim 后 1 至 200 个字符 |
+| `family_name` | string | 是 | trim 后 1 至 200 个字符 |
+| `email` | string | 是 | 无空白、包含有效 `@` 与域名，最多 200 个字符；创建时请求 ZITADEL 发送验证邮件 |
+| `display_name` | string/null | 否 | trim 后最多 200 个字符；省略时由名字与姓氏生成 |
 | `role_ids` | int64[] | 否 | 默认 `[]`，最多 64 项；服务端去重 |
 
 请求 DTO 拒绝未知字段。示例：
 
 ```json
 {
-  "identity_id": "279693210507280451",
   "username": "lin.chen",
+  "given_name": "林",
+  "family_name": "陈",
   "email": "lin@example.com",
   "display_name": "陈林",
-  "avatar_url": null,
   "role_ids": [3, 5]
 }
 ```
 
-成功：`201 Created`，`Location: /users/{id}`，正文为新 `User`。失败还包括不存在的角色或
-授权人导致的 `404`、重复 identity 导致的 `409 user_already_provisioned`、字段错误导致的
-`422`。事务失败时不会留下部分用户或角色关系。
+成功：`201 Created`，`Location: /users/{id}`，正文为包含 ZITADEL identity ID 的新 `User`。
+不存在的角色或授权人返回 `404`；ZITADEL 中用户名或邮箱冲突返回
+`409 identity_already_exists`；字段错误返回 `422`；Provider 不可用返回
+`503 identity_provider_unavailable`。本地事务失败时不会留下部分用户或角色关系，并触发
+Provider 删除补偿；补偿本身失败只记录脱敏服务端日志，不会覆盖原始错误。
 
 ### `GET /users/{user_id}`
 
@@ -354,7 +361,10 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 
 ### `GET /permissions`
 
-权限：`permissions:read`。返回内置与宿主注册权限的完整、不分页目录：
+权限：`permissions:read`。返回内置与宿主注册权限的完整、不分页目录。宿主每次通过
+`create_permissions` 或 `Account::register_permissions` 注册新权限时，Account 都会在同一事务
+中把这些权限补入系统管理员角色；升级迁移也会回填已有权限，避免管理员随着权限目录扩展而
+失去管理能力：
 
 ```json
 {

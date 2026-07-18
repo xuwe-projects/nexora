@@ -23,13 +23,14 @@ use thiserror::Error;
 use url::{Host, Url};
 
 use crate::{
-    ExternalIdentity, SystemRole,
+    CreateHumanIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError, SystemRole,
     generated::zitadel::{
         project::v2::{AddProjectRoleRequest, project_service_client::ProjectServiceClient},
         user::v2::{
-            HumanUserView, InUserIDQuery, ListQuery, ListUsersRequest, SearchQuery, StateQuery,
-            Type, TypeQuery, UserFieldName, UserState, UserView,
-            user_service_client::UserServiceClient,
+            CreateUserRequest, DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery,
+            ListUsersRequest, SearchQuery, SendEmailVerificationCode, SetHumanEmail,
+            SetHumanProfile, StateQuery, Type, TypeQuery, UserFieldName, UserState, UserView,
+            create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
         },
     },
 };
@@ -71,6 +72,7 @@ impl DirectoryUser {
 pub struct ZitadelUserDirectory {
     user_client: UserServiceClient<Channel>,
     project_client: ProjectServiceClient<Channel>,
+    organization_id: String,
     project_id: String,
 }
 
@@ -78,6 +80,7 @@ impl fmt::Debug for ZitadelUserDirectory {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ZitadelUserDirectory")
+            .field("organization_id", &self.organization_id)
             .field("project_id", &self.project_id)
             .finish_non_exhaustive()
     }
@@ -96,10 +99,17 @@ impl ZitadelUserDirectory {
     pub fn new(
         issuer: &str,
         personal_access_token: &str,
+        organization_id: &str,
         project_id: &str,
     ) -> Result<Self, DirectoryError> {
         let endpoint = grpc_endpoint(issuer)?;
         let authorization = authorization_value(personal_access_token)?;
+        let organization_id = organization_id.trim();
+        if organization_id.is_empty() {
+            return Err(DirectoryError::InvalidConfiguration(
+                "Organization ID 不能为空",
+            ));
+        }
         let project_id = project_id.trim();
         if project_id.is_empty() {
             return Err(DirectoryError::InvalidConfiguration("Project ID 不能为空"));
@@ -127,6 +137,7 @@ impl ZitadelUserDirectory {
         Ok(Self {
             user_client: UserServiceClient::new(channel.clone()),
             project_client: ProjectServiceClient::new(channel),
+            organization_id: organization_id.to_owned(),
             project_id: project_id.to_owned(),
         })
     }
@@ -219,6 +230,79 @@ impl ZitadelUserDirectory {
             .find(|user| user.identity_id == identity_id))
     }
 
+    /// 在配置的 ZITADEL Organization 中创建人类用户并发送默认邮箱验证邮件。
+    ///
+    /// 返回值中的 identity ID 完全来自 ZITADEL `CreateUser` 响应，调用方无需也不能提交
+    /// 裸 subject。头像由用户后续在身份服务中维护，因此创建时为 `None`。
+    ///
+    /// # Errors
+    ///
+    /// UserService v2 拒绝请求、用户名或邮箱冲突、响应缺少用户 ID 时返回错误。
+    pub async fn create_human_user(
+        &self,
+        request: &CreateHumanIdentity,
+    ) -> Result<DirectoryUser, DirectoryError> {
+        let mut profile = SetHumanProfile::new();
+        profile.set_given_name(request.given_name.as_str());
+        profile.set_family_name(request.family_name.as_str());
+        if let Some(display_name) = request.display_name.as_deref() {
+            profile.set_display_name(display_name);
+        }
+
+        let mut email = SetHumanEmail::new();
+        email.set_email(request.email.as_str());
+        email.set_send_code(SendEmailVerificationCode::new());
+
+        let mut human = CreateHumanUser::new();
+        human.set_profile(profile);
+        human.set_email(email);
+
+        let mut create = CreateUserRequest::new();
+        create.set_organization_id(self.organization_id.as_str());
+        create.set_username(request.username.as_str());
+        create.set_human(human);
+        let response = self
+            .user_client
+            .create_user(create.as_view())
+            .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+            .await?;
+        let identity_id = required_string(response.id(), "create_user.id")?;
+        if identity_id.trim().is_empty() {
+            return Err(DirectoryError::InvalidString("create_user.id"));
+        }
+        Ok(DirectoryUser {
+            identity_id,
+            username: request.username.clone(),
+            display_name: request
+                .display_name
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
+            email: Some(request.email.clone()),
+            avatar_url: None,
+        })
+    }
+
+    /// 删除指定 ZITADEL 用户，用于本地账号事务失败后的补偿。
+    ///
+    /// # Errors
+    ///
+    /// identity ID 为空或 UserService v2 拒绝删除时返回错误。
+    pub async fn delete_user(&self, identity_id: &str) -> Result<(), DirectoryError> {
+        let identity_id = identity_id.trim();
+        if identity_id.is_empty() {
+            return Err(DirectoryError::InvalidConfiguration(
+                "删除用户 identity ID 不能为空",
+            ));
+        }
+        let mut request = DeleteUserRequest::new();
+        request.set_user_id(identity_id);
+        self.user_client
+            .delete_user(request.as_view())
+            .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+            .await?;
+        Ok(())
+    }
+
     async fn list_users(
         &self,
         identity_id: Option<&str>,
@@ -257,6 +341,50 @@ impl ZitadelUserDirectory {
                 .then_with(|| left.identity_id.cmp(&right.identity_id))
         });
         Ok(users)
+    }
+}
+
+#[async_trait]
+impl IdentityDirectory for ZitadelUserDirectory {
+    async fn identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError> {
+        self.active_human_user(identity_id)
+            .await
+            .map(|user| user.map(DirectoryUser::into_external_identity))
+            .map_err(identity_directory_error)
+    }
+
+    async fn create_human_identity(
+        &self,
+        request: &CreateHumanIdentity,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        self.create_human_user(request)
+            .await
+            .map(DirectoryUser::into_external_identity)
+            .map_err(identity_directory_error)
+    }
+
+    async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError> {
+        self.delete_user(identity_id)
+            .await
+            .map_err(identity_directory_error)
+    }
+}
+
+fn identity_directory_error(error: DirectoryError) -> IdentityDirectoryError {
+    match &error {
+        DirectoryError::Request { code, .. } if *code == StatusCodeError::AlreadyExists => {
+            IdentityDirectoryError::Conflict
+        }
+        DirectoryError::Request { code, .. } if *code == StatusCodeError::NotFound => {
+            IdentityDirectoryError::NotFound
+        }
+        _ => {
+            tracing::warn!(error = ?error, "ZITADEL 身份目录请求失败");
+            IdentityDirectoryError::Unavailable
+        }
     }
 }
 

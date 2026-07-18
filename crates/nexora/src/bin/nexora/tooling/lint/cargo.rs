@@ -28,6 +28,12 @@ const FORBIDDEN_HTTP_CRATES: [&str; 7] = [
     "warp",
 ];
 const FORBIDDEN_RUNTIMES: [&str; 3] = ["async-std", "async_std", "smol"];
+const GPUI_COMPONENT_GIT: &str = "https://github.com/longbridge/gpui-component";
+const GPUI_COMPONENT_REV: &str = "031555662e99a1b5a549990b47f246d475b8288a";
+const ZED_GIT: &str = "https://github.com/zed-industries/zed";
+const ZED_REV: &str = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba";
+const GPUI_REPLACE: &str = "https://github.com/zed-industries/zed#gpui@0.2.2";
+const GPUI_MACROS_REPLACE: &str = "https://github.com/zed-industries/zed#gpui_macros@0.1.0";
 
 /// 已解析的 Cargo manifest。
 #[derive(Debug)]
@@ -199,11 +205,108 @@ struct Dependency {
 /// 检查 workspace manifests、crate 目标组织、依赖边界和迁移目录。
 pub(super) fn check(workspace: &Workspace, report: &mut Report) -> CliResult<()> {
     check_root_features(workspace, report);
+    check_gpui_revision_matrix(workspace, report);
     check_members(workspace, report);
     check_dependency_edges(workspace, report);
     check_migration_locations(workspace, report)?;
     check_modified_migrations(workspace, report)?;
     Ok(())
+}
+
+fn check_gpui_revision_matrix(workspace: &Workspace, report: &mut Report) {
+    let Some(dependencies) = workspace
+        .root_manifest
+        .document
+        .get("workspace")
+        .and_then(Item::as_table_like)
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(Item::as_table_like)
+    else {
+        return;
+    };
+    let Some(component) = dependencies.get("gpui-component") else {
+        return;
+    };
+
+    check_pinned_dependency(
+        workspace,
+        "gpui-component",
+        component,
+        GPUI_COMPONENT_GIT,
+        GPUI_COMPONENT_REV,
+        report,
+    );
+    if let Some(assets) = dependencies.get("gpui-component-assets") {
+        check_pinned_dependency(
+            workspace,
+            "gpui-component-assets",
+            assets,
+            GPUI_COMPONENT_GIT,
+            GPUI_COMPONENT_REV,
+            report,
+        );
+    }
+    for name in ["gpui", "gpui_platform", "reqwest_client"] {
+        if let Some(item) = dependencies.get(name) {
+            check_pinned_dependency(workspace, name, item, ZED_GIT, ZED_REV, report);
+        }
+    }
+
+    let replacements = workspace
+        .root_manifest
+        .document
+        .get("replace")
+        .and_then(Item::as_table_like);
+    for key in [GPUI_REPLACE, GPUI_MACROS_REPLACE] {
+        let valid = replacements
+            .and_then(|table| table.get(key))
+            .is_some_and(|item| {
+                dependency_string_property(item, "git") == Some(ZED_GIT)
+                    && dependency_string_property(item, "rev") == Some(ZED_REV)
+            });
+        if !valid {
+            report.push(
+                Diagnostic::error(
+                    "nexora::gpui_revision_mismatch",
+                    relative_path(workspace.root(), &workspace.root_manifest.path),
+                    1,
+                    1,
+                    format!("gpui-component 依赖缺少兼容的 `[replace]` 条目 `{key}`"),
+                )
+                .with_help(format!(
+                    "把 `{key}` 固定到 `{ZED_GIT}` revision `{ZED_REV}`"
+                )),
+            );
+        }
+    }
+}
+
+fn check_pinned_dependency(
+    workspace: &Workspace,
+    name: &str,
+    item: &Item,
+    expected_git: &str,
+    expected_rev: &str,
+    report: &mut Report,
+) {
+    if dependency_string_property(item, "git") == Some(expected_git)
+        && dependency_string_property(item, "rev") == Some(expected_rev)
+    {
+        return;
+    }
+    let (line, column) = workspace.root_manifest.dependency_position(name, item);
+    report.push(
+        Diagnostic::error(
+            "nexora::gpui_revision_mismatch",
+            relative_path(workspace.root(), &workspace.root_manifest.path),
+            line,
+            column,
+            format!("依赖 `{name}` 没有使用 Nexora 已验证的 GPUI 兼容 revision"),
+        )
+        .with_help(format!(
+            "设置 git = `{expected_git}`、rev = `{expected_rev}`；升级 gpui-component 时同步更新整组 revision"
+        )),
+    );
 }
 
 fn check_root_features(workspace: &Workspace, report: &mut Report) {

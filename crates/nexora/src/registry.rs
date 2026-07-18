@@ -12,11 +12,12 @@ use thiserror::Error;
 use crate::{__private::LoginFeatureRegistration, LoginFeature as LoginFeatureDefinition};
 use crate::{
     __private::{
-        FeatureRegistration, SettingsWindowRegistration, SidebarFooterRegistration,
-        SidebarHeaderRegistration, WindowRegistration,
+        FeatureRegistration, NavigationGroupRegistration, SettingsWindowRegistration,
+        SidebarFooterRegistration, SidebarHeaderRegistration, WindowRegistration,
     },
-    Feature, FeatureInstance, FeatureMetadata, FeatureRuntimeError, ResolveError, RouteMatch,
-    RouteTarget, SettingsWindow as SettingsWindowDefinition,
+    Feature, FeatureInstance, FeatureMetadata, FeatureRuntimeError,
+    NavigationGroup as NavigationGroupDefinition, NavigationGroupMetadata, ResolveError,
+    RouteMatch, RouteTarget, SettingsWindow as SettingsWindowDefinition,
     SidebarFooter as SidebarFooterDefinition, SidebarHeader as SidebarHeaderDefinition,
     Window as WindowDefinition, WindowMetadata,
     route::{RouteParameters, canonical_segment, decode_parameter, parse_location},
@@ -32,6 +33,7 @@ use crate::{WindowInstance, WindowRuntimeError};
 pub struct AppRegistryBuilder {
     features: Vec<FeatureMetadata>,
     feature_registrations: Vec<FeatureRegistration>,
+    navigation_groups: Vec<NavigationGroupMetadata>,
     windows: Vec<WindowMetadata>,
     window_registrations: Vec<WindowRegistration>,
     settings_windows: Vec<SettingsWindowRegistration>,
@@ -63,6 +65,15 @@ impl AppRegistryBuilder {
         if let Some(registration) = F::REGISTRATION {
             self.feature_registrations.push(registration);
         }
+        self
+    }
+
+    /// 注册一个不对应页面或路径的纯导航目录类型。
+    pub fn navigation_group<G>(mut self) -> Self
+    where
+        G: NavigationGroupDefinition,
+    {
+        self.navigation_groups.push(G::METADATA);
         self
     }
 
@@ -170,6 +181,8 @@ impl AppRegistryBuilder {
 
         self.features
             .sort_by_key(|metadata| (metadata.order(), metadata.path(), metadata.id()));
+        self.navigation_groups
+            .sort_by_key(|metadata| (metadata.order(), metadata.section(), metadata.id()));
         self.windows
             .sort_by_key(|metadata| (metadata.order(), metadata.path(), metadata.id()));
         self.sidebar_headers
@@ -177,9 +190,9 @@ impl AppRegistryBuilder {
         self.sidebar_footers
             .sort_by_key(SidebarFooterRegistration::type_name);
 
-        validate_feature_ids(&self.features)?;
+        validate_navigation_ids(&self.features, &self.navigation_groups)?;
         validate_window_ids(&self.windows)?;
-        validate_feature_parents(&self.features)?;
+        validate_navigation_graph(&self.features, &self.navigation_groups)?;
         let sidebar_header = unique_sidebar_header(self.sidebar_headers)?;
         let sidebar_footer = unique_sidebar_footer(self.sidebar_footers)?;
 
@@ -205,6 +218,7 @@ impl AppRegistryBuilder {
 
         Ok(AppRegistry {
             features: self.features,
+            navigation_groups: self.navigation_groups,
             feature_registrations: self
                 .feature_registrations
                 .into_iter()
@@ -231,6 +245,7 @@ impl AppRegistryBuilder {
 /// 不会等到 deeplink 到达时才产生不确定行为。
 pub struct AppRegistry {
     features: Vec<FeatureMetadata>,
+    navigation_groups: Vec<NavigationGroupMetadata>,
     feature_registrations: HashMap<&'static str, FeatureRegistration>,
     windows: Vec<WindowMetadata>,
     window_registrations: HashMap<&'static str, WindowRegistration>,
@@ -285,6 +300,11 @@ impl AppRegistry {
                 builder.features.push(registration.metadata());
                 builder.feature_registrations.push(*registration);
             });
+        inventory::iter::<NavigationGroupRegistration>
+            .into_iter()
+            .for_each(|registration| {
+                builder.navigation_groups.push(registration.metadata());
+            });
         inventory::iter::<crate::__private::WindowRegistration>
             .into_iter()
             .for_each(|registration| {
@@ -321,6 +341,14 @@ impl AppRegistry {
     /// 和稳定标识共同确定。
     pub fn features(&self) -> &[FeatureMetadata] {
         &self.features
+    }
+
+    /// 返回自动发现或手动注册的全部纯导航目录。
+    ///
+    /// 目录顺序由 `order`、`section` 和稳定标识共同确定；它们不属于路由目标，也不会
+    /// 出现在 Window、Tab 或最近页面集合中。
+    pub fn navigation_groups(&self) -> &[NavigationGroupMetadata] {
+        &self.navigation_groups
     }
 
     /// 返回自动发现或手动注册的全部独立 Window。
@@ -374,11 +402,69 @@ impl AppRegistry {
             .filter(|metadata| metadata.navigation())
     }
 
-    /// 返回指定父 Feature 下的直接子导航定义。
-    pub fn children_of(&self, parent_id: &str) -> impl Iterator<Item = FeatureMetadata> + '_ {
-        let parent_id = parent_id.to_owned();
+    /// 返回指定 NavigationGroup 下的直接叶子 Feature。
+    pub fn features_in_group(&self, group_id: &str) -> impl Iterator<Item = FeatureMetadata> + '_ {
+        let group_id = group_id.to_owned();
         self.navigation_features()
-            .filter(move |metadata| metadata.parent() == Some(parent_id.as_str()))
+            .filter(move |metadata| metadata.group() == Some(group_id.as_str()))
+    }
+
+    /// 返回指定 NavigationGroup 下的直接子目录。
+    pub fn groups_in_group(
+        &self,
+        group_id: &str,
+    ) -> impl Iterator<Item = NavigationGroupMetadata> + '_ {
+        let group_id = group_id.to_owned();
+        self.navigation_groups
+            .iter()
+            .copied()
+            .filter(move |metadata| metadata.parent() == Some(group_id.as_str()))
+    }
+
+    /// 根据稳定标识返回一个纯导航目录。
+    pub fn navigation_group(&self, group_id: &str) -> Option<NavigationGroupMetadata> {
+        self.navigation_groups
+            .iter()
+            .find(|metadata| metadata.id() == group_id)
+            .copied()
+    }
+
+    /// 返回某个 Feature 从根目录到直接父目录的完整 NavigationGroup 链。
+    ///
+    /// 未找到 Feature 或 Feature 不属于目录时返回空列表。注册表在构建阶段已拒绝未知父级
+    /// 和循环，因此该方法不会产生部分链或无限循环。
+    pub fn navigation_group_ancestors(&self, feature_id: &str) -> Vec<NavigationGroupMetadata> {
+        let mut ancestors = Vec::new();
+        let mut group_id = self
+            .features
+            .iter()
+            .find(|feature| feature.id() == feature_id)
+            .and_then(|feature| feature.group());
+        while let Some(id) = group_id {
+            let Some(group) = self.navigation_group(id) else {
+                break;
+            };
+            group_id = group.parent();
+            ancestors.push(group);
+        }
+        ancestors.reverse();
+        ancestors
+    }
+
+    /// 返回 Feature 最终所属的顶层 section。
+    ///
+    /// Feature 显式声明 section 时使用该值；位于 NavigationGroup 中且省略 section 时继承
+    /// 目录 section。注册表构建成功后，显式 section 与目录 section 一定一致。
+    pub fn feature_section(&self, feature: FeatureMetadata) -> &'static str {
+        feature
+            .section()
+            .or_else(|| {
+                feature
+                    .group()
+                    .and_then(|id| self.navigation_group(id))
+                    .map(NavigationGroupMetadata::section)
+            })
+            .unwrap_or("应用")
     }
 
     /// 解析内部路径或 custom scheme URI，并返回具体 Feature/Window 与动态参数。
@@ -560,10 +646,10 @@ pub enum RegistryError {
         /// 面向开发者的具体校验信息。
         message: String,
     },
-    /// 两个 Feature 使用了相同稳定标识。
-    #[error("Feature 稳定标识 `{id}` 重复")]
-    DuplicateFeatureId {
-        /// 重复的 Feature 标识。
+    /// Feature 与 NavigationGroup 共用的导航稳定标识发生重复。
+    #[error("导航稳定标识 `{id}` 在 Feature 或 NavigationGroup 中重复")]
+    DuplicateNavigationId {
+        /// 重复的导航标识。
         id: &'static str,
     },
     /// 两个独立 Window 使用了相同稳定标识。
@@ -604,27 +690,39 @@ pub enum RegistryError {
         /// 与首个实现冲突的 Footer Rust 类型名称。
         duplicate: &'static str,
     },
-    /// 子 Feature 引用了不存在的父 Feature。
-    #[error("Feature `{id}` 引用了不存在的父 Feature `{parent}`")]
-    UnknownFeatureParent {
-        /// 子 Feature 的稳定标识。
+    /// Feature 引用了不存在的 NavigationGroup。
+    #[error("Feature `{id}` 引用了不存在的 NavigationGroup `{group}`")]
+    UnknownFeatureGroup {
+        /// 出错 Feature 的稳定标识。
         id: &'static str,
-        /// 未找到的父 Feature 标识。
+        /// 未找到的目录标识。
+        group: &'static str,
+    },
+    /// NavigationGroup 引用了不存在的父目录。
+    #[error("NavigationGroup `{id}` 引用了不存在的父目录 `{parent}`")]
+    UnknownNavigationGroupParent {
+        /// 出错目录的稳定标识。
+        id: &'static str,
+        /// 未找到的父目录标识。
         parent: &'static str,
     },
-    /// 可见子 Feature 指向了不会出现在导航中的父 Feature。
-    #[error("Feature `{id}` 的父 Feature `{parent}` 设置了 navigation = false")]
-    HiddenFeatureParent {
-        /// 无法从根导航到达的子 Feature 标识。
+    /// NavigationGroup 的父子关系形成自引用或更长循环。
+    #[error("NavigationGroup `{id}` 的父级关系形成循环")]
+    NavigationGroupCycle {
+        /// 检测到循环的目录标识。
         id: &'static str,
-        /// 被隐藏的父 Feature 标识。
-        parent: &'static str,
     },
-    /// Feature 的父子关系形成了自引用或更长的循环。
-    #[error("Feature `{id}` 的父级关系形成循环")]
-    FeatureParentCycle {
-        /// 检测到循环的 Feature 标识。
+    /// Feature 或子目录跨越了父 NavigationGroup 所属 section。
+    #[error("导航项 `{id}` 属于 section `{section}`，但其目录 `{group}` 属于 `{group_section}`")]
+    NavigationSectionMismatch {
+        /// 出错 Feature 或 NavigationGroup 的稳定标识。
         id: &'static str,
+        /// 出错项声明的 section。
+        section: &'static str,
+        /// 被引用的目录标识。
+        group: &'static str,
+        /// 被引用目录所属的 section。
+        group_section: &'static str,
     },
     /// 两个 Feature/Window 注册了相同或等价的路径模式。
     #[error("路径模式 `{path}` 与已注册模式 `{conflict}` 冲突")]
@@ -701,11 +799,19 @@ fn unique_sidebar_footer(
     Ok(Some(first))
 }
 
-fn validate_feature_ids(features: &[FeatureMetadata]) -> Result<(), RegistryError> {
-    let mut ids = HashSet::with_capacity(features.len());
+fn validate_navigation_ids(
+    features: &[FeatureMetadata],
+    groups: &[NavigationGroupMetadata],
+) -> Result<(), RegistryError> {
+    let mut ids = HashSet::with_capacity(features.len() + groups.len());
     for metadata in features {
         if !ids.insert(metadata.id()) {
-            return Err(RegistryError::DuplicateFeatureId { id: metadata.id() });
+            return Err(RegistryError::DuplicateNavigationId { id: metadata.id() });
+        }
+    }
+    for metadata in groups {
+        if !ids.insert(metadata.id()) {
+            return Err(RegistryError::DuplicateNavigationId { id: metadata.id() });
         }
     }
     Ok(())
@@ -721,32 +827,57 @@ fn validate_window_ids(windows: &[WindowMetadata]) -> Result<(), RegistryError> 
     Ok(())
 }
 
-fn validate_feature_parents(features: &[FeatureMetadata]) -> Result<(), RegistryError> {
-    let definitions = features
+fn validate_navigation_graph(
+    features: &[FeatureMetadata],
+    groups: &[NavigationGroupMetadata],
+) -> Result<(), RegistryError> {
+    let definitions = groups
         .iter()
         .map(|metadata| (metadata.id(), *metadata))
         .collect::<HashMap<_, _>>();
     for metadata in features {
+        if let Some(group_id) = metadata.group() {
+            let Some(group) = definitions.get(group_id) else {
+                return Err(RegistryError::UnknownFeatureGroup {
+                    id: metadata.id(),
+                    group: group_id,
+                });
+            };
+            if let Some(section) = metadata.section()
+                && section != group.section()
+            {
+                return Err(RegistryError::NavigationSectionMismatch {
+                    id: metadata.id(),
+                    section,
+                    group: group_id,
+                    group_section: group.section(),
+                });
+            }
+        }
+    }
+
+    for metadata in groups {
         if let Some(parent_id) = metadata.parent() {
             let Some(parent) = definitions.get(parent_id) else {
-                return Err(RegistryError::UnknownFeatureParent {
+                return Err(RegistryError::UnknownNavigationGroupParent {
                     id: metadata.id(),
                     parent: parent_id,
                 });
             };
-            if metadata.navigation() && !parent.navigation() {
-                return Err(RegistryError::HiddenFeatureParent {
+            if metadata.section() != parent.section() {
+                return Err(RegistryError::NavigationSectionMismatch {
                     id: metadata.id(),
-                    parent: parent_id,
+                    section: metadata.section(),
+                    group: parent_id,
+                    group_section: parent.section(),
                 });
             }
         }
-
         let mut current = *metadata;
         let mut visited = HashSet::new();
         while let Some(parent_id) = current.parent() {
             if !visited.insert(current.id()) {
-                return Err(RegistryError::FeatureParentCycle { id: metadata.id() });
+                return Err(RegistryError::NavigationGroupCycle { id: metadata.id() });
             }
             let Some(parent) = definitions.get(parent_id) else {
                 break;

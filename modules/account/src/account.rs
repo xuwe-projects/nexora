@@ -5,6 +5,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
+use async_trait::async_trait;
 use axum::{Router, extract::FromRef};
 pub use kernel::Page;
 use kernel::ValidationError;
@@ -45,6 +46,69 @@ pub struct AccountDependencies {
     pub pool: PgPool,
     /// 用于验证 HTTP Bearer access token 并提取可信身份声明的验证器。
     pub token_verifier: Arc<dyn AccessTokenVerifier>,
+    /// 可选的外部身份目录；配置后 `/me` 会刷新 Provider 资料，管理员创建用户也会先在
+    /// Provider 创建身份，再原子绑定本地账号。
+    pub identity_directory: Option<Arc<dyn IdentityDirectory>>,
+}
+
+/// 在外部身份目录创建人类用户所需的领域输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateHumanIdentity {
+    /// 组织内唯一、可用于登录的用户名。
+    pub username: String,
+    /// 用户名字。
+    pub given_name: String,
+    /// 用户姓氏。
+    pub family_name: String,
+    /// 登录与验证使用的主邮箱。
+    pub email: String,
+    /// 可选展示名称；省略时由身份目录使用名字与姓氏生成。
+    pub display_name: Option<String>,
+}
+
+/// 外部身份目录的稳定错误分类。
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityDirectoryError {
+    /// 目录中已经存在相同用户名、邮箱或其他唯一身份。
+    #[error("身份目录中的用户已经存在")]
+    Conflict,
+    /// 指定 identity ID 在目录中不存在。
+    #[error("身份目录用户不存在")]
+    NotFound,
+    /// 目录暂时不可用或拒绝了服务端管理请求。
+    #[error("身份目录暂时不可用")]
+    Unavailable,
+}
+
+/// Account 创建和刷新身份资料使用的外部目录端口。
+#[async_trait]
+pub trait IdentityDirectory: Send + Sync {
+    /// 按稳定 identity ID 读取 Provider 中的最新人类用户资料。
+    ///
+    /// # Errors
+    ///
+    /// Provider 拒绝请求、暂时不可用或返回无法转换的资料时返回稳定目录错误。
+    async fn identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError>;
+
+    /// 在 Provider 创建人类用户并返回包含 Provider identity ID 的完整资料。
+    ///
+    /// # Errors
+    ///
+    /// 用户名或邮箱冲突、Provider 拒绝请求、暂时不可用或响应无效时返回稳定目录错误。
+    async fn create_human_identity(
+        &self,
+        request: &CreateHumanIdentity,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError>;
+
+    /// 删除刚创建但尚未成功绑定本地账号的 Provider 用户，用于失败补偿。
+    ///
+    /// # Errors
+    ///
+    /// identity ID 不存在、Provider 拒绝删除或暂时不可用时返回稳定目录错误。
+    async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError>;
 }
 
 /// 账号模块首次初始化需要的可信输入。
@@ -107,6 +171,7 @@ pub struct Account {
 pub(crate) struct AccountState {
     pool: PgPool,
     token_verifier: Arc<dyn AccessTokenVerifier>,
+    identity_directory: Option<Arc<dyn IdentityDirectory>>,
 }
 
 impl FromRef<AccountState> for Account {
@@ -279,11 +344,13 @@ impl Account {
         let AccountDependencies {
             pool,
             token_verifier,
+            identity_directory,
         } = dependencies;
         Self {
             state: AccountState {
                 pool,
                 token_verifier,
+                identity_directory,
             },
         }
     }
@@ -500,6 +567,36 @@ impl Account {
             .ok_or(AccountError::NotFound("用户"))
     }
 
+    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
+    ///
+    /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
+    /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
+    ///
+    /// # Errors
+    ///
+    /// 身份目录不可用、目录资料无效、本地用户不存在或数据库更新失败时返回错误。
+    pub async fn refresh_user_from_directory(
+        &self,
+        identity_id: &str,
+    ) -> Result<AccessProfile, AccountError> {
+        let Some(directory) = self.state.identity_directory.as_ref() else {
+            let user = stores::users::query_by_identity_id(identity_id, &self.state.pool)
+                .await
+                .map_err(StoreError::from)?
+                .ok_or(AccountError::UserNotRegistered)?;
+            return self.user_access(user.id.as_str()).await;
+        };
+        let identity = directory
+            .identity(identity_id)
+            .await?
+            .ok_or(IdentityDirectoryError::NotFound)?
+            .normalized()?;
+        let user = stores::identities::sync_existing(&identity, &self.state.pool)
+            .await?
+            .ok_or(AccountError::UserNotRegistered)?;
+        self.user_access(user.id.as_str()).await
+    }
+
     /// 更新一个普通用户的访问状态。
     ///
     /// # Errors
@@ -564,6 +661,47 @@ impl Account {
         create_user_with_roles(&self.state.pool, identity, role_ids, granted_by).await
     }
 
+    /// 在外部身份目录创建人类用户，并在同一业务操作中绑定本地账号和初始角色。
+    ///
+    /// Provider 创建成功而本地事务失败时会尽力删除刚创建的 Provider 用户；补偿失败只记录
+    /// 脱敏错误，原始本地错误仍返回给调用方。未配置身份目录时不会回退到接收裸 identity ID。
+    ///
+    /// # Errors
+    ///
+    /// 输入字段无效、目录不可用或冲突、本地身份已绑定、角色或授权人不存在，以及数据库
+    /// 事务失败时返回错误。
+    pub async fn create_managed_user_with_roles(
+        &self,
+        request: CreateHumanIdentity,
+        role_ids: &[i64],
+        granted_by: &str,
+    ) -> Result<User, AccountError> {
+        let request = normalized_create_human_identity(request)?;
+        let directory = self
+            .state
+            .identity_directory
+            .as_ref()
+            .ok_or(IdentityDirectoryError::Unavailable)?;
+        let identity = directory
+            .create_human_identity(&request)
+            .await?
+            .normalized()?;
+        let identity_id = identity.identity_id.clone();
+        match create_user_with_roles(&self.state.pool, identity, role_ids, granted_by).await {
+            Ok(user) => Ok(user),
+            Err(error) => {
+                if let Err(cleanup_error) = directory.delete_identity(identity_id.as_str()).await {
+                    tracing::error!(
+                        error = ?cleanup_error,
+                        business_operation = "managed_user_creation_compensation",
+                        "本地用户创建失败后无法删除身份目录中的新用户"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// 把经过身份目录或认证流程确认的用户设为唯一超级管理员。
     ///
     /// 初始化与超级管理员写入在同一个数据库事务中完成。相同身份重复调用会返回
@@ -595,6 +733,47 @@ impl Account {
     pub fn routers<S>(&self) -> Router<S> {
         routers::initialize().with_state::<S>(self.state.clone())
     }
+}
+
+fn normalized_create_human_identity(
+    request: CreateHumanIdentity,
+) -> Result<CreateHumanIdentity, AccountError> {
+    let username = request.username.trim();
+    let given_name = request.given_name.trim();
+    let family_name = request.family_name.trim();
+    let email = request.email.trim();
+    let display_name = request
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if username.is_empty() || username.chars().count() > 200 {
+        return Err(ValidationError::new("username", "登录用户名必须为 1 到 200 个字符").into());
+    }
+    if given_name.is_empty() || given_name.chars().count() > 200 {
+        return Err(ValidationError::new("given_name", "名字必须为 1 到 200 个字符").into());
+    }
+    if family_name.is_empty() || family_name.chars().count() > 200 {
+        return Err(ValidationError::new("family_name", "姓氏必须为 1 到 200 个字符").into());
+    }
+    let valid_email = email.len() <= 200
+        && !email.chars().any(char::is_whitespace)
+        && email
+            .split_once('@')
+            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'));
+    if !valid_email {
+        return Err(ValidationError::new("email", "邮箱格式无效且长度不能超过 200 个字符").into());
+    }
+    if display_name.is_some_and(|value| value.chars().count() > 200) {
+        return Err(ValidationError::new("display_name", "展示名称不能超过 200 个字符").into());
+    }
+    Ok(CreateHumanIdentity {
+        username: username.to_owned(),
+        given_name: given_name.to_owned(),
+        family_name: family_name.to_owned(),
+        email: email.to_owned(),
+        display_name: display_name.map(str::to_owned),
+    })
 }
 
 fn validate_permission_definitions(

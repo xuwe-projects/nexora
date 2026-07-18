@@ -34,8 +34,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
 };
 use nexora::{
-    AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, RouteMatch, RouteTarget,
-    RouteTargetKind,
+    AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationGroupMetadata,
+    RouteMatch, RouteTarget, RouteTargetKind,
 };
 use ui::{PanelHeader, layout::WorkspaceLayout};
 
@@ -68,6 +68,21 @@ pub struct RootView {
     _users_subscription: Option<Subscription>,
     _auth_subscription: Option<Subscription>,
     _release_subscription: Option<Subscription>,
+}
+
+#[derive(Clone, Copy)]
+enum NavigationEntry {
+    Group(NavigationGroupMetadata),
+    Feature(FeatureMetadata),
+}
+
+impl NavigationEntry {
+    fn sort_key(&self) -> (i32, u8, &'static str) {
+        match *self {
+            Self::Group(group) => (group.order(), 0, group.id()),
+            Self::Feature(feature) => (feature.order(), 1, feature.id()),
+        }
+    }
 }
 
 /// Console 将一个已解析路径打开为标签或独立窗口时可能发生的错误。
@@ -1075,10 +1090,16 @@ impl RootView {
             .find(|(section, _)| *section == "扩展示例")
             .map(|(_, items)| items.as_slice())
             .unwrap_or_default();
-        let extension_active = extension_items
-            .iter()
-            .copied()
-            .any(|item| FeatureId::from_id(item.id()) == Some(self.active_feature()));
+        let extension_active = extension_items.iter().copied().any(|item| match item {
+            NavigationEntry::Feature(feature) => {
+                FeatureId::from_id(feature.id()) == Some(self.active_feature())
+            }
+            NavigationEntry::Group(group) => self
+                .registry
+                .navigation_group_ancestors(self.active_feature().id())
+                .iter()
+                .any(|ancestor| ancestor.id() == group.id()),
+        });
         if !extension_items.is_empty() {
             navigation_menus.push(
                 SidebarMenu::new()
@@ -1094,7 +1115,7 @@ impl RootView {
                                 extension_items
                                     .iter()
                                     .copied()
-                                    .map(|item| self.render_nav_item(item, cx)),
+                                    .map(|item| self.render_navigation_entry(item, cx)),
                             ),
                     ),
             );
@@ -1162,30 +1183,45 @@ impl RootView {
             .into_any_element()
     }
 
-    fn navigation_sections(&self) -> Vec<(&'static str, Vec<FeatureMetadata>)> {
-        self.registry
-            .navigation_features()
-            .filter(|metadata| metadata.parent().is_none())
-            .fold(Vec::new(), |mut sections, metadata| {
-                let section = metadata.section().unwrap_or("应用");
-                if let Some((_, items)) = sections
-                    .iter_mut()
-                    .find(|(existing, _)| *existing == section)
-                {
-                    items.push(metadata);
-                } else {
-                    sections.push((section, vec![metadata]));
-                }
-                sections
-            })
+    fn navigation_sections(&self) -> Vec<(&'static str, Vec<NavigationEntry>)> {
+        let mut roots = self
+            .registry
+            .navigation_groups()
+            .iter()
+            .copied()
+            .filter(|group| group.parent().is_none())
+            .map(NavigationEntry::Group)
+            .chain(
+                self.registry
+                    .navigation_features()
+                    .filter(|feature| feature.group().is_none())
+                    .map(NavigationEntry::Feature),
+            )
+            .collect::<Vec<_>>();
+        roots.sort_by_key(NavigationEntry::sort_key);
+        roots.into_iter().fold(Vec::new(), |mut sections, entry| {
+            let section = match entry {
+                NavigationEntry::Group(group) => group.section(),
+                NavigationEntry::Feature(feature) => self.registry.feature_section(feature),
+            };
+            if let Some((_, items)) = sections
+                .iter_mut()
+                .find(|(existing, _)| *existing == section)
+            {
+                items.push(entry);
+            } else {
+                sections.push((section, vec![entry]));
+            }
+            sections
+        })
     }
 
-    fn render_nav_menu(&self, items: &[FeatureMetadata], cx: &mut Context<Self>) -> SidebarMenu {
+    fn render_nav_menu(&self, items: &[NavigationEntry], cx: &mut Context<Self>) -> SidebarMenu {
         SidebarMenu::new().children(
             items
                 .iter()
                 .copied()
-                .map(|item| self.render_nav_item(item, cx)),
+                .map(|item| self.render_navigation_entry(item, cx)),
         )
     }
 
@@ -1250,45 +1286,54 @@ impl RootView {
         cx.notify();
     }
 
-    fn render_nav_item(&self, item: FeatureMetadata, cx: &mut Context<Self>) -> SidebarMenuItem {
-        let feature = FeatureId::from_id(item.id())
-            .expect("Nexora 注册表中的 Feature 必须具有 Console FeatureId");
-        let children = self
-            .registry
-            .children_of(item.id())
-            .map(|child| self.render_nav_child(child, cx))
-            .collect::<Vec<_>>();
-        let has_children = !children.is_empty();
-        let active = self.active_feature() == feature;
-
-        let menu_item = SidebarMenuItem::new(item.title())
-            .icon(feature_icon(item.icon()))
-            .active(active)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if let Err(error) = this.select_feature_in(feature, window, cx) {
-                    tracing::error!(error = %error, "无法打开侧边栏 Feature");
-                }
-                cx.notify();
-            }));
-
-        if has_children {
-            menu_item
-                .default_open(
-                    self.active_feature() == feature
-                        || self.registry.children_of(item.id()).any(|child| {
-                            FeatureId::from_id(child.id()) == Some(self.active_feature())
-                        }),
-                )
-                .click_to_toggle(true)
-                .children(children)
-        } else {
-            menu_item
+    fn render_navigation_entry(
+        &self,
+        entry: NavigationEntry,
+        cx: &mut Context<Self>,
+    ) -> SidebarMenuItem {
+        match entry {
+            NavigationEntry::Group(group) => self.render_nav_group(group, cx),
+            NavigationEntry::Feature(feature) => self.render_nav_feature(feature, cx),
         }
     }
 
-    fn render_nav_child(&self, item: FeatureMetadata, cx: &mut Context<Self>) -> SidebarMenuItem {
+    fn render_nav_group(
+        &self,
+        group: NavigationGroupMetadata,
+        cx: &mut Context<Self>,
+    ) -> SidebarMenuItem {
+        let mut children = self
+            .registry
+            .groups_in_group(group.id())
+            .map(NavigationEntry::Group)
+            .chain(
+                self.registry
+                    .features_in_group(group.id())
+                    .map(NavigationEntry::Feature),
+            )
+            .collect::<Vec<_>>();
+        children.sort_by_key(NavigationEntry::sort_key);
+        let children = children
+            .into_iter()
+            .map(|entry| self.render_navigation_entry(entry, cx))
+            .collect::<Vec<_>>();
+        let active_id = self.active_feature().id();
+        let default_open = self
+            .registry
+            .navigation_group_ancestors(active_id)
+            .iter()
+            .any(|ancestor| ancestor.id() == group.id());
+
+        SidebarMenuItem::new(group.title())
+            .icon(feature_icon(group.icon()))
+            .default_open(default_open)
+            .click_to_toggle(true)
+            .children(children)
+    }
+
+    fn render_nav_feature(&self, item: FeatureMetadata, cx: &mut Context<Self>) -> SidebarMenuItem {
         let feature = FeatureId::from_id(item.id())
-            .expect("Nexora 子导航 Feature 必须具有 Console FeatureId");
+            .expect("Nexora 注册表中的 Feature 必须具有 Console FeatureId");
         let active = self.active_feature() == feature;
 
         SidebarMenuItem::new(item.title())
@@ -1296,7 +1341,7 @@ impl RootView {
             .active(active)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Err(error) = this.select_feature_in(feature, window, cx) {
-                    tracing::error!(error = %error, "无法打开侧边栏子 Feature");
+                    tracing::error!(error = %error, "无法打开侧边栏 Feature");
                 }
                 cx.notify();
             }))

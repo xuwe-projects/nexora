@@ -4,21 +4,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{pagination::PageResponse, patch::PatchField};
 
-/// 管理员显式开通可信外部身份的请求正文。
+/// 管理员在身份目录创建人类用户并绑定本地账号的请求正文。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProvisionUserRequest {
-    /// 当前部署绑定的 OIDC issuer 中稳定且唯一的 identity ID（subject）。
-    pub identity_id: String,
-    /// 身份提供方中的可选登录用户名；省略时仍可通过稳定 identity ID 完成绑定。
+    /// 身份提供方中的登录用户名，在组织内必须唯一。
+    pub username: String,
+    /// 用户名字；由身份提供方用于建立人类用户资料。
+    pub given_name: String,
+    /// 用户姓氏；由身份提供方用于建立人类用户资料。
+    pub family_name: String,
+    /// 登录与验证使用的主邮箱。
+    pub email: String,
+    /// 可选展示名称；省略时使用名字与姓氏组合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    /// 身份提供方返回的可选邮箱。
-    pub email: Option<String>,
-    /// 面向用户界面展示的名称。
-    pub display_name: String,
-    /// 身份提供方返回的可选头像 URL。
-    pub avatar_url: Option<String>,
+    pub display_name: Option<String>,
     /// 创建用户时直接授予的角色 ID 集合；省略时使用 Account 的默认成员角色。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role_ids: Vec<i64>,

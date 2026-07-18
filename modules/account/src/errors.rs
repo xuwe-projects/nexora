@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use kernel::ValidationError;
 
-use crate::{PermissionKey, authentication::VerificationError};
+use crate::{IdentityDirectoryError, PermissionKey, authentication::VerificationError};
 
 /// Store 在执行持久化操作时返回的结构化错误。
 #[derive(Debug, Error)]
@@ -80,6 +80,13 @@ pub enum AccountError {
         /// OIDC verifier 返回的结构化失败原因。
         #[from]
         VerificationError,
+    ),
+    /// 外部身份目录创建或刷新用户失败。
+    #[error(transparent)]
+    IdentityDirectory(
+        /// 不包含 Provider 内部响应或密钥的稳定错误分类。
+        #[from]
+        IdentityDirectoryError,
     ),
     /// 外部身份缺少稳定 identity ID 或必要展示字段。
     #[error("认证身份不完整")]
@@ -169,6 +176,22 @@ impl From<AccountError> for ApiError {
     fn from(error: AccountError) -> Self {
         match error {
             AccountError::Verification(error) => Self::from(error),
+            AccountError::IdentityDirectory(IdentityDirectoryError::Conflict) => Self::new(
+                StatusCode::CONFLICT,
+                "identity_already_exists",
+                "登录用户名或邮箱已经存在",
+            ),
+            AccountError::IdentityDirectory(IdentityDirectoryError::NotFound) => Self::new(
+                StatusCode::NOT_FOUND,
+                "identity_not_found",
+                "身份目录用户不存在",
+            ),
+            AccountError::IdentityDirectory(IdentityDirectoryError::Unavailable) => {
+                Self::service_unavailable(
+                    "identity_provider_unavailable",
+                    "身份服务暂时无法完成请求",
+                )
+            }
             AccountError::InvalidIdentity => {
                 Self::unauthorized("invalid_identity", "认证身份不完整")
             }

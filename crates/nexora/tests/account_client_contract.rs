@@ -73,11 +73,11 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
         spawn_mock("201 Created", USER_JSON, &[("Location", "/users/User0001")]);
     let user = session(endpoint)
         .provision_user(&ProvisionUserRequest {
-            identity_id: "subject-1".to_owned(),
-            username: Some("tester".to_owned()),
-            email: Some("user@example.com".to_owned()),
-            display_name: "测试用户".to_owned(),
-            avatar_url: None,
+            username: "tester".to_owned(),
+            given_name: "Test".to_owned(),
+            family_name: "User".to_owned(),
+            email: "user@example.com".to_owned(),
+            display_name: Some("测试用户".to_owned()),
             role_ids: vec![7, 9],
         })
         .expect("201 响应应按 User 契约解码");
@@ -87,7 +87,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
     assert_request(&request, "POST", "/users");
     assert_eq!(
         request_body(&request),
-        r#"{"identity_id":"subject-1","username":"tester","email":"user@example.com","display_name":"测试用户","avatar_url":null,"role_ids":[7,9]}"#
+        r#"{"username":"tester","given_name":"Test","family_name":"User","email":"user@example.com","display_name":"测试用户","role_ids":[7,9]}"#
     );
 }
 

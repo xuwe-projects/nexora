@@ -115,7 +115,7 @@ impl RolesPage {
             || self
                 .editor
                 .as_ref()
-                .is_some_and(|editor| editor.read(cx).is_busy())
+                .is_some_and(|editor| editor.read(cx).is_busy(cx))
         {
             return;
         }
@@ -166,10 +166,16 @@ impl Render for RolesPage {
         let editor_busy = self
             .editor
             .as_ref()
-            .is_some_and(|editor| editor.read(cx).is_busy());
+            .is_some_and(|editor| editor.read(cx).is_busy(cx));
+        let selected_role_id = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).is_open(cx))
+            .then_some(self.selected_role_id)
+            .flatten();
         let list = RolesList::new(
             self.roles.clone(),
-            self.selected_role_id,
+            selected_role_id,
             self.loading || editor_busy,
             cx.entity().downgrade(),
         );
@@ -258,6 +264,5 @@ impl Render for RolesPage {
                     ))
                 },
             )
-            .children(self.editor.clone())
     }
 }

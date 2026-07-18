@@ -6,9 +6,9 @@
 #[cfg(feature = "server")]
 pub use crate::account_module::{
     AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
-    AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
-    IdentityIssuerBindingOutcome, Page, Permission, PermissionDefinition, PermissionKey, Role,
-    SystemRole, User, UserStatus,
+    AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
+    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
+    Page, Permission, PermissionDefinition, PermissionKey, Role, SystemRole, User, UserStatus,
     authentication::{AccessTokenVerifier, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
@@ -68,6 +68,9 @@ pub(crate) mod server {
         pub issuer_url: String,
         /// Access token 的 `aud` claim 必须包含的资源服务标识。
         pub audience: String,
+        /// ZITADEL 中创建人类用户的 Organization ID。
+        #[cfg(feature = "server")]
+        pub organization_id: String,
         /// ZITADEL 中承载本系统角色的 Project ID，与 API Application Client ID 含义不同。
         #[cfg(feature = "server")]
         pub project_id: String,
@@ -87,6 +90,7 @@ pub(crate) mod server {
                 .field("audience", &self.audience);
             #[cfg(feature = "server")]
             debug
+                .field("organization_id", &self.organization_id)
                 .field("project_id", &self.project_id)
                 .field("personal_access_token", &"[REDACTED]");
             debug.finish()
@@ -127,6 +131,7 @@ pub(crate) mod server {
         Ok(AccountDependencies {
             pool,
             token_verifier: Arc::new(verifier),
+            identity_directory: None,
         })
     }
 
@@ -145,6 +150,7 @@ pub(crate) mod server {
         ZitadelUserDirectory::new(
             settings.oidc.issuer_url.as_str(),
             settings.oidc.personal_access_token.as_str(),
+            settings.oidc.organization_id.as_str(),
             settings.oidc.project_id.as_str(),
         )
     }
@@ -196,6 +202,13 @@ pub(crate) mod server {
             return Err(ConfigError::invalid_section(
                 "account.server",
                 "oidc.audience 不能为空",
+            ));
+        }
+        #[cfg(feature = "server")]
+        if settings.organization_id.trim().is_empty() {
+            return Err(ConfigError::invalid_section(
+                "account.server",
+                "oidc.organization_id 不能为空",
             ));
         }
         #[cfg(feature = "server")]

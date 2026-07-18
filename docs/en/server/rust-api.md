@@ -92,6 +92,7 @@ host pool.
 | --- | --- |
 | `issuer_url` | Canonical Provider issuer; HTTPS in production, loopback HTTP for development |
 | `audience` | Required access-token audience |
+| `organization_id` | ZITADEL Organization where `POST /users` creates human users |
 | `project_id` | ZITADEL Project that carries system roles |
 | `personal_access_token` | Server credential for ZITADEL UserService/ProjectService; redacted in Debug |
 
@@ -111,10 +112,14 @@ pub fn user_directory<S>(
 `dependencies` performs OIDC discovery and issuer binding. `user_directory` constructs the ZITADEL
 gRPC clients. Neither runs migrations or starts HTTP.
 
-`ZitadelUserDirectory` is also public for custom setup flows. `new` creates the gRPC clients;
+`ZitadelUserDirectory` is also public for custom setup flows. `new` accepts issuer, PAT,
+Organization ID, and Project ID and creates the gRPC clients;
 `ensure_project_roles(&[SystemRole])` idempotently creates Project roles;
 `list_active_human_users()` reads at most 10,000 enabled human users; and
 `active_human_user(identity_id)` re-verifies one selection. Calls use a 15-second timeout.
+It also implements `IdentityDirectory`: `identity` refreshes a profile, `create_human_identity`
+creates a UserService v2 human user and requests email verification, and `delete_identity` supports
+compensation after a failed local transaction.
 `DirectoryUser` carries identity ID, username, display name, optional email, and optional avatar;
 `into_external_identity()` preserves those trusted fields. `DirectoryError` distinguishes invalid
 configuration, TLS, UserService/ProjectService requests, invalid UTF-8, and the safety limit, without
@@ -139,7 +144,7 @@ exposing PAT metadata.
 
 | Method | Input | Output / semantics |
 | --- | --- | --- |
-| `register_permissions` | permission definitions | Idempotently upsert metadata and return permissions |
+| `register_permissions` | permission definitions | Idempotently upsert metadata and grant every registered permission to the system administrator in the same transaction |
 | `permissions` | none | Complete permission catalog |
 | `roles`, `role` | optional role ID | Roles with direct permissions |
 | `create_role` | key, name, description, permission IDs | Transactional custom role creation |
@@ -148,10 +153,12 @@ exposing PAT metadata.
 | `replace_role_permissions` | ID and complete ID set | Atomic replacement; empty clears |
 | `users` | page and page size | `Page<User>`; size clamped to 1–100 |
 | `user_access` | user ID | `AccessProfile` |
+| `refresh_user_from_directory` | identity ID | Synchronizes username, email, display name, avatar, and last-login time without creating unknown users |
 | `update_user_status` | user ID and status | Protects the super admin and final enabled admin |
 | `replace_user_roles` | user ID, complete roles, actor ID | Atomic replacement retaining `member` |
 | `provision_user` | trusted `ExternalIdentity` | Creates a user without a local password |
 | `provision_user_with_roles` | identity, roles, actor ID | Transactional user and initial role creation |
+| `create_managed_user_with_roles` | `CreateHumanIdentity`, roles, actor ID | Creates the Provider user, binds it locally, and attempts Provider deletion if the local transaction fails |
 | `routers::<S>` | none | Router with private Account State injected |
 
 Facade writes do not authorize the current caller. Built-in HTTP handlers apply `Authorized<P>`;
@@ -265,8 +272,9 @@ Hosts can import these stable boundaries directly from `nexora::server`:
 
 - composition/configuration: `Server`, `ServerError`, `AccountSettings`, `AccountOidcSettings`,
   `AccountServerInitializationError`, `migrations`, `dependencies`, `user_directory`;
-- Account facade/entities: `Account`, `AccountError`, `AccessProfile`, `ExternalIdentity`, `User`,
-  `Role`, `Permission`, `PermissionDefinition`, `PermissionKey`;
+- Account facade/entities: `Account`, `AccountError`, `AccessProfile`, `ExternalIdentity`,
+  `CreateHumanIdentity`, `IdentityDirectory`, `IdentityDirectoryError`, `User`, `Role`, `Permission`,
+  `PermissionDefinition`, `PermissionKey`;
 - auth: `AuthenticatedUser`, `Authorized<P>`, `RequiredPermission`;
 - trusted writes: `create_permissions`, `create_role`, `create_user`, `create_user_with_roles`,
   `replace_role_permissions`, `replace_user_roles`;

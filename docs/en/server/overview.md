@@ -117,10 +117,10 @@ permission with `Authorized<P>`. Both reuse framework bearer-token verification,
 and merged permissions without exposing the token to business code.
 
 The default `POST /users` requires only `users:provision` when `role_ids` is empty and additionally
-requires `users:roles.write` when it is non-empty. Requests may include optional `username`
-metadata for the Identity Provider login name; stable authentication binding, conflict detection,
-and login lookup continue to use only `identity_id`. Trusted hosts calling pool-first APIs must
-enforce equivalent authorization themselves.
+requires `users:roles.write` when it is non-empty. It sends username, human profile names, and email
+to ZITADEL UserService v2, then binds the returned identity ID locally; clients cannot submit a raw
+identity ID. `GET /me` refreshes Provider profile data while still requiring an existing active local
+account. Trusted hosts calling pool-first APIs must enforce equivalent authorization themselves.
 
 After binding, `server.setup_url(listener.local_addr()?)` can be used to log the pending Setup URL.
 It only formats the already-bound address and never owns the listener or service lifecycle.

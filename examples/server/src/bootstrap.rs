@@ -48,16 +48,18 @@ pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, Boot
     )
     .await?;
     Account::bind_identity_issuer(&pool, config.oidc.issuer_url.as_str()).await?;
-    let account = Account::new(AccountDependencies {
-        pool: pool.clone(),
-        token_verifier: Arc::new(verifier),
-    });
-    let system_initialized = account.is_system_initialized().await?;
     let directory = ZitadelUserDirectory::new(
         &config.oidc.issuer_url,
         config.oidc.personal_access_token(),
+        config.oidc.organization_id(),
         config.oidc.project_id(),
     )?;
+    let account = Account::new(AccountDependencies {
+        pool: pool.clone(),
+        token_verifier: Arc::new(verifier),
+        identity_directory: Some(Arc::new(directory.clone())),
+    });
+    let system_initialized = account.is_system_initialized().await?;
     if system_initialized {
         let system_roles = account.system_roles().await?;
         tracing::info!(

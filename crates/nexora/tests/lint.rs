@@ -126,6 +126,47 @@ actix-web = "4"
 }
 
 #[test]
+fn cargo_rules_reject_unpinned_or_mismatched_gpui_component_matrix() {
+    let fixture = Fixture::new("gpui-revision-matrix");
+    fixture.write(
+        "Cargo.toml",
+        r#"[workspace]
+resolver = "3"
+members = ["crates/ui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "wrong-zed-revision" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+"#,
+    );
+    fixture.write(
+        "crates/ui/Cargo.toml",
+        r#"[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+"#,
+    );
+    fixture.write("crates/ui/src/lib.rs", "//! UI fixture.\n");
+
+    let output = fixture.run(&[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success());
+    assert!(stdout.contains("nexora::gpui_revision_mismatch"));
+    assert!(stdout.contains("gpui-component"));
+    assert!(stdout.contains("gpui_macros@0.1.0"));
+}
+
+#[test]
 fn cargo_rules_allow_documented_nexora_facade_mixed_targets() {
     let fixture = Fixture::new("nexora-mixed-targets");
     fixture.write(

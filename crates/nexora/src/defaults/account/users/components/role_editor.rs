@@ -1,17 +1,13 @@
-//! 用户直接角色完整替换组件。
+//! 使用公共 FormDialog 完整替换用户直接角色。
 
 use std::collections::BTreeSet;
 
-use gpui::{Context, Render, Task, Window, div, prelude::*};
+use gpui::{Context, Entity, Render, Task, Window, div, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
-    alert::Alert,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    spinner::Spinner,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Sizable as _, alert::Alert, checkbox::Checkbox, h_flex,
+    spinner::Spinner, v_flex,
 };
+use ui::{FormDialog, FormDialogState};
 
 use crate::defaults::account::has_permission;
 use crate::desktop::{
@@ -19,20 +15,33 @@ use crate::desktop::{
     contract::{AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse},
 };
 
-#[derive(Default)]
 pub(in crate::defaults::account::users) struct UserRoleEditor {
-    open: bool,
+    form: Entity<FormDialogState>,
     loading: bool,
     saving: bool,
     roles: Vec<RoleResponse>,
     profile: Option<AccessProfileResponse>,
     selected_role_ids: BTreeSet<i64>,
+    original_role_ids: String,
     error: Option<String>,
-    notice: Option<String>,
     _task: Option<Task<()>>,
 }
 
 impl UserRoleEditor {
+    pub(super) fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            form: cx.new(FormDialogState::new),
+            loading: false,
+            saving: false,
+            roles: Vec::new(),
+            profile: None,
+            selected_role_ids: BTreeSet::new(),
+            original_role_ids: String::new(),
+            error: None,
+            _task: None,
+        }
+    }
+
     pub(super) const fn is_busy(&self) -> bool {
         self.loading || self.saving
     }
@@ -41,24 +50,28 @@ impl UserRoleEditor {
         &mut self,
         user_id: String,
         roles: Vec<RoleResponse>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.is_busy() {
             return;
         }
+        self.form.update(cx, |form, cx| {
+            form.reset_fields(cx);
+            form.open(window, cx);
+        });
         let Some(session) = api_session(cx) else {
-            self.open = true;
             self.error = Some("当前登录会话不可用，请重新登录".to_owned());
             cx.notify();
             return;
         };
-        self.open = true;
         self.loading = true;
         self.roles = roles;
         self.profile = None;
         self.selected_role_ids.clear();
+        self.original_role_ids.clear();
         self.error = None;
-        self.notice = None;
+        let form = self.form.clone();
         let background = cx.background_spawn(async move { session.get_user(user_id.as_str()) });
         self._task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
@@ -67,6 +80,16 @@ impl UserRoleEditor {
                 match result {
                     Ok(profile) => {
                         this.selected_role_ids = profile.roles.iter().map(|role| role.id).collect();
+                        this.original_role_ids = role_draft(&this.selected_role_ids);
+                        form.update(cx, |form, cx| {
+                            form.set_field_draft(
+                                "role_ids",
+                                "用户角色",
+                                this.original_role_ids.clone(),
+                                this.original_role_ids.clone(),
+                                cx,
+                            );
+                        });
                         this.profile = Some(profile);
                         this.error = None;
                     }
@@ -78,28 +101,26 @@ impl UserRoleEditor {
         cx.notify();
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
-        if self.loading || self.saving {
-            return;
-        }
-        self.open = false;
-        self.profile = None;
-        self.selected_role_ids.clear();
-        self.error = None;
-        self.notice = None;
-        cx.notify();
-    }
-
     fn toggle_role(&mut self, role_id: i64, checked: bool, cx: &mut Context<Self>) {
         if checked {
             self.selected_role_ids.insert(role_id);
         } else {
             self.selected_role_ids.remove(&role_id);
         }
+        let draft = role_draft(&self.selected_role_ids);
+        self.form.update(cx, |form, cx| {
+            form.set_field_draft(
+                "role_ids",
+                "用户角色",
+                self.original_role_ids.clone(),
+                draft,
+                cx,
+            );
+        });
         cx.notify();
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) {
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_busy() {
             return;
         }
@@ -117,21 +138,28 @@ impl UserRoleEditor {
         };
         self.saving = true;
         self.error = None;
-        self.notice = None;
+        self.form
+            .update(cx, |form, cx| form.set_submitting(true, cx));
+        let form = self.form.clone();
         let background =
             cx.background_spawn(
                 async move { session.replace_user_roles(user_id.as_str(), &request) },
             );
-        self._task = Some(cx.spawn(async move |this, cx| {
+        self._task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = background.await;
-            _ = this.update(cx, |this, cx| {
+            _ = this.update_in(cx, |this, window, cx| {
                 this.saving = false;
+                form.update(cx, |form, cx| form.set_submitting(false, cx));
                 match result {
                     Ok(profile) => {
                         this.selected_role_ids = profile.roles.iter().map(|role| role.id).collect();
+                        this.original_role_ids = role_draft(&this.selected_role_ids);
                         this.profile = Some(profile);
-                        this.notice = Some("用户角色已保存".to_owned());
                         this.error = None;
+                        form.update(cx, |form, cx| {
+                            form.mark_saved(cx);
+                            form.close(window, cx);
+                        });
                     }
                     Err(error) => this.error = Some(error.user_message()),
                 }
@@ -144,10 +172,6 @@ impl UserRoleEditor {
 
 impl Render for UserRoleEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.open {
-            return div().into_any_element();
-        }
-
         let role_options = self.roles.iter().map(|role| {
             let role_id = role.id;
             Checkbox::new(format!("default-assign-role-{role_id}"))
@@ -164,47 +188,10 @@ impl Render for UserRoleEditor {
             .map(|profile| profile.user.display_name.as_str())
             .unwrap_or("用户");
         let can_save = has_permission(cx, "users:roles.write") && has_permission(cx, "roles:read");
-
-        v_flex()
+        let content = v_flex()
             .gap_3()
-            .p_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tokens.group_box)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_semibold()
-                                    .child(format!("为 {display_name} 分配角色")),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("保存时会完整替换该用户的直接角色集合。"),
-                            ),
-                    )
-                    .child(
-                        Button::new("close-default-user-role-editor")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Close)
-                            .tooltip("关闭角色分配")
-                            .disabled(self.loading || self.saving)
-                            .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
-                    ),
-            )
             .when_some(self.error.clone(), |this, error| {
                 this.child(Alert::error("default-user-role-error", error))
-            })
-            .when_some(self.notice.clone(), |this, notice| {
-                this.child(Alert::success("default-user-role-notice", notice))
             })
             .when(self.loading, |this| {
                 this.child(
@@ -213,7 +200,7 @@ impl Render for UserRoleEditor {
                         .gap_2()
                         .py_6()
                         .child(Spinner::new().small())
-                        .child("正在读取用户角色..."),
+                        .child("正在读取用户角色…"),
                 )
             })
             .when(!self.loading && self.roles.is_empty(), |this| {
@@ -225,23 +212,34 @@ impl Render for UserRoleEditor {
             .when(!self.loading && !self.roles.is_empty(), |this| {
                 this.child(v_flex().gap_2().children(role_options))
             })
-            .child(
-                h_flex().justify_end().child(
-                    Button::new("save-default-user-roles")
-                        .primary()
-                        .label("保存角色")
-                        .loading(self.saving)
-                        .disabled(
-                            self.loading || self.saving || self.profile.is_none() || !can_save,
-                        )
-                        .tooltip(if can_save {
-                            "完整替换该用户的直接角色集合"
-                        } else {
-                            "需要 users:roles.write 与 roles:read 权限"
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                ),
-            )
-            .into_any_element()
+            .when(!can_save, |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("需要 users:roles.write 与 roles:read 权限。"),
+                )
+            });
+        let editor = cx.entity().downgrade();
+        FormDialog::new(
+            "default-user-role-form-dialog",
+            self.form.clone(),
+            format!("管理 {display_name} 的角色"),
+            content,
+            move |_, window, cx| {
+                _ = editor.update(cx, |editor, cx| editor.save(window, cx));
+            },
+        )
+        .description("保存时会完整替换该用户的直接角色集合。")
+        .submit_label("保存角色")
+        .submit_disabled(self.loading || self.profile.is_none() || !can_save)
     }
+}
+
+fn role_draft(role_ids: &BTreeSet<i64>) -> String {
+    role_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }

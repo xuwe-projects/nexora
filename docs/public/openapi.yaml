@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.4.1
+  version: 0.5.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -132,7 +132,8 @@ paths:
       summary: 校验本地账号并返回当前用户、角色与合并权限
       description: >-
         仅认证服务中存在身份还不代表可以登录本系统。identity_id 必须已经存在于
-        account.users 且用户处于启用状态；接口不会为陌生身份自动创建本地用户。
+        account.users 且用户处于启用状态。接口会通过 ZITADEL UserService v2 gRPC 读取并同步
+        最新 username、邮箱、展示名与头像，但不会为陌生身份自动创建本地用户。
       security:
         - bearerAuth: []
       responses:
@@ -183,11 +184,12 @@ paths:
     post:
       tags: [Users]
       operationId: provisionUser
-      summary: 开通外部身份并建立初始用户角色关联
+      summary: 在 ZITADEL 创建用户并建立本地账号与初始角色关联
       description: >-
-        管理员确认 OIDC 外部身份后创建本地用户，并在同一事务中建立 role_ids 指定的
-        初始角色关联；role_ids 缺省时创建不带业务角色的用户。空集合只要求
-        users:provision，非空集合还要求 users:roles.write。
+        服务端调用 ZITADEL UserService v2 创建人类用户，再使用返回的 identity ID 创建本地
+        用户，并在同一事务中建立 role_ids 指定的初始角色关联。role_ids 缺省时只保留内置
+        member 角色。空集合只要求 users:provision，非空集合还要求 users:roles.write；本地
+        事务失败时会尽力删除刚创建的 Provider 用户。
       security:
         - bearerAuth: []
       requestBody:
@@ -942,30 +944,32 @@ components:
     ProvisionUserRequest:
       type: object
       additionalProperties: false
-      required: [identity_id, display_name]
+      required: [username, given_name, family_name, email]
       properties:
-        identity_id:
-          type: string
-          minLength: 1
-          maxLength: 255
-          description: 当前部署绑定的 OIDC issuer 中稳定且唯一的 subject
         username:
-          type: [string, "null"]
-          minLength: 1
-          maxLength: 200
-          description: 与稳定 identity ID 一同保存的可选登录用户名
-        email:
-          type: [string, "null"]
-          format: email
-          maxLength: 320
-        display_name:
           type: string
           minLength: 1
           maxLength: 200
-        avatar_url:
+          description: 将在配置的 ZITADEL Organization 中创建的唯一登录用户名
+        given_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: ZITADEL 人类用户资料中的名字
+        family_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: ZITADEL 人类用户资料中的姓氏
+        email:
+          type: string
+          format: email
+          maxLength: 200
+          description: ZITADEL 主邮箱；创建时使用默认邮件验证流程
+        display_name:
           type: [string, "null"]
-          format: uri
-          maxLength: 2048
+          maxLength: 200
+          description: 可选展示名；省略时由名字与姓氏生成
         role_ids:
           type: array
           default: []

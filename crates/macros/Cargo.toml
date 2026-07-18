@@ -21,3 +21,4 @@ syn = { workspace = true, features = ["derive", "proc-macro"] }
 
 [dev-dependencies]
 inventory = { workspace = true }
+trybuild = { workspace = true }

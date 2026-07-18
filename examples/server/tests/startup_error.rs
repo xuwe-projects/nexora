@@ -17,6 +17,7 @@ url = "postgres://secret-user:secret-password@127.0.0.1:1/unavailable"
 max_connections = 1
 
 [oidc]
+organization_id = "startup-test-organization-id"
 project_id = "startup-test-project-id"
 personal_access_token = "startup-test-personal-access-token"
 

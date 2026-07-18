@@ -3,7 +3,10 @@
 //! 默认实现只负责 Account 装配与框架 Router；数据库连接池、顶层 Axum State、监听器、
 //! 日志和关闭策略始终由应用创建和持有。
 
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use axum::Router;
 use sqlx::PgPool;
@@ -16,10 +19,10 @@ pub use crate::account::server::{
     ZitadelUserDirectory, dependencies, setup_routes, setup_routes_with, user_directory,
 };
 pub use crate::account::{
-    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, ExternalIdentity,
-    Permission, PermissionDefinition, PermissionKey, RequiredPermission, Role, User,
-    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
-    replace_user_roles,
+    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, CreateHumanIdentity,
+    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, Permission, PermissionDefinition,
+    PermissionKey, RequiredPermission, Role, User, create_permissions, create_role, create_user,
+    create_user_with_roles, replace_role_permissions, replace_user_roles,
 };
 
 /// 可组合 Nexora 默认模块与应用 Router 的服务端实例。
@@ -86,9 +89,10 @@ impl Server {
                 AccountServerSettings = crate::account::server::Settings,
             >,
     {
-        let dependencies = crate::account::server::dependencies(pool.clone(), settings).await?;
-        let account = crate::account::Account::new(dependencies);
         let directory = crate::account::server::user_directory(settings)?;
+        let mut dependencies = crate::account::server::dependencies(pool.clone(), settings).await?;
+        dependencies.identity_directory = Some(Arc::new(directory.clone()));
+        let account = crate::account::Account::new(dependencies);
         self.setup_required = !account.is_system_initialized().await?;
         if !self.setup_required {
             let roles = account.system_roles().await?;

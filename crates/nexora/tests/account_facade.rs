@@ -183,6 +183,8 @@ mod server {
                     issuer_url: "https://identity.example.com".to_owned(),
                     audience: "nexora-api".to_owned(),
                     #[cfg(feature = "server")]
+                    organization_id: "organization-1".to_owned(),
+                    #[cfg(feature = "server")]
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
@@ -200,6 +202,8 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     audience: "  ".to_owned(),
+                    #[cfg(feature = "server")]
+                    organization_id: "organization-1".to_owned(),
                     #[cfg(feature = "server")]
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
@@ -219,6 +223,8 @@ mod server {
                     issuer_url: "http://127.0.0.1:8080".to_owned(),
                     audience: "nexora-api".to_owned(),
                     #[cfg(feature = "server")]
+                    organization_id: "organization-1".to_owned(),
+                    #[cfg(feature = "server")]
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
@@ -230,6 +236,8 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "http://identity.example.com".to_owned(),
                     audience: "nexora-api".to_owned(),
+                    #[cfg(feature = "server")]
+                    organization_id: "organization-1".to_owned(),
                     #[cfg(feature = "server")]
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
@@ -314,6 +322,7 @@ mod server {
                 oidc: OidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),
                     audience: "nexora-api".to_owned(),
+                    organization_id: "organization-1".to_owned(),
                     project_id: String::new(),
                     personal_access_token: "secret-personal-access-token".to_owned(),
                 },

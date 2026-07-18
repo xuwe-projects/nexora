@@ -29,6 +29,8 @@ issuer_url = "https://id.example.com"
 # project/resource audience scope，实际 audience 也可能是 Project ID 或资源服务标识。
 # 应解码一枚真实 access token 核对 `aud`，再填写这里，而不是无条件假定它等于 Client ID。
 audience = "replace-with-api-application-client-id"
+# 创建用户所属的 ZITADEL Organization ID；生产环境可使用 OIDC__ORGANIZATION_ID 注入。
+organization_id = "replace-with-zitadel-organization-id"
 # 初始化时通过 ProjectService v2 gRPC 创建本地系统角色所需的 Project ID。
 # Project ID 与 API Application Client ID 不是同一概念，必须从 ZITADEL Project 详情获取。
 # 生产环境也可使用 OIDC__PROJECT_ID 注入。

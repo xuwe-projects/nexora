@@ -5,8 +5,60 @@ package zitadel.user.v2;
 // ZITADEL UserService v2 中 setup 用户目录所需的最小线上契约。
 // 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的字段由 Protobuf 兼容机制忽略。
 service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
 }
+
+message SetHumanProfile {
+  string given_name = 1;
+  string family_name = 2;
+  optional string nick_name = 3;
+  optional string display_name = 4;
+  optional string preferred_language = 5;
+}
+
+message SendEmailVerificationCode {
+  optional string url_template = 1;
+}
+
+message ReturnEmailVerificationCode {}
+
+message SetHumanEmail {
+  string email = 1;
+  oneof verification {
+    SendEmailVerificationCode send_code = 2;
+    ReturnEmailVerificationCode return_code = 3;
+    bool is_verified = 4;
+  }
+}
+
+message CreateUserRequest {
+  message Human {
+    SetHumanProfile profile = 1;
+    SetHumanEmail email = 2;
+  }
+
+  message Machine {}
+
+  string organization_id = 1;
+  optional string user_id = 2;
+  optional string username = 3;
+  oneof user_type {
+    Human human = 4;
+    Machine machine = 5;
+  }
+}
+
+message CreateUserResponse {
+  string id = 1;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+message DeleteUserResponse {}
 
 message ListQuery {
   uint64 offset = 1;

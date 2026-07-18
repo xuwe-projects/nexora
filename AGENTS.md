@@ -52,8 +52,12 @@ src/features/users/components/table.rs
 
 ## 使用 Nexora 注册与导航
 
-- 页面、独立窗口和专用槽位分别使用 Nexora 的 `Feature`、`Window`、
-  `SettingsWindow`、`LoginFeature`、`SidebarHeader` 与 `SidebarFooter` 派生能力。
+- 页面、纯导航目录、独立窗口和专用槽位分别使用 Nexora 的 `Feature`、
+  `NavigationGroup`、`Window`、`SettingsWindow`、`LoginFeature`、`SidebarHeader` 与
+  `SidebarFooter` 派生能力。
+- `section` 只表示 Sidebar 顶层大类，`NavigationGroup` 只表示可递归展开/收起的目录，
+  `Feature` 只表示具有 path 和页面实例的叶子。Feature 通过 `group = "稳定目录 ID"` 归组；
+  不得让 Feature 充当目录，不得为目录创建空白页面、占位路由或第二套路由表。
 - 确保声明这些类型的模块进入编译，让 inventory 自动发现；不要维护第二套路由表、导航表
   或 RootView 分支。
 - 动态 Feature 路径使用强类型 `path_params` / `query_params`，并设置
@@ -62,8 +66,13 @@ src/features/users/components/table.rs
   `account_enabled` 一类重复开关。
 - 桌面端认证配置、会话和 Account HTTP 客户端统一从 `nexora::desktop` 导入，不使用
   `nexora::account::client` 等内部层级。
-- 自定义 `SidebarHeader`/`SidebarFooter` 只提供内容；Header/Footer 的 hover、内边距和
-  Header 下方/Footer 上方分隔线由 Shell 固定托管，自定义插槽不能移除这些外壳样式。
+- Shell 只固定托管 Sidebar Header/Footer 的结构边界、间距和分隔线；不得向自定义内容
+  注入 hover、selected、圆角、cursor 或点击语义。品牌与应用 Context 使用稳定唯一的
+  `SidebarRegion` 分区，各区域自行声明交互视觉；默认 Header/Footer 的 hover 也必须由
+  默认实现显式添加。
+- 创建和编辑业务资源默认使用 `nexora::desktop::FormDialog`。表单输入、异步任务与草稿状态
+  放在独立 Entity 中，遮罩只覆盖当前 Feature Panel；通过 `FormDialogState` 暴露脏字段和
+  草稿，默认取消保留未保存确认，提交逻辑必须由业务组件实现。
 
 ## 保持服务端组合权属于应用
 
@@ -111,6 +120,9 @@ src/features/users/components/table.rs
 - 已进入共享环境的迁移禁止修改或重排，修正必须新增后续迁移。
 - workspace 第三方版本与来源统一声明在根 `[workspace.dependencies]`；成员 crate 使用
   `{ workspace = true }`，并只开启所需 feature。
+- `gpui-component` 及 assets 必须固定到经过验证的同一 git revision；`gpui`、
+  `gpui_platform`、`gpui_macros` 与其他 Zed 同源 crate 必须跟随该 revision 的 lockfile
+  兼容组合。脚手架必须输出相同 revision，不能依赖下游 lockfile 偶然解析到兼容版本。
 - 桌面应用对 Nexora 只启用 `desktop,derive`；服务端只启用 `server,derive`。
 - 公开 Rust API 必须具有说明职责、参数、副作用和错误条件的中文 rustdoc。
 

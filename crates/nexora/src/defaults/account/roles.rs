@@ -2,7 +2,9 @@
 
 mod components;
 
-use gpui::{AnyView, AppContext as _, Context, Entity, IntoElement, Render, Window};
+use gpui::{
+    AnyView, AppContext as _, Context, Entity, IntoElement, Render, Window, div, prelude::*,
+};
 
 use crate::{
     Feature, FeatureElement, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NoPath,
@@ -25,7 +27,20 @@ pub(super) const ROLES_METADATA: FeatureMetadata = FeatureMetadata::new(
 #[derive(Default)]
 struct DefaultRolesFeature {
     page: Option<Entity<RolesPage>>,
-    create_dialog: Option<Entity<RoleCreateDialog>>,
+    dialog_layer: Option<Entity<RolesDialogLayer>>,
+}
+
+struct RolesDialogLayer {
+    create_dialog: Entity<RoleCreateDialog>,
+    editor: Entity<RoleEditor>,
+}
+
+impl Render for RolesDialogLayer {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .children([self.create_dialog.clone().into_any_element()])
+            .child(self.editor.clone())
+    }
 }
 
 impl Feature for DefaultRolesFeature {
@@ -47,10 +62,14 @@ impl FeatureElement for DefaultRolesFeature {
         let editor = cx.new(|cx| RoleEditor::new(page.downgrade(), window, cx));
         let create_dialog = cx.new(|cx| RoleCreateDialog::new(page.downgrade(), window, cx));
         page.update(cx, |page, cx| {
-            page.set_components(editor, create_dialog.downgrade(), cx);
+            page.set_components(editor.clone(), create_dialog.downgrade(), cx);
+        });
+        let dialog_layer = cx.new(|_| RolesDialogLayer {
+            create_dialog,
+            editor,
         });
         self.page = Some(page);
-        self.create_dialog = Some(create_dialog);
+        self.dialog_layer = Some(dialog_layer);
     }
 
     fn activated(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -60,7 +79,7 @@ impl FeatureElement for DefaultRolesFeature {
     }
 
     fn panel_overlay(&self) -> Option<AnyView> {
-        self.create_dialog.clone().map(Into::into)
+        self.dialog_layer.clone().map(Into::into)
     }
 
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {

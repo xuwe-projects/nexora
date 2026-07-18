@@ -3,6 +3,9 @@
 use gpui::{AppContext as _, Context, Empty, IntoElement, Render, TestAppContext, Window};
 use nexora::{AppRegistry, RegistryError};
 
+const APPLICATION_SOURCE: &str = include_str!("../src/application.rs");
+const SIDEBAR_REGION_SOURCE: &str = include_str!("../../ui/src/sidebar_region.rs");
+
 #[derive(nexora::SidebarHeader)]
 struct TestSidebarHeader {
     value: u32,
@@ -88,4 +91,44 @@ fn duplicate_sidebar_slots_return_structured_registry_errors() {
         RegistryError::DuplicateSidebarFooter { first, duplicate }
             if first.ends_with("TestSidebarFooter") && duplicate.ends_with("TestSidebarFooter")
     ));
+}
+
+#[test]
+fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
+    let default_footer = APPLICATION_SOURCE
+        .split_once("fn render_default_account_footer")
+        .and_then(|(_, source)| source.split_once("fn render_sidebar"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位默认账户 Footer 实现");
+    assert!(
+        default_footer.contains(".hover("),
+        "默认 Footer 必须在自身实现中显式声明 hover"
+    );
+
+    let sidebar = APPLICATION_SOURCE
+        .split_once("fn render_sidebar")
+        .and_then(|(_, source)| source.split_once("fn render_tab"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Shell 实现");
+    let brand_position = sidebar
+        .find("nexora-sidebar-brand")
+        .expect("Shell 必须保留默认品牌区域");
+    let custom_position = sidebar
+        .find(".children(self.sidebar_header.clone())")
+        .expect("Shell 必须在品牌之后追加应用 Header Context");
+    assert!(brand_position < custom_position);
+    assert!(sidebar.contains(".border_b_1()"));
+    assert!(sidebar.contains(".border_t_1()"));
+    assert!(sidebar.contains(".gap_2()"));
+
+    let region_render = SIDEBAR_REGION_SOURCE
+        .split_once("impl RenderOnce for SidebarRegion")
+        .map(|(_, source)| source)
+        .expect("应当可以定位 SidebarRegion 渲染实现");
+    for forbidden in [".hover(", ".on_click(", ".cursor_pointer(", ".rounded("] {
+        assert!(
+            !region_render.contains(forbidden),
+            "自定义 SidebarRegion 不得隐式注入交互视觉：{forbidden}"
+        );
+    }
 }

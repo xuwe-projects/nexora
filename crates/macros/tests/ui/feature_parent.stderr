@@ -1,0 +1,5 @@
+error: 不支持的 feature 属性；允许 id、title、path、section、icon、group、order、navigation、content_scrollable、path_params、query_params 和 factory；页面目录请声明 NavigationGroup
+ --> tests/ui/feature_parent.rs:2:45
+  |
+2 | #[nexora(title = "车间", path = "/workshops", parent = "resources")]
+  |                                               ^^^^^^

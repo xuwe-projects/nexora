@@ -6,6 +6,7 @@ use std::{
 };
 
 const TEST_PERSONAL_ACCESS_TOKEN: &str = "test-personal-access-token";
+const TEST_ORGANIZATION_ID: &str = "test-organization-id";
 const TEST_PROJECT_ID: &str = "test-project-id";
 const TEST_SETUP_SECRET: &str = "test-setup-secret";
 
@@ -318,6 +319,7 @@ fn clean_config_command(directory: &Path) -> Command {
         .env_remove("DATABASE__MAX_CONNECTIONS")
         .env_remove("OIDC__ISSUER_URL")
         .env_remove("OIDC__AUDIENCE")
+        .env("OIDC__ORGANIZATION_ID", TEST_ORGANIZATION_ID)
         .env("OIDC__PROJECT_ID", TEST_PROJECT_ID)
         .env("OIDC__PERSONAL_ACCESS_TOKEN", TEST_PERSONAL_ACCESS_TOKEN)
         .env("SETUP__SECRET", TEST_SETUP_SECRET)

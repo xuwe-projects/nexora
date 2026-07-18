@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.5.0: NavigationGroup, FormDialog, and managed ZITADEL users](./0.5.0)
 - [0.4.1: OpenAPI static publishing fix](./0.4.1)
 - [0.4.0: user management UX and login username binding](./0.4.0)
 - [0.3.1: host authentication-scope observation](./0.3.1)

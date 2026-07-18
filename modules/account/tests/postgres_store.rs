@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
-    AccountInitializationOutcome, AccountInitializationStatus, ExternalIdentity,
-    IdentityIssuerBindingOutcome, PermissionDefinition, PermissionKey, User,
+    AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
+    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
+    PermissionDefinition, PermissionKey, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
@@ -63,6 +64,25 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
     .expect("宿主应能注册应用权限");
     assert_eq!(permissions.len(), 1);
     assert_eq!(permissions[0].key.as_str(), "projects:archive");
+    let admin_has_registered_permission = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM account.role_permissions role_permissions
+            JOIN account.roles roles ON roles.id = role_permissions.role_id
+            WHERE roles.key = 'admin'
+              AND role_permissions.permission_id = $1
+        )
+        "#,
+    )
+    .bind(permissions[0].id)
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对系统管理员权限兜底");
+    assert!(
+        admin_has_registered_permission,
+        "应用新注册的权限必须自动授予系统管理员角色"
+    );
 
     let role = create_role(
         &pool,
@@ -579,11 +599,11 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         .expect("初始业务角色应当可以创建");
 
     let request = ProvisionUserRequest {
-        identity_id: "provisioned-user".to_owned(),
-        username: Some("provisioned-user".to_owned()),
-        email: Some("provisioned-user@example.com".to_owned()),
-        display_name: "已开通用户".to_owned(),
-        avatar_url: None,
+        username: "provisioned-user".to_owned(),
+        given_name: "Provisioned".to_owned(),
+        family_name: "User".to_owned(),
+        email: "provisioned-user@example.com".to_owned(),
+        display_name: Some("已开通用户".to_owned()),
         role_ids: vec![initial_role.id],
     };
     let forbidden = request_json(
@@ -626,11 +646,11 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
     assert_eq!(granted_by, Some(administrator.id.clone()));
 
     let invalid_request = ProvisionUserRequest {
-        identity_id: "rollback-http-user".to_owned(),
-        username: Some("rollback-http-user".to_owned()),
-        email: None,
-        display_name: "应回滚用户".to_owned(),
-        avatar_url: None,
+        username: "rollback-http-user".to_owned(),
+        given_name: "Rollback".to_owned(),
+        family_name: "User".to_owned(),
+        email: "rollback-http-user@example.com".to_owned(),
+        display_name: Some("应回滚用户".to_owned()),
         role_ids: vec![i64::MAX],
     };
     let invalid = request_json(
@@ -714,11 +734,11 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         .expect("应当可以授予用户与角色管理权限");
 
     let empty_roles = ProvisionUserRequest {
-        identity_id: "empty-role-user".to_owned(),
-        username: Some("empty-role-user".to_owned()),
-        email: None,
-        display_name: "默认成员用户".to_owned(),
-        avatar_url: None,
+        username: "empty-role-user".to_owned(),
+        given_name: "Empty".to_owned(),
+        family_name: "Role".to_owned(),
+        email: "empty-role-user@example.com".to_owned(),
+        display_name: Some("默认成员用户".to_owned()),
         role_ids: Vec::new(),
     };
     assert_eq!(
@@ -734,11 +754,11 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
     );
 
     let denied_roles = ProvisionUserRequest {
-        identity_id: "denied-role-user".to_owned(),
-        username: Some("denied-role-user".to_owned()),
-        email: None,
-        display_name: "越权角色用户".to_owned(),
-        avatar_url: None,
+        username: "denied-role-user".to_owned(),
+        given_name: "Denied".to_owned(),
+        family_name: "Role".to_owned(),
+        email: "denied-role-user@example.com".to_owned(),
+        display_name: Some("越权角色用户".to_owned()),
         role_ids: vec![initial_role.id],
     };
     let denied = request_json_response(
@@ -758,11 +778,11 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
     assert_eq!(denied_error.error.code, "permission_denied");
 
     let allowed_roles = ProvisionUserRequest {
-        identity_id: "allowed-role-user".to_owned(),
-        username: Some("allowed-role-user".to_owned()),
-        email: None,
-        display_name: "已授权角色用户".to_owned(),
-        avatar_url: None,
+        username: "allowed-role-user".to_owned(),
+        given_name: "Allowed".to_owned(),
+        family_name: "Role".to_owned(),
+        email: "allowed-role-user@example.com".to_owned(),
+        display_name: Some("已授权角色用户".to_owned()),
         role_ids: vec![initial_role.id],
     };
     assert_eq!(
@@ -785,6 +805,7 @@ async fn test_account(pool: PgPool) -> Account {
     Account::new(AccountDependencies {
         pool,
         token_verifier: Arc::new(TokenIdentityVerifier),
+        identity_directory: Some(Arc::new(TestIdentityDirectory)),
     })
 }
 
@@ -965,6 +986,38 @@ fn identity(identity_id: &str) -> ExternalIdentity {
 }
 
 struct TokenIdentityVerifier;
+
+struct TestIdentityDirectory;
+
+#[async_trait]
+impl IdentityDirectory for TestIdentityDirectory {
+    async fn identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError> {
+        Ok(Some(identity(identity_id)))
+    }
+
+    async fn create_human_identity(
+        &self,
+        request: &CreateHumanIdentity,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        Ok(ExternalIdentity {
+            identity_id: request.username.clone(),
+            username: Some(request.username.clone()),
+            email: Some(request.email.clone()),
+            display_name: request
+                .display_name
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
+            avatar_url: None,
+        })
+    }
+
+    async fn delete_identity(&self, _identity_id: &str) -> Result<(), IdentityDirectoryError> {
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl AccessTokenVerifier for TokenIdentityVerifier {

@@ -72,10 +72,13 @@ cargo fmt --all --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo run -p nexora -- lint --workspace . --deny-warnings
+bash scripts/check-scaffold-consumer.sh
 cd docs && bun install --frozen-lockfile && bun run build
 ```
 
-修改脚手架时还要实际生成代表性项目并编译桌面端与服务端。依赖外部 PostgreSQL、OIDC 或
+`check-scaffold-consumer.sh` 必须从无 `Cargo.lock` 的实际生成项目执行 `cargo check`，用于
+发现 gpui-component 与 GPUI revision 在下游重新解析时产生的不兼容。修改 Account 脚手架时
+还要实际生成 workspace 项目并编译桌面端与服务端。依赖外部 PostgreSQL、OIDC 或
 签名环境的验证没有执行时，必须在提交与 Release Notes 中说明，不得写成已经通过。
 
 任一必需门禁失败时停止发布，修复后从失败项开始重跑；不要先打 tag 再补测试。

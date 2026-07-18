@@ -20,6 +20,8 @@ secret = "replace-with-a-long-random-setup-secret"
 issuer_url = "https://identity.example.com"
 # Account API 接受的 access token audience；填写 Provider 中代表该 API/资源服务的标识。
 audience = "nexora-api"
+# 创建用户所属的 ZITADEL Organization ID。
+organization_id = "replace-with-zitadel-organization-id"
 # ZITADEL Project ID，用于通过 ProjectService v2 创建和同步本系统角色；它不是 API Client ID。
 project_id = "replace-with-zitadel-project-id"
 # ZITADEL 服务账号 PAT，用于 UserService 与 ProjectService v2；不要提交真实令牌。

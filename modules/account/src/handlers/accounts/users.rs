@@ -16,7 +16,7 @@ use contracts::{
 };
 
 use crate::{
-    Account, AccountError, AccountState, ApiError, ExternalIdentity,
+    Account, AccountError, AccountState, ApiError, CreateHumanIdentity,
     authorization::{
         Authorized, RequiredPermission,
         accounts::{ProvisionUsers, ReadUsers, WriteUserRoles, WriteUserStatus},
@@ -31,11 +31,11 @@ pub(crate) async fn provision_user(
     ApiJson(request): ApiJson<ProvisionUserRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let ProvisionUserRequest {
-        identity_id,
         username,
+        given_name,
+        family_name,
         email,
         display_name,
-        avatar_url,
         role_ids,
     } = request;
     let roles_write_permission = <WriteUserRoles as RequiredPermission>::KEY;
@@ -48,13 +48,13 @@ pub(crate) async fn provision_user(
     }
     let granted_by = authorization.profile().user.id.clone();
     let user = Account { state }
-        .provision_user_with_roles(
-            ExternalIdentity {
-                identity_id,
+        .create_managed_user_with_roles(
+            CreateHumanIdentity {
                 username,
+                given_name,
+                family_name,
                 email,
                 display_name,
-                avatar_url,
             },
             role_ids.as_slice(),
             granted_by.as_str(),

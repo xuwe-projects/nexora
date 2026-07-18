@@ -5,6 +5,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
     button::Button, h_flex, tag::Tag, v_flex,
 };
+use ui::Card;
 
 use crate::desktop::contract::RoleResponse;
 
@@ -40,11 +41,9 @@ impl RenderOnce for RolesList {
             let role_id = role.id;
             let page = self.page.clone();
             let selected = self.selected_role_id == Some(role_id);
-            v_flex()
-                .gap_3()
-                .p_4()
-                .rounded_lg()
-                .border_1()
+            Card::new()
+                .w_full()
+                .p_3()
                 .border_color(if selected {
                     cx.theme().primary
                 } else {
@@ -52,62 +51,85 @@ impl RenderOnce for RolesList {
                 })
                 .child(
                     h_flex()
+                        .w_full()
+                        .min_w_0()
                         .justify_between()
                         .gap_3()
                         .child(
                             v_flex()
+                                .flex_1()
                                 .min_w_0()
                                 .gap_1()
-                                .child(div().font_semibold().child(role.name.clone()))
+                                .child(
+                                    h_flex()
+                                        .min_w_0()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .font_semibold()
+                                                .child(role.name.clone()),
+                                        )
+                                        .child(if role.key == "admin" {
+                                            Tag::info()
+                                                .small()
+                                                .child("系统管理员")
+                                                .into_any_element()
+                                        } else if role.is_system {
+                                            Tag::secondary()
+                                                .small()
+                                                .child("内置")
+                                                .into_any_element()
+                                        } else {
+                                            Tag::new().small().child("自定义").into_any_element()
+                                        }),
+                                )
                                 .child(
                                     div()
                                         .text_xs()
+                                        .truncate()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(role.key.clone()),
-                                ),
+                                )
+                                .when_some(role.description.clone(), |this, description| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .truncate()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(description),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
+                                .flex_shrink_0()
                                 .gap_2()
-                                .child(if role.is_system {
-                                    Tag::secondary().small().child("内置").into_any_element()
-                                } else {
-                                    Tag::info().small().child("自定义").into_any_element()
-                                })
                                 .child(
                                     div()
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(format!("{} 项权限", role.permissions.len())),
+                                )
+                                .child(
+                                    Button::new(format!("manage-default-role-{role_id}"))
+                                        .small()
+                                        .outline()
+                                        .selected(selected)
+                                        .disabled(self.busy)
+                                        .label(if selected {
+                                            "正在管理"
+                                        } else {
+                                            "管理角色"
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            _ = page.update(cx, |page, cx| {
+                                                page.select_role(role_id, window, cx);
+                                            });
+                                        }),
                                 ),
                         ),
-                )
-                .when_some(role.description, |this, description| {
-                    this.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(description),
-                    )
-                })
-                .child(
-                    h_flex().justify_end().child(
-                        Button::new(format!("manage-default-role-{role_id}"))
-                            .small()
-                            .outline()
-                            .selected(selected)
-                            .disabled(self.busy)
-                            .label(if selected {
-                                "正在管理"
-                            } else {
-                                "管理角色"
-                            })
-                            .on_click(move |_, window, cx| {
-                                _ = page.update(cx, |page, cx| {
-                                    page.select_role(role_id, window, cx);
-                                });
-                            }),
-                    ),
                 )
         });
 

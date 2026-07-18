@@ -17,7 +17,7 @@ use syn::{
 /// 为类型生成 Nexora Feature 元数据实现。
 ///
 /// 调用方必须通过 `#[nexora(title = "...", path = "/...")]` 提供标题和路由路径，
-/// 还可以配置 `id`、`section`、`icon`、`parent`、`order`、`navigation` 与
+/// 还可以配置 `id`、`section`、`icon`、`group`、`order`、`navigation` 与
 /// `content_scrollable`。动态路径使用
 /// `:name` 声明参数，并且必须显式设置 `path_params = SomeType` 与
 /// `navigation = false`。查询参数类型可以通过 `query_params = SomeType` 声明；不能实现
@@ -30,6 +30,20 @@ pub fn derive_feature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     expand_feature(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// 为不对应页面和路径的纯导航目录生成静态注册记录。
+///
+/// 调用方必须提供 `title` 与顶层 `section`，还可以配置稳定 `id`、`icon`、`order` 和
+/// 可选父 NavigationGroup 的 `parent`。宏只提交导航元数据，不生成 GPUI `Render`、页面
+/// 工厂、路由、Window 或 Tab 能力。
+#[proc_macro_derive(NavigationGroup, attributes(nexora))]
+pub fn derive_navigation_group(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    expand_navigation_group(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -125,13 +139,23 @@ struct FeatureArguments {
     path: Option<LitStr>,
     section: Option<LitStr>,
     icon: Option<LitStr>,
-    parent: Option<LitStr>,
+    group: Option<LitStr>,
     order: Option<i32>,
     navigation: Option<LitBool>,
     content_scrollable: Option<LitBool>,
     path_params: Option<Type>,
     query_params: Option<Type>,
     factory: Option<ExprPath>,
+}
+
+#[derive(Default)]
+struct NavigationGroupArguments {
+    id: Option<LitStr>,
+    title: Option<LitStr>,
+    section: Option<LitStr>,
+    icon: Option<LitStr>,
+    parent: Option<LitStr>,
+    order: Option<i32>,
 }
 
 #[derive(Default)]
@@ -201,7 +225,7 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     });
     let section = optional_string(arguments.section);
     let icon = optional_string(arguments.icon);
-    let parent = optional_string(arguments.parent);
+    let group = optional_string(arguments.group);
     let order = arguments.order.unwrap_or_default();
     let nexora = nexora_path();
     let path_params = arguments
@@ -235,7 +259,7 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 #path,
                 #section,
                 #icon,
-                #parent,
+                #group,
                 #order,
                 #navigation,
             ).with_content_scrollable(#content_scrollable);
@@ -275,6 +299,45 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             #nexora::__private::FeatureRegistration::new(
                 <#ident as #nexora::Feature>::METADATA,
                 #factory_function,
+            )
+        }
+    })
+}
+
+fn expand_navigation_group(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
+    reject_generics(&input, "NavigationGroup")?;
+    let arguments = parse_navigation_group_arguments(&input.attrs)?;
+    let title = required_string(arguments.title, "title")?;
+    let section = required_string(arguments.section, "section")?;
+    let ident = &input.ident;
+    let id = arguments.id.unwrap_or_else(|| {
+        LitStr::new(
+            &default_id(ident.to_string().as_str(), "NavigationGroup"),
+            ident.span(),
+        )
+    });
+    let icon = optional_string(arguments.icon);
+    let parent = optional_string(arguments.parent);
+    let order = arguments.order.unwrap_or_default();
+    let nexora = nexora_path();
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #nexora::NavigationGroup for #ident #type_generics #where_clause {
+            const METADATA: #nexora::NavigationGroupMetadata =
+                #nexora::NavigationGroupMetadata::new(
+                    #id,
+                    #title,
+                    #section,
+                    #icon,
+                    #parent,
+                    #order,
+                );
+        }
+
+        #nexora::__private::inventory::submit! {
+            #nexora::__private::NavigationGroupRegistration::new(
+                <#ident as #nexora::NavigationGroup>::METADATA,
             )
         }
     })
@@ -826,12 +889,12 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 meta.path.span(),
                 "icon",
             )
-        } else if meta.path.is_ident("parent") {
+        } else if meta.path.is_ident("group") {
             set_once(
-                &mut arguments.parent,
+                &mut arguments.group,
                 parse_string(&meta)?,
                 meta.path.span(),
-                "parent",
+                "group",
             )
         } else if meta.path.is_ident("order") {
             let order = parse_order(&meta)?;
@@ -877,7 +940,60 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 "factory",
             )
         } else {
-            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、parent、order、navigation、content_scrollable、path_params、query_params 和 factory"))
+            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、group、order、navigation、content_scrollable、path_params、query_params 和 factory；页面目录请声明 NavigationGroup"))
+        }
+    })?;
+
+    Ok(arguments)
+}
+
+fn parse_navigation_group_arguments(attributes: &[Attribute]) -> Result<NavigationGroupArguments> {
+    let attribute = single_attribute(attributes)?;
+    let mut arguments = NavigationGroupArguments::default();
+
+    attribute.parse_nested_meta(|meta| {
+        if meta.path.is_ident("id") {
+            set_once(
+                &mut arguments.id,
+                parse_string(&meta)?,
+                meta.path.span(),
+                "id",
+            )
+        } else if meta.path.is_ident("title") {
+            set_once(
+                &mut arguments.title,
+                parse_string(&meta)?,
+                meta.path.span(),
+                "title",
+            )
+        } else if meta.path.is_ident("section") {
+            set_once(
+                &mut arguments.section,
+                parse_string(&meta)?,
+                meta.path.span(),
+                "section",
+            )
+        } else if meta.path.is_ident("icon") {
+            set_once(
+                &mut arguments.icon,
+                parse_string(&meta)?,
+                meta.path.span(),
+                "icon",
+            )
+        } else if meta.path.is_ident("parent") {
+            set_once(
+                &mut arguments.parent,
+                parse_string(&meta)?,
+                meta.path.span(),
+                "parent",
+            )
+        } else if meta.path.is_ident("order") {
+            let order = parse_order(&meta)?;
+            set_once(&mut arguments.order, order, meta.path.span(), "order")
+        } else {
+            Err(meta.error(
+                "不支持的 navigation group 属性；允许 id、title、section、icon、parent 和 order",
+            ))
         }
     })?;
 

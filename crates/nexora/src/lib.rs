@@ -43,12 +43,13 @@ pub use macros::LoginFeature;
 #[cfg(feature = "derive")]
 pub use macros::Settings;
 #[cfg(all(feature = "derive", feature = "desktop"))]
-pub use macros::{Feature, SettingsWindow, SidebarFooter, SidebarHeader, Window};
+pub use macros::{Feature, NavigationGroup, SettingsWindow, SidebarFooter, SidebarHeader, Window};
 #[cfg(feature = "desktop")]
 pub use metadata::LoginFeature;
 #[cfg(feature = "desktop")]
 pub use metadata::{
-    Feature, FeatureMetadata, SettingsWindow, SidebarFooter, SidebarHeader, Window, WindowMetadata,
+    Feature, FeatureMetadata, NavigationGroup, NavigationGroupMetadata, SettingsWindow,
+    SidebarFooter, SidebarHeader, Window, WindowMetadata,
 };
 #[cfg(feature = "desktop")]
 pub use registry::{AppRegistry, AppRegistryBuilder, RegistryError};
@@ -86,7 +87,8 @@ pub mod __private {
 
     #[cfg(feature = "desktop")]
     use crate::{
-        FeatureInstance, FeatureMetadata, FeatureRuntimeError, RouteMatch, WindowMetadata,
+        FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationGroupMetadata, RouteMatch,
+        WindowMetadata,
         runtime::{WindowInstance, WindowRuntimeError},
     };
 
@@ -124,6 +126,25 @@ pub mod __private {
 
         pub(crate) const fn factory(&self) -> FeatureFactory {
             self.factory
+        }
+    }
+
+    /// 一条由 `#[derive(NavigationGroup)]` 自动提交的纯导航目录记录。
+    #[cfg(feature = "desktop")]
+    #[derive(Debug, Clone, Copy)]
+    pub struct NavigationGroupRegistration {
+        metadata: NavigationGroupMetadata,
+    }
+
+    #[cfg(feature = "desktop")]
+    impl NavigationGroupRegistration {
+        /// 创建只包含导航元数据且没有页面工厂的目录注册记录。
+        pub const fn new(metadata: NavigationGroupMetadata) -> Self {
+            Self { metadata }
+        }
+
+        pub(crate) const fn metadata(&self) -> NavigationGroupMetadata {
+            self.metadata
         }
     }
 
@@ -304,6 +325,8 @@ pub mod __private {
 
     #[cfg(feature = "desktop")]
     inventory::collect!(FeatureRegistration);
+    #[cfg(feature = "desktop")]
+    inventory::collect!(NavigationGroupRegistration);
     #[cfg(feature = "desktop")]
     inventory::collect!(LoginFeatureRegistration);
     #[cfg(feature = "desktop")]

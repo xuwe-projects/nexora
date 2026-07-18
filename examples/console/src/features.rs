@@ -402,12 +402,21 @@ pub fn feature_catalog_sections() -> impl Iterator<Item = (&'static str, &'stati
         .filter_map(|items| items.first().map(|first| (first.section(), items)))
 }
 
+#[derive(nexora::NavigationGroup)]
+#[nexora(
+    id = "project-management",
+    title = "项目管理",
+    section = "工作台",
+    icon = "folder-open",
+    order = 10
+)]
+struct ProjectManagementGroup;
+
 #[derive(Default, nexora::Feature)]
 #[nexora(
     title = "模板项目",
     path = "/projects/templates",
-    section = "工作台",
-    parent = "projects",
+    group = "project-management",
     icon = "folder-open",
     order = 11
 )]
@@ -427,8 +436,7 @@ impl nexora::FeatureElement for ProjectTemplatesFeature {
 #[nexora(
     title = "运行环境",
     path = "/projects/environments",
-    section = "工作台",
-    parent = "projects",
+    group = "project-management",
     icon = "folder-open",
     order = 12
 )]

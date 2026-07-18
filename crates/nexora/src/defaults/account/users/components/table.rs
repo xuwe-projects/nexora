@@ -38,7 +38,8 @@ impl UsersTable {
         let state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .sortable(false)
-                .col_movable(false)
+                .col_movable(true)
+                .col_resizable(true)
                 .col_selectable(false)
                 .row_selectable(false)
         });
@@ -108,8 +109,14 @@ impl UsersTable {
 }
 
 impl Render for UsersTable {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().min_h_0().child(
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = self.state.read(cx).delegate().users.len();
+        let table_height = if rows == 0 {
+            160.0
+        } else {
+            ((rows.saturating_add(1) as f32) * 40.0).clamp(80.0, 520.0)
+        };
+        div().w_full().h(px(table_height)).child(
             Card::new()
                 .size_full()
                 .overflow_hidden()
@@ -132,19 +139,23 @@ impl UsersTableDelegate {
                 Column::new("user", "用户")
                     .width(px(260.))
                     .min_width(px(220.))
-                    .fixed_left(),
+                    .max_width(px(360.)),
                 Column::new("username", "登录用户名")
-                    .width(px(180.))
-                    .min_width(px(140.)),
+                    .width(px(160.))
+                    .min_width(px(120.))
+                    .max_width(px(240.)),
                 Column::new("email", "邮箱")
-                    .width(px(220.))
-                    .min_width(px(180.)),
+                    .width(px(240.))
+                    .min_width(px(180.))
+                    .max_width(px(360.)),
                 Column::new("status", "状态")
-                    .width(px(110.))
-                    .min_width(px(96.)),
+                    .width(px(96.))
+                    .min_width(px(84.))
+                    .max_width(px(112.)),
                 Column::new("actions", "操作")
-                    .width(px(220.))
-                    .min_width(px(220.))
+                    .width(px(196.))
+                    .min_width(px(180.))
+                    .max_width(px(240.))
                     .selectable(false),
             ],
             users: Vec::new(),
@@ -225,9 +236,9 @@ impl UsersTableDelegate {
                     } else {
                         "需要 users:roles.write 与 roles:read 权限"
                     })
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         _ = role_page.update(cx, |page, cx| {
-                            page.manage_roles(role_user_id.clone(), cx);
+                            page.manage_roles(role_user_id.clone(), window, cx);
                         });
                     }),
             )
@@ -266,6 +277,20 @@ impl TableDelegate for UsersTableDelegate {
         self.columns[col_ix].clone()
     }
 
+    fn move_column(
+        &mut self,
+        col_ix: usize,
+        to_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) {
+        if col_ix >= self.columns.len() || to_ix >= self.columns.len() || col_ix == to_ix {
+            return;
+        }
+        let column = self.columns.remove(col_ix);
+        self.columns.insert(to_ix, column);
+    }
+
     fn render_tr(
         &mut self,
         row_ix: usize,
@@ -290,20 +315,19 @@ impl TableDelegate for UsersTableDelegate {
         let Some(user) = self.users.get(row_ix).cloned() else {
             return div().into_any_element();
         };
-        match col_ix {
-            0 => self.render_user(&user, cx),
-            1 => user
+        match self.columns[col_ix].key.as_ref() {
+            "user" => self.render_user(&user, cx),
+            "username" => user
                 .username
-                .as_deref()
-                .map(|username| format!("@{username}"))
+                .clone()
                 .unwrap_or_else(|| "未绑定".to_owned())
                 .into_any_element(),
-            2 => user
+            "email" => user
                 .email
                 .clone()
                 .unwrap_or_else(|| "—".to_owned())
                 .into_any_element(),
-            3 => match user.status {
+            "status" => match user.status {
                 UserStatus::Active => Tag::success()
                     .small()
                     .rounded_full()
@@ -315,7 +339,7 @@ impl TableDelegate for UsersTableDelegate {
                     .child("已停用")
                     .into_any_element(),
             },
-            4 => self.render_actions(&user, cx),
+            "actions" => self.render_actions(&user, cx),
             _ => div().into_any_element(),
         }
     }

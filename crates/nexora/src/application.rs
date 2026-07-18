@@ -4,7 +4,7 @@
 //! 主窗口创建以及 Feature Entity 的生命周期由框架统一管理。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
 };
@@ -24,26 +24,24 @@ use gpui::{
     prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    StyledExt as _, TitleBar,
     alert::Alert,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle},
+    collapsible::Collapsible,
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
-    sidebar::{
-        Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader as SidebarHeaderContainer,
-        SidebarMenu, SidebarMenuItem,
-    },
+    scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
+    v_flex,
 };
 #[cfg(feature = "desktop")]
-use gpui_component::{
-    avatar::Avatar, menu::DropdownMenu as _, sidebar::SidebarFooter as SidebarFooterContainer,
-};
+use gpui_component::{avatar::Avatar, menu::DropdownMenu as _};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use ui::{PanelHeader, layout::WorkspaceLayout};
+use ui::{PanelHeader, SidebarRegion, layout::WorkspaceLayout};
 
 /// 应用默认品牌区域使用的 PNG Logo。
 ///
@@ -86,7 +84,8 @@ pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
 
 use crate::{
     AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationContextExt as _,
-    RegistryError, ResolveError, RouteMatch, RouteTargetKind, WindowRuntimeError,
+    NavigationGroupMetadata, RegistryError, ResolveError, RouteMatch, RouteTargetKind,
+    WindowRuntimeError,
     runtime::{clear_navigation_handler, install_navigation_handler},
 };
 
@@ -696,6 +695,7 @@ struct ApplicationShell {
     regular_tab_scroll_handle: ScrollHandle,
     navigation_history: Vec<ShellRoute>,
     navigation_history_index: usize,
+    expanded_navigation_groups: HashSet<&'static str>,
     preferences_writer: Option<PreferencesWriter>,
     feature_instances: HashMap<String, FeatureInstance>,
     #[cfg(feature = "desktop")]
@@ -712,6 +712,28 @@ struct ApplicationShell {
     #[cfg(feature = "desktop")]
     _authentication_subscription: Option<Subscription>,
     _release_subscription: Option<Subscription>,
+}
+
+#[derive(Clone, Copy)]
+enum NavigationEntry {
+    Group(NavigationGroupMetadata),
+    Feature(FeatureMetadata),
+}
+
+impl NavigationEntry {
+    fn sort_key(&self) -> (i32, u8, &'static str) {
+        match *self {
+            Self::Group(metadata) => (metadata.order(), 0, metadata.id()),
+            Self::Feature(metadata) => (metadata.order(), 1, metadata.id()),
+        }
+    }
+
+    fn section(self, registry: &AppRegistry) -> &'static str {
+        match self {
+            Self::Group(metadata) => metadata.section(),
+            Self::Feature(metadata) => registry.feature_section(metadata),
+        }
+    }
 }
 
 impl ApplicationShell {
@@ -807,6 +829,12 @@ impl ApplicationShell {
         let preferences_writer =
             preferences_store.and_then(|store| PreferencesWriter::start(store).ok());
 
+        let expanded_navigation_groups = registry
+            .navigation_group_ancestors(initial_route.route().target().id())
+            .into_iter()
+            .map(NavigationGroupMetadata::id)
+            .collect();
+
         Self {
             registry,
             application_name,
@@ -822,6 +850,7 @@ impl ApplicationShell {
             regular_tab_scroll_handle: ScrollHandle::new(),
             navigation_history: vec![initial_route],
             navigation_history_index: 0,
+            expanded_navigation_groups,
             preferences_writer,
             feature_instances,
             #[cfg(feature = "desktop")]
@@ -996,6 +1025,7 @@ impl ApplicationShell {
                 *current = route.clone();
             }
             self.scroll_tab_into_view(&route);
+            self.expand_active_navigation_groups();
             return;
         }
 
@@ -1004,6 +1034,7 @@ impl ApplicationShell {
             self.push_navigation_history(route.clone());
         }
         self.scroll_tab_into_view(&route);
+        self.expand_active_navigation_groups();
     }
 
     fn push_navigation_history(&mut self, route: ShellRoute) {
@@ -1344,6 +1375,7 @@ impl ApplicationShell {
             Ok(()) => self.navigation_error = None,
             Err(error) => self.navigation_error = Some(error.to_string()),
         }
+        self.expand_active_navigation_groups();
         cx.notify();
     }
 
@@ -1416,72 +1448,164 @@ impl ApplicationShell {
         Ok(())
     }
 
-    fn render_navigation_item(
+    fn render_navigation_feature(
         &self,
         metadata: FeatureMetadata,
         cx: &mut Context<Self>,
-    ) -> SidebarMenuItem {
-        let children = self
-            .registry
-            .children_of(metadata.id())
-            .map(|child| self.render_navigation_item(child, cx))
-            .collect::<Vec<_>>();
+    ) -> AnyElement {
         let path = metadata.path();
-        let item = SidebarMenuItem::new(metadata.title())
+        Button::new(format!("nexora-navigation-feature-{}", metadata.id()))
+            .ghost()
+            .small()
+            .w_full()
+            .justify_start()
+            .selected(self.active_target_id() == metadata.id())
             .icon(feature_icon(metadata.icon()))
-            .active(self.active_target_id() == metadata.id())
+            .label(metadata.title())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Err(error) = this.open_path(path, window, cx) {
                     this.navigation_error = Some(error.to_string());
                 }
                 cx.notify();
-            }));
-
-        if children.is_empty() {
-            item
-        } else {
-            item.default_open(self.navigation_branch_is_active(metadata.id()))
-                .click_to_toggle(true)
-                .children(children)
-        }
+            }))
+            .into_any_element()
     }
 
     fn active_target_id(&self) -> &'static str {
         self.active_route.route().target().id()
     }
 
-    fn navigation_branch_is_active(&self, branch_id: &str) -> bool {
-        let mut active_id = Some(self.active_target_id());
-        while let Some(id) = active_id {
-            if id == branch_id {
-                return true;
-            }
-            active_id = self
-                .registry
-                .features()
-                .iter()
-                .find(|metadata| metadata.id() == id)
-                .and_then(|metadata| metadata.parent());
+    fn expand_active_navigation_groups(&mut self) {
+        for group in self
+            .registry
+            .navigation_group_ancestors(self.active_target_id())
+        {
+            self.expanded_navigation_groups.insert(group.id());
         }
-        false
     }
 
-    fn navigation_sections(&self) -> Vec<(&'static str, Vec<FeatureMetadata>)> {
-        self.registry
-            .navigation_features()
-            .filter(|metadata| metadata.parent().is_none())
-            .fold(Vec::new(), |mut sections, metadata| {
-                let section = metadata.section().unwrap_or("应用");
-                if let Some((_, items)) = sections
-                    .iter_mut()
-                    .find(|(existing, _)| *existing == section)
-                {
-                    items.push(metadata);
-                } else {
-                    sections.push((section, vec![metadata]));
-                }
-                sections
-            })
+    fn toggle_navigation_group(&mut self, group_id: &'static str, cx: &mut Context<Self>) {
+        if !self.expanded_navigation_groups.remove(group_id) {
+            self.expanded_navigation_groups.insert(group_id);
+        }
+        cx.notify();
+    }
+
+    fn render_navigation_group(
+        &self,
+        metadata: NavigationGroupMetadata,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let group_id = metadata.id();
+        let expanded = self.expanded_navigation_groups.contains(group_id);
+        let children = self
+            .navigation_children(Some(group_id), metadata.section())
+            .into_iter()
+            .map(|entry| self.render_navigation_entry(entry, cx))
+            .collect::<Vec<_>>();
+        let header = Button::new(format!("nexora-navigation-group-{group_id}"))
+            .ghost()
+            .small()
+            .w_full()
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .child(feature_icon(metadata.icon()))
+                    .child(div().flex_1().min_w_0().truncate().child(metadata.title()))
+                    .child(Icon::new(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_navigation_group(group_id, cx);
+            }));
+
+        Collapsible::new()
+            .open(expanded)
+            .child(header)
+            .content(
+                v_flex()
+                    .ml_3p5()
+                    .pl_2p5()
+                    .py_0p5()
+                    .gap_1()
+                    .border_l_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .children(children),
+            )
+            .into_any_element()
+    }
+
+    fn render_navigation_entry(
+        &self,
+        entry: NavigationEntry,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match entry {
+            NavigationEntry::Group(metadata) => self.render_navigation_group(metadata, cx),
+            NavigationEntry::Feature(metadata) => self.render_navigation_feature(metadata, cx),
+        }
+    }
+
+    fn navigation_children(
+        &self,
+        parent: Option<&str>,
+        section: &'static str,
+    ) -> Vec<NavigationEntry> {
+        let mut entries = self
+            .registry
+            .navigation_groups()
+            .iter()
+            .copied()
+            .filter(|group| group.parent() == parent && group.section() == section)
+            .map(NavigationEntry::Group)
+            .chain(
+                self.registry
+                    .navigation_features()
+                    .filter(|feature| {
+                        feature.group() == parent
+                            && self.registry.feature_section(*feature) == section
+                    })
+                    .map(NavigationEntry::Feature),
+            )
+            .collect::<Vec<_>>();
+        entries.sort_by_key(NavigationEntry::sort_key);
+        entries
+    }
+
+    fn navigation_sections(&self) -> Vec<(&'static str, Vec<NavigationEntry>)> {
+        let mut sections = Vec::<(&'static str, Vec<NavigationEntry>)>::new();
+        let mut roots = self
+            .registry
+            .navigation_groups()
+            .iter()
+            .copied()
+            .filter(|group| group.parent().is_none())
+            .map(NavigationEntry::Group)
+            .chain(
+                self.registry
+                    .navigation_features()
+                    .filter(|feature| feature.group().is_none())
+                    .map(NavigationEntry::Feature),
+            )
+            .collect::<Vec<_>>();
+        roots.sort_by_key(NavigationEntry::sort_key);
+        for entry in roots {
+            let section = entry.section(&self.registry);
+            if let Some((_, items)) = sections
+                .iter_mut()
+                .find(|(existing, _)| *existing == section)
+            {
+                items.push(entry);
+            } else {
+                sections.push((section, vec![entry]));
+            }
+        }
+        sections
     }
 
     fn render_default_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1539,8 +1663,14 @@ impl ApplicationShell {
         let menu_items = account_actions::menu_actions();
         let action_context = cx.focus_handle();
 
-        SidebarFooterContainer::new()
+        SidebarRegion::new("nexora-default-account-footer")
             .w_full()
+            .py_2()
+            .rounded(cx.theme().radius)
+            .hover(|this| {
+                this.bg(cx.theme().tokens.sidebar_accent)
+                    .text_color(cx.theme().sidebar_accent_foreground)
+            })
             .child(
                 h_flex().flex_1().min_w_0().gap_2().child(avatar).child(
                     div()
@@ -1582,61 +1712,103 @@ impl ApplicationShell {
             .into_iter()
             .enumerate()
             .map(|(index, (section, items))| {
-                let menu = SidebarMenu::new().children(
+                let menu = v_flex().gap_1().children(
                     items
                         .into_iter()
-                        .map(|metadata| self.render_navigation_item(metadata, cx)),
+                        .map(|entry| self.render_navigation_entry(entry, cx)),
                 );
-                SidebarGroup::new(section).child(if index + 1 < navigation_section_count {
-                    menu.pb_3().border_b_1().border_color(sidebar_border)
-                } else {
-                    menu
-                })
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .h_8()
+                            .px_2()
+                            .text_xs()
+                            .text_color(cx.theme().sidebar_foreground.opacity(0.7))
+                            .child(section),
+                    )
+                    .child(menu)
+                    .when(index + 1 < navigation_section_count, |this| {
+                        this.pb_3().border_b_1().border_color(sidebar_border)
+                    })
             })
             .collect::<Vec<_>>();
-        let header = self
-            .sidebar_header
-            .as_ref()
-            .map(|header| header.clone().into_any_element())
-            .unwrap_or_else(|| self.render_default_sidebar_header(cx));
+        let brand = SidebarRegion::new("nexora-sidebar-brand")
+            .py_2()
+            .child(self.render_default_sidebar_header(cx));
+        let header = v_flex()
+            .w_full()
+            .gap_2()
+            .px_2()
+            .child(brand)
+            .children(self.sidebar_header.clone());
 
-        let sidebar = Sidebar::new("nexora-sidebar")
-            .size_full()
-            .collapsible(SidebarCollapsible::None)
-            .header(
-                div()
-                    .w_full()
-                    .pb_3()
-                    .border_b_1()
-                    .border_color(sidebar_border)
-                    .child(SidebarHeaderContainer::new().child(header)),
-            )
-            .children(navigation_groups);
-        let sidebar = if let Some(footer) = self.sidebar_footer.as_ref() {
-            sidebar.footer(
+        let footer = if let Some(footer) = self.sidebar_footer.as_ref() {
+            Some(
                 div()
                     .w_full()
                     .pt_3()
+                    .pb_3()
+                    .px_3()
                     .border_t_1()
                     .border_color(sidebar_border)
-                    .child(SidebarFooterContainer::new().w_full().child(footer.clone())),
+                    .child(footer.clone())
+                    .into_any_element(),
             )
         } else {
             #[cfg(feature = "desktop")]
             if self.account_enabled {
-                sidebar.footer(
+                Some(
                     div()
                         .w_full()
                         .pt_3()
+                        .pb_3()
+                        .px_3()
                         .border_t_1()
                         .border_color(sidebar_border)
-                        .child(self.render_default_account_footer(cx)),
+                        .child(self.render_default_account_footer(cx))
+                        .into_any_element(),
                 )
             } else {
-                sidebar
+                None
             }
+            #[cfg(not(feature = "desktop"))]
+            None
         };
-        sidebar.into_any_element()
+
+        v_flex()
+            .id("nexora-sidebar")
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .bg(cx.theme().tokens.sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .border_r_1()
+            .border_color(sidebar_border)
+            .child(
+                div()
+                    .w_full()
+                    .pt_3()
+                    .pb_3()
+                    .px_3()
+                    .border_b_1()
+                    .border_color(sidebar_border)
+                    .child(header),
+            )
+            .child(
+                v_flex()
+                    .id("nexora-sidebar-navigation")
+                    .flex_1()
+                    .min_h_0()
+                    .px_3()
+                    .py_3()
+                    .gap_3()
+                    .overflow_y_scrollbar()
+                    .children(navigation_groups),
+            )
+            .when_some(footer, |this, footer| this.child(footer))
+            .into_any_element()
     }
 
     fn render_tab(route: ShellRoute, is_pinned: bool, shell: WeakEntity<Self>) -> Tab {
@@ -2001,40 +2173,23 @@ impl ApplicationShell {
         else {
             return vec![(self.active_route.title(), None)];
         };
-        let mut parents = Vec::new();
-        let mut parent_id = active_metadata.parent();
-        while let Some(id) = parent_id {
-            let Some(parent) = self
-                .registry
-                .features()
-                .iter()
-                .find(|metadata| metadata.id() == id)
-                .copied()
-            else {
-                break;
-            };
-            parent_id = parent.parent();
-            parents.push(parent);
-        }
-        let section = active_metadata
-            .section()
-            .or_else(|| parents.iter().find_map(|metadata| metadata.section()))
-            .unwrap_or("应用");
+        let groups = self.registry.navigation_group_ancestors(active_id);
+        let section = self.registry.feature_section(active_metadata);
         let section_path = self
             .registry
             .navigation_features()
             .find(|metadata| {
-                metadata.parent().is_none()
-                    && metadata.section().unwrap_or("应用") == section
+                metadata.group().is_none()
+                    && self.registry.feature_section(*metadata) == section
                     && !metadata.path().contains(':')
             })
             .map(|metadata| metadata.path().to_owned());
         let mut items = vec![(section.to_owned(), section_path)];
-        parents.reverse();
-        items.extend(parents.into_iter().map(|metadata| {
-            let path = (!metadata.path().contains(':')).then(|| metadata.path().to_owned());
-            (metadata.title().to_owned(), path)
-        }));
+        items.extend(
+            groups
+                .into_iter()
+                .map(|metadata| (metadata.title().to_owned(), None)),
+        );
         items.push((self.active_route.title(), None));
         items
     }

@@ -177,6 +177,8 @@ pub struct OidcSettings {
     pub issuer_url: String,
     /// Access token 必须包含的 API audience。
     pub audience: String,
+    /// 创建人类用户所属的 ZITADEL Organization ID。
+    pub organization_id: String,
     /// 保存并签发本系统角色的认证授权 Project ID。
     ///
     /// 该值与可能是 API Client ID 的 `audience` 含义不同，初始化时作为
@@ -194,6 +196,7 @@ impl fmt::Debug for OidcSettings {
             .debug_struct("OidcSettings")
             .field("issuer_url", &self.issuer_url)
             .field("audience", &self.audience)
+            .field("organization_id", &self.organization_id)
             .field("project_id", &self.project_id)
             .field("personal_access_token", &"[REDACTED]")
             .finish()
@@ -206,6 +209,7 @@ impl Default for OidcSettings {
         Self {
             issuer_url: "https://id.example.com".to_owned(),
             audience: "nexora-api".to_owned(),
+            organization_id: String::new(),
             project_id: String::new(),
             personal_access_token: String::new(),
         }
@@ -253,6 +257,11 @@ impl OidcSettings {
         self.personal_access_token.trim()
     }
 
+    /// 返回创建用户所属的 ZITADEL Organization ID。
+    pub(crate) fn organization_id(&self) -> &str {
+        self.organization_id.trim()
+    }
+
     /// 返回初始化角色所属的认证授权 Project ID。
     pub(crate) fn project_id(&self) -> &str {
         self.project_id.trim()
@@ -290,6 +299,9 @@ fn validate_database(database: &DatabaseSettings) -> Result<(), ServerConfigErro
 fn validate_oidc(oidc: &OidcSettings) -> Result<(), ServerConfigError> {
     if oidc.audience.trim().is_empty() {
         return Err(ServerConfigError::Invalid("oidc.audience 不能为空"));
+    }
+    if oidc.organization_id().is_empty() {
+        return Err(ServerConfigError::Invalid("oidc.organization_id 不能为空"));
     }
     if oidc.project_id().is_empty() {
         return Err(ServerConfigError::Invalid("oidc.project_id 不能为空"));

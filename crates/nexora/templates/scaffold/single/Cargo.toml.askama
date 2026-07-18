@@ -4,11 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", default-features = false }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba", default-features = false }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "031555662e99a1b5a549990b47f246d475b8288a" }
 nexora = { {{ nexora_source }}, default-features = false, features = ["desktop", "derive"] }
 
-[patch.crates-io]
-# GPUI 当前仍依赖已被 crates.io 撤回的版本，临时固定到对应源码 revision。
-spin_09 = { package = "spin", git = "https://github.com/mvdnes/spin-rs.git", rev = "502c9dca17c99762184095c9d64c0aedd1db97ff" }
-spin_10 = { package = "spin", git = "https://github.com/mvdnes/spin-rs.git", rev = "4a6cc16c47dbffab0225717056aebb2f06cb163c" }
+[replace]
+"https://github.com/zed-industries/zed#gpui@0.2.2" = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba" }
+"https://github.com/zed-industries/zed#gpui_macros@0.1.0" = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba" }

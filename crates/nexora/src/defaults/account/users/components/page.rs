@@ -50,7 +50,7 @@ impl UsersPage {
     ) -> Self {
         let page = cx.entity().downgrade();
         let users_table = cx.new(|cx| UsersTable::new(page, window, cx));
-        let role_editor = cx.new(|_| UserRoleEditor::default());
+        let role_editor = cx.new(UserRoleEditor::new);
         let table = users_table.downgrade();
         let role_editor_subscription = cx.observe(&role_editor, move |_, _, cx| {
             _ = table.update(cx, |table, cx| table.refresh(cx));
@@ -81,6 +81,10 @@ impl UsersPage {
     ) {
         self.provision_dialog = Some(dialog);
         cx.notify();
+    }
+
+    pub(in crate::defaults::account::users) fn role_editor(&self) -> Entity<UserRoleEditor> {
+        self.role_editor.clone()
     }
 
     pub(in crate::defaults::account::users) fn load_if_needed(&mut self, cx: &mut Context<Self>) {
@@ -166,13 +170,18 @@ impl UsersPage {
         }
     }
 
-    pub(super) fn manage_roles(&mut self, user_id: String, cx: &mut Context<Self>) {
+    pub(super) fn manage_roles(
+        &mut self,
+        user_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.loading || self.role_editor.read(cx).is_busy() {
             return;
         }
         let roles = self.roles.clone();
         self.role_editor.update(cx, |editor, cx| {
-            editor.open(user_id, roles, cx);
+            editor.open(user_id, roles, window, cx);
         });
         self.refresh_table(cx);
     }
@@ -246,8 +255,7 @@ impl Render for UsersPage {
         let loaded_count = self.users_table.read(cx).len(cx);
 
         v_flex()
-            .size_full()
-            .min_h_0()
+            .w_full()
             .gap_4()
             .p_5()
             .child(
@@ -303,7 +311,6 @@ impl Render for UsersPage {
             .when_some(self.notice.clone(), |this, notice| {
                 this.child(Alert::success("default-account-users-notice", notice))
             })
-            .child(div().flex_1().min_h_0().child(self.users_table.clone()))
-            .child(self.role_editor.clone())
+            .child(self.users_table.clone())
     }
 }

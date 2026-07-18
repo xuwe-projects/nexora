@@ -15,6 +15,7 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     items: [
       { text: "Application 与品牌", link: "/desktop/application" },
       { text: "Feature 与导航", link: "/desktop/features" },
+      { text: "公共桌面组件", link: "/desktop/components" },
       { text: "Account", link: "/desktop/account" },
     ],
   },
@@ -37,8 +38,8 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     text: "版本发布",
     items: [
       { text: "更新日志", link: "/changelog/" },
-      { text: "0.4.1", link: "/changelog/0.4.1" },
-      { text: "从 0.4.0 升级", link: "/changelog/0.4.1#从-040-升级" },
+      { text: "0.5.0", link: "/changelog/0.5.0" },
+      { text: "从 0.4.1 升级", link: "/changelog/0.5.0#破坏性变更与迁移" },
     ],
   },
 ];
@@ -56,6 +57,7 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     items: [
       { text: "Application and Branding", link: "/en/desktop/application" },
       { text: "Features and Navigation", link: "/en/desktop/features" },
+      { text: "Shared Desktop Components", link: "/en/desktop/components" },
       { text: "Account", link: "/en/desktop/account" },
     ],
   },
@@ -78,8 +80,8 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     text: "Releases",
     items: [
       { text: "Changelog", link: "/en/changelog/" },
-      { text: "0.4.1", link: "/en/changelog/0.4.1" },
-      { text: "Upgrade from 0.4.0", link: "/en/changelog/0.4.1#upgrade-from-040" },
+      { text: "0.5.0", link: "/en/changelog/0.5.0" },
+      { text: "Upgrade from 0.4.1", link: "/en/changelog/0.5.0#upgrade-from-041" },
     ],
   },
 ];

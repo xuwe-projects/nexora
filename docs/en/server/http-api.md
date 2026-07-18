@@ -143,9 +143,11 @@ responses also include `x-request-id`, matching the error body's `request_id`.
 
 ### `GET /me`
 
-Requires authentication but no extra permission. Returns `200 AccessProfile`. It never provisions an
-unknown identity. Common failures are invalid token `401`, unregistered or suspended account `403`,
-and Provider `503`.
+Requires authentication but no extra permission. It reads the latest human profile from ZITADEL
+UserService v2 by identity ID, synchronizes username, email, display name, avatar, and last-login
+time, then returns `200 AccessProfile`. It never provisions an unknown identity. Common failures are
+invalid token `401`, unregistered or suspended account `403`, missing directory identity `404`, and
+Provider `503`.
 
 ## Users
 
@@ -156,31 +158,34 @@ Requires `users:read`. Accepts `page` and `page_size`; unknown query keys are re
 
 ### `POST /users`
 
-Requires `users:provision` and, for a non-empty `role_ids`, `users:roles.write`.
+Requires `users:provision` and, for a non-empty `role_ids`, `users:roles.write`. The server creates a
+human user through ZITADEL gRPC and binds the returned identity ID locally.
 
 | Body field | Required | Constraints |
 | --- | --- | --- |
-| `identity_id` | Yes | Trimmed non-empty issuer subject, at most 255 bytes |
-| `username` | No | Nullable; trimmed non-empty value up to 200 characters |
-| `email` | No | May be omitted or null, up to 320 bytes |
-| `display_name` | Yes | Trimmed non-empty value up to 200 characters |
-| `avatar_url` | No | May be omitted or null, up to 2048 bytes |
+| `username` | Yes | Trimmed 1–200 characters; unique in the configured Organization |
+| `given_name` | Yes | Trimmed 1–200 characters |
+| `family_name` | Yes | Trimmed 1–200 characters |
+| `email` | Yes | Valid email without whitespace, up to 200 characters |
+| `display_name` | No | Nullable, up to 200 characters; names are used when omitted |
 | `role_ids` | No | Defaults to `[]`, at most 64 IDs; deduplicated by the server |
 
 ```json
 {
-  "identity_id": "279693210507280451",
   "username": "lin.chen",
+  "given_name": "Lin",
+  "family_name": "Chen",
   "email": "lin@example.com",
   "display_name": "Lin Chen",
-  "avatar_url": null,
   "role_ids": [3, 5]
 }
 ```
 
-Returns `201 Created`, `Location: /users/{id}`, and the created `User`. User creation, the built-in
-`member` assignment, and requested roles are transactional. Duplicate identity returns
-`409 user_already_provisioned`; invalid fields return `422`; missing roles return `404`.
+Returns `201 Created`, `Location: /users/{id}`, and the created `User`. Local user creation, the
+built-in `member` assignment, and requested roles are transactional. A local failure triggers a
+best-effort deletion of the newly created Provider user. Duplicate username/email returns
+`409 identity_already_exists`; invalid fields return `422`; missing roles return `404`; an unavailable
+Provider returns `503 identity_provider_unavailable`.
 
 ### `GET /users/{user_id}`
 
@@ -269,7 +274,8 @@ all direct permissions. Returns `200 Role`.
 
 Requires `permissions:read`. Returns the complete unpaged catalog as
 `200 {"items": Permission[]}`. HTTP is read-only; trusted hosts register permissions through
-`create_permissions` or `Account::register_permissions`.
+`create_permissions` or `Account::register_permissions`. Registration also grants each new
+permission to the system-administrator role in the same transaction.
 
 ## Default Setup SSR flow
 

@@ -1,20 +1,19 @@
-//! 创建用户对话框内容。
+//! 使用公共 FormDialog 创建 ZITADEL 用户并绑定本地账号。
 
 use std::collections::BTreeSet;
 
-use gpui::{Context, Entity, Render, Task, WeakEntity, Window, div, prelude::*, px};
+use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
 use gpui_component::{
-    Disableable as _, Sizable as _, StyledExt as _, WindowExt as _,
+    Disableable as _, Sizable as _, StyledExt as _,
     alert::Alert,
-    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    dialog::DialogFooter,
     form::{field, v_form},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     spinner::Spinner,
     v_flex,
 };
+use ui::{FormDialog, FormDialogState};
 
 use crate::{
     defaults::account::has_permission,
@@ -28,15 +27,17 @@ use super::UsersPage;
 
 pub(in crate::defaults::account::users) struct ProvisionUserDialog {
     page: WeakEntity<UsersPage>,
-    identity_id: Entity<InputState>,
+    form: Entity<FormDialogState>,
     username: Entity<InputState>,
+    given_name: Entity<InputState>,
+    family_name: Entity<InputState>,
     display_name: Entity<InputState>,
     email: Entity<InputState>,
-    avatar_url: Entity<InputState>,
     roles: Vec<RoleResponse>,
     selected_role_ids: BTreeSet<i64>,
     saving: bool,
     error: Option<String>,
+    _subscriptions: Vec<Subscription>,
     _task: Option<Task<()>>,
 }
 
@@ -46,18 +47,32 @@ impl ProvisionUserDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let form = cx.new(FormDialogState::new);
+        let username = cx.new(|cx| InputState::new(window, cx).placeholder("登录用户名"));
+        let given_name = cx.new(|cx| InputState::new(window, cx).placeholder("名字"));
+        let family_name = cx.new(|cx| InputState::new(window, cx).placeholder("姓氏"));
+        let display_name = cx.new(|cx| InputState::new(window, cx).placeholder("可选展示名称"));
+        let email = cx.new(|cx| InputState::new(window, cx).placeholder("user@example.com"));
+        let subscriptions = vec![
+            track_input(cx, &form, &username, "username", "登录用户名"),
+            track_input(cx, &form, &given_name, "given_name", "名字"),
+            track_input(cx, &form, &family_name, "family_name", "姓氏"),
+            track_input(cx, &form, &display_name, "display_name", "展示名称"),
+            track_input(cx, &form, &email, "email", "邮箱"),
+        ];
         Self {
             page,
-            identity_id: cx
-                .new(|cx| InputState::new(window, cx).placeholder("OIDC subject / Identity ID")),
-            username: cx.new(|cx| InputState::new(window, cx).placeholder("登录用户名")),
-            display_name: cx.new(|cx| InputState::new(window, cx).placeholder("用户显示名称")),
-            email: cx.new(|cx| InputState::new(window, cx).placeholder("可选邮箱")),
-            avatar_url: cx.new(|cx| InputState::new(window, cx).placeholder("可选头像 URL")),
+            form,
+            username,
+            given_name,
+            family_name,
+            display_name,
+            email,
             roles: Vec::new(),
             selected_role_ids: BTreeSet::new(),
             saving: false,
             error: None,
+            _subscriptions: subscriptions,
             _task: None,
         }
     }
@@ -68,50 +83,13 @@ impl ProvisionUserDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.saving || window.has_active_dialog(cx) {
+        if self.saving {
             return;
         }
         self.reset_inputs(window, cx);
         self.roles = roles;
         self.error = None;
-        let content = cx.entity();
-        let cancel_dialog = content.downgrade();
-        let submit_dialog = content.downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let cancel_dialog = cancel_dialog.clone();
-            let submit_dialog = submit_dialog.clone();
-            dialog
-                .title("创建用户")
-                .width(px(520.))
-                .max_h(px(640.))
-                .close_button(false)
-                .keyboard(false)
-                .overlay_closable(false)
-                .child(content.clone())
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            Button::new("cancel-default-provision-user")
-                                .outline()
-                                .label("取消")
-                                .on_click(move |_, window, cx| {
-                                    _ = cancel_dialog.update(cx, |dialog, cx| {
-                                        dialog.cancel(window, cx);
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("submit-default-provision-user")
-                                .primary()
-                                .label("创建用户")
-                                .on_click(move |_, window, cx| {
-                                    _ = submit_dialog.update(cx, |dialog, cx| {
-                                        dialog.provision(window, cx);
-                                    });
-                                }),
-                        ),
-                )
-        });
+        self.form.update(cx, |form, cx| form.open(window, cx));
         cx.notify();
     }
 
@@ -124,16 +102,10 @@ impl ProvisionUserDialog {
         } else {
             self.selected_role_ids.remove(&role_id);
         }
-        cx.notify();
-    }
-
-    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.saving {
-            return;
-        }
-        self.reset_inputs(window, cx);
-        self.error = None;
-        window.close_dialog(cx);
+        let draft = role_draft(&self.selected_role_ids);
+        self.form.update(cx, |form, cx| {
+            form.set_field_draft("role_ids", "初始角色", "", draft, cx);
+        });
         cx.notify();
     }
 
@@ -151,20 +123,25 @@ impl ProvisionUserDialog {
             cx.notify();
             return;
         };
-        let identity_id = self.identity_id.read(cx).value().trim().to_owned();
-        let username = self.username.read(cx).value().trim().to_owned();
-        let display_name = self.display_name.read(cx).value().trim().to_owned();
-        if identity_id.is_empty() || username.is_empty() || display_name.is_empty() {
-            self.error = Some("登录用户名、Identity ID 和显示名称不能为空".to_owned());
+        let username = input_text(&self.username, cx);
+        let given_name = input_text(&self.given_name, cx);
+        let family_name = input_text(&self.family_name, cx);
+        let email = input_text(&self.email, cx);
+        if username.is_empty()
+            || given_name.is_empty()
+            || family_name.is_empty()
+            || email.is_empty()
+        {
+            self.error = Some("登录用户名、名字、姓氏和邮箱不能为空".to_owned());
             cx.notify();
             return;
         }
         let request = ProvisionUserRequest {
-            identity_id,
-            username: Some(username),
-            email: optional_text(self.email.read(cx).value().as_ref()),
-            display_name,
-            avatar_url: optional_text(self.avatar_url.read(cx).value().as_ref()),
+            username,
+            given_name,
+            family_name,
+            email,
+            display_name: optional_text(self.display_name.read(cx).value().as_ref()),
             role_ids: if can_assign_initial_roles(cx) {
                 self.selected_role_ids.iter().copied().collect()
             } else {
@@ -173,19 +150,26 @@ impl ProvisionUserDialog {
         };
         self.saving = true;
         self.error = None;
+        self.form
+            .update(cx, |form, cx| form.set_submitting(true, cx));
         let page = self.page.clone();
+        let form = self.form.clone();
         let background = cx.background_spawn(async move { session.provision_user(&request) });
         self._task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = background.await;
             _ = this.update_in(cx, |this, window, cx| {
                 this.saving = false;
+                form.update(cx, |form, cx| form.set_submitting(false, cx));
                 match result {
                     Ok(user) => {
                         _ = page.update(cx, |page, cx| {
                             page.user_provisioned(user.display_name.clone(), cx);
                         });
+                        form.update(cx, |form, cx| {
+                            form.mark_saved(cx);
+                            form.close(window, cx);
+                        });
                         this.reset_inputs(window, cx);
-                        window.close_dialog(cx);
                     }
                     Err(error) => this.error = Some(error.user_message()),
                 }
@@ -197,15 +181,16 @@ impl ProvisionUserDialog {
 
     fn reset_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for input in [
-            &self.identity_id,
             &self.username,
+            &self.given_name,
+            &self.family_name,
             &self.display_name,
             &self.email,
-            &self.avatar_url,
         ] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.selected_role_ids.clear();
+        self.form.update(cx, FormDialogState::reset_fields);
     }
 }
 
@@ -223,7 +208,7 @@ impl Render for ProvisionUserDialog {
                 }))
         });
 
-        v_flex()
+        let content = v_flex()
             .w_full()
             .gap_4()
             .when_some(self.error.clone(), |this, error| {
@@ -234,43 +219,43 @@ impl Render for ProvisionUserDialog {
                     h_flex()
                         .gap_2()
                         .child(Spinner::new().small())
-                        .child("正在创建用户…"),
+                        .child("正在 ZITADEL 创建并绑定用户…"),
                 )
             })
             .child(
                 v_form()
-                    .columns(1)
+                    .columns(2)
                     .child(
                         field()
                             .label("登录用户名")
-                            .description("绑定身份提供方中的登录用户名，用于管理界面识别用户。")
+                            .description("在 ZITADEL Organization 中唯一，并可用于登录。")
                             .required(true)
                             .child(Input::new(&self.username).disabled(self.saving)),
                     )
                     .child(
                         field()
-                            .label("Identity ID")
-                            .description(
-                                "填写当前 OIDC Provider 中稳定且唯一的 subject；实际登录绑定仍以此字段为准。",
-                            )
-                            .required(true)
-                            .child(Input::new(&self.identity_id).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("显示名称")
-                            .required(true)
-                            .child(Input::new(&self.display_name).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
                             .label("邮箱")
+                            .description("创建后由 ZITADEL 发送默认验证邮件。")
+                            .required(true)
                             .child(Input::new(&self.email).disabled(self.saving)),
                     )
                     .child(
                         field()
-                            .label("头像 URL")
-                            .child(Input::new(&self.avatar_url).disabled(self.saving)),
+                            .label("名字")
+                            .required(true)
+                            .child(Input::new(&self.given_name).disabled(self.saving)),
+                    )
+                    .child(
+                        field()
+                            .label("姓氏")
+                            .required(true)
+                            .child(Input::new(&self.family_name).disabled(self.saving)),
+                    )
+                    .child(
+                        field()
+                            .label("展示名称")
+                            .description("可选；省略时使用名字与姓氏。")
+                            .child(Input::new(&self.display_name).disabled(self.saving)),
                     ),
             )
             .child(
@@ -280,12 +265,12 @@ impl Render for ProvisionUserDialog {
                     .child(
                         div()
                             .text_xs()
-                            .child("创建用户与角色关联会在同一请求中原子完成。"),
+                            .child("ZITADEL 创建成功后，本地用户与角色会在同一事务中写入。"),
                     )
                     .when(!can_assign_roles, |this| {
                         this.child(Alert::info(
                             "default-provision-user-roles-forbidden",
-                            "当前只能创建空角色用户；选择初始角色还需要 users:roles.write 与 roles:read 权限。",
+                            "选择初始角色还需要 users:roles.write 与 roles:read 权限。",
                         ))
                     })
                     .when(can_assign_roles && self.roles.is_empty(), |this| {
@@ -295,13 +280,55 @@ impl Render for ProvisionUserDialog {
                         ))
                     })
                     .children(role_options),
-            )
+            );
+        let dialog = cx.entity().downgrade();
+        FormDialog::new(
+            "default-provision-user-form-dialog",
+            self.form.clone(),
+            "创建用户",
+            content,
+            move |_, window, cx| {
+                _ = dialog.update(cx, |dialog, cx| dialog.provision(window, cx));
+            },
+        )
+        .description("在 ZITADEL 创建人类用户，并自动关联到 Nexora Account。")
+        .submit_label("创建用户")
     }
+}
+
+fn track_input(
+    cx: &mut Context<ProvisionUserDialog>,
+    form: &Entity<FormDialogState>,
+    input: &Entity<InputState>,
+    key: &'static str,
+    label: &'static str,
+) -> Subscription {
+    let form = form.clone();
+    cx.subscribe(input, move |_, input, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+            let draft = input.read(cx).value().to_string();
+            form.update(cx, |form, cx| {
+                form.set_field_draft(key, label, "", draft, cx);
+            });
+        }
+    })
+}
+
+fn input_text(input: &Entity<InputState>, cx: &gpui::App) -> String {
+    input.read(cx).value().trim().to_owned()
 }
 
 fn optional_text(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn role_draft(role_ids: &BTreeSet<i64>) -> String {
+    role_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn can_assign_initial_roles(cx: &gpui::App) -> bool {

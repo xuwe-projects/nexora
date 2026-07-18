@@ -54,7 +54,11 @@ impl FeatureElement for UserDetailsFeature {
 }
 ```
 
-- 静态可导航 Feature 设置 `title`、`path` 和可选的 `section/icon/order/parent`。
+- 静态可导航 Feature 设置 `title`、`path` 和可选的 `section/icon/order/group`。Feature 只表示
+  页面；`group` 只能引用同 section 的 `NavigationGroup`，不再允许 Feature 充当父目录。
+- `section` 是顶层大类；`#[derive(nexora::NavigationGroup)]` 声明没有 path/page/tab 的纯目录，
+  它可用 `parent = "另一个目录 ID"` 递归嵌套。目录点击只展开/收起，叶子 Feature 才导航；
+  不得用空白 Feature、占位页或第二套路由表冒充分组。
 - 普通页面保持默认外层滚动；虚拟列表、编辑器或 DataTable 已自行管理滚动视口时，设置 `content_scrollable = false`，避免 Shell 产生双层滚动。
 - 需要覆盖内容区与 Panel Header、但保留 Sidebar 和窗口 TitleBar 的对话框时，实现 `FeatureElement::panel_overlay`。浮层必须是在 `initialize` 中创建并长期持有的 Entity，hook 始终返回同一个 `AnyView`；显示、隐藏和内容变化由浮层 Entity 自己管理，不要根据 Feature 临时状态在 `Some` 与 `None` 之间切换。
 - 带 `:name` 的动态路径必须声明 `path_params = T` 并设置 `navigation = false`。查询字段用 `query_params = Q`；`T` 和 `Q` 均通过 `serde::Deserialize` 校验。
@@ -66,6 +70,10 @@ impl FeatureElement for UserDetailsFeature {
 - 页面私有轻量组件使用 `#[derive(IntoElement)] + RenderOnce`；有输入状态、异步请求或订阅
   的组件使用独立 Entity 并实现 `Render`，由 Feature 在 `initialize` 创建后组合。禁止通过拆
   文件但继续把全部状态和 handler 留在 Feature 的方式制造假组件化。
+- 创建和编辑资源默认使用 `nexora::desktop::{FormDialog, FormDialogState}`。对话框 Entity 在
+  `initialize` 创建并由 `panel_overlay` 稳定返回，只遮罩当前 Feature Panel；输入变化写入
+  字段草稿，默认取消自动确认未保存内容，业务必须提供 `on_submit`。非表单确认或工厂选择
+  Popover 不强制使用 FormDialog。
 
 独立原生窗口使用 `#[derive(nexora::Window)]` 和 `WindowElement`。它支持同样的 `path_params/query_params/factory`，不进入主导航或标签；可覆盖 `window_options`、`initialize` 和 `closing`。
 
@@ -120,7 +128,8 @@ impl Render for AppLogin {
 - 不需要自定义构造时派生 `Default`；否则使用 `#[nexora(factory = AppLogin::new)]`，构造函数签名为 `fn new(&mut Window, &mut Context<Self>) -> Self`。
 - 多个 Login 覆盖在 `AppRegistry::discover/build` 时返回 `RegistryError::DuplicateLoginFeature`，不会按链接顺序任选一个。
 - Account 客户端默认注入 `/users` 与 `/roles` 管理 Feature，并放在“访问控制” section。
-  用户页支持开通已确认的 OIDC 身份、初始角色、状态和直接角色管理；角色页支持自定义角色
+  用户页通过服务端 ZITADEL gRPC 创建人类用户并自动绑定本地账号、初始角色、状态和直接角色
+  管理；`GET /me` 会从身份目录同步最新用户名与资料。角色页支持自定义角色
   创建、元数据编辑、完整权限替换和删除。应用声明相同 ID 或路径的普通 `Feature` 即可逐页
   替换默认实现，不需要新的专用派生宏。
 
@@ -167,8 +176,10 @@ impl gpui::Render for AppSidebarFooter {
 ```
 
 每个应用最多各声明一个 `SidebarHeader` 和 `SidebarFooter`；可选 factory 仍使用 `fn new(&mut Window, &mut Context<Self>) -> Self`。不要为插槽修改框架 Shell。
-自定义类型只提供插槽内容；Shell 始终在外层保留标准 Header/Footer hover、内边距和
-Header 下方/Footer 上方分隔线。不要在自定义内容里复制或抵消这些外壳样式。
+自定义类型只提供插槽内容；Shell 只保留 Header/Footer 结构边界、间距和分隔线，不向自定义
+内容注入 hover、selected、圆角、cursor 或点击语义。品牌与应用 Context 需要独立命中区域时
+使用 `nexora::desktop::SidebarRegion::new("稳定唯一 ID")`，由每个区域自行声明 hover 和点击，
+不要用负 margin 或背景覆盖抵消 Shell。
 
 ## 加载配置和 Account
 

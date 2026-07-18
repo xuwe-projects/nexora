@@ -5,11 +5,17 @@
 /// 桌面工作区中用于承载表格、表单和摘要的内容卡片。
 pub mod card;
 
+/// 基于 gpui-component 组合实现的级联选择器。
+pub mod cascader;
+
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
 /// 桌面应用未登录时复用的认证门禁。
 pub mod login_gate;
+
+/// 带草稿追踪与未保存确认的内容区表单对话框。
+pub mod form_dialog;
 
 /// 受右侧主面板边界约束的模态对话框。
 pub mod panel_dialog;
@@ -17,11 +23,19 @@ pub mod panel_dialog;
 /// 桌面工作区右侧主面板的统一顶部栏。
 pub mod panel_header;
 
+/// Sidebar Header/Footer 中由应用自行控制交互视觉的稳定区域。
+pub mod sidebar_region;
+
 /// 窗口级 Dialog、Sheet 与 Notification 遮罩层组合。
 pub mod window_layers;
 
 pub use card::Card;
+pub use cascader::{
+    Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
+};
+pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft};
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;
+pub use sidebar_region::SidebarRegion;
 pub use window_layers::window_layers;

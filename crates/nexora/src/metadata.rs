@@ -24,10 +24,87 @@ pub trait Feature: 'static {
     const REGISTRATION: Option<crate::__private::FeatureRegistration> = None;
 }
 
+/// 纯导航目录的静态声明契约。
+///
+/// `NavigationGroup` 只参与 Sidebar 树和面包屑组织，不拥有 path、页面工厂、Entity、
+/// Window 或 Tab。应用应通过 `#[derive(nexora::NavigationGroup)]` 自动提交声明。
+pub trait NavigationGroup: 'static {
+    /// 当前纯导航目录的稳定静态元数据。
+    const METADATA: NavigationGroupMetadata;
+}
+
+/// 纯导航目录的稳定描述。
+///
+/// `section` 表示顶层大类；`parent` 只能引用同一 section 中另一个
+/// `NavigationGroup`。目录本身不可路由，点击时只能展开或收起子项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NavigationGroupMetadata {
+    id: &'static str,
+    title: &'static str,
+    section: &'static str,
+    icon: Option<&'static str>,
+    parent: Option<&'static str>,
+    order: i32,
+}
+
+impl NavigationGroupMetadata {
+    /// 创建一份纯导航目录静态描述。
+    ///
+    /// 该构造函数主要供派生宏使用；稳定标识、父级存在性、循环和跨 section 引用由
+    /// [`crate::AppRegistryBuilder::build`] 统一校验。
+    pub const fn new(
+        id: &'static str,
+        title: &'static str,
+        section: &'static str,
+        icon: Option<&'static str>,
+        parent: Option<&'static str>,
+        order: i32,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            section,
+            icon,
+            parent,
+            order,
+        }
+    }
+
+    /// 返回不会随展示文案变化的目录标识。
+    pub const fn id(self) -> &'static str {
+        self.id
+    }
+
+    /// 返回 Sidebar 与面包屑中使用的目录标题。
+    pub const fn title(self) -> &'static str {
+        self.title
+    }
+
+    /// 返回目录所属的顶层导航 section。
+    pub const fn section(self) -> &'static str {
+        self.section
+    }
+
+    /// 返回由具体 UI 层解释的可选图标标识。
+    pub const fn icon(self) -> Option<&'static str> {
+        self.icon
+    }
+
+    /// 返回可选的父 NavigationGroup 稳定标识。
+    pub const fn parent(self) -> Option<&'static str> {
+        self.parent
+    }
+
+    /// 返回同级导航目录的稳定排序值。
+    pub const fn order(self) -> i32 {
+        self.order
+    }
+}
+
 /// 业务 Feature 的稳定描述。
 ///
-/// 描述会同时用于路径匹配、导航生成、标签标题和父子目录组织。`path` 是应用内部逻辑
-/// 路径，不包含 custom scheme、查询参数或片段。
+/// 描述会同时用于路径匹配、导航生成和标签标题。`path` 是应用内部逻辑路径，不包含
+/// custom scheme、查询参数或片段；`group` 只能引用纯 [`NavigationGroup`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureMetadata {
     id: &'static str,
@@ -35,7 +112,7 @@ pub struct FeatureMetadata {
     path: &'static str,
     section: Option<&'static str>,
     icon: Option<&'static str>,
-    parent: Option<&'static str>,
+    group: Option<&'static str>,
     order: i32,
     navigation: bool,
     content_scrollable: bool,
@@ -56,7 +133,7 @@ impl FeatureMetadata {
         path: &'static str,
         section: Option<&'static str>,
         icon: Option<&'static str>,
-        parent: Option<&'static str>,
+        group: Option<&'static str>,
         order: i32,
         navigation: bool,
     ) -> Self {
@@ -66,7 +143,7 @@ impl FeatureMetadata {
             path,
             section,
             icon,
-            parent,
+            group,
             order,
             navigation,
             content_scrollable: true,
@@ -98,9 +175,11 @@ impl FeatureMetadata {
         self.icon
     }
 
-    /// 返回父 Feature 的稳定标识，用于生成二级导航。
-    pub const fn parent(self) -> Option<&'static str> {
-        self.parent
+    /// 返回所属纯导航目录的稳定标识。
+    ///
+    /// 该标识只能引用 [`NavigationGroupMetadata`]；Feature 不能再充当其他页面的目录。
+    pub const fn group(self) -> Option<&'static str> {
+        self.group
     }
 
     /// 返回同级导航项的稳定排序值。

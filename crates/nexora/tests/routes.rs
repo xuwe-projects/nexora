@@ -2,8 +2,8 @@
 
 use gpui::{Context, Empty, IntoElement, Window as GpuiWindow};
 use nexora::{
-    AppRegistry, Feature, FeatureElement, FeatureMetadata, NoPath, NoQuery, Path, Query,
-    RegistryError, ResolveError, RouteExtractError, RouteTarget, RouteTargetKind, Window,
+    AppRegistry, Feature, FeatureElement, FeatureMetadata, NavigationGroup, NoPath, NoQuery, Path,
+    Query, RegistryError, ResolveError, RouteExtractError, RouteTarget, RouteTargetKind, Window,
     WindowElement,
 };
 use serde::Deserialize;
@@ -54,6 +54,16 @@ struct HomeFeature;
 #[nexora(title = "用户管理", path = "/users", section = "访问控制", order = 10)]
 struct UsersFeature;
 
+#[derive(NavigationGroup)]
+#[nexora(
+    id = "user-access",
+    title = "用户与权限",
+    section = "访问控制",
+    icon = "users",
+    order = 15
+)]
+struct UserAccessGroup;
+
 #[derive(Default, Feature)]
 #[nexora(
     title = "用户详情",
@@ -72,7 +82,7 @@ struct NewUserFeature;
 #[nexora(
     title = "用户角色",
     path = "/users/roles",
-    parent = "users",
+    group = "user-access",
     order = 20
 )]
 struct UserRolesFeature;
@@ -106,6 +116,10 @@ fn derive_exposes_stable_feature_and_window_metadata() {
     assert_eq!(HomeFeature::METADATA.icon(), Some("layout-dashboard"));
     assert!(HomeFeature::METADATA.navigation());
     assert!(HomeFeature::METADATA.content_scrollable());
+    assert_eq!(UserAccessGroup::METADATA.id(), "user-access");
+    assert_eq!(UserAccessGroup::METADATA.section(), "访问控制");
+    assert_eq!(UserAccessGroup::METADATA.icon(), Some("users"));
+    assert_eq!(UserRolesFeature::METADATA.group(), Some("user-access"));
 
     assert_eq!(UserDetailsFeature::METADATA.id(), "user-details");
     assert!(!UserDetailsFeature::METADATA.navigation());
@@ -115,8 +129,9 @@ fn derive_exposes_stable_feature_and_window_metadata() {
 }
 
 #[test]
-fn registry_builds_navigation_and_children_from_metadata() {
+fn registry_builds_navigation_groups_and_leaf_features_from_metadata() {
     let registry = AppRegistry::builder()
+        .navigation_group::<UserAccessGroup>()
         .feature::<UserRolesFeature>()
         .feature::<UsersFeature>()
         .feature::<HomeFeature>()
@@ -132,11 +147,12 @@ fn registry_builds_navigation_and_children_from_metadata() {
     assert_eq!(&navigation_ids[..3], ["home", "users", "user-roles"]);
     assert_eq!(
         registry
-            .children_of("users")
+            .features_in_group("user-access")
             .map(|metadata| metadata.id())
             .collect::<Vec<_>>(),
         ["user-roles"]
     );
+    assert_eq!(registry.navigation_groups(), [UserAccessGroup::METADATA]);
     assert_eq!(registry.windows(), [SettingsWindow::METADATA]);
 }
 
@@ -452,45 +468,156 @@ fn excessive_dynamic_parameters_return_an_error_instead_of_panicking() {
     ));
 }
 
-#[derive(Default, Feature)]
-#[nexora(title = "循环页面", path = "/cycle", parent = "cycle")]
-struct CycleFeature;
+#[derive(NavigationGroup)]
+#[nexora(id = "cycle", title = "循环目录", section = "测试", parent = "cycle")]
+struct CycleGroup;
+
+#[derive(NavigationGroup)]
+#[nexora(
+    id = "unknown-parent",
+    title = "未知父目录",
+    section = "测试",
+    parent = "missing"
+)]
+struct UnknownParentGroup;
+
+#[derive(NavigationGroup)]
+#[nexora(id = "root-data", title = "资料", section = "资料中心")]
+struct RootDataGroup;
+
+#[derive(NavigationGroup)]
+#[nexora(
+    id = "cross-section",
+    title = "跨区目录",
+    section = "系统管理",
+    parent = "root-data"
+)]
+struct CrossSectionGroup;
 
 #[derive(Default, Feature)]
-#[nexora(title = "隐藏父页面", path = "/hidden-parent", navigation = false)]
-struct HiddenParentFeature;
+#[nexora(title = "未知目录页面", path = "/unknown-group", group = "missing")]
+struct UnknownGroupFeature;
+
+#[derive(NavigationGroup)]
+#[nexora(id = "users", title = "重复用户标识", section = "访问控制")]
+struct DuplicateUsersGroup;
+
+#[derive(NavigationGroup)]
+#[nexora(
+    id = "production-model",
+    title = "生产建模",
+    section = "资料中心",
+    parent = "root-data",
+    order = 10
+)]
+struct ProductionModelGroup;
 
 #[derive(Default, Feature)]
 #[nexora(
-    title = "可见子页面",
-    path = "/visible-child",
-    parent = "hidden-parent"
+    title = "车间",
+    path = "/workshops",
+    group = "production-model",
+    order = 10
 )]
-struct VisibleChildFeature;
+struct WorkshopFeature;
 
-impl_empty_feature_element!(CycleFeature, HiddenParentFeature, VisibleChildFeature);
+impl_empty_feature_element!(UnknownGroupFeature, WorkshopFeature);
 
 #[test]
-fn invalid_feature_parent_graphs_are_rejected() {
+fn nested_navigation_groups_are_queryable_and_keep_leaf_routes() {
+    let registry = AppRegistry::builder()
+        .navigation_group::<RootDataGroup>()
+        .navigation_group::<ProductionModelGroup>()
+        .feature::<WorkshopFeature>()
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        registry
+            .groups_in_group("root-data")
+            .map(|group| group.id())
+            .collect::<Vec<_>>(),
+        ["production-model"]
+    );
+    assert_eq!(
+        registry
+            .features_in_group("production-model")
+            .map(|feature| feature.id())
+            .collect::<Vec<_>>(),
+        ["workshop"]
+    );
+    assert_eq!(
+        registry
+            .navigation_group_ancestors("workshop")
+            .into_iter()
+            .map(|group| group.id())
+            .collect::<Vec<_>>(),
+        ["root-data", "production-model"]
+    );
+    assert_eq!(
+        registry.resolve("/workshops").unwrap().target().id(),
+        "workshop"
+    );
+    assert!(matches!(
+        registry.resolve("/production-model"),
+        Err(ResolveError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn invalid_navigation_group_graphs_are_rejected() {
     assert!(matches!(
         AppRegistry::builder()
-            .feature::<CycleFeature>()
+            .navigation_group::<CycleGroup>()
             .build()
             .err()
             .unwrap(),
-        RegistryError::FeatureParentCycle { id: "cycle" }
+        RegistryError::NavigationGroupCycle { id: "cycle" }
     ));
     assert!(matches!(
         AppRegistry::builder()
-            .feature::<HiddenParentFeature>()
-            .feature::<VisibleChildFeature>()
+            .navigation_group::<UnknownParentGroup>()
             .build()
             .err()
             .unwrap(),
-        RegistryError::HiddenFeatureParent {
-            id: "visible-child",
-            parent: "hidden-parent"
+        RegistryError::UnknownNavigationGroupParent {
+            id: "unknown-parent",
+            parent: "missing"
         }
+    ));
+    assert!(matches!(
+        AppRegistry::builder()
+            .navigation_group::<RootDataGroup>()
+            .navigation_group::<CrossSectionGroup>()
+            .build()
+            .err()
+            .unwrap(),
+        RegistryError::NavigationSectionMismatch {
+            id: "cross-section",
+            section: "系统管理",
+            group: "root-data",
+            group_section: "资料中心"
+        }
+    ));
+    assert!(matches!(
+        AppRegistry::builder()
+            .feature::<UnknownGroupFeature>()
+            .build()
+            .err()
+            .unwrap(),
+        RegistryError::UnknownFeatureGroup {
+            id: "unknown-group",
+            group: "missing"
+        }
+    ));
+    assert!(matches!(
+        AppRegistry::builder()
+            .feature::<UsersFeature>()
+            .navigation_group::<DuplicateUsersGroup>()
+            .build()
+            .err()
+            .unwrap(),
+        RegistryError::DuplicateNavigationId { id: "users" }
     ));
 }
 

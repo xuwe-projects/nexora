@@ -26,6 +26,24 @@ pub(crate) async fn query_by_id(user_id: &str, pool: &PgPool) -> Result<Option<U
     .await
 }
 
+/// 按外部身份目录的稳定 identity ID 返回本地用户实体。
+pub(crate) async fn query_by_identity_id(
+    identity_id: &str,
+    pool: &PgPool,
+) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, identity_id, username, email, display_name, avatar_url, status,
+               is_super_admin, created_at, updated_at, last_login_at
+        FROM account.users
+        WHERE identity_id = $1
+        "#,
+    )
+    .bind(identity_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// 按页码返回本地用户实体。
 pub(crate) async fn query_page(
     request: PageRequest,
