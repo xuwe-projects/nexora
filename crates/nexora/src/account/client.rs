@@ -31,8 +31,9 @@ pub use contracts::account as contract;
 pub use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache, PendingOidcLogin};
 pub(crate) use runtime::observe_authentication_in;
 pub use runtime::{
-    AccountLoginFailure, AccountLoginRuntimeError, AccountLoginSnapshot, api_session,
-    install_authenticator, is_authenticated, login_profile, login_session, login_snapshot,
+    AccountAuthenticationScope, AccountLoginFailure, AccountLoginRuntimeError,
+    AccountLoginSnapshot, api_session, authentication_scope, install_authenticator,
+    is_authenticated, login_profile, login_session, login_snapshot, observe_authentication,
     sign_out, start_login,
 };
 

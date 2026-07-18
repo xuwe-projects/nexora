@@ -5,11 +5,12 @@
 
 pub use crate::account::client::OidcSettings as AccountOidcSettings;
 pub use crate::account::client::{
-    AccountAuthenticationError, AccountAuthenticator, AccountClient, AccountClientConfig,
-    AccountClientConfigError, AccountClientError, AccountLogin, AccountLoginFailure,
-    AccountLoginRuntimeError, AccountLoginSnapshot, AccountSession, ApiSettings, OidcClient,
-    OidcConfig, OidcError, OidcSession, OidcTokenCache, PendingAccountLogin, PendingOidcLogin,
-    Settings as AccountSettings, api_session, client_config, contract, install_authenticator,
-    is_authenticated, login_profile, login_session, login_snapshot, oidc_config, sign_out,
+    AccountAuthenticationError, AccountAuthenticationScope, AccountAuthenticator, AccountClient,
+    AccountClientConfig, AccountClientConfigError, AccountClientError, AccountLogin,
+    AccountLoginFailure, AccountLoginRuntimeError, AccountLoginSnapshot, AccountSession,
+    ApiSettings, OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache,
+    PendingAccountLogin, PendingOidcLogin, Settings as AccountSettings, api_session,
+    authentication_scope, client_config, contract, install_authenticator, is_authenticated,
+    login_profile, login_session, login_snapshot, observe_authentication, oidc_config, sign_out,
     start_login,
 };

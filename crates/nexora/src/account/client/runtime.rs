@@ -39,6 +39,19 @@ pub struct AccountLoginSnapshot {
     pub failure: Option<AccountLoginFailure>,
 }
 
+/// 当前 Account 会话可以安全交给宿主业务状态使用的作用域标识。
+///
+/// 该快照不包含 OIDC token 或 Provider 资料。宿主可以在发起异步业务请求时保存快照，
+/// 并在响应写回前与最新值比较；退出、重新登录或替换认证器后，旧响应将因 revision 不同
+/// 而被丢弃。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountAuthenticationScope {
+    /// 当前进程内认证作用域的递增版本；该值只用于内存态并发隔离，不能持久化或跨进程比较。
+    pub revision: u64,
+    /// 当前登录用户在 `account.users(id)` 中的本地 ID；未登录时为 `None`。
+    pub user_id: Option<String>,
+}
+
 /// 可以安全交给桌面 UI 的 Account 登录失败信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountLoginFailure {
@@ -55,6 +68,7 @@ struct AccountLoginState {
     status: SharedString,
     failure: Option<AccountLoginFailure>,
     generation: u64,
+    authentication_revision: u64,
     cancellation: Option<Arc<AtomicBool>>,
     login_window: Option<AnyWindowHandle>,
 }
@@ -77,14 +91,18 @@ pub enum AccountLoginRuntimeError {
 /// 应用通常在 [`crate::Application::initialize`] 中调用一次。再次调用会安全替换旧状态
 /// 并清除已有会话，适合开发期间重新加载配置。
 pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) {
-    let generation = if let Some(state) = cx.try_global::<AccountLoginState>() {
-        if let Some(cancellation) = state.cancellation.as_ref() {
-            cancellation.store(true, Ordering::Release);
-        }
-        state.generation.wrapping_add(1)
-    } else {
-        0
-    };
+    let (generation, authentication_revision) =
+        if let Some(state) = cx.try_global::<AccountLoginState>() {
+            if let Some(cancellation) = state.cancellation.as_ref() {
+                cancellation.store(true, Ordering::Release);
+            }
+            (
+                state.generation.wrapping_add(1),
+                state.authentication_revision.wrapping_add(1),
+            )
+        } else {
+            (0, 0)
+        };
     let state = AccountLoginState {
         authenticator,
         login: None,
@@ -92,6 +110,7 @@ pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) 
         status: "未登录".into(),
         failure: None,
         generation,
+        authentication_revision,
         cancellation: None,
         login_window: None,
     };
@@ -122,6 +141,24 @@ pub fn login_snapshot(cx: &App) -> AccountLoginSnapshot {
         busy: state.busy,
         status: state.status.clone(),
         failure: state.failure.clone(),
+    }
+}
+
+/// 返回当前业务请求所属的 Account 认证作用域。
+///
+/// 未安装认证器或尚未登录时，`user_id` 为 `None`。revision 只在当前进程内用于识别
+/// 退出、重新登录和认证器替换，不代表数据库版本或 token 内容。
+pub fn authentication_scope(cx: &App) -> AccountAuthenticationScope {
+    let Some(state) = cx.try_global::<AccountLoginState>() else {
+        return AccountAuthenticationScope::default();
+    };
+    AccountAuthenticationScope {
+        revision: state.authentication_revision,
+        user_id: state
+            .login
+            .as_ref()
+            .map(AccountLogin::profile)
+            .map(|profile| profile.user.id.clone()),
     }
 }
 
@@ -222,12 +259,37 @@ pub fn sign_out(cx: &mut App) {
         cancellation.store(true, Ordering::Release);
     }
     state.generation = state.generation.wrapping_add(1);
+    state.authentication_revision = state.authentication_revision.wrapping_add(1);
     state.login = None;
     state.busy = false;
     state.status = "已退出登录".into();
     state.failure = None;
     state.login_window = None;
     refresh_login_windows(cx);
+}
+
+/// 观察当前 Entity 所属应用中的 Account 认证作用域变化。
+///
+/// 回调只在 [`AccountAuthenticationScope`] 发生变化时触发，不会因登录状态文案或忙碌状态
+/// 更新而触发。订阅不会主动发送初始值；构造 Entity 时应先调用 [`authentication_scope`]
+/// 读取当前作用域，并把返回的 [`Subscription`] 保存在与 Entity 相同的生命周期中。
+/// 丢弃订阅会立即停止观察。
+pub fn observe_authentication<T>(
+    cx: &mut Context<T>,
+    mut observer: impl FnMut(&mut T, AccountAuthenticationScope, &mut Context<T>) + 'static,
+) -> Subscription
+where
+    T: 'static,
+{
+    let mut previous = authentication_scope(cx);
+    cx.observe_global::<AccountLoginState>(move |this, cx| {
+        let current = authentication_scope(cx);
+        if current == previous {
+            return;
+        }
+        previous = current.clone();
+        observer(this, current, cx);
+    })
 }
 
 pub(crate) fn observe_authentication_in<T>(
@@ -280,6 +342,7 @@ fn complete_login(
     match result {
         Ok(login) => {
             let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
             state.busy = false;
             state.cancellation = None;
             state.login_window = None;
@@ -291,6 +354,7 @@ fn complete_login(
             let failure = login_failure(&error);
             let displayed = push_login_failure_notification(&failure, cx);
             let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
             state.busy = false;
             state.cancellation = None;
             state.login_window = None;
