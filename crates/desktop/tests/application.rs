@@ -51,7 +51,8 @@ impl AssetSource for TestAssets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(["icons/app.svg"]
             .into_iter()
-            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .filter(|asset| asset.starts_with(path))
+            .map(Into::into)
             .collect())
     }
 }

@@ -11,8 +11,8 @@ fn embedded_repository_finds_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
-    assert!(entry.markdown().contains("Sidebar"));
-    assert!(entry.markdown().contains("SidebarHeader"));
+    assert!(entry.markdown().contains("自定义图标"));
+    assert!(entry.markdown().contains("application_assets"));
 }
 
 #[test]
@@ -41,6 +41,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.6.0",
             "0.5.2",
             "0.5.1",
             "0.5.0",

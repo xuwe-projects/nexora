@@ -27,7 +27,8 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(Self::iter()
-            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .filter(|asset| asset.starts_with(path))
+            .map(Into::into)
             .collect())
     }
 }
@@ -88,7 +89,8 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(Self::iter()
-            .filter_map(|asset| asset.starts_with(path).then(|| asset.into()))
+            .filter(|asset| asset.starts_with(path))
+            .map(Into::into)
             .collect())
     }
 }
