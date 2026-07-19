@@ -8,6 +8,20 @@ pub(crate) mod zitadel {
         }
     }
 
+    pub(crate) mod org {
+        #[allow(dead_code, unused_imports, nonstandard_style, clippy::all)]
+        pub(crate) mod v2 {
+            grpc::include_proto!("zitadel/org/v2", "org_service");
+        }
+    }
+
+    pub(crate) mod authorization {
+        #[allow(dead_code, unused_imports, nonstandard_style, clippy::all)]
+        pub(crate) mod v2 {
+            grpc::include_proto!("zitadel/authorization/v2", "authorization_service");
+        }
+    }
+
     pub(crate) mod user {
         #[allow(dead_code, unused_imports, nonstandard_style, clippy::all)]
         pub(crate) mod v2 {

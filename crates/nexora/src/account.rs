@@ -9,7 +9,10 @@ pub use crate::account_module::{
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
     ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
     Page, Permission, PermissionDefinition, PermissionKey, Role, SystemRole, User, UserStatus,
-    authentication::{AccessTokenVerifier, VerifiedIdentity},
+    authentication::{
+        AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
+        VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
+    },
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
     replace_user_roles,
@@ -50,6 +53,14 @@ pub(crate) mod server {
     #[cfg(feature = "server")]
     pub use crate::account_module::directory::{
         DirectoryError, DirectoryUser, ZitadelUserDirectory,
+    };
+    #[cfg(feature = "server")]
+    pub use crate::account_module::provisioning::{
+        CreateZitadelOrganizationRequest, ZitadelAuthorization, ZitadelAuthorizationOutcome,
+        ZitadelAuthorizationRequest, ZitadelDeleteUserOutcome, ZitadelOrganization,
+        ZitadelOrganizationState, ZitadelProjectGrant, ZitadelProjectGrantOutcome,
+        ZitadelProjectGrantRequest, ZitadelProjectGrantState, ZitadelProvisioningClient,
+        ZitadelProvisioningError,
     };
 
     /// Account 资源服务器运行所需的标准配置段。
@@ -152,6 +163,30 @@ pub(crate) mod server {
             settings.oidc.personal_access_token.as_str(),
             settings.oidc.organization_id.as_str(),
             settings.oidc.project_id.as_str(),
+        )
+    }
+
+    /// 根据强类型根配置创建 ZITADEL provisioning/admin client。
+    ///
+    /// 该 client 使用与默认 Account 目录相同的 issuer、PAT、TLS 与 loopback 安全规则，但不绑定
+    /// 固定 Organization 或 Project。宿主可用它为 customer portal 动态创建 Organization、
+    /// Project Grant、人类用户和 Project role authorization。
+    ///
+    /// # Errors
+    ///
+    /// issuer、PAT 或 TLS 配置无法用于建立 ZITADEL gRPC 客户端时返回
+    /// [`ZitadelProvisioningError`]。
+    #[cfg(feature = "server")]
+    pub fn provisioning_client<S>(
+        settings: &S,
+    ) -> Result<ZitadelProvisioningClient, ZitadelProvisioningError>
+    where
+        S: ProvidesAccountServerSettings<AccountServerSettings = Settings>,
+    {
+        let settings = settings.account_server_settings();
+        ZitadelProvisioningClient::new(
+            settings.oidc.issuer_url.as_str(),
+            settings.oidc.personal_access_token.as_str(),
         )
     }
 

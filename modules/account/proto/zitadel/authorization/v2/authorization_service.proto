@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package zitadel.authorization.v2;
+
+// ZITADEL AuthorizationService v2 中客户门户角色授权所需的最小线上契约。
+// ZITADEL 此处的 Authorization 表示用户 Project role assignment。
+service AuthorizationService {
+  rpc ListAuthorizations(ListAuthorizationsRequest) returns (ListAuthorizationsResponse);
+  rpc CreateAuthorization(CreateAuthorizationRequest) returns (CreateAuthorizationResponse);
+  rpc UpdateAuthorization(UpdateAuthorizationRequest) returns (UpdateAuthorizationResponse);
+  rpc DeleteAuthorization(DeleteAuthorizationRequest) returns (DeleteAuthorizationResponse);
+}
+
+message PaginationRequest {
+  uint64 offset = 1;
+  uint32 limit = 2;
+  bool asc = 3;
+}
+
+message PaginationResponse {
+  uint64 total_result = 1;
+  uint64 applied_limit = 2;
+}
+
+message IDFilter {
+  string id = 1;
+}
+
+message InIDsFilter {
+  repeated string ids = 1;
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STATE_ACTIVE = 1;
+  STATE_INACTIVE = 2;
+}
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string organization_id = 3;
+}
+
+message Organization {
+  string id = 1;
+  string name = 2;
+}
+
+message User {
+  string id = 1;
+  string preferred_login_name = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+  string organization_id = 5;
+}
+
+message Role {
+  string key = 1;
+  string display_name = 2;
+  string group = 3;
+}
+
+message Authorization {
+  string id = 1;
+  Project project = 4;
+  Organization organization = 5;
+  User user = 6;
+  State state = 7;
+  repeated Role roles = 8;
+}
+
+message AuthorizationsSearchFilter {
+  oneof filter {
+    IDFilter organization_id = 2;
+    InIDsFilter in_user_ids = 4;
+    IDFilter project_id = 8;
+    IDFilter project_grant_id = 11;
+  }
+}
+
+enum AuthorizationFieldName {
+  AUTHORIZATION_FIELD_NAME_UNSPECIFIED = 0;
+  AUTHORIZATION_FIELD_NAME_ID = 1;
+  AUTHORIZATION_FIELD_NAME_CREATION_DATE = 2;
+  AUTHORIZATION_FIELD_NAME_CHANGE_DATE = 3;
+}
+
+message ListAuthorizationsRequest {
+  PaginationRequest pagination = 1;
+  AuthorizationFieldName sorting_column = 2;
+  repeated AuthorizationsSearchFilter filters = 3;
+}
+
+message ListAuthorizationsResponse {
+  PaginationResponse pagination = 1;
+  repeated Authorization authorizations = 2;
+}
+
+message CreateAuthorizationRequest {
+  string user_id = 1;
+  string project_id = 2;
+  string organization_id = 3;
+  repeated string role_keys = 4;
+}
+
+message CreateAuthorizationResponse {
+  string id = 1;
+}
+
+message UpdateAuthorizationRequest {
+  string id = 1;
+  repeated string role_keys = 2;
+}
+
+message UpdateAuthorizationResponse {}
+
+message DeleteAuthorizationRequest {
+  string id = 1;
+}
+
+message DeleteAuthorizationResponse {}

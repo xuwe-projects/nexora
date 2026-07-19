@@ -2,14 +2,20 @@ use std::sync::Arc;
 
 use account::{
     Account, AccountDependencies, AccountError, ExternalIdentity,
-    authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
+    authentication::{
+        AccessTokenVerifier, OidcResourceServer, VerificationError, VerifiedBearerIdentity,
+        VerifiedIdentity,
+    },
 };
 use api::{ApiError, with_http_layers};
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::{Body, to_bytes},
+    extract::FromRef,
     http::{Request, StatusCode},
     response::IntoResponse as _,
+    routing::get,
 };
 use contracts::error::ErrorEnvelope;
 use sqlx::postgres::PgPoolOptions;
@@ -87,6 +93,61 @@ async fn deployment_issuer_mismatch_is_a_stable_authentication_failure() {
     assert_eq!(error.error.code, "invalid_identity_issuer");
 }
 
+#[tokio::test]
+async fn resource_server_authentication_error_does_not_echo_access_token() {
+    let state = PortalState {
+        resource_server: OidcResourceServer::new(Arc::new(RejectingVerifier)),
+    };
+    let router = with_http_layers(
+        Router::new()
+            .route("/portal", get(portal_handler))
+            .with_state(state),
+    );
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/portal")
+                .header("authorization", "Bearer secret-portal-token")
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .expect("错误响应正文应当可读取");
+    let body = String::from_utf8(body.to_vec()).expect("错误响应应为 UTF-8 JSON");
+    assert!(!body.contains("secret-portal-token"));
+    let error: ErrorEnvelope = serde_json::from_str(body.as_str()).expect("错误响应应符合公共契约");
+    assert_eq!(error.error.code, "invalid_access_token");
+}
+
+#[derive(Clone)]
+struct PortalState {
+    resource_server: OidcResourceServer,
+}
+
+impl FromRef<PortalState> for OidcResourceServer {
+    fn from_ref(state: &PortalState) -> Self {
+        state.resource_server.clone()
+    }
+}
+
+async fn portal_handler(_identity: VerifiedBearerIdentity) -> StatusCode {
+    StatusCode::OK
+}
+
+struct RejectingVerifier;
+
+#[async_trait]
+impl AccessTokenVerifier for RejectingVerifier {
+    async fn verify(&self, _token: &str) -> Result<VerifiedIdentity, VerificationError> {
+        Err(VerificationError::InvalidToken)
+    }
+}
+
 struct StaticVerifier;
 
 #[async_trait]
@@ -99,6 +160,7 @@ impl AccessTokenVerifier for StaticVerifier {
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
             avatar_url: None,
+            organization: None,
         })
     }
 }

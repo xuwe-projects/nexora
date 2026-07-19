@@ -50,6 +50,15 @@ async fn verifier_enforces_standard_access_token_claims() {
     assert_eq!(identity.issuer, format!("{issuer}/"));
     assert_eq!(identity.subject, "user-1");
     assert_eq!(identity.display_name, "Ada");
+    let organization = identity
+        .organization
+        .expect("ZITADEL org context claim 应当被保留");
+    assert_eq!(organization.id, "customer-org-1");
+    assert_eq!(organization.name.as_deref(), Some("Acme"));
+    assert_eq!(
+        organization.primary_domain.as_deref(),
+        Some("acme.example.com")
+    );
 
     let wrong_audience = verifier
         .verify(&signed_token(
@@ -90,11 +99,52 @@ async fn verifier_enforces_standard_access_token_claims() {
 }
 
 #[tokio::test]
+async fn verifier_accepts_any_configured_resource_server_audience() {
+    let encoding_key =
+        EncodingKey::from_ec_pem(PRIVATE_KEY.as_bytes()).expect("测试私钥应当可以解析");
+    let mut jwk =
+        Jwk::from_encoding_key(&encoding_key, Algorithm::ES256).expect("测试公钥应当可以导出");
+    jwk.common.key_id = Some(KEY_ID.to_owned());
+    jwk.common.public_key_use = Some(PublicKeyUse::Signature);
+    let (issuer, server) = spawn_provider(jwk);
+    let verifier = OidcAccessTokenVerifier::discover_many(&issuer, ["portal-api", "openapi"])
+        .await
+        .expect("多 audience verifier 应当可以初始化");
+
+    let identity = verifier
+        .verify(&signed_token(
+            &encoding_key,
+            &issuer,
+            "openapi",
+            now() + 3_600,
+            None,
+        ))
+        .await
+        .expect("命中任一 audience 的 token 应当通过");
+
+    assert_eq!(identity.subject, "user-1");
+    server.join().expect("测试 Provider 应当正常退出");
+}
+
+#[tokio::test]
 async fn discovery_rejects_non_loopback_http_issuer_before_request() {
     let error = match OidcAccessTokenVerifier::discover("http://id.example.com", AUDIENCE).await {
         Ok(_) => panic!("非 loopback HTTP issuer 必须在发起网络请求前被拒绝"),
         Err(error) => error,
     };
+
+    assert!(matches!(error, VerificationError::InvalidConfiguration(_)));
+}
+
+#[tokio::test]
+async fn discovery_rejects_empty_audience_before_request() {
+    let error =
+        match OidcAccessTokenVerifier::discover_many("https://id.example.com", ["portal-api", " "])
+            .await
+        {
+            Ok(_) => panic!("空 audience 必须在发起网络请求前被拒绝"),
+            Err(error) => error,
+        };
 
     assert!(matches!(error, VerificationError::InvalidConfiguration(_)));
 }
@@ -180,7 +230,11 @@ fn signed_token_with_key_id(
         "exp": expires_at,
         "iat": now(),
         "name": "Ada",
-        "email": "ada@example.com"
+        "email": "ada@example.com",
+        "urn:zitadel:iam:org:id": "customer-org-1",
+        "urn:zitadel:iam:user:resourceowner:id": "resource-owner-1",
+        "urn:zitadel:iam:user:resourceowner:name": "Acme",
+        "urn:zitadel:iam:user:resourceowner:primary_domain": "acme.example.com"
     });
     if let Some(not_before) = not_before {
         claims["nbf"] = json!(not_before);

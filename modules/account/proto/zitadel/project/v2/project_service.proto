@@ -6,6 +6,10 @@ package zitadel.project.v2;
 // 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的响应字段由 Protobuf 忽略。
 service ProjectService {
   rpc AddProjectRole(AddProjectRoleRequest) returns (AddProjectRoleResponse);
+  rpc CreateProjectGrant(CreateProjectGrantRequest) returns (CreateProjectGrantResponse);
+  rpc UpdateProjectGrant(UpdateProjectGrantRequest) returns (UpdateProjectGrantResponse);
+  rpc DeleteProjectGrant(DeleteProjectGrantRequest) returns (DeleteProjectGrantResponse);
+  rpc ListProjectGrants(ListProjectGrantsRequest) returns (ListProjectGrantsResponse);
 }
 
 message AddProjectRoleRequest {
@@ -21,3 +25,87 @@ message AddProjectRoleRequest {
 
 // 当前调用方只需确认创建成功，不读取创建时间。
 message AddProjectRoleResponse {}
+
+message ProjectGrant {
+  string organization_id = 1;
+  string granted_organization_id = 4;
+  string granted_organization_name = 5;
+  repeated string granted_role_keys = 6;
+  string project_id = 7;
+  string project_name = 8;
+  ProjectGrantState state = 9;
+}
+
+enum ProjectGrantState {
+  PROJECT_GRANT_STATE_UNSPECIFIED = 0;
+  PROJECT_GRANT_STATE_ACTIVE = 1;
+  PROJECT_GRANT_STATE_INACTIVE = 2;
+}
+
+enum ProjectGrantFieldName {
+  PROJECT_GRANT_FIELD_NAME_UNSPECIFIED = 0;
+  PROJECT_GRANT_FIELD_NAME_PROJECT_ID = 1;
+  PROJECT_GRANT_FIELD_NAME_CREATION_DATE = 2;
+  PROJECT_GRANT_FIELD_NAME_CHANGE_DATE = 3;
+}
+
+message PaginationRequest {
+  uint64 offset = 1;
+  uint32 limit = 2;
+  bool asc = 3;
+}
+
+message PaginationResponse {
+  uint64 total_result = 1;
+  uint64 applied_limit = 2;
+}
+
+message IDFilter {
+  string id = 1;
+}
+
+message InIDsFilter {
+  repeated string ids = 1;
+}
+
+message ProjectGrantSearchFilter {
+  oneof filter {
+    InIDsFilter in_project_ids_filter = 3;
+    IDFilter organization_id_filter = 4;
+    IDFilter granted_organization_id_filter = 5;
+  }
+}
+
+message CreateProjectGrantRequest {
+  string project_id = 1;
+  string granted_organization_id = 2;
+  repeated string role_keys = 3;
+}
+
+message CreateProjectGrantResponse {}
+
+message UpdateProjectGrantRequest {
+  string project_id = 1;
+  string granted_organization_id = 2;
+  repeated string role_keys = 3;
+}
+
+message UpdateProjectGrantResponse {}
+
+message DeleteProjectGrantRequest {
+  string project_id = 1;
+  string granted_organization_id = 2;
+}
+
+message DeleteProjectGrantResponse {}
+
+message ListProjectGrantsRequest {
+  PaginationRequest pagination = 1;
+  ProjectGrantFieldName sorting_column = 2;
+  repeated ProjectGrantSearchFilter filters = 3;
+}
+
+message ListProjectGrantsResponse {
+  PaginationResponse pagination = 1;
+  repeated ProjectGrant project_grants = 2;
+}

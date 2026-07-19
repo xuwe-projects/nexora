@@ -4,23 +4,13 @@
 //! 交互，读取 setup 所需的人类用户并确保本地系统角色存在于目标 Project。超级管理员绑定
 //! 规则仍由账号实体校验与初始化 store 负责。
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::fmt;
 
 use async_trait::async_trait;
-use grpc::{
-    StatusCodeError, StatusError,
-    client::{Channel, ChannelOptions},
-    credentials::{
-        CompositeChannelCredentials, LocalChannelCredentials, SecurityLevel,
-        call::{CallCredentials, CallDetails, ClientConnectionSecurityInfo},
-        rustls::client::{ClientTlsConfig, RustlsChannelCredendials},
-    },
-    metadata::{AsciiMetadataValue, MetadataMap},
-};
+use grpc::{StatusCodeError, StatusError, client::Channel};
 use grpc_protobuf::CallBuilder as _;
 use protobuf::{ProtoString, View};
 use thiserror::Error;
-use url::{Host, Url};
 
 use crate::{
     CreateHumanIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError, SystemRole,
@@ -33,11 +23,11 @@ use crate::{
             create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
         },
     },
+    zitadel::{self, REQUEST_TIMEOUT},
 };
 
 const PAGE_SIZE: u32 = 100;
 const MAX_DIRECTORY_USERS: u64 = 10_000;
-const DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 可用于首次初始化选择的人类用户。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,8 +92,6 @@ impl ZitadelUserDirectory {
         organization_id: &str,
         project_id: &str,
     ) -> Result<Self, DirectoryError> {
-        let endpoint = grpc_endpoint(issuer)?;
-        let authorization = authorization_value(personal_access_token)?;
         let organization_id = organization_id.trim();
         if organization_id.is_empty() {
             return Err(DirectoryError::InvalidConfiguration(
@@ -114,26 +102,7 @@ impl ZitadelUserDirectory {
         if project_id.is_empty() {
             return Err(DirectoryError::InvalidConfiguration("Project ID 不能为空"));
         }
-        let call_credentials = Arc::new(PatCallCredentials { authorization });
-        let channel = if endpoint.secure {
-            _ = rustls::crypto::ring::default_provider().install_default();
-            let tls = RustlsChannelCredendials::new(ClientTlsConfig::new())
-                .map_err(DirectoryError::TlsConfiguration)?;
-            Channel::new(
-                endpoint.target,
-                Arc::new(CompositeChannelCredentials::new(tls, call_credentials)),
-                ChannelOptions::default(),
-            )
-        } else {
-            Channel::new(
-                endpoint.target,
-                Arc::new(CompositeChannelCredentials::new(
-                    LocalChannelCredentials::new(),
-                    call_credentials,
-                )),
-                ChannelOptions::default(),
-            )
-        };
+        let channel = zitadel::authenticated_channel(issuer, personal_access_token)?;
         Ok(Self {
             user_client: UserServiceClient::new(channel.clone()),
             project_client: ProjectServiceClient::new(channel),
@@ -160,7 +129,7 @@ impl ZitadelUserDirectory {
             match self
                 .project_client
                 .add_project_role(request.as_view())
-                .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+                .with_timeout(REQUEST_TIMEOUT)
                 .await
             {
                 Ok(_) => tracing::info!(
@@ -264,7 +233,7 @@ impl ZitadelUserDirectory {
         let response = self
             .user_client
             .create_user(create.as_view())
-            .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+            .with_timeout(REQUEST_TIMEOUT)
             .await?;
         let identity_id = required_string(response.id(), "create_user.id")?;
         if identity_id.trim().is_empty() {
@@ -298,7 +267,7 @@ impl ZitadelUserDirectory {
         request.set_user_id(identity_id);
         self.user_client
             .delete_user(request.as_view())
-            .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+            .with_timeout(REQUEST_TIMEOUT)
             .await?;
         Ok(())
     }
@@ -318,7 +287,7 @@ impl ZitadelUserDirectory {
             let response = self
                 .user_client
                 .list_users(request.as_view())
-                .with_timeout(DIRECTORY_REQUEST_TIMEOUT)
+                .with_timeout(REQUEST_TIMEOUT)
                 .await?;
             let result_count = response.result().len() as u64;
             for user in response.result() {
@@ -448,99 +417,15 @@ impl From<StatusError> for DirectoryError {
     }
 }
 
-#[derive(Clone)]
-struct GrpcEndpoint {
-    target: String,
-    secure: bool,
-}
-
-#[derive(Clone)]
-struct PatCallCredentials {
-    authorization: AsciiMetadataValue,
-}
-
-impl fmt::Debug for PatCallCredentials {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PatCallCredentials")
-            .field("authorization", &"[REDACTED]")
-            .finish()
-    }
-}
-
-#[async_trait]
-impl CallCredentials for PatCallCredentials {
-    async fn get_metadata(
-        &self,
-        _call_details: &CallDetails,
-        _auth_info: &ClientConnectionSecurityInfo,
-        metadata: &mut MetadataMap,
-    ) -> Result<(), StatusError> {
-        metadata.insert("authorization", self.authorization.clone());
-        Ok(())
-    }
-
-    fn minimum_channel_security_level(&self) -> SecurityLevel {
-        SecurityLevel::NoSecurity
-    }
-}
-
-fn grpc_endpoint(issuer: &str) -> Result<GrpcEndpoint, DirectoryError> {
-    let url = Url::parse(issuer.trim())
-        .map_err(|_| DirectoryError::InvalidConfiguration("OIDC issuer URL 无效"))?;
-    if url.host().is_none() {
-        return Err(DirectoryError::InvalidConfiguration(
-            "OIDC issuer 必须是包含主机的绝对 URL",
-        ));
-    }
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(DirectoryError::InvalidConfiguration(
-            "OIDC issuer 不能包含凭据、query 或 fragment",
-        ));
-    }
-    let secure = match url.scheme() {
-        "https" => true,
-        "http" if is_loopback(&url) => false,
-        _ => {
-            return Err(DirectoryError::InvalidConfiguration(
-                "OIDC issuer 必须使用 HTTPS；仅 loopback 开发地址允许 HTTP",
-            ));
+impl From<zitadel::ClientError> for DirectoryError {
+    fn from(error: zitadel::ClientError) -> Self {
+        match error {
+            zitadel::ClientError::InvalidConfiguration(message) => {
+                Self::InvalidConfiguration(message)
+            }
+            zitadel::ClientError::TlsConfiguration(message) => Self::TlsConfiguration(message),
         }
-    };
-    let host = url
-        .host_str()
-        .ok_or(DirectoryError::InvalidConfiguration("OIDC issuer 缺少主机"))?;
-    let port = url
-        .port_or_known_default()
-        .ok_or(DirectoryError::InvalidConfiguration("OIDC issuer 缺少端口"))?;
-    let authority = if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
-    Ok(GrpcEndpoint {
-        target: format!("dns:///{authority}"),
-        secure,
-    })
-}
-
-fn authorization_value(personal_access_token: &str) -> Result<AsciiMetadataValue, DirectoryError> {
-    let token = personal_access_token.trim();
-    if token.is_empty() {
-        return Err(DirectoryError::InvalidConfiguration(
-            "Personal Access Token 不能为空",
-        ));
     }
-    let mut authorization = AsciiMetadataValue::try_from(format!("Bearer {token}").as_bytes())
-        .map_err(|_| {
-            DirectoryError::InvalidConfiguration("Personal Access Token 包含非法 metadata 字符")
-        })?;
-    authorization.set_sensitive(true);
-    Ok(authorization)
 }
 
 fn list_users_request(offset: u64, identity_id: Option<&str>) -> ListUsersRequest {
@@ -640,13 +525,4 @@ fn required_string(
 
 fn non_empty_owned(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
 }

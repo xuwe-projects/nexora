@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package zitadel.org.v2;
+
+// ZITADEL OrganizationService v2 中客户门户开通所需的最小线上契约。
+// 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用字段由 Protobuf 忽略。
+service OrganizationService {
+  rpc AddOrganization(AddOrganizationRequest) returns (AddOrganizationResponse);
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse);
+}
+
+message AddOrganizationRequest {
+  message Admin {
+    oneof user_type {
+      string user_id = 1;
+    }
+    repeated string roles = 3;
+  }
+
+  string name = 1;
+  repeated Admin admins = 2;
+  optional string org_id = 3;
+  optional string organization_id = 4;
+}
+
+message AddOrganizationResponse {
+  message CreatedAdmin {
+    string user_id = 1;
+    optional string email_code = 2;
+    optional string phone_code = 3;
+  }
+
+  string organization_id = 2;
+  repeated CreatedAdmin created_admins = 3;
+}
+
+message ListQuery {
+  uint64 offset = 1;
+  uint32 limit = 2;
+  bool asc = 3;
+}
+
+message ListDetails {
+  uint64 total_result = 1;
+}
+
+enum OrganizationState {
+  ORGANIZATION_STATE_UNSPECIFIED = 0;
+  ORGANIZATION_STATE_ACTIVE = 1;
+  ORGANIZATION_STATE_INACTIVE = 2;
+  ORGANIZATION_STATE_REMOVED = 3;
+}
+
+enum OrganizationFieldName {
+  ORGANIZATION_FIELD_NAME_UNSPECIFIED = 0;
+  ORGANIZATION_FIELD_NAME_NAME = 1;
+  ORGANIZATION_FIELD_NAME_CREATION_DATE = 2;
+}
+
+enum TextQueryMethod {
+  TEXT_QUERY_METHOD_EQUALS = 0;
+  TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE = 1;
+  TEXT_QUERY_METHOD_STARTS_WITH = 2;
+  TEXT_QUERY_METHOD_STARTS_WITH_IGNORE_CASE = 3;
+  TEXT_QUERY_METHOD_CONTAINS = 4;
+  TEXT_QUERY_METHOD_CONTAINS_IGNORE_CASE = 5;
+  TEXT_QUERY_METHOD_ENDS_WITH = 6;
+  TEXT_QUERY_METHOD_ENDS_WITH_IGNORE_CASE = 7;
+}
+
+message Organization {
+  string id = 1;
+  OrganizationState state = 3;
+  string name = 4;
+  string primary_domain = 5;
+}
+
+message OrganizationNameQuery {
+  string name = 1;
+  TextQueryMethod method = 2;
+}
+
+message OrganizationIDQuery {
+  string id = 1;
+}
+
+message SearchQuery {
+  oneof query {
+    OrganizationNameQuery name_query = 1;
+    OrganizationIDQuery id_query = 4;
+  }
+}
+
+message ListOrganizationsRequest {
+  ListQuery query = 1;
+  OrganizationFieldName sorting_column = 2;
+  repeated SearchQuery queries = 3;
+}
+
+message ListOrganizationsResponse {
+  ListDetails details = 1;
+  OrganizationFieldName sorting_column = 2;
+  repeated Organization result = 3;
+}

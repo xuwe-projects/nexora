@@ -12,7 +12,9 @@ use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 use url::{Host, Url};
 
-use super::{AccessTokenVerifier, VerificationError, VerifiedIdentity};
+use super::{
+    AccessTokenVerifier, VerificationError, VerifiedIdentity, VerifiedOrganizationContext,
+};
 
 const MIN_JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -21,7 +23,7 @@ pub struct OidcAccessTokenVerifier {
     http: reqwest::Client,
     issuer: String,
     identity_issuer: String,
-    audience: String,
+    audiences: Vec<String>,
     jwks_uri: Url,
     signing_algorithms: Vec<String>,
     jwks: RwLock<JwkSet>,
@@ -39,12 +41,32 @@ impl OidcAccessTokenVerifier {
         issuer: impl AsRef<str>,
         audience: impl Into<String>,
     ) -> Result<Self, VerificationError> {
+        Self::discover_many(issuer, [audience.into()]).await
+    }
+
+    /// 发现 Provider 元数据、校验 issuer，并创建支持多个 audience 的 access token verifier。
+    ///
+    /// 任一配置的 audience 命中 token `aud` claim 即可通过验证，适合同一 issuer 下 portal、
+    /// openapi 等多个 resource server 共用 verifier 的场景。
+    ///
+    /// # Errors
+    ///
+    /// issuer URL 无效、audience 列表为空或包含空值、discovery 与配置不一致、元数据缺字段，
+    /// 或网络请求失败时返回 [`VerificationError`]。
+    pub async fn discover_many<I, A>(
+        issuer: impl AsRef<str>,
+        audiences: I,
+    ) -> Result<Self, VerificationError>
+    where
+        I: IntoIterator<Item = A>,
+        A: Into<String>,
+    {
         let issuer_url = normalized_issuer(issuer.as_ref())?;
         let identity_issuer = issuer_url.to_string();
-        let audience = audience.into();
-        if audience.trim().is_empty() {
+        let audiences = normalize_audiences(audiences)?;
+        if audiences.is_empty() {
             return Err(VerificationError::InvalidConfiguration(
-                "audience 不能为空".to_owned(),
+                "audience 列表不能为空".to_owned(),
             ));
         }
         let http = reqwest::Client::builder()
@@ -80,7 +102,7 @@ impl OidcAccessTokenVerifier {
             http,
             issuer: document.issuer.trim().to_owned(),
             identity_issuer,
-            audience,
+            audiences,
             jwks_uri: document.jwks_uri,
             signing_algorithms: document.id_token_signing_alg_values_supported,
             jwks: RwLock::new(jwks),
@@ -145,7 +167,12 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
         let mut validation = Validation::new(header.alg);
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
         validation.set_issuer(&[self.issuer.as_str()]);
-        validation.set_audience(&[self.audience.as_str()]);
+        let audiences = self
+            .audiences
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        validation.set_audience(audiences.as_slice());
         validation.validate_nbf = true;
         let claims = decode::<AccessTokenClaims>(token, &decoding_key, &validation)
             .map_err(|_| VerificationError::InvalidToken)?
@@ -161,6 +188,7 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(claims.subject.as_str())
             .to_owned();
+        let organization = organization_context(&claims)?;
         Ok(VerifiedIdentity {
             issuer: self.identity_issuer.clone(),
             subject: claims.subject,
@@ -168,6 +196,7 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
             email: claims.email,
             display_name,
             avatar_url: claims.picture,
+            organization,
         })
     }
 }
@@ -188,6 +217,83 @@ struct AccessTokenClaims {
     email: Option<String>,
     preferred_username: Option<String>,
     picture: Option<String>,
+    #[serde(rename = "urn:zitadel:iam:org:id")]
+    zitadel_organization_id: Option<String>,
+    #[serde(rename = "urn:zitadel:iam:user:resourceowner:id")]
+    resource_owner_id: Option<String>,
+    #[serde(rename = "urn:zitadel:iam:user:resourceowner:name")]
+    resource_owner_name: Option<String>,
+    #[serde(rename = "urn:zitadel:iam:user:resourceowner:primary_domain")]
+    resource_owner_primary_domain: Option<String>,
+}
+
+fn normalize_audiences<I, A>(audiences: I) -> Result<Vec<String>, VerificationError>
+where
+    I: IntoIterator<Item = A>,
+    A: Into<String>,
+{
+    let mut normalized = Vec::new();
+    for audience in audiences {
+        let audience = audience.into();
+        let audience = audience.trim();
+        if audience.is_empty() {
+            return Err(VerificationError::InvalidConfiguration(
+                "audience 不能为空".to_owned(),
+            ));
+        }
+        if !normalized.iter().any(|existing| existing == audience) {
+            normalized.push(audience.to_owned());
+        }
+    }
+    Ok(normalized)
+}
+
+fn organization_context(
+    claims: &AccessTokenClaims,
+) -> Result<Option<VerifiedOrganizationContext>, VerificationError> {
+    let organization_id = claims
+        .zitadel_organization_id
+        .as_deref()
+        .or(claims.resource_owner_id.as_deref())
+        .map(required_claim("ZITADEL organization id"))
+        .transpose()?;
+    let Some(id) = organization_id else {
+        return Ok(None);
+    };
+    Ok(Some(VerifiedOrganizationContext {
+        id,
+        name: claims
+            .resource_owner_name
+            .as_deref()
+            .map(optional_claim)
+            .transpose()?
+            .flatten(),
+        primary_domain: claims
+            .resource_owner_primary_domain
+            .as_deref()
+            .map(optional_claim)
+            .transpose()?
+            .flatten(),
+    }))
+}
+
+fn required_claim(field: &'static str) -> impl FnOnce(&str) -> Result<String, VerificationError> {
+    move |value| {
+        let value = value.trim();
+        if value.is_empty() {
+            tracing::warn!(
+                claim = field,
+                "OIDC token 中的 ZITADEL 组织上下文 claim 为空"
+            );
+            return Err(VerificationError::InvalidToken);
+        }
+        Ok(value.to_owned())
+    }
+}
+
+fn optional_claim(value: &str) -> Result<Option<String>, VerificationError> {
+    let value = value.trim();
+    Ok((!value.is_empty()).then_some(value.to_owned()))
 }
 
 async fn load_jwks(http: &reqwest::Client, uri: &Url) -> Result<JwkSet, VerificationError> {
