@@ -137,9 +137,12 @@ mod server {
         config::Settings as _,
         server::{
             Account, AccountOidcSettings as OidcSettings, AccountSettings as Settings,
-            AuthenticatedUser, Authorized, DirectoryUser, ExternalIdentity, PermissionDefinition,
-            PermissionKey, RequiredPermission, Setup, SetupCompletionRequest, SetupUnlockRequest,
-            create_permissions, create_role, create_user, create_user_with_roles, migrations,
+            AuthenticatedUser, Authorized, DirectoryUser, ExternalIdentity,
+            OidcAccessTokenVerifier, OidcResourceServer, PermissionDefinition, PermissionKey,
+            RequiredPermission, Setup, SetupCompletionRequest, SetupUnlockRequest,
+            VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
+            ZitadelAuthorizationRequest, ZitadelProvisioningClient, create_permissions,
+            create_role, create_user, create_user_with_roles, migrations, provisioning_client,
             replace_role_permissions, replace_user_roles,
         },
     };
@@ -174,6 +177,10 @@ mod server {
 
     async fn authorized_handler(_authorization: Authorized<ReadProjects>) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    async fn portal_handler(_identity: VerifiedBearerIdentity) -> StatusCode {
+        StatusCode::OK
     }
 
     #[test]
@@ -279,6 +286,68 @@ mod server {
 
         let server = Server::new();
         assert!(server.account().is_none());
+        assert!(server.zitadel_provisioning_client().is_none());
+    }
+
+    #[test]
+    fn server_facade_exposes_independent_resource_server_and_zitadel_provisioning() {
+        fn assert_portal_api(
+            resource_server: OidcResourceServer,
+            provisioning: ZitadelProvisioningClient,
+        ) {
+            #[derive(Clone)]
+            struct PortalState {
+                resource_server: OidcResourceServer,
+            }
+
+            impl FromRef<PortalState> for OidcResourceServer {
+                fn from_ref(state: &PortalState) -> Self {
+                    state.resource_server.clone()
+                }
+            }
+
+            let router: Router<PortalState> = Router::new().route("/portal", get(portal_handler));
+            let identity = VerifiedIdentity {
+                issuer: "https://identity.example.com/".to_owned(),
+                subject: "user-1".to_owned(),
+                username: Some("user-1".to_owned()),
+                email: Some("user@example.com".to_owned()),
+                display_name: "测试用户".to_owned(),
+                avatar_url: None,
+                organization: Some(VerifiedOrganizationContext {
+                    id: "customer-org".to_owned(),
+                    name: None,
+                    primary_domain: None,
+                }),
+            };
+            let request = ZitadelAuthorizationRequest {
+                user_id: identity.subject,
+                project_id: "portal-project".to_owned(),
+                organization_id: identity.organization.expect("测试身份应包含 org").id,
+                role_keys: vec!["admin".to_owned()],
+            };
+
+            _ = router;
+            _ = resource_server;
+            _ = provisioning;
+            _ = request;
+        }
+
+        _ = std::any::type_name::<OidcAccessTokenVerifier>();
+        _ = assert_portal_api as fn(OidcResourceServer, ZitadelProvisioningClient);
+        let settings = ServerSettings {
+            account: Settings {
+                oidc: OidcSettings {
+                    issuer_url: "http://127.0.0.1:8080".to_owned(),
+                    audience: "nexora-api".to_owned(),
+                    organization_id: "organization-1".to_owned(),
+                    project_id: "project-1".to_owned(),
+                    personal_access_token: "test-personal-access-token".to_owned(),
+                },
+            },
+        };
+        let client = provisioning_client(&settings).expect("loopback provisioning client 应可构造");
+        assert!(!format!("{client:?}").contains("test-personal-access-token"));
     }
 
     #[test]

@@ -7,10 +7,12 @@ use std::marker::PhantomData;
 
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{header::AUTHORIZATION, request::Parts},
+    http::request::Parts,
 };
 
-use crate::{AccessProfile, Account, AccountError, ApiError, PermissionKey};
+use crate::{
+    AccessProfile, Account, AccountError, ApiError, PermissionKey, authentication::bearer_token,
+};
 
 /// 已通过 Bearer token 验证、本地账号存在性和停用状态检查的当前用户。
 ///
@@ -104,26 +106,4 @@ where
             permission: PhantomData,
         })
     }
-}
-
-fn bearer_token(parts: &Parts) -> Result<&str, ApiError> {
-    let value = parts
-        .headers
-        .get(AUTHORIZATION)
-        .ok_or_else(|| ApiError::unauthorized("missing_access_token", "缺少 Bearer token"))?
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("invalid_access_token", "Authorization 头无效"))?;
-    let (scheme, token) = value.split_once(' ').ok_or_else(|| {
-        ApiError::unauthorized(
-            "invalid_access_token",
-            "Authorization 头必须使用 Bearer scheme",
-        )
-    })?;
-    if !scheme.eq_ignore_ascii_case("bearer") || token.trim().is_empty() {
-        return Err(ApiError::unauthorized(
-            "invalid_access_token",
-            "Authorization 头必须使用 Bearer scheme",
-        ));
-    }
-    Ok(token.trim())
 }

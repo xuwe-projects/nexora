@@ -13,15 +13,22 @@ use sqlx::PgPool;
 use thiserror::Error;
 
 pub use crate::account::server::{
-    AccountServerInitializationError, DefaultSetup, DefaultSetupCompletionRequest,
-    DefaultSetupUnlockRequest, DirectoryError, DirectoryUser, OidcSettings as AccountOidcSettings,
-    Settings as AccountSettings, Setup, SetupCompletionRequest, SetupUnlockRequest,
-    ZitadelUserDirectory, dependencies, setup_routes, setup_routes_with, user_directory,
+    AccountServerInitializationError, CreateZitadelOrganizationRequest, DefaultSetup,
+    DefaultSetupCompletionRequest, DefaultSetupUnlockRequest, DirectoryError, DirectoryUser,
+    OidcSettings as AccountOidcSettings, Settings as AccountSettings, Setup,
+    SetupCompletionRequest, SetupUnlockRequest, ZitadelAuthorization, ZitadelAuthorizationOutcome,
+    ZitadelAuthorizationRequest, ZitadelDeleteUserOutcome, ZitadelOrganization,
+    ZitadelOrganizationState, ZitadelProjectGrant, ZitadelProjectGrantOutcome,
+    ZitadelProjectGrantRequest, ZitadelProjectGrantState, ZitadelProvisioningClient,
+    ZitadelProvisioningError, ZitadelUserDirectory, dependencies, provisioning_client,
+    setup_routes, setup_routes_with, user_directory,
 };
 pub use crate::account::{
-    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, CreateHumanIdentity,
-    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, Permission, PermissionDefinition,
-    PermissionKey, RequiredPermission, Role, User, create_permissions, create_role, create_user,
+    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, BearerAccessToken,
+    CreateHumanIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
+    OidcAccessTokenVerifier, OidcResourceServer, Permission, PermissionDefinition, PermissionKey,
+    RequiredPermission, Role, User, VerifiedBearerIdentity, VerifiedIdentity,
+    VerifiedOrganizationContext, create_permissions, create_role, create_user,
     create_user_with_roles, replace_role_permissions, replace_user_roles,
 };
 
@@ -38,6 +45,7 @@ pub struct Server {
 struct AccountRoutes {
     account: crate::account::Account,
     directory: ZitadelUserDirectory,
+    provisioning_client: ZitadelProvisioningClient,
     setup_secret: String,
 }
 
@@ -90,6 +98,7 @@ impl Server {
             >,
     {
         let directory = crate::account::server::user_directory(settings)?;
+        let provisioning_client = crate::account::server::provisioning_client(settings)?;
         let mut dependencies = crate::account::server::dependencies(pool.clone(), settings).await?;
         dependencies.identity_directory = Some(Arc::new(directory.clone()));
         let account = crate::account::Account::new(dependencies);
@@ -101,6 +110,7 @@ impl Server {
         self.account_routes = Some(AccountRoutes {
             account,
             directory,
+            provisioning_client,
             setup_secret: setup_secret.to_owned(),
         });
         Ok(())
@@ -140,6 +150,20 @@ impl Server {
         self.account_routes
             .as_ref()
             .map(|routes| routes.account.clone())
+    }
+
+    /// 返回已经初始化的 ZITADEL provisioning/admin client。
+    ///
+    /// 该 client 不绑定默认 Account 的固定 Organization；宿主可把它放入自己的 State，为客户
+    /// portal 动态创建 ZITADEL Organization、portal Project Grant、人类用户和用户 Project
+    /// authorization。它不会把 portal 用户加入默认内部 Account `/users` 管理列表。
+    ///
+    /// [`Self::initialize`] 成功前返回 `None`。
+    #[must_use]
+    pub fn zitadel_provisioning_client(&self) -> Option<ZitadelProvisioningClient> {
+        self.account_routes
+            .as_ref()
+            .map(|routes| routes.provisioning_client.clone())
     }
 
     /// 当系统尚未完成初始化时，根据宿主已经绑定的地址返回 Setup 页面 URL。
@@ -183,6 +207,14 @@ pub enum ServerError {
         /// ZITADEL 用户目录或角色管理接口返回的原始错误。
         #[from]
         crate::account::server::DirectoryError,
+    ),
+    /// ZITADEL provisioning/admin client 初始化失败。
+    #[cfg(feature = "server")]
+    #[error("ZITADEL provisioning client 初始化失败")]
+    Provisioning(
+        /// ZITADEL provisioning client 返回的配置或 TLS 错误。
+        #[from]
+        crate::account::server::ZitadelProvisioningError,
     ),
 }
 

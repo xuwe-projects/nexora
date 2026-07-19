@@ -23,8 +23,13 @@ mod errors;
 #[cfg(feature = "zitadel")]
 mod generated;
 mod handlers;
+/// 提供客户门户开通所需的 ZITADEL Organization、Project Grant、用户与授权管理客户端。
+#[cfg(feature = "zitadel")]
+pub mod provisioning;
 mod routers;
 mod stores;
+#[cfg(feature = "zitadel")]
+mod zitadel;
 
 pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;

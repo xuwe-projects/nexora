@@ -2,6 +2,8 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate("zitadel/user/v2/user_service.proto")?;
     generate("zitadel/project/v2/project_service.proto")?;
+    generate("zitadel/org/v2/org_service.proto")?;
+    generate("zitadel/authorization/v2/authorization_service.proto")?;
     Ok(())
 }
 

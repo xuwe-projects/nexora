@@ -1034,6 +1034,7 @@ impl AccessTokenVerifier for TokenIdentityVerifier {
             email: Some(format!("{token}@example.com")),
             display_name: token.to_owned(),
             avatar_url: None,
+            organization: None,
         })
     }
 }
