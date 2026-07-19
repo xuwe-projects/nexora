@@ -4,7 +4,7 @@ use semver::Version;
 #[test]
 fn current_release_is_newer_than_previous_release() {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let previous = Version::parse("0.9.1").unwrap();
+    let previous = Version::parse("0.10.0").unwrap();
 
     assert!(current > previous);
 }
@@ -19,8 +19,8 @@ fn embedded_repository_finds_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
-    assert!(entry.markdown().contains("顶部标签栏"));
-    assert!(entry.markdown().contains("TabBar"));
+    assert!(entry.markdown().contains("服务端客户门户能力"));
+    assert!(entry.markdown().contains("VerifiedIdentity"));
 }
 
 #[test]
@@ -49,6 +49,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.10.0",
             "0.9.1",
             "0.9.0",
             "0.8.0",
