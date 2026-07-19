@@ -755,8 +755,7 @@ struct ApplicationShell {
     opened_tabs: Vec<ShellRoute>,
     pinned_tabs: Vec<ShellRoute>,
     tab_context_route: Option<ShellRoute>,
-    pinned_tab_scroll_handle: ScrollHandle,
-    regular_tab_scroll_handle: ScrollHandle,
+    tab_scroll_handle: ScrollHandle,
     navigation_history: Vec<ShellRoute>,
     navigation_history_index: usize,
     expanded_navigation_groups: HashSet<&'static str>,
@@ -912,8 +911,7 @@ impl ApplicationShell {
             opened_tabs,
             pinned_tabs,
             tab_context_route: None,
-            pinned_tab_scroll_handle: ScrollHandle::new(),
-            regular_tab_scroll_handle: ScrollHandle::new(),
+            tab_scroll_handle: ScrollHandle::new(),
             navigation_history: vec![initial_route],
             navigation_history_index: 0,
             expanded_navigation_groups,
@@ -1234,42 +1232,13 @@ impl ApplicationShell {
         self.reorder_tabs_by_pin();
     }
 
-    fn regular_tab_routes(&self) -> Vec<ShellRoute> {
-        self.opened_tabs
-            .iter()
-            .filter(|route| !self.is_route_pinned(route))
-            .cloned()
-            .collect()
-    }
-
     fn tab_index(&self, route: &ShellRoute) -> Option<usize> {
         self.opened_tabs.iter().position(|opened| opened == route)
     }
 
-    fn pinned_tab_index(&self, route: &ShellRoute) -> Option<usize> {
-        self.pinned_tabs.iter().position(|pinned| pinned == route)
-    }
-
-    fn regular_tab_index(&self, route: &ShellRoute) -> Option<usize> {
-        self.opened_tabs
-            .iter()
-            .filter(|opened| !self.is_route_pinned(opened))
-            .position(|opened| opened == route)
-    }
-
-    fn active_pinned_tab_index(&self) -> Option<usize> {
-        self.pinned_tab_index(&self.active_route)
-    }
-
-    fn active_regular_tab_index(&self) -> Option<usize> {
-        self.regular_tab_index(&self.active_route)
-    }
-
     fn scroll_tab_into_view(&self, route: &ShellRoute) {
-        if let Some(index) = self.pinned_tab_index(route) {
-            self.pinned_tab_scroll_handle.scroll_to_item(index);
-        } else if let Some(index) = self.regular_tab_index(route) {
-            self.regular_tab_scroll_handle.scroll_to_item(index);
+        if let Some(index) = self.tab_index(route) {
+            self.tab_scroll_handle.scroll_to_item(index);
         }
     }
 
@@ -1490,25 +1459,13 @@ impl ApplicationShell {
         self.update_runtime_after_tab_change(previous_active_route, window, cx);
     }
 
-    fn select_pinned_tab_in(
+    fn select_tab_in(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), FeatureRuntimeError> {
-        if let Some(route) = self.pinned_tabs.get(index).cloned() {
-            self.navigate_to_route_in(route, true, window, cx)?;
-        }
-        Ok(())
-    }
-
-    fn select_regular_tab_in(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<(), FeatureRuntimeError> {
-        if let Some(route) = self.regular_tab_routes().get(index).cloned() {
+        if let Some(route) = self.opened_tabs.get(index).cloned() {
             self.navigate_to_route_in(route, true, window, cx)?;
         }
         Ok(())
@@ -1966,10 +1923,9 @@ impl ApplicationShell {
     }
 
     fn render_title_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let opened_tabs = self.opened_tabs.clone();
         let pinned_tabs = self.pinned_tabs.clone();
-        let regular_tabs = self.regular_tab_routes();
-        let active_pinned_tab_index = self.active_pinned_tab_index();
-        let active_regular_tab_index = self.active_regular_tab_index();
+        let active_tab_index = self.tab_index(&self.active_route);
         let shell = cx.entity().downgrade();
         let title_bar_background = cx.theme().tokens.title_bar;
         let can_navigate_back = self.can_navigate_back();
@@ -2048,51 +2004,9 @@ impl ApplicationShell {
                                             })),
                                     ),
                             )
-                            .when(!pinned_tabs.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .id("nexora-pinned-tabs-zone")
-                                        .flex_none()
-                                        .max_w(px(220.0))
-                                        .min_w_0()
-                                        .h_full()
-                                        .overflow_hidden()
-                                        .child(
-                                            self.tab_style
-                                                .apply(TabBar::new("nexora-pinned-tabs"))
-                                                .w_full()
-                                                .h_full()
-                                                .track_scroll(&self.pinned_tab_scroll_handle)
-                                                .menu(pinned_tabs.len() > 2)
-                                                .when_some(
-                                                    active_pinned_tab_index,
-                                                    |this, index| this.selected_index(index),
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, index: &usize, window, cx| {
-                                                        match this.select_pinned_tab_in(
-                                                            *index, window, cx,
-                                                        ) {
-                                                            Ok(()) => this.navigation_error = None,
-                                                            Err(error) => {
-                                                                this.navigation_error =
-                                                                    Some(error.to_string())
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    },
-                                                ))
-                                                .children(pinned_tabs.iter().cloned().map(
-                                                    |route| {
-                                                        Self::render_tab(route, true, shell.clone())
-                                                    },
-                                                )),
-                                        ),
-                                )
-                            })
                             .child(
                                 div()
-                                    .id("nexora-regular-tabs-zone")
+                                    .id("nexora-tabs-zone")
                                     .relative()
                                     .flex_1()
                                     .min_w_0()
@@ -2100,19 +2014,17 @@ impl ApplicationShell {
                                     .overflow_hidden()
                                     .child(
                                         self.tab_style
-                                            .apply(TabBar::new("nexora-regular-tabs"))
+                                            .apply(TabBar::new("nexora-open-tabs"))
                                             .w_full()
                                             .h_full()
-                                            .track_scroll(&self.regular_tab_scroll_handle)
-                                            .menu(!regular_tabs.is_empty())
-                                            .when_some(active_regular_tab_index, |this, index| {
+                                            .track_scroll(&self.tab_scroll_handle)
+                                            .menu(!opened_tabs.is_empty())
+                                            .when_some(active_tab_index, |this, index| {
                                                 this.selected_index(index)
                                             })
                                             .on_click(cx.listener(
                                                 |this, index: &usize, window, cx| {
-                                                    match this
-                                                        .select_regular_tab_in(*index, window, cx)
-                                                    {
+                                                    match this.select_tab_in(*index, window, cx) {
                                                         Ok(()) => this.navigation_error = None,
                                                         Err(error) => {
                                                             this.navigation_error =
@@ -2122,8 +2034,9 @@ impl ApplicationShell {
                                                     cx.notify();
                                                 },
                                             ))
-                                            .children(regular_tabs.iter().cloned().map(|route| {
-                                                Self::render_tab(route, false, shell.clone())
+                                            .children(opened_tabs.iter().cloned().map(|route| {
+                                                let is_pinned = pinned_tabs.contains(&route);
+                                                Self::render_tab(route, is_pinned, shell.clone())
                                             })),
                                     ),
                             ),

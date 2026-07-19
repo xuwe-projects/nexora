@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.9.1: connected top tab segmented bar and user management stability](./0.9.1)
 - [0.9.0: CRUD table macro and tab style](./0.9.0)
 - [0.8.0: standard CRUD Panel](./0.8.0)
 - [0.7.0: application custom icon assets](./0.7.0)

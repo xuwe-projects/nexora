@@ -53,7 +53,7 @@ impl UsersPage {
         let role_editor = cx.new(UserRoleEditor::new);
         let table = users_table.downgrade();
         let role_editor_subscription = cx.observe(&role_editor, move |_, _, cx| {
-            _ = table.update(cx, |table, cx| table.refresh(cx));
+            _ = table.update(cx, |table, cx| table.refresh_actions(cx));
             cx.notify();
         });
         Self {
@@ -232,10 +232,6 @@ impl UsersPage {
         cx.notify();
     }
 
-    pub(super) const fn is_loading(&self) -> bool {
-        self.loading
-    }
-
     pub(super) fn is_user_busy(&self, user_id: &str) -> bool {
         self.busy_user_id.as_deref() == Some(user_id)
     }
@@ -245,7 +241,9 @@ impl UsersPage {
     }
 
     fn refresh_table(&self, cx: &mut Context<Self>) {
-        self.users_table.update(cx, |table, cx| table.refresh(cx));
+        let loading = self.loading;
+        self.users_table
+            .update(cx, |table, cx| table.refresh(loading, cx));
     }
 }
 

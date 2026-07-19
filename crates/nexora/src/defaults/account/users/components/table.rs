@@ -25,7 +25,6 @@ const USER_TABLE_ROW_HEIGHT: f32 = 52.0;
 
 pub(in crate::defaults::account::users) struct UsersTable {
     state: Entity<TableState<UsersTableDelegate>>,
-    page: WeakEntity<UsersPage>,
 }
 
 type UsersTableDelegate = CrudTableDelegate<UserTableRow>;
@@ -63,7 +62,7 @@ impl UsersTable {
                 .col_selectable(false)
                 .row_selectable(false)
         });
-        Self { state, page }
+        Self { state }
     }
 
     pub(super) fn replace_rows(
@@ -128,17 +127,18 @@ impl UsersTable {
         self.state.read(cx).delegate().rows().len()
     }
 
-    pub(super) fn refresh(&self, cx: &mut Context<Self>) {
-        let page_loading = self
-            .page
-            .upgrade()
-            .is_some_and(|page| page.read(cx).is_loading());
+    pub(super) fn refresh(&self, page_loading: bool, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
             delegate.set_loading(page_loading && delegate.rows().is_empty());
             delegate.set_loading_more(page_loading);
             cx.notify();
         });
+        cx.notify();
+    }
+
+    pub(super) fn refresh_actions(&self, cx: &mut Context<Self>) {
+        self.state.update(cx, |_, cx| cx.notify());
         cx.notify();
     }
 }

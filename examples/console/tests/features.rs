@@ -705,9 +705,9 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.version().to_string(), env!("CARGO_PKG_VERSION"));
     assert_eq!(entry.locale(), "zh-CN");
-    assert!(entry.markdown().contains("CRUD 表格"));
-    assert!(entry.markdown().contains("CrudTableRow"));
-    assert!(!entry.markdown().contains("TabBar"));
+    assert!(entry.markdown().contains("顶部标签栏"));
+    assert!(entry.markdown().contains("TabBar"));
+    assert!(!entry.markdown().contains("CrudTableRow"));
     assert!(!entry.markdown().contains("DMG"));
 }
 
