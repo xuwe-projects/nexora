@@ -15,9 +15,7 @@ use gpui_component::{
     ActiveTheme as _, FocusTrapElement as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     dialog::CancelDialog,
-    h_flex,
-    scroll::ScrollableElement as _,
-    v_flex,
+    h_flex, v_flex,
 };
 
 type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -52,7 +50,7 @@ impl PanelDialog {
             title: None,
             footer: None,
             children: Vec::new(),
-            overlay_closable: true,
+            overlay_closable: false,
             on_close: Rc::new(|_, _, _| {}),
         }
     }
@@ -73,7 +71,7 @@ impl PanelDialog {
         self
     }
 
-    /// 设置点击遮罩时是否触发关闭，默认启用。
+    /// 设置点击遮罩时是否触发关闭，默认禁用。
     ///
     /// 即使关闭该选项，遮罩仍会拦截鼠标事件，避免操作穿透到当前 Panel 的业务内容。
     pub fn overlay_closable(mut self, overlay_closable: bool) -> Self {
@@ -115,12 +113,15 @@ impl RenderOnce for PanelDialog {
 
         let surface = v_flex()
             .id("panel-dialog-surface")
+            .debug_selector(|| "panel-dialog-surface".into())
+            .relative()
+            .flex_none()
             .role(Role::Dialog)
             .key_context("Dialog")
             .w(px(480.0))
+            .h_auto()
             .max_w(relative(0.9))
-            .max_h(relative(0.9))
-            .min_h_0()
+            .min_h(px(180.0))
             .overflow_hidden()
             .bg(cx.theme().tokens.background)
             .border_1()
@@ -128,7 +129,6 @@ impl RenderOnce for PanelDialog {
             .rounded(cx.theme().radius_lg)
             .shadow_xl()
             .refine_style(&self.style)
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .on_action(move |_: &CancelDialog, window, cx| {
                 close_from_keyboard(&ClickEvent::default(), window, cx);
             })
@@ -163,9 +163,8 @@ impl RenderOnce for PanelDialog {
             )
             .child(
                 v_flex()
+                    .flex_none()
                     .min_h_0()
-                    .max_h(relative(0.68))
-                    .overflow_y_scrollbar()
                     .debug_selector(|| "panel-dialog-content".into())
                     .gap_4()
                     .p_4()
@@ -197,11 +196,13 @@ impl RenderOnce for PanelDialog {
             .p_4()
             .occlude()
             .bg(cx.theme().overlay)
-            .on_any_mouse_down(move |event, window, cx| {
-                cx.stop_propagation();
-                if overlay_closable && event.button == MouseButton::Left {
-                    close_from_overlay(&ClickEvent::default(), window, cx);
-                }
+            .when(overlay_closable, |this| {
+                this.on_any_mouse_down(move |event, window, cx| {
+                    cx.stop_propagation();
+                    if event.button == MouseButton::Left {
+                        close_from_overlay(&ClickEvent::default(), window, cx);
+                    }
+                })
             })
             .child(surface)
     }

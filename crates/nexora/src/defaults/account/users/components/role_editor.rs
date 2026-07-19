@@ -172,9 +172,11 @@ impl UserRoleEditor {
 
 impl Render for UserRoleEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let component_size = theme::component_size(cx);
         let role_options = self.roles.iter().map(|role| {
             let role_id = role.id;
             Checkbox::new(format!("default-assign-role-{role_id}"))
+                .with_size(component_size)
                 .label(format!("{}（{}）", role.name, role.key))
                 .checked(self.selected_role_ids.contains(&role_id))
                 .disabled(self.loading || self.saving)
@@ -221,18 +223,16 @@ impl Render for UserRoleEditor {
                 )
             });
         let editor = cx.entity().downgrade();
-        FormDialog::new(
-            "default-user-role-form-dialog",
-            self.form.clone(),
-            format!("管理 {display_name} 的角色"),
-            content,
-            move |_, window, cx| {
+        FormDialog::new("default-user-role-form-dialog", self.form.clone())
+            .title(format!("管理 {display_name} 的角色"))
+            .description("保存该用户的角色设置。")
+            .section(content)
+            .submit_label("保存角色")
+            .submit_disabled(self.loading || self.profile.is_none() || !can_save)
+            .with_size(component_size)
+            .on_submit(move |_, window, cx| {
                 _ = editor.update(cx, |editor, cx| editor.save(window, cx));
-            },
-        )
-        .description("保存该用户的角色设置。")
-        .submit_label("保存角色")
-        .submit_disabled(self.loading || self.profile.is_none() || !can_save)
+            })
     }
 }
 

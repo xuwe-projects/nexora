@@ -62,7 +62,8 @@ impl FeatureElement for UserDetailsFeature {
 - 普通页面保持默认外层滚动；虚拟列表、编辑器或 DataTable 已自行管理滚动视口时，设置 `content_scrollable = false`，避免 Shell 产生双层滚动。
 - 标准 CRUD 业务 Panel（标题/描述、刷新、可选筛选/操作区、表格/列表主体）默认使用
   `nexora::desktop::{CrudPanel, CrudPanelToolbar}`。顶部刷新只负责重新拉取当前数据；查询、创建、
-  导入、导出和批量操作放入工具栏 action 区；没有筛选和操作时不要渲染第二块卡片。
+  导入、导出和批量操作放入工具栏 action 区；没有筛选和操作时不要渲染第二块卡片。Panel、
+  工具栏按钮、输入和下拉都通过 `.with_size(theme::component_size(cx))` 跟随设置中的组件尺寸。
 - 标准 CRUD 表格优先使用 `#[derive(nexora::CrudTableRow)]` 标记行数据结构，并交给
   `nexora::desktop::CrudTableDelegate<T>` 接入 `gpui-component` 的 `DataTable`。字段属性只描述
   `Column` 能力、表头/正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加，
@@ -74,9 +75,10 @@ impl FeatureElement for UserDetailsFeature {
   `nexora::desktop::TableCell`。默认垂直居中、水平靠左；需要按列语义覆盖时使用
   `.left()`、`.center()`、`.right()` 和 `.top()`、`.middle()`、`.bottom()`。表格网格线优先使用
   `DataTable::bordered(true)` 等原生样式，不在单元格组件中重复实现。
-- 主窗口顶部 Feature 标签默认使用 gpui-component 官方 `TabBar::segmented()` 样式；应用需要
-  改成 underline、pill 或 outline 时，通过 `ApplicationOptions::tab_style(ApplicationTabStyle::...)`
-  选择，不要重写 Shell 标签栏。
+- 主窗口顶部 Feature 标签默认使用 gpui-component 官方 story 的默认 `Tabs` 样式；应用需要
+  改成 `Underline`、`Pill`、`Outline` 或 `Segmented` 时，通过
+  `ApplicationOptions::tab_style(ApplicationTabStyle::...)` 选择，不要重写 Shell 标签栏。标签栏
+  必须使用 `theme::component_size(cx)` 跟随设置中的组件尺寸。
 - 需要覆盖内容区与 Panel Header、但保留 Sidebar 和窗口 TitleBar 的对话框时，实现 `FeatureElement::panel_overlay`。浮层必须是在 `initialize` 中创建并长期持有的 Entity，hook 始终返回同一个 `AnyView`；显示、隐藏和内容变化由浮层 Entity 自己管理，不要根据 Feature 临时状态在 `Some` 与 `None` 之间切换。
 - 带 `:name` 的动态路径必须声明 `path_params = T` 并设置 `navigation = false`。查询字段用 `query_params = Q`；`T` 和 `Q` 均通过 `serde::Deserialize` 校验。
 - 在 `FeatureElement` 中用 `FeatureContextExt::path/query`，用 `NavigationContextExt::navigate` 打开 Feature 或 Window。不要另设字符串参数通道。
@@ -87,10 +89,14 @@ impl FeatureElement for UserDetailsFeature {
 - 页面私有轻量组件使用 `#[derive(IntoElement)] + RenderOnce`；有输入状态、异步请求或订阅
   的组件使用独立 Entity 并实现 `Render`，由 Feature 在 `initialize` 创建后组合。禁止通过拆
   文件但继续把全部状态和 handler 留在 Feature 的方式制造假组件化。
-- 创建和编辑资源默认使用 `nexora::desktop::{FormDialog, FormDialogState}`。对话框 Entity 在
-  `initialize` 创建并由 `panel_overlay` 稳定返回，只遮罩当前 Feature Panel；输入变化写入
-  字段草稿，默认取消自动确认未保存内容，业务必须提供 `on_submit`。非表单确认或工厂选择
-  Popover 不强制使用 FormDialog。
+- 创建和编辑资源默认使用 `nexora::desktop::{FormDialog, FormDialogState, FormItem}`。对话框
+  Entity 在 `initialize` 创建并由 `panel_overlay` 稳定返回，只遮罩当前 Feature Panel；渲染时用
+  `FormDialog::new(id, state).title(...).child(FormItem::new(...).input(...)).section(...)`
+  组合表单，并调用 `.with_size(theme::component_size(cx))`。输入变化写入字段草稿，默认取消
+  自动确认未保存内容，业务必须提供 `on_submit`。非表单确认或工厂选择 Popover 不强制使用
+  FormDialog。
+- 所有 gpui-component `Sizable` 控件默认遵循设置中的组件尺寸；新增页面不要硬编码 `.small()` /
+  `.medium()`，除非该控件确实是表格行内紧凑操作或图标按钮。
 
 独立原生窗口使用 `#[derive(nexora::Window)]` 和 `WindowElement`。它支持同样的 `path_params/query_params/factory`，不进入主导航或标签；可覆盖 `window_options`、`initialize` 和 `closing`。
 

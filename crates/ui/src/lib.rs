@@ -47,7 +47,7 @@ pub use cascader::{
 };
 pub use crud_panel::{CrudPanel, CrudPanelToolbar};
 pub use crud_table::{CrudTableDelegate, CrudTableRow};
-pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft};
+pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl};
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;

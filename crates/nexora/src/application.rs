@@ -87,24 +87,27 @@ pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
 /// 置顶等行为。应用可以通过 [`ApplicationOptions::tab_style`] 覆盖默认样式。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ApplicationTabStyle {
-    /// 使用官方 segmented 样式，适合作为框架默认的顶部工作区标签。
+    /// 使用官方默认 `Tabs` 样式。
     #[default]
-    Segmented,
+    Tab,
     /// 使用官方 underline 样式，适合更轻量的内容页切换。
     Underline,
     /// 使用官方 pill 样式，适合强调独立可点击标签块的界面。
     Pill,
     /// 使用官方 outline 样式，适合边界感更强的标签栏。
     Outline,
+    /// 使用官方 segmented 样式，适合需要背景容器感的标签组。
+    Segmented,
 }
 
 impl ApplicationTabStyle {
     fn apply(self, tab_bar: TabBar) -> TabBar {
         match self {
-            Self::Segmented => tab_bar.segmented(),
+            Self::Tab => tab_bar,
             Self::Underline => tab_bar.underline(),
             Self::Pill => tab_bar.pill(),
             Self::Outline => tab_bar.outline(),
+            Self::Segmented => tab_bar.segmented(),
         }
     }
 }
@@ -165,8 +168,9 @@ pub struct ApplicationOptions {
     pub initial_path: String,
     /// 主窗口顶部 Feature 标签栏使用的官方 `TabBar` 样式。
     ///
-    /// 默认使用 [`ApplicationTabStyle::Segmented`]；应用可以切换到 `Underline`、`Pill`
-    /// 或 `Outline`，交互行为仍由同一个 gpui-component `TabBar` 负责。
+    /// 默认使用 [`ApplicationTabStyle::Tab`]，与 `gpui-component` 官方 `Tabs` story 保持同步；
+    /// 应用可以切换到 `Underline`、`Pill`、`Outline` 或 `Segmented`，交互行为仍由同一个
+    /// gpui-component `TabBar` 负责。
     pub tab_style: ApplicationTabStyle,
 }
 
@@ -189,7 +193,7 @@ impl Default for ApplicationOptions {
             application_assets: None,
             locale: "zh-CN".to_owned(),
             initial_path: "/".to_owned(),
-            tab_style: ApplicationTabStyle::Segmented,
+            tab_style: ApplicationTabStyle::Tab,
         }
     }
 }
@@ -409,8 +413,30 @@ struct PreparedApplication {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
-struct ShellPreferences {
+pub(crate) struct ShellPreferences {
     pinned_tabs: Vec<String>,
+    pub(crate) startup_display_uuid: Option<String>,
+}
+
+pub(crate) const SYSTEM_PRIMARY_DISPLAY: &str = "system-primary-display";
+
+impl ShellPreferences {
+    fn for_local_application(application_name: &str) -> Option<UserConfigStore<Self>> {
+        UserConfigStore::for_local_application("com", "Nexora", application_name, "workspace.toml")
+            .ok()
+    }
+}
+
+pub(crate) fn load_shell_preferences(application_name: &str) -> ShellPreferences {
+    ShellPreferences::for_local_application(application_name)
+        .and_then(|store| store.load_or_default().ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn save_shell_preferences(application_name: &str, preferences: &ShellPreferences) {
+    if let Some(store) = ShellPreferences::for_local_application(application_name) {
+        _ = store.save(preferences);
+    }
 }
 
 struct PreferencesWriter {
@@ -523,21 +549,25 @@ where
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
     let tab_style = options.tab_style;
-    let preferences_store = UserConfigStore::for_local_application(
-        "com",
-        "Nexora",
-        application_name.as_str(),
-        "workspace.toml",
-    )
-    .ok();
-    let pinned_tab_paths = preferences_store
+    let preferences_store = ShellPreferences::for_local_application(application_name.as_str());
+    let shell_preferences = preferences_store
         .as_ref()
         .and_then(|store| store.load_or_default().ok())
-        .map(|preferences: ShellPreferences| preferences.pinned_tabs)
         .unwrap_or_default();
+    let pinned_tab_paths = shell_preferences.pinned_tabs;
+    let mut desktop_options = options.into_desktop_options();
+    match shell_preferences.startup_display_uuid.as_deref() {
+        Some(SYSTEM_PRIMARY_DISPLAY) => {
+            desktop_options.startup_display_uuid = None;
+        }
+        Some(_) => {
+            desktop_options.startup_display_uuid = shell_preferences.startup_display_uuid;
+        }
+        None => {}
+    }
     let adapter = ApplicationAdapter {
         application,
-        options: options.into_desktop_options(),
+        options: desktop_options,
         locale,
         application_name,
         application_version,
@@ -759,6 +789,7 @@ struct ApplicationShell {
     navigation_history: Vec<ShellRoute>,
     navigation_history_index: usize,
     expanded_navigation_groups: HashSet<&'static str>,
+    preferences_store: Option<UserConfigStore<ShellPreferences>>,
     preferences_writer: Option<PreferencesWriter>,
     feature_instances: HashMap<String, FeatureInstance>,
     #[cfg(feature = "desktop")]
@@ -890,6 +921,7 @@ impl ApplicationShell {
             this.close_business_windows(cx);
             this.preferences_writer = None;
         }));
+        let preferences_store_for_shell = preferences_store.clone();
         let preferences_writer =
             preferences_store.and_then(|store| PreferencesWriter::start(store).ok());
 
@@ -915,6 +947,7 @@ impl ApplicationShell {
             navigation_history: vec![initial_route],
             navigation_history_index: 0,
             expanded_navigation_groups,
+            preferences_store: preferences_store_for_shell,
             preferences_writer,
             feature_instances,
             #[cfg(feature = "desktop")]
@@ -1262,12 +1295,18 @@ impl ApplicationShell {
         let Some(writer) = self.preferences_writer.as_ref() else {
             return;
         };
+        let startup_display_uuid = self
+            .preferences_store
+            .as_ref()
+            .and_then(|store| store.load_or_default().ok())
+            .and_then(|preferences: ShellPreferences| preferences.startup_display_uuid);
         let preferences = ShellPreferences {
             pinned_tabs: self
                 .pinned_tabs
                 .iter()
                 .map(|route| route.path().to_owned())
                 .collect(),
+            startup_display_uuid,
         };
         writer.persist(preferences);
     }
@@ -2017,6 +2056,7 @@ impl ApplicationShell {
                                             .apply(TabBar::new("nexora-open-tabs"))
                                             .w_full()
                                             .h_full()
+                                            .with_size(theme::component_size(cx))
                                             .track_scroll(&self.tab_scroll_handle)
                                             .menu(!opened_tabs.is_empty())
                                             .when_some(active_tab_index, |this, index| {

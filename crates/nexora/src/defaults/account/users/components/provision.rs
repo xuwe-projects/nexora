@@ -7,13 +7,12 @@ use gpui_component::{
     Disableable as _, Sizable as _, StyledExt as _,
     alert::Alert,
     checkbox::Checkbox,
-    form::{field, v_form},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     spinner::Spinner,
     v_flex,
 };
-use ui::{FormDialog, FormDialogState};
+use ui::{FormDialog, FormDialogState, FormItem};
 
 use crate::{
     defaults::account::has_permission,
@@ -196,10 +195,12 @@ impl ProvisionUserDialog {
 
 impl Render for ProvisionUserDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let component_size = theme::component_size(cx);
         let can_assign_roles = can_assign_initial_roles(cx);
         let role_options = self.roles.iter().map(|role| {
             let role_id = role.id;
             Checkbox::new(format!("default-provision-user-role-{role_id}"))
+                .with_size(component_size)
                 .label(format!("{}（{}）", role.name, role.key))
                 .checked(self.selected_role_ids.contains(&role_id))
                 .disabled(self.saving || !can_assign_roles)
@@ -208,9 +209,9 @@ impl Render for ProvisionUserDialog {
                 }))
         });
 
-        let content = v_flex()
+        let status_section = v_flex()
             .w_full()
-            .gap_4()
+            .gap_3()
             .when_some(self.error.clone(), |this, error| {
                 this.child(Alert::error("default-provision-user-error", error).title("创建失败"))
             })
@@ -221,74 +222,68 @@ impl Render for ProvisionUserDialog {
                         .child(Spinner::new().small())
                         .child("正在创建用户…"),
                 )
+            });
+        let roles_section = v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("初始角色"))
+            .child(div().text_xs().child("可选；创建后也可以继续调整。"))
+            .when(!can_assign_roles, |this| {
+                this.child(Alert::info(
+                    "default-provision-user-roles-forbidden",
+                    "当前账号不能选择初始角色。",
+                ))
             })
+            .when(can_assign_roles && self.roles.is_empty(), |this| {
+                this.child(Alert::info(
+                    "default-provision-user-roles-empty",
+                    "当前没有可分配角色。",
+                ))
+            })
+            .children(role_options);
+        let dialog = cx.entity().downgrade();
+        FormDialog::new("default-provision-user-form-dialog", self.form.clone())
+            .title("创建用户")
+            .description("填写信息后创建用户。")
+            .columns(2)
+            .section(status_section)
             .child(
-                v_form()
-                    .columns(2)
-                    .child(
-                        field()
-                            .label("登录用户名")
-                            .description("用于登录系统的唯一用户名。")
-                            .required(true)
-                            .child(Input::new(&self.username).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("邮箱")
-                            .description("用于接收账号相关通知。")
-                            .required(true)
-                            .child(Input::new(&self.email).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("名字")
-                            .required(true)
-                            .child(Input::new(&self.given_name).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("姓氏")
-                            .required(true)
-                            .child(Input::new(&self.family_name).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("展示名称")
-                            .description("可选；省略时使用名字与姓氏。")
-                            .child(Input::new(&self.display_name).disabled(self.saving)),
-                    ),
+                FormItem::new("登录用户名")
+                    .description("用于登录系统的唯一用户名。")
+                    .required()
+                    .input(&self.username)
+                    .disabled(self.saving),
             )
             .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().font_semibold().child("初始角色"))
-                    .child(div().text_xs().child("可选；创建后也可以继续调整。"))
-                    .when(!can_assign_roles, |this| {
-                        this.child(Alert::info(
-                            "default-provision-user-roles-forbidden",
-                            "当前账号不能选择初始角色。",
-                        ))
-                    })
-                    .when(can_assign_roles && self.roles.is_empty(), |this| {
-                        this.child(Alert::info(
-                            "default-provision-user-roles-empty",
-                            "当前没有可分配角色。",
-                        ))
-                    })
-                    .children(role_options),
-            );
-        let dialog = cx.entity().downgrade();
-        FormDialog::new(
-            "default-provision-user-form-dialog",
-            self.form.clone(),
-            "创建用户",
-            content,
-            move |_, window, cx| {
+                FormItem::new("邮箱")
+                    .description("用于接收账号相关通知。")
+                    .required()
+                    .input(&self.email)
+                    .disabled(self.saving),
+            )
+            .child(
+                FormItem::new("名字")
+                    .required()
+                    .input(&self.given_name)
+                    .disabled(self.saving),
+            )
+            .child(
+                FormItem::new("姓氏")
+                    .required()
+                    .input(&self.family_name)
+                    .disabled(self.saving),
+            )
+            .child(
+                FormItem::new("展示名称")
+                    .description("可选；省略时使用名字与姓氏。")
+                    .input(&self.display_name)
+                    .disabled(self.saving),
+            )
+            .section(roles_section)
+            .submit_label("创建用户")
+            .with_size(component_size)
+            .on_submit(move |_, window, cx| {
                 _ = dialog.update(cx, |dialog, cx| dialog.provision(window, cx));
-            },
-        )
-        .description("填写信息后创建用户。")
-        .submit_label("创建用户")
+            })
     }
 }
 

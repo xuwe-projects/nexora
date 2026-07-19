@@ -1,10 +1,15 @@
 //! 默认用户管理页面状态。
 
-use gpui::{App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*};
+use gpui::{
+    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*,
+    px,
+};
 use gpui_component::{
-    Disableable as _, IconName,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
+    input::{Input, InputState},
+    menu::{DropdownMenu as _, PopupMenuItem},
     v_flex,
 };
 
@@ -16,6 +21,7 @@ use crate::{
     },
 };
 
+use super::table::{UserFilters, UserStatusFilter, UserTypeFilter};
 use super::{ProvisionUserDialog, UserRoleEditor, UsersTable};
 
 const PAGE_SIZE: u32 = 25;
@@ -35,6 +41,10 @@ pub(in crate::defaults::account::users) struct UsersPage {
     busy_user_id: Option<String>,
     error: Option<String>,
     notice: Option<String>,
+    keyword_input: Entity<InputState>,
+    status_filter: UserStatusFilter,
+    type_filter: UserTypeFilter,
+    applied_filters: UserFilters,
     users_table: Entity<UsersTable>,
     role_editor: Entity<UserRoleEditor>,
     provision_dialog: Option<WeakEntity<ProvisionUserDialog>>,
@@ -49,6 +59,8 @@ impl UsersPage {
         cx: &mut Context<Self>,
     ) -> Self {
         let page = cx.entity().downgrade();
+        let keyword_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索用户、登录名或邮箱"));
         let users_table = cx.new(|cx| UsersTable::new(page, window, cx));
         let role_editor = cx.new(UserRoleEditor::new);
         let table = users_table.downgrade();
@@ -65,6 +77,10 @@ impl UsersPage {
             busy_user_id: None,
             error: None,
             notice: None,
+            keyword_input,
+            status_filter: UserStatusFilter::default(),
+            type_filter: UserTypeFilter::default(),
+            applied_filters: UserFilters::default(),
             users_table,
             role_editor,
             provision_dialog: None,
@@ -94,9 +110,9 @@ impl UsersPage {
     }
 
     pub(super) fn load_next_page(&mut self, cx: &mut Context<Self>) {
-        let loaded_count = self.users_table.read(cx).len(cx);
+        let loaded_count = self.users_table.read(cx).loaded_len();
         let total = usize::try_from(self.total.max(0)).unwrap_or(usize::MAX);
-        if self.loaded && !self.loading && loaded_count < total {
+        if self.loaded && !self.loading && self.applied_filters.is_empty() && loaded_count < total {
             self.load_page(self.page.saturating_add(1), UserLoadMode::Append, cx);
         }
     }
@@ -143,12 +159,13 @@ impl UsersPage {
                         if let Some(roles) = roles {
                             this.roles = roles;
                         }
+                        let filters = this.applied_filters.clone();
                         this.users_table.update(cx, |table, cx| match mode {
                             UserLoadMode::Replace => {
-                                table.replace_rows(users.items, users.page.total, cx)
+                                table.replace_rows(users.items, users.page.total, &filters, cx)
                             }
                             UserLoadMode::Append => {
-                                table.append_rows(users.items, users.page.total, cx)
+                                table.append_rows(users.items, users.page.total, &filters, cx)
                             }
                         });
                         this.loaded = true;
@@ -213,8 +230,9 @@ impl UsersPage {
                 this.busy_user_id = None;
                 match result {
                     Ok(updated) => {
+                        let filters = this.applied_filters.clone();
                         this.users_table.update(cx, |table, cx| {
-                            table.update_user(updated.clone(), cx);
+                            table.update_user(updated.clone(), &filters, cx);
                         });
                         let action = match updated.status {
                             UserStatus::Active => "启用",
@@ -245,14 +263,48 @@ impl UsersPage {
         self.users_table
             .update(cx, |table, cx| table.refresh(loading, cx));
     }
+
+    fn set_status_filter(&mut self, filter: UserStatusFilter, cx: &mut Context<Self>) {
+        self.status_filter = filter;
+        cx.notify();
+    }
+
+    fn set_type_filter(&mut self, filter: UserTypeFilter, cx: &mut Context<Self>) {
+        self.type_filter = filter;
+        cx.notify();
+    }
+
+    fn apply_filters(&mut self, cx: &mut Context<Self>) {
+        let keyword = self
+            .keyword_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_ascii_lowercase();
+        self.applied_filters = UserFilters::new(keyword, self.status_filter, self.type_filter);
+        let filters = self.applied_filters.clone();
+        self.users_table
+            .update(cx, |table, cx| table.apply_filters(&filters, cx));
+        cx.notify();
+    }
 }
 
 impl Render for UsersPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let component_size = theme::component_size(cx);
         let can_provision = has_permission(cx, "users:provision");
-        let loaded_count = self.users_table.read(cx).len(cx);
+        let loaded_count = self.users_table.read(cx).loaded_len();
+        let visible_count = self.users_table.read(cx).visible_len(cx);
+        let query_action = Button::new("query-default-account-users")
+            .with_size(component_size)
+            .outline()
+            .icon(IconName::Search)
+            .label("查询")
+            .disabled(self.loading)
+            .on_click(cx.listener(|this, _, _, cx| this.apply_filters(cx)));
         let create_user_action = Button::new("open-default-account-user-dialog")
             .debug_selector(|| "open-default-account-user-dialog".into())
+            .with_size(component_size)
             .primary()
             .icon(IconName::Plus)
             .label("创建用户")
@@ -265,6 +317,60 @@ impl Render for UsersPage {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_provision_dialog(window, cx);
             }));
+        let page = cx.entity().downgrade();
+        let status_filter = filter_dropdown(
+            "default-account-user-status-filter",
+            self.status_filter.label(),
+            UserStatusFilter::ALL.map(|filter| (filter.label(), filter)),
+            self.status_filter,
+            page.clone(),
+            |page, filter, cx| page.set_status_filter(filter, cx),
+            component_size,
+        );
+        let type_filter = filter_dropdown(
+            "default-account-user-type-filter",
+            self.type_filter.label(),
+            UserTypeFilter::ALL.map(|filter| (filter.label(), filter)),
+            self.type_filter,
+            page,
+            |page, filter, cx| page.set_type_filter(filter, cx),
+            component_size,
+        );
+        let keyword_filter = v_flex()
+            .gap_1()
+            .w(px(280.0))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("关键词"),
+            )
+            .child(
+                Input::new(&self.keyword_input)
+                    .with_size(component_size)
+                    .cleanable(true)
+                    .disabled(self.loading),
+            );
+        let status_filter = v_flex()
+            .gap_1()
+            .w(px(160.0))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("状态"),
+            )
+            .child(status_filter);
+        let type_filter = v_flex()
+            .gap_1()
+            .w(px(160.0))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("类型"),
+            )
+            .child(type_filter);
 
         let content = v_flex()
             .w_full()
@@ -285,8 +391,8 @@ impl Render for UsersPage {
 
         CrudPanel::new("用户管理", content)
             .description(format!(
-                "已加载 {loaded_count} / {} 个本地用户",
-                self.total.max(0)
+                "已加载 {loaded_count} / {} 个本地用户 · 当前显示 {visible_count} 个",
+                self.total.max(0),
             ))
             .refresh(
                 "refresh-default-account-users",
@@ -294,6 +400,45 @@ impl Render for UsersPage {
                 self.loading,
                 cx.listener(|this, _, _, cx| this.refresh(cx)),
             )
+            .filter(keyword_filter)
+            .filter(status_filter)
+            .filter(type_filter)
+            .action(query_action)
             .action(create_user_action)
+            .with_size(component_size)
     }
+}
+
+fn filter_dropdown<T>(
+    id: &'static str,
+    label: &'static str,
+    options: impl IntoIterator<Item = (&'static str, T)>,
+    selected: T,
+    page: WeakEntity<UsersPage>,
+    on_select: impl Fn(&mut UsersPage, T, &mut Context<UsersPage>) + Clone + 'static,
+    size: gpui_component::Size,
+) -> impl IntoElement
+where
+    T: Copy + PartialEq + 'static,
+{
+    let options = options.into_iter().collect::<Vec<_>>();
+    Button::new(id)
+        .with_size(size)
+        .outline()
+        .dropdown_caret(true)
+        .label(label)
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+            options.iter().fold(menu, |menu, (label, filter)| {
+                let page = page.clone();
+                let on_select = on_select.clone();
+                let filter = *filter;
+                menu.item(
+                    PopupMenuItem::new(*label)
+                        .checked(filter == selected)
+                        .on_click(move |_, _, cx| {
+                            _ = page.update(cx, |page, cx| on_select(page, filter, cx));
+                        }),
+                )
+            })
+        })
 }

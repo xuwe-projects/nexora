@@ -32,7 +32,9 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 // 在 render 中：Input::new(&self.input)
 ```
 
-**尺寸**：`.xsmall()`、`.small()`、`.medium()`（默认）、`.large()`
+**尺寸**：业务页面中实现 `Sizable` 的组件优先 `.with_size(theme::component_size(cx))`，让设置里的
+组件尺寸即时生效；`.xsmall()`、`.small()`、`.medium()`、`.large()` 只在紧凑表格行、图标工具按钮
+等有明确语义时手动使用。
 
 **主题**：`cx.theme().primary` · `.background` · `.foreground` · `.border` · `.muted`
 

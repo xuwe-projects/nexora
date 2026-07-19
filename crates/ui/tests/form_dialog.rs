@@ -5,9 +5,9 @@ use std::sync::{
 
 use gpui::{
     AppContext as _, Context, IntoElement, Modifiers, Render, TestAppContext, Window, div,
-    prelude::*,
+    prelude::*, px,
 };
-use ui::{FormDialog, FormDialogState};
+use ui::{FormDialog, FormDialogState, FormItem};
 
 const FORM_DIALOG_SOURCE: &str = include_str!("../src/form_dialog.rs");
 
@@ -23,19 +23,22 @@ impl Render for FormDialogTestRoot {
         let submitted = self.submitted.clone();
 
         div().relative().size_full().child(
-            FormDialog::new(
-                "disabled-submit-form-dialog",
-                self.state.clone(),
-                "编辑用户",
-                div().child("表单内容"),
-                move |_, _, _| {
+            FormDialog::new("disabled-submit-form-dialog", self.state.clone())
+                .title("编辑用户")
+                .child(
+                    FormItem::new("名称").element(
+                        div()
+                            .debug_selector(|| "form-dialog-custom-content".into())
+                            .child("表单内容"),
+                    ),
+                )
+                .submit_disabled(true)
+                .on_submit(move |_, _, _| {
                     submitted.fetch_add(1, Ordering::SeqCst);
-                },
-            )
-            .submit_disabled(true)
-            .on_cancel(move |_, _, _| {
-                cancelled.fetch_add(1, Ordering::SeqCst);
-            }),
+                })
+                .on_cancel(move |_, _, _| {
+                    cancelled.fetch_add(1, Ordering::SeqCst);
+                }),
         )
     }
 }
@@ -106,9 +109,28 @@ fn submit_disabled_only_blocks_submit_and_keeps_cancel_available(cx: &mut TestAp
     let submit = cx
         .debug_bounds("form-dialog-submit")
         .expect("FormDialog 应当渲染提交按钮");
+    let content = cx
+        .debug_bounds("form-dialog-custom-content")
+        .expect("FormDialog 应当渲染标准表单项内容");
+    let panel_content = cx
+        .debug_bounds("panel-dialog-content")
+        .expect("PanelDialog 应当渲染内容区域");
+    let surface = cx
+        .debug_bounds("panel-dialog-surface")
+        .expect("PanelDialog 应当渲染 surface");
+    assert!(content.size.height > px(0.0));
+    assert!(panel_content.size.height > content.size.height);
+    assert!(cancel.origin.y + cancel.size.height <= surface.origin.y + surface.size.height);
 
     cx.simulate_click(submit.center(), Modifiers::none());
     assert_eq!(submitted.load(Ordering::SeqCst), 0);
+    assert_eq!(cancelled.load(Ordering::SeqCst), 0);
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let cancel = cx
+        .debug_bounds("form-dialog-cancel")
+        .expect("FormDialog 应当继续渲染取消按钮");
 
     cx.simulate_click(cancel.center(), Modifiers::none());
     assert_eq!(cancelled.load(Ordering::SeqCst), 1);
@@ -128,5 +150,6 @@ fn source_contract_applies_business_disabled_state_to_submit_only() {
 
     assert!(cancel_block.contains(".disabled(submitting)"));
     assert!(!cancel_block.contains("self.submit_disabled"));
-    assert!(submit_block.contains(".disabled(submitting || self.submit_disabled)"));
+    assert!(submit_block.contains(".disabled(submit_disabled)"));
+    assert!(FORM_DIALOG_SOURCE.contains("let submit_disabled ="));
 }

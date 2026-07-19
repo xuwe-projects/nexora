@@ -4,14 +4,13 @@ use std::collections::BTreeSet;
 
 use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
 use gpui_component::{
-    Disableable as _, StyledExt as _,
+    Disableable as _, Sizable as _, StyledExt as _,
     alert::Alert,
     checkbox::Checkbox,
-    form::{field, v_form},
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     v_flex,
 };
-use ui::{FormDialog, FormDialogState};
+use ui::{FormDialog, FormDialogState, FormItem};
 
 use crate::{
     defaults::account::has_permission,
@@ -159,10 +158,12 @@ impl RoleCreateDialog {
 
 impl Render for RoleCreateDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let component_size = theme::component_size(cx);
         let can_read_permissions = has_permission(cx, "permissions:read");
         let permission_options = self.permissions.iter().map(|permission| {
             let permission_id = permission.id;
             Checkbox::new(format!("default-create-role-permission-{permission_id}"))
+                .with_size(component_size)
                 .label(format!("{}（{}）", permission.name, permission.key))
                 .checked(self.selected_permission_ids.contains(&permission_id))
                 .disabled(self.saving || !can_read_permissions)
@@ -170,71 +171,67 @@ impl Render for RoleCreateDialog {
                     this.toggle_permission(permission_id, *checked, cx);
                 }))
         });
-        let content = v_flex()
-            .w_full()
-            .gap_4()
-            .when_some(self.error.clone(), |this, error| {
-                this.child(Alert::error("default-create-role-error", error).title("角色创建失败"))
+        let status_section =
+            v_flex()
+                .w_full()
+                .gap_3()
+                .when_some(self.error.clone(), |this, error| {
+                    this.child(
+                        Alert::error("default-create-role-error", error).title("角色创建失败"),
+                    )
+                });
+        let permissions_section = v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("初始权限"))
+            .when(!can_read_permissions, |this| {
+                this.child(Alert::info(
+                    "default-create-role-permissions-unavailable",
+                    "当前账号不能选择初始权限，角色将以空权限创建。",
+                ))
             })
+            .when(
+                can_read_permissions && self.permissions.is_empty(),
+                |this| {
+                    this.child(Alert::info(
+                        "default-create-role-permissions-empty",
+                        "当前系统没有可分配权限。",
+                    ))
+                },
+            )
+            .when(can_read_permissions, |this| {
+                this.children(permission_options)
+            });
+        let dialog = cx.entity().downgrade();
+        FormDialog::new("default-create-role-form-dialog", self.form.clone())
+            .title("创建角色")
+            .description("填写信息后创建角色。")
+            .section(status_section)
             .child(
-                v_form()
-                    .columns(1)
-                    .child(
-                        field()
-                            .label("角色键")
-                            .description(
-                                "使用 2 至 64 位小写字母、数字、点、下划线或连字符，并以字母开头。",
-                            )
-                            .required(true)
-                            .child(Input::new(&self.role_key).disabled(self.saving)),
+                FormItem::new("角色键")
+                    .description(
+                        "使用 2 至 64 位小写字母、数字、点、下划线或连字符，并以字母开头。",
                     )
-                    .child(
-                        field()
-                            .label("角色名称")
-                            .required(true)
-                            .child(Input::new(&self.role_name).disabled(self.saving)),
-                    )
-                    .child(
-                        field()
-                            .label("说明")
-                            .child(Input::new(&self.description).disabled(self.saving)),
-                    ),
+                    .required()
+                    .input(&self.role_key)
+                    .disabled(self.saving),
             )
             .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().font_semibold().child("初始权限"))
-                    .when(!can_read_permissions, |this| {
-                        this.child(Alert::info(
-                            "default-create-role-permissions-unavailable",
-                            "当前账号不能选择初始权限，角色将以空权限创建。",
-                        ))
-                    })
-                    .when(
-                        can_read_permissions && self.permissions.is_empty(),
-                        |this| {
-                            this.child(Alert::info(
-                                "default-create-role-permissions-empty",
-                                "当前系统没有可分配权限。",
-                            ))
-                        },
-                    )
-                    .when(can_read_permissions, |this| {
-                        this.children(permission_options)
-                    }),
-            );
-        let dialog = cx.entity().downgrade();
-        FormDialog::new(
-            "default-create-role-form-dialog",
-            self.form.clone(),
-            "创建角色",
-            content,
-            move |_, window, cx| {
+                FormItem::new("角色名称")
+                    .required()
+                    .input(&self.role_name)
+                    .disabled(self.saving),
+            )
+            .child(
+                FormItem::new("说明")
+                    .input(&self.description)
+                    .disabled(self.saving),
+            )
+            .section(permissions_section)
+            .submit_label("创建角色")
+            .with_size(component_size)
+            .on_submit(move |_, window, cx| {
                 _ = dialog.update(cx, |dialog, cx| dialog.submit(window, cx));
-            },
-        )
-        .description("填写信息后创建角色。")
-        .submit_label("创建角色")
+            })
     }
 }
 

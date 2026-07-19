@@ -60,7 +60,7 @@ impl Render for DefaultRolesFeature {
 
 impl FeatureElement for DefaultRolesFeature {
     fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let page = cx.new(|_| RolesPage::default());
+        let page = cx.new(|cx| RolesPage::new(window, cx));
         let editor = cx.new(|cx| RoleEditor::new(page.downgrade(), window, cx));
         let create_dialog = cx.new(|cx| RoleCreateDialog::new(page.downgrade(), window, cx));
         page.update(cx, |page, cx| {

@@ -47,9 +47,10 @@ Logo 没有动作时可以完全没有 hover，工厂选择器则可以自行添
 
 ## 标签样式
 
-主窗口顶部 Feature 标签默认使用 gpui-component 官方 `TabBar::segmented()` 样式。需要切换
-视觉变体时，通过 `ApplicationOptions::tab_style` 选择官方 `underline`、`pill` 或 `outline`
-样式，标签切换、置顶、滚动和右键菜单行为不变：
+主窗口顶部 Feature 标签默认使用 gpui-component story 中的官方默认 `Tabs` 样式。需要切换
+视觉变体时，通过 `ApplicationOptions::tab_style` 选择官方 `Tab`、`Underline`、`Pill`、
+`Outline` 或 `Segmented` 样式，标签切换、置顶、滚动和右键菜单行为不变；标签栏会使用
+`theme::component_size(cx)` 跟随设置中的组件尺寸：
 
 ```rust
 use nexora::{ApplicationOptions, ApplicationTabStyle};

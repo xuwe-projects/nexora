@@ -10,8 +10,8 @@ use gpui::{
     prelude::*,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, button::Button, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, StyledExt as _, button::Button,
+    h_flex, v_flex,
 };
 
 use crate::Card;
@@ -153,6 +153,7 @@ pub struct CrudPanel {
     refresh: Option<CrudRefreshAction>,
     toolbar: CrudPanelToolbar,
     content: AnyElement,
+    size: Size,
 }
 
 impl CrudPanel {
@@ -166,6 +167,7 @@ impl CrudPanel {
             refresh: None,
             toolbar: CrudPanelToolbar::new(),
             content: content.into_any_element(),
+            size: Size::default(),
         }
     }
 
@@ -259,9 +261,17 @@ impl CrudPanel {
     }
 }
 
+impl gpui_component::Sizable for CrudPanel {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl RenderOnce for CrudPanel {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let has_toolbar = !self.toolbar.is_empty();
+        let size = self.size;
 
         v_flex()
             .size_full()
@@ -295,7 +305,7 @@ impl RenderOnce for CrudPanel {
                             this.child(
                                 Button::new(action.id)
                                     .outline()
-                                    .small()
+                                    .with_size(size)
                                     .icon(Icon::default().path(REFRESH_ICON_PATH))
                                     .label("刷新")
                                     .loading(action.loading)

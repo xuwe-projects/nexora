@@ -4,16 +4,15 @@ use std::collections::BTreeSet;
 
 use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
-    form::{field, v_form},
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     v_flex,
 };
-use ui::{FormDialog, FormDialogState};
+use ui::{FormDialog, FormDialogState, FormItem};
 
 use contracts::patch::PatchField;
 
@@ -278,6 +277,7 @@ impl Render for RoleEditor {
         let Some(role) = self.role.clone() else {
             return div().into_any_element();
         };
+        let component_size = theme::component_size(cx);
         let role_id = role.id;
         let immutable = role.is_system;
         let can_write = has_permission(cx, "roles:write");
@@ -285,6 +285,7 @@ impl Render for RoleEditor {
         let permission_options = self.permissions.iter().map(|permission| {
             let permission_id = permission.id;
             Checkbox::new(format!("default-role-permission-{role_id}-{permission_id}"))
+                .with_size(component_size)
                 .label(format!("{}（{}）", permission.name, permission.key))
                 .checked(self.selected_permission_ids.contains(&permission_id))
                 .disabled(immutable || self.saving || !can_write || !can_read_permissions)
@@ -311,31 +312,6 @@ impl Render for RoleEditor {
                 this.child(Alert::error("default-role-editor-error", error))
             })
             .child(
-                v_form()
-                    .columns(1)
-                    .child(
-                        field().label("角色键").child(
-                            div()
-                                .p_2()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().tokens.group_box)
-                                .child(role.key.clone()),
-                        ),
-                    )
-                    .child(
-                        field().label("角色名称").child(
-                            Input::new(&self.edit_name)
-                                .disabled(immutable || self.saving || !can_write),
-                        ),
-                    )
-                    .child(
-                        field().label("说明").child(
-                            Input::new(&self.edit_description)
-                                .disabled(immutable || self.saving || !can_write),
-                        ),
-                    ),
-            )
-            .child(
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().font_semibold().child("绑定权限"))
@@ -356,6 +332,7 @@ impl Render for RoleEditor {
             .when(!immutable, |this| {
                 this.child(
                     Button::new(format!("delete-default-role-{role_id}"))
+                        .with_size(component_size)
                         .danger()
                         .outline()
                         .label("删除角色")
@@ -386,19 +363,36 @@ impl Render for RoleEditor {
                         }),
                 )
             });
-        FormDialog::new(
-            "default-role-editor-form-dialog",
-            self.form.clone(),
-            format!("管理 {}", role.name),
-            content,
-            move |_, window, cx| {
+        FormDialog::new("default-role-editor-form-dialog", self.form.clone())
+            .title(format!("管理 {}", role.name))
+            .description("保存角色信息与权限设置。")
+            .child(
+                FormItem::new("角色键").element(
+                    div()
+                        .p_2()
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().tokens.group_box)
+                        .child(role.key.clone()),
+                ),
+            )
+            .child(
+                FormItem::new("角色名称")
+                    .input(&self.edit_name)
+                    .disabled(immutable || self.saving || !can_write),
+            )
+            .child(
+                FormItem::new("说明")
+                    .input(&self.edit_description)
+                    .disabled(immutable || self.saving || !can_write),
+            )
+            .section(content)
+            .submit_label("保存角色")
+            .submit_disabled(immutable || !can_write || !can_read_permissions)
+            .with_size(component_size)
+            .on_submit(move |_, window, cx| {
                 _ = editor.update(cx, |editor, cx| editor.submit(window, cx));
-            },
-        )
-        .description("保存角色信息与权限设置。")
-        .submit_label("保存角色")
-        .submit_disabled(immutable || !can_write || !can_read_permissions)
-        .into_any_element()
+            })
+            .into_any_element()
     }
 }
 

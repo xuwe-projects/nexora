@@ -112,6 +112,7 @@ fn default_users_feature_keeps_panel_form_dialog_stable_and_blocks_unprivileged_
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_component::init);
+    cx.update(theme::init);
     let registry = AppRegistry::builder()
         .account_defaults(true)
         .build()
@@ -159,6 +160,7 @@ fn default_roles_feature_keeps_overlay_stable_and_blocks_unprivileged_creation(
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_component::init);
+    cx.update(theme::init);
     let registry = AppRegistry::builder()
         .account_defaults(true)
         .build()

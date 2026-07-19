@@ -25,6 +25,8 @@ const USER_TABLE_ROW_HEIGHT: f32 = 52.0;
 
 pub(in crate::defaults::account::users) struct UsersTable {
     state: Entity<TableState<UsersTableDelegate>>,
+    all_rows: Vec<UserResponse>,
+    server_total: usize,
 }
 
 type UsersTableDelegate = CrudTableDelegate<UserTableRow>;
@@ -62,46 +64,75 @@ impl UsersTable {
                 .col_selectable(false)
                 .row_selectable(false)
         });
-        Self { state }
+        Self {
+            state,
+            all_rows: Vec::new(),
+            server_total: 0,
+        }
     }
 
     pub(super) fn replace_rows(
         &mut self,
         users: Vec<UserResponse>,
         total: i64,
+        filters: &UserFilters,
         cx: &mut Context<Self>,
     ) {
-        self.state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-            delegate.replace_rows(users.into_iter().map(UserTableRow::from).collect());
-            delegate.set_total(usize::try_from(total.max(0)).unwrap_or(usize::MAX));
-            delegate.set_loading(false);
-            delegate.set_loading_more(false);
-            cx.notify();
-        });
-        cx.notify();
+        self.all_rows = users;
+        self.server_total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
+        self.apply_filters(filters, cx);
     }
 
     pub(super) fn append_rows(
         &mut self,
         users: Vec<UserResponse>,
         total: i64,
+        filters: &UserFilters,
         cx: &mut Context<Self>,
     ) {
+        let existing_ids = self
+            .all_rows
+            .iter()
+            .map(|user| user.id.clone())
+            .collect::<BTreeSet<_>>();
+        self.all_rows.extend(
+            users
+                .into_iter()
+                .filter(|user| !existing_ids.contains(&user.id)),
+        );
+        self.server_total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
+        self.apply_filters(filters, cx);
+    }
+
+    pub(super) fn update_user(
+        &mut self,
+        updated: UserResponse,
+        filters: &UserFilters,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(row) = self.all_rows.iter_mut().find(|row| row.id == updated.id) {
+            *row = updated;
+        }
+        self.apply_filters(filters, cx);
+    }
+
+    pub(super) fn apply_filters(&mut self, filters: &UserFilters, cx: &mut Context<Self>) {
+        let filtered_rows = self
+            .all_rows
+            .iter()
+            .filter(|user| filters.matches(user))
+            .cloned()
+            .map(UserTableRow::from)
+            .collect::<Vec<_>>();
+        let total = if filters.is_empty() {
+            self.server_total
+        } else {
+            filtered_rows.len()
+        };
         self.state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
-            let existing_ids = delegate
-                .rows()
-                .iter()
-                .map(|row| row.source.id.clone())
-                .collect::<BTreeSet<_>>();
-            delegate.append_rows(
-                users
-                    .into_iter()
-                    .filter(|user| !existing_ids.contains(&user.id))
-                    .map(UserTableRow::from),
-            );
-            delegate.set_total(usize::try_from(total.max(0)).unwrap_or(usize::MAX));
+            delegate.replace_rows(filtered_rows);
+            delegate.set_total(total);
             delegate.set_loading(false);
             delegate.set_loading_more(false);
             cx.notify();
@@ -109,21 +140,11 @@ impl UsersTable {
         cx.notify();
     }
 
-    pub(super) fn update_user(&mut self, updated: UserResponse, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, cx| {
-            if let Some(row) = state
-                .delegate_mut()
-                .rows_mut()
-                .iter_mut()
-                .find(|row| row.source.id == updated.id)
-            {
-                *row = UserTableRow::from(updated);
-                cx.notify();
-            }
-        });
+    pub(super) fn loaded_len(&self) -> usize {
+        self.all_rows.len()
     }
 
-    pub(super) fn len(&self, cx: &App) -> usize {
+    pub(super) fn visible_len(&self, cx: &App) -> usize {
         self.state.read(cx).delegate().rows().len()
     }
 
@@ -140,6 +161,114 @@ impl UsersTable {
     pub(super) fn refresh_actions(&self, cx: &mut Context<Self>) {
         self.state.update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct UserFilters {
+    keyword: String,
+    status: UserStatusFilter,
+    user_type: UserTypeFilter,
+}
+
+impl UserFilters {
+    pub(super) fn new(
+        keyword: impl Into<String>,
+        status: UserStatusFilter,
+        user_type: UserTypeFilter,
+    ) -> Self {
+        Self {
+            keyword: keyword.into(),
+            status,
+            user_type,
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.keyword.is_empty()
+            && self.status == UserStatusFilter::All
+            && self.user_type == UserTypeFilter::All
+    }
+
+    fn matches(&self, user: &UserResponse) -> bool {
+        if !self.status.matches(user.status) || !self.user_type.matches(user.user_type) {
+            return false;
+        }
+        if self.keyword.is_empty() {
+            return true;
+        }
+
+        let keyword = self.keyword.as_str();
+        user.id.to_ascii_lowercase().contains(keyword)
+            || user
+                .username
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .contains(keyword)
+            || user
+                .email
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .contains(keyword)
+            || user.display_name.to_ascii_lowercase().contains(keyword)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum UserStatusFilter {
+    #[default]
+    All,
+    Active,
+    Suspended,
+}
+
+impl UserStatusFilter {
+    pub(super) const ALL: [Self; 3] = [Self::All, Self::Active, Self::Suspended];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部状态",
+            Self::Active => "已启用",
+            Self::Suspended => "已停用",
+        }
+    }
+
+    fn matches(self, status: UserStatus) -> bool {
+        match self {
+            Self::All => true,
+            Self::Active => status == UserStatus::Active,
+            Self::Suspended => status == UserStatus::Suspended,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum UserTypeFilter {
+    #[default]
+    All,
+    Human,
+    ServiceAccount,
+}
+
+impl UserTypeFilter {
+    pub(super) const ALL: [Self; 3] = [Self::All, Self::Human, Self::ServiceAccount];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部类型",
+            Self::Human => "人员",
+            Self::ServiceAccount => "服务账号",
+        }
+    }
+
+    fn matches(self, user_type: UserType) -> bool {
+        match self {
+            Self::All => true,
+            Self::Human => user_type == UserType::Human,
+            Self::ServiceAccount => user_type == UserType::ServiceAccount,
+        }
     }
 }
 
@@ -358,13 +487,14 @@ impl UserTableRow {
         } else {
             "当前账号不能修改状态"
         };
+        let component_size = theme::component_size(cx);
 
         TableCell::new(
             h_flex()
                 .gap_2()
                 .child(
                     Button::new(format!("default-user-roles-{role_user_id}"))
-                        .small()
+                        .with_size(component_size)
                         .label("管理角色")
                         .disabled(
                             is_service_account
@@ -381,7 +511,7 @@ impl UserTableRow {
                 )
                 .child(
                     Button::new(format!("default-user-status-{status_user_id}"))
-                        .small()
+                        .with_size(component_size)
                         .outline()
                         .label(status_action)
                         .loading(current_user_busy)

@@ -128,10 +128,12 @@ impl RenderOnce for CreateUser {
 - `#[derive(IntoElement)] + RenderOnce` 用于由 props 与回调即可渲染的一次性组件。
 - 创建/编辑表单若有输入状态、异步请求或订阅，使用独立 `Entity<Component>` 并让组件实现
   `Render`；Feature 在 `initialize` 中创建并保存 Entity，`render` 只把它作为子元素组合。
-- 创建和编辑资源默认使用 `nexora::desktop::FormDialog` 与长期存在的
+- 创建和编辑资源默认使用 `nexora::desktop::{FormDialog, FormDialogState, FormItem}` 与长期存在的
   `Entity<FormDialogState>`。Feature 通过 `panel_overlay` 返回稳定对话框层，遮罩只覆盖当前
-  Panel；输入变化调用 `set_field_draft`，默认取消自动提示未保存字段，`on_submit` 必须由
-  业务组件实现。只有非表单确认、Popover 等明确不同语义才选择其他组件。
+  Panel；渲染时用 `FormDialog::new(id, state).title(...).child(FormItem::new(...).input(...))`
+  组合标准字段，复杂块用 `.section(...)`，并调用 `.with_size(theme::component_size(cx))`。输入变化
+  调用 `set_field_draft`，默认取消自动提示未保存字段，`on_submit` 必须由业务组件实现。只有非表单
+  确认、Popover 等明确不同语义才选择其他组件。
 - 组件通过回调、事件或共享 Entity 与 Feature 通信；不要为了拆文件复制业务状态，也不要让
   Feature 继续包含组件的全部字段和处理函数。
 - 审查页面时如果 Feature 的 `render` 含多个可命名区域，或同一文件同时承担列表与 CRUD

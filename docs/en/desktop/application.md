@@ -48,10 +48,11 @@ and an interactive selector remain separate hit regions.
 
 ## Tab Style
 
-The main-window Feature tabs use gpui-component's official `TabBar::segmented()` style by default.
-Applications can switch to the official underline, pill, or outline variant through
-`ApplicationOptions::tab_style` without replacing tab switching, pinning, scrolling, or context-menu
-behavior:
+The main-window Feature tabs use the official default `Tabs` style from gpui-component's story by
+default. Applications can switch to the official `Tab`, `Underline`, `Pill`, `Outline`, or
+`Segmented` variant through `ApplicationOptions::tab_style` without replacing tab switching,
+pinning, scrolling, or context-menu behavior. The tab bar applies `theme::component_size(cx)` so it
+follows the component-size setting:
 
 ```rust
 use nexora::{ApplicationOptions, ApplicationTabStyle};

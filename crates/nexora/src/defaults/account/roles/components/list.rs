@@ -37,6 +37,7 @@ impl RolesList {
 
 impl RenderOnce for RolesList {
     fn render(self, _window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let component_size = theme::component_size(cx);
         let cards = self.roles.into_iter().map(|role| {
             let role_id = role.id;
             let page = self.page.clone();
@@ -114,7 +115,7 @@ impl RenderOnce for RolesList {
                                 )
                                 .child(
                                     Button::new(format!("manage-default-role-{role_id}"))
-                                        .small()
+                                        .with_size(component_size)
                                         .outline()
                                         .selected(selected)
                                         .disabled(self.busy)

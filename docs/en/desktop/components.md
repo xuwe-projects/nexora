@@ -10,9 +10,10 @@ interactions under `nexora::desktop`.
 
 ## FormDialog
 
-`FormDialog` is the default create/edit form container. It has a title and optional description, a
-vertically scrollable content region, and cancel/submit actions. Its `PanelDialog` overlay only covers
-the active Feature panel, leaving the Sidebar available.
+`FormDialog` is the default create/edit form container. It has a title and optional description,
+form content, and cancel/submit actions. Its `PanelDialog` overlay only covers the active Feature
+panel, leaving the Sidebar available. Forms do not close by clicking the overlay; cancel, the close
+button, and submit are the explicit intents.
 
 Keep a long-lived `Entity<FormDialogState>` next to input entities. Record each input change with
 `set_field_draft`. The default cancel path closes a clean form and presents field names and draft
@@ -24,12 +25,34 @@ code must implement `on_submit`, call `mark_saved` after success, and then `clos
 Create the form component in `FeatureElement::initialize` and always return the same overlay Entity
 from `panel_overlay`; do not create inputs, subscriptions, or tasks from `render`.
 
+Use the builder API for standard fields and custom sections. `FormItem` provides labels,
+descriptions, required markers, and built-in `input`, `password_input`, `number_input`, and
+`checkbox` controls; complex blocks can use `element` or `FormDialog::section`:
+
+```rust
+use gpui_component::Sizable as _;
+use nexora::desktop::{FormDialog, FormItem};
+
+FormDialog::new("create-user-dialog", self.form.clone())
+    .title("Create user")
+    .description("Fill in the information to create a user.")
+    .child(FormItem::new("Name").required().input(&self.name))
+    .child(FormItem::new("Email").input(&self.email))
+    .section(permission_list)
+    .submit_label("Create user")
+    .submit_disabled(!self.can_submit(cx))
+    .with_size(theme::component_size(cx))
+    .on_submit(cx.listener(Self::submit))
+```
+
 ## CrudPanel and CrudTableRow
 
 `CrudPanel` is the standard three-part resource-management layout: a summary card, an optional
 filter/action toolbar, and a main body that fills the remaining height. The header refresh action
 uses the shared `rotate-ccw.svg` icon and means “reload current data”; search, create, import,
-export, and batch actions belong in `CrudPanelToolbar`.
+export, and batch actions belong in `CrudPanelToolbar`. Pages should pass `theme::component_size(cx)`
+to `CrudPanel`, toolbar buttons, inputs, and dropdowns so the component-size setting applies
+immediately.
 
 CRUD tables should prefer `#[derive(nexora::CrudTableRow)]` for row data and
 `CrudTableDelegate<T>` to connect those rows to gpui-component `DataTable`. Field attributes only
@@ -60,7 +83,9 @@ let delegate = CrudTableDelegate::new(rows)
     .row_id(|row| format!("city-{}", row.id))
     .action_column(Column::new("actions", "Actions").width(gpui::px(160.)), render_actions);
 let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
-let panel = CrudPanel::new("Cities", table).toolbar(CrudPanelToolbar::new());
+let panel = CrudPanel::new("Cities", table)
+    .toolbar(CrudPanelToolbar::new())
+    .with_size(theme::component_size(cx));
 ```
 
 Headers use `TableHeaderCell` and are horizontally and vertically centered by default. Body cells use
