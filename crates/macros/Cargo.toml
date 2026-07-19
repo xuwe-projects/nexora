@@ -13,6 +13,10 @@ categories = ["development-tools::procedural-macro-helpers", "gui"]
 [lib]
 proc-macro = true
 
+[[bench]]
+name = "crud_table_row"
+harness = false
+
 [dependencies]
 proc-macro2 = { workspace = true, features = ["proc-macro"] }
 proc-macro-crate = { workspace = true }

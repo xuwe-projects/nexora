@@ -1,0 +1,5 @@
+error: 排序方式只能声明一次，已声明 sortable
+ --> tests/ui/crud_table_row_duplicate_sort.rs:5:31
+  |
+5 |     #[nexora(column(sortable, ascending))]
+  |                               ^^^^^^^^^

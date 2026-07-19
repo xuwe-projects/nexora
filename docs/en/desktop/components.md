@@ -24,6 +24,50 @@ code must implement `on_submit`, call `mark_saved` after success, and then `clos
 Create the form component in `FeatureElement::initialize` and always return the same overlay Entity
 from `panel_overlay`; do not create inputs, subscriptions, or tasks from `render`.
 
+## CrudPanel and CrudTableRow
+
+`CrudPanel` is the standard three-part resource-management layout: a summary card, an optional
+filter/action toolbar, and a main body that fills the remaining height. The header refresh action
+uses the shared `rotate-ccw.svg` icon and means “reload current data”; search, create, import,
+export, and batch actions belong in `CrudPanelToolbar`.
+
+CRUD tables should prefer `#[derive(nexora::CrudTableRow)]` for row data and
+`CrudTableDelegate<T>` to connect those rows to gpui-component `DataTable`. Field attributes only
+describe `Column` options, header/body alignment, and custom rendering. Operation columns are added
+with `action_column`; complex tables can still implement the native `TableDelegate` directly.
+
+```rust
+use gpui_component::table::{Column, DataTable, TableState};
+use nexora::desktop::{CrudTableDelegate, CrudPanel, CrudPanelToolbar, TableCell};
+
+#[derive(Clone, nexora::CrudTableRow)]
+struct CityRow {
+    #[nexora(column(name = "ID", width = 64., fixed_left))]
+    id: u64,
+    #[nexora(column(title = "City", width = 160., sortable))]
+    name: String,
+    #[nexora(column(title = "Status", width = 76., align = "center", render = Self::status_cell))]
+    enabled: bool,
+}
+
+impl CityRow {
+    fn status_cell(row: &Self, _window: &mut gpui::Window, _cx: &mut gpui::App) -> TableCell {
+        TableCell::new(if row.enabled { "Enabled" } else { "Disabled" }).center()
+    }
+}
+
+let delegate = CrudTableDelegate::new(rows)
+    .row_id(|row| format!("city-{}", row.id))
+    .action_column(Column::new("actions", "Actions").width(gpui::px(160.)), render_actions);
+let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
+let panel = CrudPanel::new("Cities", table).toolbar(CrudPanelToolbar::new());
+```
+
+Headers use `TableHeaderCell` and are horizontally and vertically centered by default. Body cells use
+`TableCell`, vertically centered and left-aligned by default, with `.left()`, `.center()`, `.right()`,
+`.top()`, `.middle()`, and `.bottom()` for per-column overrides. Grid lines should use native
+`DataTable::bordered(true)` or related table styles.
+
 ## Cascader
 
 `Cascader` is a single-select hierarchical picker composed from gpui-component Popover, Input,

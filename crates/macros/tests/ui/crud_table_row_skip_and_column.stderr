@@ -1,0 +1,6 @@
+error: 同一个字段不能同时声明 skip 和 column
+ --> tests/ui/crud_table_row_skip_and_column.rs:5:5
+  |
+5 | /     #[nexora(skip, column)]
+6 | |     name: String,
+  | |________________^

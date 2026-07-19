@@ -260,9 +260,9 @@ impl Render for UsersPage {
             .label("创建用户")
             .disabled(self.loading || !can_provision)
             .tooltip(if can_provision {
-                "创建并绑定已由管理员确认的 OIDC 用户"
+                "创建用户"
             } else {
-                "需要 users:provision 权限"
+                "当前账号不能创建用户"
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_provision_dialog(window, cx);

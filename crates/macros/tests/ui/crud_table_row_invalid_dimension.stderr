@@ -1,0 +1,5 @@
+error: 列宽必须是数字字面量，例如 width = 120. 或 width = 120
+ --> tests/ui/crud_table_row_invalid_dimension.rs:5:29
+  |
+5 |     #[nexora(column(width = "wide"))]
+  |                             ^^^^^^

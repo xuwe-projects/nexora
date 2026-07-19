@@ -1,0 +1,7 @@
+error: CrudTableRow 至少需要一个 #[nexora(column)] 字段
+ --> tests/ui/crud_table_row_no_columns.rs:4:1
+  |
+4 | / struct NoColumns {
+5 | |     id: u64,
+6 | | }
+  | |_^

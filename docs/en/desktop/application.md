@@ -46,6 +46,19 @@ divider but does not add interaction styles. When the header should show both br
 context, compose stable-ID `SidebarRegion` values inside the custom header so a non-interactive logo
 and an interactive selector remain separate hit regions.
 
+## Tab Style
+
+The main-window Feature tabs use gpui-component's official `TabBar::segmented()` style by default.
+Applications can switch to the official underline, pill, or outline variant through
+`ApplicationOptions::tab_style` without replacing tab switching, pinning, scrolling, or context-menu
+behavior:
+
+```rust
+use nexora::{ApplicationOptions, ApplicationTabStyle};
+
+ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
+```
+
 ## Automatic Account detection
 
 The `desktop` feature compiles Account client capabilities, but regular applications keep the gate

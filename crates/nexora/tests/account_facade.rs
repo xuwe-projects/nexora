@@ -76,6 +76,7 @@ mod client {
                 "display_name": "测试用户",
                 "avatar_url": null,
                 "status": "active",
+                "user_type": "human",
                 "is_super_admin": false,
                 "created_at": 1,
                 "updated_at": 2,

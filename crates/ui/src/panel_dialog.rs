@@ -163,9 +163,10 @@ impl RenderOnce for PanelDialog {
             )
             .child(
                 v_flex()
-                    .flex_1()
                     .min_h_0()
+                    .max_h(relative(0.68))
                     .overflow_y_scrollbar()
+                    .debug_selector(|| "panel-dialog-content".into())
                     .gap_4()
                     .p_4()
                     .children(self.children),

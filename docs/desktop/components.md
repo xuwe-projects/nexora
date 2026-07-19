@@ -65,6 +65,61 @@ impl Editor {
 Feature 应在 `initialize` 创建表单组件 Entity，并让 `panel_overlay` 始终返回同一个对话框层；
 不要在 `render` 中创建 Input、订阅或任务，也不要根据打开状态在 `Some` 与 `None` 之间切换。
 
+## CrudPanel 与 CrudTableRow
+
+`CrudPanel` 是标准资源管理页面的三段式骨架：顶部摘要卡片、可选筛选/操作工具栏，以及默认
+撑满剩余高度的主内容区。顶部刷新按钮使用统一 `rotate-ccw.svg` 图标，只表示重新拉取当前
+数据；查询、创建、导入、导出和批量操作放在 `CrudPanelToolbar` 的 action 区。
+
+```rust
+use gpui_component::button::Button;
+use nexora::desktop::{CrudPanel, CrudPanelToolbar};
+
+let toolbar = CrudPanelToolbar::new()
+    .filter(keyword_input)
+    .action(Button::new("search").label("查询"))
+    .action(Button::new("create").label("创建"));
+
+CrudPanel::new("城市", table)
+    .description("维护城市及所属国家或地区")
+    .toolbar(toolbar)
+```
+
+CRUD 表格优先使用 `#[derive(nexora::CrudTableRow)]` 描述行数据，再用
+`CrudTableDelegate<T>` 接入 gpui-component `DataTable`。字段属性只增强 `Column` 声明、表头/
+正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加。复杂表格仍可直接手写
+原生 `TableDelegate`。
+
+```rust
+use gpui_component::table::{Column, DataTable, TableState};
+use nexora::desktop::{CrudTableDelegate, TableCell};
+
+#[derive(Clone, nexora::CrudTableRow)]
+struct CityRow {
+    #[nexora(column(name = "ID", width = 64., fixed_left))]
+    id: u64,
+    #[nexora(column(title = "城市", width = 160., sortable))]
+    name: String,
+    #[nexora(column(title = "状态", width = 76., align = "center", render = Self::status_cell))]
+    enabled: bool,
+}
+
+impl CityRow {
+    fn status_cell(row: &Self, _window: &mut gpui::Window, _cx: &mut gpui::App) -> TableCell {
+        TableCell::new(if row.enabled { "启用" } else { "停用" }).center()
+    }
+}
+
+let delegate = CrudTableDelegate::new(rows)
+    .row_id(|row| format!("city-{}", row.id))
+    .action_column(Column::new("actions", "操作").width(gpui::px(160.)), render_actions);
+let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
+```
+
+表头默认通过 `TableHeaderCell` 水平、垂直居中；正文 `TableCell` 默认垂直居中、水平靠左，可
+用 `.left()`、`.center()`、`.right()` 和 `.top()`、`.middle()`、`.bottom()` 覆盖。表格网格线
+优先使用 `DataTable::bordered(true)` 等原生样式。
+
 ## Cascader
 
 `Cascader` 是单选级联选择器，复用 gpui-component 的 Popover、Input、Button、Icon 和滚动

@@ -1,7 +1,7 @@
 use contracts::{
     account::{
         PermissionResponse, ProvisionUserRequest, RoleResponse, UpdateRoleRequest, UserResponse,
-        UserStatus,
+        UserStatus, UserType,
     },
     pagination::{PageMetadata, PageQuery, PageResponse},
     patch::PatchField,
@@ -48,6 +48,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
         display_name: "测试用户".to_owned(),
         avatar_url: None,
         status: UserStatus::Suspended,
+        user_type: UserType::Human,
         is_super_admin: false,
         created_at: now,
         updated_at: now,
@@ -57,6 +58,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let json = serde_json::to_value(&response).expect("用户响应应当可以序列化");
     assert_eq!(json["id"], "Ab3xY9qP");
     assert_eq!(json["status"], "suspended");
+    assert_eq!(json["user_type"], "human");
     assert_eq!(json["identity_id"], "user-1");
     assert_eq!(json["username"], "tester");
     assert_eq!(json["is_super_admin"], false);
@@ -92,7 +94,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
 }
 
 #[test]
-fn provision_user_request_uses_zitadel_human_fields_and_snake_case() {
+fn provision_user_request_uses_profile_fields_and_snake_case() {
     let request = ProvisionUserRequest {
         username: "tester".to_owned(),
         given_name: "Test".to_owned(),

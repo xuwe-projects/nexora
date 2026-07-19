@@ -49,6 +49,10 @@ Issue 或 PR 仅在确实关联时写成可点击链接，例如
   `docs/changelog/components/<version>/<component>/<locale>.md`。
 - 只写上一版本到当前版本的升级说明。存在破坏性变更时，必须列出旧写法、新写法、配置或
   数据迁移顺序和回滚注意事项；没有破坏性变更时明确说明无需手工迁移。
+- 如果本版本新增或修改了脚手架 Skill、宏编写规则或生成项目约束，Release Notes 必须在
+  升级指南中提醒应用项目同步 `.agents/skills`；涉及自定义宏规则时，明确说明需要接入
+  `cargo expand`、手写等价对比、`cargo bench`、`cargo bloat`，以及未达标时的 `cargo asm`
+  分析闭环。
 
 每个 Release 至少包含：
 
@@ -59,6 +63,7 @@ Issue 或 PR 仅在确实关联时写成可点击链接，例如
 5. 兼容性与破坏性变更；
 6. 从上一版本升级到本版本的操作；
 7. 实际执行过的验证。
+8. 需要下游项目同步的 Skill 或脚手架规则。
 
 不要只使用 GitHub 自动生成说明代替人工 Release Notes；它可以辅助收集提交，但不能省略
 用户影响、处理人和升级信息。

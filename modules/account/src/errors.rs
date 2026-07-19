@@ -48,6 +48,9 @@ pub enum StoreError {
     /// 当前操作试图修改唯一内置超级管理员的身份、状态或角色。
     #[error("内置超级管理员账号不可修改或删除")]
     SuperAdministratorImmutable,
+    /// 当前操作试图在用户管理中修改服务账号。
+    #[error("服务账号不可在用户管理中修改")]
+    ServiceAccountImmutable,
     /// 系统已经完成一次性初始化。
     #[error("系统已经完成初始化")]
     SystemAlreadyInitialized,
@@ -160,6 +163,10 @@ impl From<StoreError> for AccountError {
             StoreError::SuperAdministratorImmutable => Self::Conflict {
                 code: "super_administrator_immutable",
                 message: "超级管理员账号不可修改、停用、删除或挂载角色",
+            },
+            StoreError::ServiceAccountImmutable => Self::Conflict {
+                code: "service_account_immutable",
+                message: "服务账号不能在用户管理中修改",
             },
             StoreError::SystemAlreadyInitialized => Self::Conflict {
                 code: "system_already_initialized",

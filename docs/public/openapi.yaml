@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.7.0
+  version: 0.9.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -797,9 +797,12 @@ components:
     UserStatus:
       type: string
       enum: [active, suspended]
+    UserType:
+      type: string
+      enum: [human, service_account]
     User:
       type: object
-      required: [id, identity_id, display_name, status, is_super_admin, created_at, updated_at, last_login_at]
+      required: [id, identity_id, display_name, status, user_type, is_super_admin, created_at, updated_at, last_login_at]
       properties:
         id:
           type: string
@@ -830,6 +833,9 @@ components:
           maxLength: 2048
         status:
           $ref: "#/components/schemas/UserStatus"
+        user_type:
+          $ref: "#/components/schemas/UserType"
+          description: 用户类型；service_account 表示系统集成、任务或服务间调用的非人类账号
         is_super_admin:
           type: boolean
           description: 是否为不挂载角色或权限、直接绕过权限校验的系统唯一超级管理员

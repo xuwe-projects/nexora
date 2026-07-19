@@ -45,6 +45,18 @@ ApplicationOptions::new().application_logo(ApplicationLogo::png(include_bytes!(
 Header 内使用 `SidebarRegion::new("application-context")` 等稳定 ID 组合独立命中区域；
 Logo 没有动作时可以完全没有 hover，工厂选择器则可以自行添加 hover 与 Popover。
 
+## 标签样式
+
+主窗口顶部 Feature 标签默认使用 gpui-component 官方 `TabBar::segmented()` 样式。需要切换
+视觉变体时，通过 `ApplicationOptions::tab_style` 选择官方 `underline`、`pill` 或 `outline`
+样式，标签切换、置顶、滚动和右键菜单行为不变：
+
+```rust
+use nexora::{ApplicationOptions, ApplicationTabStyle};
+
+ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
+```
+
 ## Account 自动发现
 
 `desktop` 会编译 Account 客户端，但普通应用默认不显示认证门禁。应用在

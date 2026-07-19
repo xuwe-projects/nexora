@@ -39,13 +39,16 @@ pub mod server;
 #[cfg(feature = "desktop")]
 pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
+    ApplicationTabStyle,
 };
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]
 pub use macros::Settings;
 #[cfg(all(feature = "derive", feature = "desktop"))]
-pub use macros::{Feature, NavigationGroup, SettingsWindow, SidebarFooter, SidebarHeader, Window};
+pub use macros::{
+    CrudTableRow, Feature, NavigationGroup, SettingsWindow, SidebarFooter, SidebarHeader, Window,
+};
 #[cfg(feature = "desktop")]
 pub use metadata::LoginFeature;
 #[cfg(feature = "desktop")]
@@ -84,6 +87,8 @@ pub mod __private {
 
     #[cfg(feature = "desktop")]
     pub use gpui;
+    #[cfg(feature = "desktop")]
+    pub use gpui_component;
     #[cfg(feature = "desktop")]
     pub use inventory;
 

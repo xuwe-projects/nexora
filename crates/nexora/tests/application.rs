@@ -4,8 +4,8 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Context, Empty, IntoElement, SharedString, Window, px, size};
 use nexora::{
-    Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, FeatureElement,
-    WindowElement,
+    Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, ApplicationTabStyle,
+    FeatureElement, WindowElement,
 };
 
 #[derive(Default, nexora::Feature)]
@@ -79,6 +79,7 @@ fn default_options_are_immediately_usable() {
     );
     assert_eq!(options.locale, "zh-CN");
     assert_eq!(options.initial_path, "/");
+    assert_eq!(options.tab_style, ApplicationTabStyle::Segmented);
     assert_eq!(options.window_size, Some(size(px(900.0), px(640.0))));
     assert_eq!(options.window_min_size, Some(size(px(640.0), px(480.0))));
     assert!(
@@ -99,6 +100,7 @@ fn option_builders_replace_framework_defaults() {
         .application_assets(TestAssets)
         .sidebar_subtitle("Project workspace")
         .initial_path("/users")
+        .tab_style(ApplicationTabStyle::Underline)
         .locale("en")
         .window_size(1280.0, 800.0)
         .window_min_size(720.0, 480.0)
@@ -115,6 +117,7 @@ fn option_builders_replace_framework_defaults() {
     );
     assert!(options.application_assets.is_some());
     assert_eq!(options.initial_path, "/users");
+    assert_eq!(options.tab_style, ApplicationTabStyle::Underline);
     assert_eq!(options.locale, "en");
     assert_eq!(options.window_size, Some(size(px(1280.0), px(800.0))));
     assert_eq!(options.window_min_size, Some(size(px(720.0), px(480.0))));

@@ -112,18 +112,22 @@ pub(crate) async fn update_status(
     let mut transaction = pool.begin().await?;
     let administrator_role_id =
         roles::query_system_role_id("admin", true, &mut transaction).await?;
-    let (current_status, is_super_admin) = sqlx::query_as::<_, (UserStatus, bool)>(
-        r#"
-        SELECT status, is_super_admin
+    let (current_status, is_super_admin, username, email) =
+        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
+            r#"
+        SELECT status, is_super_admin, username, email
         FROM account.users
         WHERE id = $1
         FOR UPDATE
         "#,
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(StoreError::NotFound("用户"))?;
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::NotFound("用户"))?;
+    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
+        return Err(StoreError::ServiceAccountImmutable);
+    }
     if is_super_admin && current_status != status {
         return Err(StoreError::SuperAdministratorImmutable);
     }
@@ -157,20 +161,24 @@ pub(crate) async fn replace_roles(
     let mut transaction = pool.begin().await?;
     let administrator_role_id =
         roles::query_system_role_id("admin", true, &mut transaction).await?;
-    let (target_status, is_super_admin) = sqlx::query_as::<_, (UserStatus, bool)>(
-        r#"
-        SELECT status, is_super_admin
+    let (target_status, is_super_admin, username, email) =
+        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
+            r#"
+        SELECT status, is_super_admin, username, email
         FROM account.users
         WHERE id = $1
         FOR UPDATE
         "#,
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(StoreError::NotFound("用户"))?;
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::NotFound("用户"))?;
     if is_super_admin {
         return Err(StoreError::SuperAdministratorImmutable);
+    }
+    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
+        return Err(StoreError::ServiceAccountImmutable);
     }
     let desired_role_ids = desired_role_ids(role_ids, &mut transaction).await?;
     let currently_administrator = sqlx::query_scalar::<_, bool>(
@@ -269,6 +277,10 @@ async fn insert_role_grants(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+fn is_service_account(is_super_admin: bool, username: Option<&str>, email: Option<&str>) -> bool {
+    !is_super_admin && username.is_none() && email.is_none()
 }
 
 async fn protect_active_administrator(

@@ -63,9 +63,20 @@ impl FeatureElement for UserDetailsFeature {
 - 标准 CRUD 业务 Panel（标题/描述、刷新、可选筛选/操作区、表格/列表主体）默认使用
   `nexora::desktop::{CrudPanel, CrudPanelToolbar}`。顶部刷新只负责重新拉取当前数据；查询、创建、
   导入、导出和批量操作放入工具栏 action 区；没有筛选和操作时不要渲染第二块卡片。
+- 标准 CRUD 表格优先使用 `#[derive(nexora::CrudTableRow)]` 标记行数据结构，并交给
+  `nexora::desktop::CrudTableDelegate<T>` 接入 `gpui-component` 的 `DataTable`。字段属性只描述
+  `Column` 能力、表头/正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加，
+  复杂表格仍可直接手写原生 `TableDelegate`。
 - CRUD DataTable 表头默认在 `TableDelegate::render_th` 中使用
   `nexora::desktop::TableHeaderCell`，让标题水平、垂直居中；需要按列语义覆盖时使用
   `.left()`、`.center()`、`.right()` 或完全自定义表头元素。
+- CRUD DataTable 正文单元格优先在 `TableDelegate::render_td` 中使用
+  `nexora::desktop::TableCell`。默认垂直居中、水平靠左；需要按列语义覆盖时使用
+  `.left()`、`.center()`、`.right()` 和 `.top()`、`.middle()`、`.bottom()`。表格网格线优先使用
+  `DataTable::bordered(true)` 等原生样式，不在单元格组件中重复实现。
+- 主窗口顶部 Feature 标签默认使用 gpui-component 官方 `TabBar::segmented()` 样式；应用需要
+  改成 underline、pill 或 outline 时，通过 `ApplicationOptions::tab_style(ApplicationTabStyle::...)`
+  选择，不要重写 Shell 标签栏。
 - 需要覆盖内容区与 Panel Header、但保留 Sidebar 和窗口 TitleBar 的对话框时，实现 `FeatureElement::panel_overlay`。浮层必须是在 `initialize` 中创建并长期持有的 Entity，hook 始终返回同一个 `AnyView`；显示、隐藏和内容变化由浮层 Entity 自己管理，不要根据 Feature 临时状态在 `Some` 与 `None` 之间切换。
 - 带 `:name` 的动态路径必须声明 `path_params = T` 并设置 `navigation = false`。查询字段用 `query_params = Q`；`T` 和 `Q` 均通过 `serde::Deserialize` 校验。
 - 在 `FeatureElement` 中用 `FeatureContextExt::path/query`，用 `NavigationContextExt::navigate` 打开 Feature 或 Window。不要另设字符串参数通道。

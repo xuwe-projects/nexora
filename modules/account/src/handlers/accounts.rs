@@ -3,7 +3,7 @@
 use contracts::{
     account::{
         AccessProfileResponse, PermissionResponse, RoleResponse, UserPageResponse, UserResponse,
-        UserStatus as ApiUserStatus,
+        UserStatus as ApiUserStatus, UserType,
     },
     pagination::PageMetadata,
 };
@@ -90,6 +90,7 @@ pub(super) fn access_profile_response(profile: AccessProfile) -> AccessProfileRe
 }
 
 pub(super) fn user_response(user: User) -> UserResponse {
+    let api_user_type = response_user_type(&user);
     UserResponse {
         id: user.id,
         identity_id: user.identity_id,
@@ -101,10 +102,19 @@ pub(super) fn user_response(user: User) -> UserResponse {
             UserStatus::Active => ApiUserStatus::Active,
             UserStatus::Suspended => ApiUserStatus::Suspended,
         },
+        user_type: api_user_type,
         is_super_admin: user.is_super_admin,
         created_at: user.created_at.timestamp(),
         updated_at: user.updated_at.timestamp(),
         last_login_at: user.last_login_at.timestamp(),
+    }
+}
+
+fn response_user_type(user: &User) -> UserType {
+    if !user.is_super_admin && user.username.is_none() && user.email.is_none() {
+        UserType::ServiceAccount
+    } else {
+        UserType::Human
     }
 }
 

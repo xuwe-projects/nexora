@@ -11,6 +11,9 @@ pub mod cascader;
 /// 标准 CRUD 资源管理 Panel 骨架。
 pub mod crud_panel;
 
+/// 标准 CRUD 数据表增强能力。
+pub mod crud_table;
+
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
@@ -32,6 +35,9 @@ pub mod sidebar_region;
 /// 桌面数据表表头辅助组件。
 pub mod table_header;
 
+/// 桌面数据表正文单元格辅助组件。
+pub mod table_cell;
+
 /// 窗口级 Dialog、Sheet 与 Notification 遮罩层组合。
 pub mod window_layers;
 
@@ -40,10 +46,12 @@ pub use cascader::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
 };
 pub use crud_panel::{CrudPanel, CrudPanelToolbar};
+pub use crud_table::{CrudTableDelegate, CrudTableRow};
 pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft};
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;
 pub use sidebar_region::SidebarRegion;
+pub use table_cell::{TableCell, TableCellVerticalAlign};
 pub use table_header::TableHeaderCell;
 pub use window_layers::window_layers;

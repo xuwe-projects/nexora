@@ -76,6 +76,17 @@ pub enum UserStatus {
     Suspended,
 }
 
+/// API 对外公开的用户类型。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserType {
+    /// 可以登录并代表自然人的用户。
+    #[default]
+    Human,
+    /// 用于系统集成、任务或服务间调用的非人类账号。
+    ServiceAccount,
+}
+
 /// 修改用户访问状态的请求正文。
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +124,9 @@ pub struct UserResponse {
     pub avatar_url: Option<String>,
     /// 用户当前访问状态。
     pub status: UserStatus,
+    /// 用户类型，用于区分人员用户和服务账号。
+    #[serde(default)]
+    pub user_type: UserType,
     /// 是否为系统唯一且不可变的内置超级管理员。
     pub is_super_admin: bool,
     /// 本地用户首次创建时间的 Unix 秒时间戳。

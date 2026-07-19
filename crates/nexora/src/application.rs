@@ -81,6 +81,34 @@ pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
         })
 }
 
+/// Nexora 主窗口顶部标签栏的视觉样式。
+///
+/// 该枚举只选择 `gpui-component` 官方 `TabBar` 的变体，不改变标签切换、滚动、右键菜单和
+/// 置顶等行为。应用可以通过 [`ApplicationOptions::tab_style`] 覆盖默认样式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ApplicationTabStyle {
+    /// 使用官方 segmented 样式，适合作为框架默认的顶部工作区标签。
+    #[default]
+    Segmented,
+    /// 使用官方 underline 样式，适合更轻量的内容页切换。
+    Underline,
+    /// 使用官方 pill 样式，适合强调独立可点击标签块的界面。
+    Pill,
+    /// 使用官方 outline 样式，适合边界感更强的标签栏。
+    Outline,
+}
+
+impl ApplicationTabStyle {
+    fn apply(self, tab_bar: TabBar) -> TabBar {
+        match self {
+            Self::Segmented => tab_bar.segmented(),
+            Self::Underline => tab_bar.underline(),
+            Self::Pill => tab_bar.pill(),
+            Self::Outline => tab_bar.outline(),
+        }
+    }
+}
+
 use crate::{
     AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationContextExt as _,
     NavigationGroupMetadata, RegistryError, ResolveError, RouteMatch, RouteTargetKind,
@@ -135,6 +163,11 @@ pub struct ApplicationOptions {
     ///
     /// 该位置会在进入 GPUI 事件循环前完成注册表匹配，并且必须指向 Feature。
     pub initial_path: String,
+    /// 主窗口顶部 Feature 标签栏使用的官方 `TabBar` 样式。
+    ///
+    /// 默认使用 [`ApplicationTabStyle::Segmented`]；应用可以切换到 `Underline`、`Pill`
+    /// 或 `Outline`，交互行为仍由同一个 gpui-component `TabBar` 负责。
+    pub tab_style: ApplicationTabStyle,
 }
 
 impl Default for ApplicationOptions {
@@ -156,6 +189,7 @@ impl Default for ApplicationOptions {
             application_assets: None,
             locale: "zh-CN".to_owned(),
             initial_path: "/".to_owned(),
+            tab_style: ApplicationTabStyle::Segmented,
         }
     }
 }
@@ -193,6 +227,12 @@ impl ApplicationOptions {
     /// 设置主窗口首先打开的 Feature 路径或 deeplink。
     pub fn initial_path(mut self, initial_path: impl Into<String>) -> Self {
         self.initial_path = initial_path.into();
+        self
+    }
+
+    /// 设置主窗口顶部 Feature 标签栏的官方 `TabBar` 样式。
+    pub const fn tab_style(mut self, tab_style: ApplicationTabStyle) -> Self {
+        self.tab_style = tab_style;
         self
     }
 
@@ -482,6 +522,7 @@ where
     let application_version = options.application_version.clone();
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
+    let tab_style = options.tab_style;
     let preferences_store = UserConfigStore::for_local_application(
         "com",
         "Nexora",
@@ -503,6 +544,7 @@ where
         application_logo,
         account_enabled: false,
         sidebar_subtitle,
+        tab_style,
         preferences_store,
         pinned_tab_paths,
         registry: Some(registry),
@@ -524,6 +566,7 @@ struct ApplicationAdapter<A> {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    tab_style: ApplicationTabStyle,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
     registry: Option<AppRegistry>,
@@ -604,6 +647,7 @@ where
         let application_logo = self.application_logo;
         let account_enabled = self.account_enabled;
         let sidebar_subtitle = self.sidebar_subtitle.clone();
+        let tab_style = self.tab_style;
         let preferences_store = self.preferences_store.clone();
         let pinned_tab_paths = std::mem::take(&mut self.pinned_tab_paths);
         cx.new(|cx| {
@@ -615,6 +659,7 @@ where
                     application_logo,
                     account_enabled,
                     sidebar_subtitle,
+                    tab_style,
                     preferences_store,
                     pinned_tab_paths,
                 },
@@ -693,6 +738,7 @@ struct ApplicationShellConfig {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    tab_style: ApplicationTabStyle,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
 }
@@ -703,6 +749,7 @@ struct ApplicationShell {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    tab_style: ApplicationTabStyle,
     initial_route: ShellRoute,
     active_route: ShellRoute,
     opened_tabs: Vec<ShellRoute>,
@@ -766,6 +813,7 @@ impl ApplicationShell {
             application_logo,
             account_enabled,
             sidebar_subtitle,
+            tab_style,
             preferences_store,
             pinned_tab_paths,
         } = config;
@@ -858,6 +906,7 @@ impl ApplicationShell {
             application_logo,
             account_enabled,
             sidebar_subtitle,
+            tab_style,
             initial_route: initial_route.clone(),
             active_route: initial_route.clone(),
             opened_tabs,
@@ -2009,7 +2058,8 @@ impl ApplicationShell {
                                         .h_full()
                                         .overflow_hidden()
                                         .child(
-                                            TabBar::new("nexora-pinned-tabs")
+                                            self.tab_style
+                                                .apply(TabBar::new("nexora-pinned-tabs"))
                                                 .w_full()
                                                 .h_full()
                                                 .track_scroll(&self.pinned_tab_scroll_handle)
@@ -2049,7 +2099,8 @@ impl ApplicationShell {
                                     .h_full()
                                     .overflow_hidden()
                                     .child(
-                                        TabBar::new("nexora-regular-tabs")
+                                        self.tab_style
+                                            .apply(TabBar::new("nexora-regular-tabs"))
                                             .w_full()
                                             .h_full()
                                             .track_scroll(&self.regular_tab_scroll_handle)

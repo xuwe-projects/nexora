@@ -342,7 +342,7 @@ impl Render for RoleEditor {
                     .when(!can_read_permissions, |this| {
                         this.child(Alert::info(
                             "default-role-editor-permissions-unavailable",
-                            "需要 permissions:read 权限才能查看或替换权限集合。",
+                            "当前账号不能查看或替换权限集合。",
                         ))
                     })
                     .when(can_read_permissions && self.permissions.is_empty(), |this| {
@@ -395,7 +395,7 @@ impl Render for RoleEditor {
                 _ = editor.update(cx, |editor, cx| editor.submit(window, cx));
             },
         )
-        .description("统一保存角色名称、说明与完整权限集合。")
+        .description("保存角色信息与权限设置。")
         .submit_label("保存角色")
         .submit_disabled(immutable || !can_write || !can_read_permissions)
         .into_any_element()

@@ -14,6 +14,8 @@ use syn::{
     spanned::Spanned as _,
 };
 
+mod crud_table;
+
 /// 为类型生成 Nexora Feature 元数据实现。
 ///
 /// 调用方必须通过 `#[nexora(title = "...", path = "/...")]` 提供标题和路由路径，
@@ -128,6 +130,21 @@ pub fn derive_settings(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     expand_settings(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// 为命名字段结构体生成标准 CRUD 数据表行实现。
+///
+/// 字段通过 `#[nexora(column(...))]` 声明为可见列，默认 key 和显示名都来自字段名。字段
+/// 属性支持常用 gpui-component `Column` builder，包括 `width`、`min_width`、
+/// `max_width`、`sortable`、`fixed_left`、`resizable`、`movable` 与 `selectable`，并额
+/// 外支持正文与表头对齐以及自定义 `render`/`text` 函数。
+#[proc_macro_derive(CrudTableRow, attributes(nexora))]
+pub fn derive_crud_table_row(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    crud_table::expand_crud_table_row(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -833,7 +850,7 @@ fn parse_settings_fields(input: &DeriveInput) -> Result<SettingsFields> {
     Ok(settings_fields)
 }
 
-fn reject_generics(input: &DeriveInput, kind: &str) -> Result<()> {
+pub(crate) fn reject_generics(input: &DeriveInput, kind: &str) -> Result<()> {
     if input.generics.params.is_empty() {
         return Ok(());
     }
@@ -844,7 +861,7 @@ fn reject_generics(input: &DeriveInput, kind: &str) -> Result<()> {
     ))
 }
 
-fn nexora_path() -> proc_macro2::TokenStream {
+pub(crate) fn nexora_path() -> proc_macro2::TokenStream {
     match crate_name("nexora") {
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name, proc_macro2::Span::call_site());
@@ -1114,7 +1131,7 @@ fn single_attribute(attributes: &[Attribute]) -> Result<&Attribute> {
     Ok(attribute)
 }
 
-fn parse_string(meta: &syn::meta::ParseNestedMeta<'_>) -> Result<LitStr> {
+pub(crate) fn parse_string(meta: &syn::meta::ParseNestedMeta<'_>) -> Result<LitStr> {
     meta.value()?.parse()
 }
 
@@ -1161,7 +1178,12 @@ fn parse_integer(value: &LitInt) -> Result<i64> {
         .map_err(|_| Error::new(value.span(), "order 必须位于 i32 可表示的范围内"))
 }
 
-fn set_once<T>(slot: &mut Option<T>, value: T, span: proc_macro2::Span, name: &str) -> Result<()> {
+pub(crate) fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    span: proc_macro2::Span,
+    name: &str,
+) -> Result<()> {
     if slot.is_some() {
         return Err(Error::new(span, format!("{name} 只能声明一次")));
     }

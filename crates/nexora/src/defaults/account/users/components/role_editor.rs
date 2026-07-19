@@ -217,7 +217,7 @@ impl Render for UserRoleEditor {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("需要 users:roles.write 与 roles:read 权限。"),
+                        .child("当前账号不能修改用户角色。"),
                 )
             });
         let editor = cx.entity().downgrade();
@@ -230,7 +230,7 @@ impl Render for UserRoleEditor {
                 _ = editor.update(cx, |editor, cx| editor.save(window, cx));
             },
         )
-        .description("保存时会完整替换该用户的直接角色集合。")
+        .description("保存该用户的角色设置。")
         .submit_label("保存角色")
         .submit_disabled(self.loading || self.profile.is_none() || !can_save)
     }

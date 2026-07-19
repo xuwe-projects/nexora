@@ -207,7 +207,7 @@ impl Render for RoleCreateDialog {
                     .when(!can_read_permissions, |this| {
                         this.child(Alert::info(
                             "default-create-role-permissions-unavailable",
-                            "当前账号没有 permissions:read 权限，角色将以空权限集合创建。",
+                            "当前账号不能选择初始权限，角色将以空权限创建。",
                         ))
                     })
                     .when(
@@ -233,7 +233,7 @@ impl Render for RoleCreateDialog {
                 _ = dialog.update(cx, |dialog, cx| dialog.submit(window, cx));
             },
         )
-        .description("创建自定义角色并设置初始权限；后续可在角色管理中调整。")
+        .description("填写信息后创建角色。")
         .submit_label("创建角色")
     }
 }

@@ -1,8 +1,8 @@
 //! 默认角色管理页面状态。
 
-use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
+use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -13,7 +13,7 @@ use gpui_component::{
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, api_session,
+        AccountClientError, CrudPanel, api_session,
         contract::{PermissionResponse, RoleResponse},
     },
 };
@@ -179,63 +179,30 @@ impl Render for RolesPage {
             self.loading || editor_busy,
             cx.entity().downgrade(),
         );
+        let create_role_action = Button::new("open-default-account-role-dialog")
+            .debug_selector(|| "open-default-account-role-dialog".into())
+            .primary()
+            .icon(IconName::Plus)
+            .label("创建角色")
+            .disabled(self.loading || !can_write)
+            .tooltip(if can_write {
+                "创建角色"
+            } else {
+                "当前账号不能创建角色"
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_create_dialog(window, cx);
+            }));
 
-        v_flex()
+        let content = v_flex()
             .w_full()
+            .flex_1()
+            .min_h_0()
             .gap_4()
-            .p_5()
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(div().text_xl().font_bold().child("角色与权限"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "{} 个角色 · {} 项可分配权限",
-                                        self.roles.len(),
-                                        self.permissions.len()
-                                    )),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("open-default-account-role-dialog")
-                                    .debug_selector(|| "open-default-account-role-dialog".into())
-                                    .primary()
-                                    .icon(IconName::Plus)
-                                    .label("创建角色")
-                                    .disabled(self.loading || !can_write)
-                                    .tooltip(if can_write {
-                                        "创建自定义角色"
-                                    } else {
-                                        "需要 roles:write 权限"
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_create_dialog(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("refresh-default-account-roles")
-                                    .outline()
-                                    .icon(Icon::default().path("icons/rotate-ccw.svg"))
-                                    .label("刷新")
-                                    .loading(self.loading)
-                                    .disabled(self.loading || editor_busy)
-                                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-                            ),
-                    ),
-            )
             .when(!can_read_permissions, |this| {
                 this.child(Alert::info(
                     "default-account-permissions-unavailable",
-                    "当前账号没有 permissions:read 权限，可以查看角色，但不能查看或替换权限集合。",
+                    "当前账号不能查看或替换权限集合。",
                 ))
             })
             .when_some(self.error.clone(), |this, error| {
@@ -263,6 +230,20 @@ impl Render for RolesPage {
                         "当前系统没有角色。",
                     ))
                 },
+            );
+
+        CrudPanel::new("角色与权限", content)
+            .description(format!(
+                "{} 个角色 · {} 项可分配权限",
+                self.roles.len(),
+                self.permissions.len()
+            ))
+            .refresh(
+                "refresh-default-account-roles",
+                self.loading,
+                self.loading || editor_busy,
+                cx.listener(|this, _, _, cx| this.load(cx)),
             )
+            .action(create_role_action)
     }
 }

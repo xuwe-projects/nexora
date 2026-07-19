@@ -1,0 +1,5 @@
+error: CrudTableRow 列 key `id` 重复
+ --> tests/ui/crud_table_row_duplicate_key.rs:7:27
+  |
+7 |     #[nexora(column(key = "id"))]
+  |                           ^^^^

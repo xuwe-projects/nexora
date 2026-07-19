@@ -1,4 +1,4 @@
-//! 使用公共 FormDialog 创建 ZITADEL 用户并绑定本地账号。
+//! 使用公共 FormDialog 创建用户。
 
 use std::collections::BTreeSet;
 
@@ -114,7 +114,7 @@ impl ProvisionUserDialog {
             return;
         }
         if !has_permission(cx, "users:provision") {
-            self.error = Some("需要 users:provision 权限才能创建用户".to_owned());
+            self.error = Some("当前账号不能创建用户".to_owned());
             cx.notify();
             return;
         }
@@ -219,7 +219,7 @@ impl Render for ProvisionUserDialog {
                     h_flex()
                         .gap_2()
                         .child(Spinner::new().small())
-                        .child("正在 ZITADEL 创建并绑定用户…"),
+                        .child("正在创建用户…"),
                 )
             })
             .child(
@@ -228,14 +228,14 @@ impl Render for ProvisionUserDialog {
                     .child(
                         field()
                             .label("登录用户名")
-                            .description("在 ZITADEL Organization 中唯一，并可用于登录。")
+                            .description("用于登录系统的唯一用户名。")
                             .required(true)
                             .child(Input::new(&self.username).disabled(self.saving)),
                     )
                     .child(
                         field()
                             .label("邮箱")
-                            .description("创建后由 ZITADEL 发送默认验证邮件。")
+                            .description("用于接收账号相关通知。")
                             .required(true)
                             .child(Input::new(&self.email).disabled(self.saving)),
                     )
@@ -262,15 +262,11 @@ impl Render for ProvisionUserDialog {
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().font_semibold().child("初始角色"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .child("ZITADEL 创建成功后，本地用户与角色会在同一事务中写入。"),
-                    )
+                    .child(div().text_xs().child("可选；创建后也可以继续调整。"))
                     .when(!can_assign_roles, |this| {
                         this.child(Alert::info(
                             "default-provision-user-roles-forbidden",
-                            "选择初始角色还需要 users:roles.write 与 roles:read 权限。",
+                            "当前账号不能选择初始角色。",
                         ))
                     })
                     .when(can_assign_roles && self.roles.is_empty(), |this| {
@@ -291,7 +287,7 @@ impl Render for ProvisionUserDialog {
                 _ = dialog.update(cx, |dialog, cx| dialog.provision(window, cx));
             },
         )
-        .description("在 ZITADEL 创建人类用户，并自动关联到 Nexora Account。")
+        .description("填写信息后创建用户。")
         .submit_label("创建用户")
     }
 }
