@@ -24,6 +24,7 @@ use crate::PanelDialog;
 
 type DialogHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+const DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO: f32 = 0.8;
 
 /// 表单字段在打开对话框时的原值与当前草稿。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -538,6 +539,7 @@ pub struct FormDialog {
     cancel_label: SharedString,
     submit_label: SharedString,
     submit_disabled: bool,
+    panel_height_ratio: Option<f32>,
     on_cancel: Option<DialogHandler>,
     on_submit: Option<DialogHandler>,
 }
@@ -561,6 +563,7 @@ impl FormDialog {
             cancel_label: "取消".into(),
             submit_label: "提交".into(),
             submit_disabled: false,
+            panel_height_ratio: Some(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO),
             on_cancel: None,
             on_submit: None,
         }
@@ -619,6 +622,25 @@ impl FormDialog {
     /// 取消、关闭和提交才会一起禁用。
     pub fn submit_disabled(mut self, disabled: bool) -> Self {
         self.submit_disabled = disabled;
+        self
+    }
+
+    /// 设置表单对话框相对当前 Feature Panel 的高度比例。
+    ///
+    /// 默认值为 `0.8`，表示常规创建/编辑表单 surface 高度固定为当前 Panel 可用高度的
+    /// 80%，标题和底部操作区固定，表单内容区独立纵向滚动。传入值会被限制在 `0.1..=1.0`
+    /// 之间，避免对话框不可用或溢出 Panel。
+    pub fn panel_height_ratio(mut self, ratio: f32) -> Self {
+        self.panel_height_ratio = Some(ratio.clamp(0.1, 1.0));
+        self
+    }
+
+    /// 使用内容自适应高度。
+    ///
+    /// 该模式只适合字段极少的小表单；对话框仍会保留默认的 Panel 高度 80% 上限，字段过多时
+    /// 继续由内容区纵向滚动。
+    pub fn auto_height(mut self) -> Self {
+        self.panel_height_ratio = None;
         self
     }
 
@@ -732,7 +754,7 @@ impl RenderOnce for FormDialog {
                 )
                 .w(px(520.0))
                 .max_w(relative(0.92))
-                .max_h(relative(0.8))
+                .max_h(relative(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO))
                 .into_any_element();
         }
 
@@ -775,7 +797,7 @@ impl RenderOnce for FormDialog {
         };
         let body = items.into_iter().chain(self.sections).collect::<Vec<_>>();
 
-        PanelDialog::new(self.id, focus_handle)
+        let dialog = PanelDialog::new(self.id, focus_handle)
             .title(title)
             .overlay_closable(false)
             .on_close(move |event, window, cx| {
@@ -810,8 +832,15 @@ impl RenderOnce for FormDialog {
                     ),
             )
             .w(px(520.0))
-            .max_w(relative(0.92))
-            .max_h(relative(0.8))
-            .into_any_element()
+            .max_w(relative(0.92));
+
+        form_dialog_height(dialog, self.panel_height_ratio).into_any_element()
+    }
+}
+
+fn form_dialog_height(dialog: PanelDialog, panel_height_ratio: Option<f32>) -> PanelDialog {
+    match panel_height_ratio {
+        Some(ratio) => dialog.h(relative(ratio)).max_h(relative(ratio)),
+        None => dialog.max_h(relative(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO)),
     }
 }

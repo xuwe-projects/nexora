@@ -22,24 +22,29 @@ impl Render for FormDialogTestRoot {
         let cancelled = self.cancelled.clone();
         let submitted = self.submitted.clone();
 
-        div().relative().size_full().child(
-            FormDialog::new("disabled-submit-form-dialog", self.state.clone())
-                .title("编辑用户")
-                .child(
-                    FormItem::new("名称").element(
-                        div()
-                            .debug_selector(|| "form-dialog-custom-content".into())
-                            .child("表单内容"),
-                    ),
-                )
-                .submit_disabled(true)
-                .on_submit(move |_, _, _| {
-                    submitted.fetch_add(1, Ordering::SeqCst);
-                })
-                .on_cancel(move |_, _, _| {
-                    cancelled.fetch_add(1, Ordering::SeqCst);
-                }),
-        )
+        div()
+            .id("form-dialog-host")
+            .debug_selector(|| "form-dialog-host".into())
+            .relative()
+            .size_full()
+            .child(
+                FormDialog::new("disabled-submit-form-dialog", self.state.clone())
+                    .title("编辑用户")
+                    .child(
+                        FormItem::new("名称").element(
+                            div()
+                                .debug_selector(|| "form-dialog-custom-content".into())
+                                .child("表单内容"),
+                        ),
+                    )
+                    .submit_disabled(true)
+                    .on_submit(move |_, _, _| {
+                        submitted.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_cancel(move |_, _, _| {
+                        cancelled.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )
     }
 }
 
@@ -136,6 +141,41 @@ fn submit_disabled_only_blocks_submit_and_keeps_cancel_available(cx: &mut TestAp
     assert_eq!(cancelled.load(Ordering::SeqCst), 1);
 }
 
+#[gpui::test]
+fn form_dialog_defaults_to_eighty_percent_of_panel_height(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let cancelled = Arc::new(AtomicUsize::new(0));
+    let submitted = Arc::new(AtomicUsize::new(0));
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let state = cx.new(FormDialogState::new);
+        state.update(cx, |state, cx| state.open(window, cx));
+        FormDialogTestRoot {
+            state,
+            cancelled,
+            submitted,
+        }
+    });
+
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let host = cx
+        .debug_bounds("form-dialog-host")
+        .expect("测试宿主应当完成布局");
+    let surface = cx
+        .debug_bounds("panel-dialog-surface")
+        .expect("FormDialog 应当渲染 PanelDialog surface");
+    let expected = host.size.height * 0.8;
+    let delta = (surface.size.height.as_f32() - expected.as_f32()).abs();
+
+    assert!(
+        delta <= 1.0,
+        "FormDialog surface height should be 80% of the panel: actual {}, expected {}",
+        surface.size.height,
+        expected
+    );
+}
+
 #[test]
 fn source_contract_applies_business_disabled_state_to_submit_only() {
     let (_, after_cancel) = FORM_DIALOG_SOURCE
@@ -152,6 +192,9 @@ fn source_contract_applies_business_disabled_state_to_submit_only() {
     assert!(!cancel_block.contains("self.submit_disabled"));
     assert!(submit_block.contains(".disabled(submit_disabled)"));
     assert!(FORM_DIALOG_SOURCE.contains("let submit_disabled ="));
+    assert!(FORM_DIALOG_SOURCE.contains("DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO: f32 = 0.8"));
+    assert!(FORM_DIALOG_SOURCE.contains("fn form_dialog_height("));
+    assert!(FORM_DIALOG_SOURCE.contains(".h(relative(ratio))"));
+    assert!(FORM_DIALOG_SOURCE.contains(".max_h(relative(ratio))"));
     assert!(FORM_DIALOG_SOURCE.contains(".max_w(relative(0.92))"));
-    assert!(FORM_DIALOG_SOURCE.contains(".max_h(relative(0.8))"));
 }

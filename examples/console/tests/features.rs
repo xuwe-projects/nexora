@@ -705,8 +705,8 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.version().to_string(), env!("CARGO_PKG_VERSION"));
     assert_eq!(entry.locale(), "zh-CN");
-    assert!(entry.markdown().contains("标准表单弹层"));
-    assert!(entry.markdown().contains("角色键"));
+    assert!(entry.markdown().contains("Panel 高度"));
+    assert!(entry.markdown().contains("FormDialog"));
     assert!(!entry.markdown().contains("CrudTableRow"));
     assert!(!entry.markdown().contains("DMG"));
 }

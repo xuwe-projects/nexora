@@ -196,7 +196,6 @@ impl RenderOnce for PanelDialog {
             .flex()
             .items_center()
             .justify_center()
-            .p_4()
             .occlude()
             .bg(cx.theme().overlay)
             .when(overlay_closable, |this| {
