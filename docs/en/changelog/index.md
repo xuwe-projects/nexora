@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.11.1: standard form-dialog scrolling and hidden role-key input](./0.11.1)
 - [0.11.0: ZITADEL customer-portal provisioning and independent resource-server auth](./0.11.0)
 - [0.10.0: standard FormDialog, official default tabs, and Settings integration](./0.10.0)
 - [0.9.1: connected top tab segmented bar and user management stability](./0.9.1)

@@ -8,6 +8,8 @@ use gpui::{
 };
 use ui::PanelDialog;
 
+const PANEL_DIALOG_SOURCE: &str = include_str!("../src/panel_dialog.rs");
+
 struct PanelDialogTestRoot {
     dismissed: Arc<AtomicBool>,
     focus_handle: FocusHandle,
@@ -66,4 +68,12 @@ fn panel_dialog_is_scoped_to_its_parent_and_exposes_close_action(cx: &mut TestAp
     cx.simulate_click(close.center(), Modifiers::none());
 
     assert!(dismissed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn source_contract_keeps_body_scroll_inside_dialog_surface() {
+    assert!(PANEL_DIALOG_SOURCE.contains(".debug_selector(|| \"panel-dialog-content\".into())"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".flex_1()"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".min_h_0()"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".overflow_y_scrollbar()"));
 }

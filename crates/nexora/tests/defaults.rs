@@ -6,6 +6,12 @@ use nexora::{AppRegistry, RouteTargetKind};
 use gpui::{AnyView, Context, Modifiers, Render, TestAppContext, Window, div, prelude::*};
 
 #[cfg(feature = "desktop")]
+const ROLE_CREATE_DIALOG_SOURCE: &str =
+    include_str!("../src/defaults/account/roles/components/create.rs");
+#[cfg(feature = "desktop")]
+const ROLE_EDITOR_SOURCE: &str = include_str!("../src/defaults/account/roles/components/editor.rs");
+
+#[cfg(feature = "desktop")]
 struct CustomUsersFeature;
 
 #[cfg(feature = "desktop")]
@@ -200,4 +206,12 @@ fn default_roles_feature_keeps_overlay_stable_and_blocks_unprivileged_creation(
         cx.debug_bounds("panel-dialog-overlay").is_none(),
         "未登录或没有 roles:write 权限时不能打开角色创建弹窗"
     );
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_role_forms_hide_role_key_from_operators() {
+    assert!(!ROLE_CREATE_DIALOG_SOURCE.contains("FormItem::new(\"角色键\")"));
+    assert!(!ROLE_EDITOR_SOURCE.contains("FormItem::new(\"角色键\")"));
+    assert!(ROLE_CREATE_DIALOG_SOURCE.contains("generated_role_key("));
 }

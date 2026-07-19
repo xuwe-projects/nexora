@@ -15,7 +15,9 @@ use gpui_component::{
     ActiveTheme as _, FocusTrapElement as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     dialog::CancelDialog,
-    h_flex, v_flex,
+    h_flex,
+    scroll::ScrollableElement as _,
+    v_flex,
 };
 
 type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -163,11 +165,12 @@ impl RenderOnce for PanelDialog {
             )
             .child(
                 v_flex()
-                    .flex_none()
+                    .flex_1()
                     .min_h_0()
                     .debug_selector(|| "panel-dialog-content".into())
                     .gap_4()
                     .p_4()
+                    .overflow_y_scrollbar()
                     .children(self.children),
             )
             .when_some(self.footer, |this, footer| {

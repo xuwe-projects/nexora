@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, WindowExt as _,
+    Disableable as _, Sizable as _, StyledExt as _, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
@@ -366,15 +366,6 @@ impl Render for RoleEditor {
         FormDialog::new("default-role-editor-form-dialog", self.form.clone())
             .title(format!("管理 {}", role.name))
             .description("保存角色信息与权限设置。")
-            .child(
-                FormItem::new("角色键").element(
-                    div()
-                        .p_2()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().tokens.group_box)
-                        .child(role.key.clone()),
-                ),
-            )
             .child(
                 FormItem::new("角色名称")
                     .input(&self.edit_name)

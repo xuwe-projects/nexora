@@ -13,6 +13,7 @@ use gpui_component::{
     spinner::Spinner,
     v_flex,
 };
+use std::collections::BTreeSet;
 
 use crate::{
     defaults::account::has_permission,
@@ -128,8 +129,13 @@ impl RolesPage {
     fn open_create_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(dialog) = &self.create_dialog {
             let permissions = self.permissions.clone();
+            let existing_role_keys = self
+                .roles
+                .iter()
+                .map(|role| role.key.clone())
+                .collect::<BTreeSet<_>>();
             _ = dialog.update(cx, |dialog, cx| {
-                dialog.open(permissions, window, cx);
+                dialog.open(permissions, existing_role_keys, window, cx);
             });
         }
     }

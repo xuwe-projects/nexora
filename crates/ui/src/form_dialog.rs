@@ -730,7 +730,9 @@ impl RenderOnce for FormDialog {
                                 }),
                         ),
                 )
-                .max_h(relative(0.82))
+                .w(px(520.0))
+                .max_w(relative(0.92))
+                .max_h(relative(0.8))
                 .into_any_element();
         }
 
@@ -808,6 +810,8 @@ impl RenderOnce for FormDialog {
                     ),
             )
             .w(px(520.0))
+            .max_w(relative(0.92))
+            .max_h(relative(0.8))
             .into_any_element()
     }
 }

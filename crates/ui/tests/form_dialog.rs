@@ -152,4 +152,6 @@ fn source_contract_applies_business_disabled_state_to_submit_only() {
     assert!(!cancel_block.contains("self.submit_disabled"));
     assert!(submit_block.contains(".disabled(submit_disabled)"));
     assert!(FORM_DIALOG_SOURCE.contains("let submit_disabled ="));
+    assert!(FORM_DIALOG_SOURCE.contains(".max_w(relative(0.92))"));
+    assert!(FORM_DIALOG_SOURCE.contains(".max_h(relative(0.8))"));
 }
