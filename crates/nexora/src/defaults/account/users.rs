@@ -22,7 +22,8 @@ pub(super) const USERS_METADATA: FeatureMetadata = FeatureMetadata::new(
     None,
     900,
     true,
-);
+)
+.with_content_scrollable(false);
 
 #[derive(Default)]
 struct DefaultUsersFeature {
@@ -38,6 +39,8 @@ struct UsersDialogLayer {
 impl Render for UsersDialogLayer {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .absolute()
+            .inset_0()
             .children([self.provision_dialog.clone().into_any_element()])
             .child(self.role_editor.clone())
     }

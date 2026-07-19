@@ -1,17 +1,17 @@
 //! 默认用户管理页面状态。
 
-use gpui::{App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
+use gpui::{App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, StyledExt as _,
+    Disableable as _, IconName,
     alert::Alert,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    v_flex,
 };
 
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, api_session,
+        AccountClientError, CrudPanel, api_session,
         contract::{RoleResponse, UpdateUserStatusRequest, UserStatus},
     },
 };
@@ -253,64 +253,49 @@ impl Render for UsersPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let can_provision = has_permission(cx, "users:provision");
         let loaded_count = self.users_table.read(cx).len(cx);
+        let create_user_action = Button::new("open-default-account-user-dialog")
+            .debug_selector(|| "open-default-account-user-dialog".into())
+            .primary()
+            .icon(IconName::Plus)
+            .label("创建用户")
+            .disabled(self.loading || !can_provision)
+            .tooltip(if can_provision {
+                "创建并绑定已由管理员确认的 OIDC 用户"
+            } else {
+                "需要 users:provision 权限"
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_provision_dialog(window, cx);
+            }));
 
-        v_flex()
+        let content = v_flex()
             .w_full()
+            .flex_1()
+            .min_h_0()
             .gap_4()
-            .p_5()
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(div().text_xl().font_bold().child("用户管理"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "已加载 {loaded_count} / {} 个本地用户",
-                                        self.total.max(0)
-                                    )),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("open-default-account-user-dialog")
-                                    .debug_selector(|| "open-default-account-user-dialog".into())
-                                    .primary()
-                                    .icon(IconName::Plus)
-                                    .label("创建用户")
-                                    .disabled(self.loading || !can_provision)
-                                    .tooltip(if can_provision {
-                                        "创建并绑定已由管理员确认的 OIDC 用户"
-                                    } else {
-                                        "需要 users:provision 权限"
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_provision_dialog(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("refresh-default-account-users")
-                                    .outline()
-                                    .icon(Icon::default().path("icons/rotate-ccw.svg"))
-                                    .label("刷新")
-                                    .loading(self.loading)
-                                    .disabled(self.loading)
-                                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                            ),
-                    ),
-            )
             .when_some(self.error.clone(), |this, error| {
-                this.child(Alert::error("default-account-users-error", error).title("用户操作失败"))
+                this.child(
+                    Alert::error("default-account-users-error", error)
+                        .title("用户操作失败")
+                        .flex_shrink_0(),
+                )
             })
             .when_some(self.notice.clone(), |this, notice| {
-                this.child(Alert::success("default-account-users-notice", notice))
+                this.child(Alert::success("default-account-users-notice", notice).flex_shrink_0())
             })
-            .child(self.users_table.clone())
+            .child(self.users_table.clone());
+
+        CrudPanel::new("用户管理", content)
+            .description(format!(
+                "已加载 {loaded_count} / {} 个本地用户",
+                self.total.max(0)
+            ))
+            .refresh(
+                "refresh-default-account-users",
+                self.loading,
+                self.loading,
+                cx.listener(|this, _, _, cx| this.refresh(cx)),
+            )
+            .action(create_user_action)
     }
 }

@@ -8,6 +8,9 @@ pub mod card;
 /// 基于 gpui-component 组合实现的级联选择器。
 pub mod cascader;
 
+/// 标准 CRUD 资源管理 Panel 骨架。
+pub mod crud_panel;
+
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
@@ -26,6 +29,9 @@ pub mod panel_header;
 /// Sidebar Header/Footer 中由应用自行控制交互视觉的稳定区域。
 pub mod sidebar_region;
 
+/// 桌面数据表表头辅助组件。
+pub mod table_header;
+
 /// 窗口级 Dialog、Sheet 与 Notification 遮罩层组合。
 pub mod window_layers;
 
@@ -33,9 +39,11 @@ pub use card::Card;
 pub use cascader::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
 };
+pub use crud_panel::{CrudPanel, CrudPanelToolbar};
 pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft};
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;
 pub use sidebar_region::SidebarRegion;
+pub use table_header::TableHeaderCell;
 pub use window_layers::window_layers;

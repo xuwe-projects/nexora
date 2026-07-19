@@ -705,8 +705,8 @@ fn settings_load_current_console_changelog() {
     assert_eq!(entry.component(), "console");
     assert_eq!(entry.version().to_string(), env!("CARGO_PKG_VERSION"));
     assert_eq!(entry.locale(), "zh-CN");
-    assert!(entry.markdown().contains("自定义图标"));
-    assert!(entry.markdown().contains("application_assets"));
+    assert!(entry.markdown().contains("标准 CRUD Panel"));
+    assert!(entry.markdown().contains("CrudPanel"));
     assert!(!entry.markdown().contains("TabBar"));
     assert!(!entry.markdown().contains("DMG"));
 }

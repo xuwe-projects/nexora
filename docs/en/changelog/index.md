@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.8.0: standard CRUD Panel](./0.8.0)
 - [0.7.0: application custom icon assets](./0.7.0)
 - [0.6.0: SidebarHeader slot replacement semantics](./0.6.0)
 - [0.5.2: Sidebar navigation alignment fix](./0.5.2)

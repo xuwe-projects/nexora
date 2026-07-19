@@ -2,7 +2,7 @@
 
 use gpui::{Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -224,7 +224,7 @@ impl Render for RolesPage {
                             .child(
                                 Button::new("refresh-default-account-roles")
                                     .outline()
-                                    .icon(IconName::Loader)
+                                    .icon(Icon::default().path("icons/rotate-ccw.svg"))
                                     .label("刷新")
                                     .loading(self.loading)
                                     .disabled(self.loading || editor_busy)

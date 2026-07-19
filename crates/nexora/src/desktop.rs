@@ -16,5 +16,6 @@ pub use crate::account::client::{
 };
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
-    FormDialog, FormDialogState, FormFieldDraft, SidebarRegion,
+    CrudPanel, CrudPanelToolbar, FormDialog, FormDialogState, FormFieldDraft, SidebarRegion,
+    TableHeaderCell,
 };

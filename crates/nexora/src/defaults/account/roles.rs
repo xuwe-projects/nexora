@@ -38,6 +38,8 @@ struct RolesDialogLayer {
 impl Render for RolesDialogLayer {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .absolute()
+            .inset_0()
             .children([self.create_dialog.clone().into_any_element()])
             .child(self.editor.clone())
     }

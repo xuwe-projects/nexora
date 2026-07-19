@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "account"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "api",
  "async-trait",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "actions"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
 ]
@@ -279,7 +279,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "api"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "contracts",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "changelog"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "include_dir",
  "semver",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "configuration"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "config",
  "directories",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "actions",
  "changelog",
@@ -1497,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "contracts"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
@@ -4250,7 +4250,7 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "thiserror 2.0.18",
@@ -4488,7 +4488,7 @@ dependencies = [
 
 [[package]]
 name = "logging"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "thiserror 2.0.18",
  "tracing-subscriber",
@@ -4735,7 +4735,7 @@ dependencies = [
 
 [[package]]
 name = "migrate"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "configuration",
@@ -4859,7 +4859,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexora"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "account",
  "actions",
@@ -4898,7 +4898,7 @@ dependencies = [
 
 [[package]]
 name = "nexora-macros"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "inventory",
  "proc-macro-crate",
@@ -5446,7 +5446,7 @@ dependencies = [
 
 [[package]]
 name = "oidc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -7385,7 +7385,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "account",
  "api",
@@ -8244,7 +8244,7 @@ dependencies = [
 
 [[package]]
 name = "theme"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
@@ -8778,7 +8778,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
@@ -8885,7 +8885,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "updater"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",

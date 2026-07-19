@@ -20,9 +20,11 @@ use crate::{
     defaults::account::has_permission,
     desktop::contract::{UserResponse, UserStatus},
 };
-use ui::Card;
+use ui::{Card, TableHeaderCell};
 
 use super::UsersPage;
+
+const USER_TABLE_ROW_HEIGHT: f32 = 52.0;
 
 pub(in crate::defaults::account::users) struct UsersTable {
     state: Entity<TableState<UsersTableDelegate>>,
@@ -109,18 +111,14 @@ impl UsersTable {
 }
 
 impl Render for UsersTable {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.state.read(cx).delegate().users.len();
-        let table_height = if rows == 0 {
-            160.0
-        } else {
-            ((rows.saturating_add(1) as f32) * 40.0).clamp(80.0, 520.0)
-        };
-        div().w_full().h(px(table_height)).child(
-            Card::new()
-                .size_full()
-                .overflow_hidden()
-                .child(DataTable::new(&self.state).stripe(true).bordered(false)),
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().w_full().flex_1().min_h_0().child(
+            Card::new().size_full().overflow_hidden().child(
+                DataTable::new(&self.state)
+                    .stripe(true)
+                    .bordered(false)
+                    .with_size(px(USER_TABLE_ROW_HEIGHT)),
+            ),
         )
     }
 }
@@ -137,25 +135,26 @@ impl UsersTableDelegate {
         Self {
             columns: vec![
                 Column::new("user", "用户")
-                    .width(px(260.))
-                    .min_width(px(220.))
-                    .max_width(px(360.)),
+                    .width(px(360.))
+                    .min_width(px(280.))
+                    .max_width(px(560.)),
                 Column::new("username", "登录用户名")
                     .width(px(160.))
                     .min_width(px(120.))
                     .max_width(px(240.)),
                 Column::new("email", "邮箱")
-                    .width(px(240.))
+                    .width(px(260.))
                     .min_width(px(180.))
                     .max_width(px(360.)),
                 Column::new("status", "状态")
-                    .width(px(96.))
-                    .min_width(px(84.))
-                    .max_width(px(112.)),
+                    .width(px(76.))
+                    .min_width(px(76.))
+                    .max_width(px(76.))
+                    .resizable(false),
                 Column::new("actions", "操作")
-                    .width(px(196.))
+                    .width(px(184.))
                     .min_width(px(180.))
-                    .max_width(px(240.))
+                    .max_width(px(220.))
                     .selectable(false),
             ],
             users: Vec::new(),
@@ -184,13 +183,15 @@ impl UsersTableDelegate {
                         h_flex()
                             .min_w_0()
                             .gap_1()
-                            .child(div().truncate().child(user.display_name.clone()))
+                            .child(div().min_w_0().truncate().child(user.display_name.clone()))
                             .when(user.is_super_admin, |this| {
                                 this.child(Tag::info().small().rounded_full().child("超级管理员"))
                             }),
                     )
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(user.id.clone()),
@@ -275,6 +276,15 @@ impl TableDelegate for UsersTableDelegate {
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
         self.columns[col_ix].clone()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        TableHeaderCell::new(self.column(col_ix, cx).name)
     }
 
     fn move_column(
