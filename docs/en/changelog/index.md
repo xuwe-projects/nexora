@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.13.0: iMES permission visibility and implied-permission storage](./0.13.0)
 - [0.12.0: Account initial-password user creation](./0.12.0)
 - [0.11.3: migration file line-ending correction](./0.11.3)
 - [0.11.2: form-dialog Panel height correction](./0.11.2)

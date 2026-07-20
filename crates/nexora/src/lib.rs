@@ -53,8 +53,8 @@ pub use macros::{
 pub use metadata::LoginFeature;
 #[cfg(feature = "desktop")]
 pub use metadata::{
-    Feature, FeatureMetadata, NavigationGroup, NavigationGroupMetadata, SettingsWindow,
-    SidebarFooter, SidebarHeader, Window, WindowMetadata,
+    Feature, FeatureMetadata, FeatureVisiblePermissions, NavigationGroup, NavigationGroupMetadata,
+    SettingsWindow, SidebarFooter, SidebarHeader, Window, WindowMetadata,
 };
 #[cfg(feature = "desktop")]
 pub use registry::{AppRegistry, AppRegistryBuilder, RegistryError};

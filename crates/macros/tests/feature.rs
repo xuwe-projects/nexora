@@ -6,6 +6,7 @@ struct FeatureMetadata {
     title: &'static str,
     path: &'static str,
     content_scrollable: bool,
+    visible_permissions_any: &'static [&'static str],
 }
 
 impl FeatureMetadata {
@@ -28,11 +29,20 @@ impl FeatureMetadata {
             title,
             path,
             content_scrollable: true,
+            visible_permissions_any: &[],
         }
     }
 
     const fn with_content_scrollable(mut self, content_scrollable: bool) -> Self {
         self.content_scrollable = content_scrollable;
+        self
+    }
+
+    const fn with_visible_permissions_any(
+        mut self,
+        visible_permissions_any: &'static [&'static str],
+    ) -> Self {
+        self.visible_permissions_any = visible_permissions_any;
         self
     }
 }
@@ -173,7 +183,11 @@ impl FeatureElement for UserFeature {
 }
 
 #[derive(Default, nexora_macros::Feature)]
-#[nexora(title = "首页", path = "/")]
+#[nexora(
+    title = "首页",
+    path = "/",
+    visible_permissions(any = ["dashboard:read", "dashboard:operate"])
+)]
 struct HomeFeature;
 
 impl FeatureElement for HomeFeature {
@@ -258,18 +272,21 @@ fn feature_derive_connects_route_types_factory_and_registration() {
                 title: "首页",
                 path: "/",
                 content_scrollable: true,
+                visible_permissions_any: &["dashboard:read", "dashboard:operate"],
             },
             FeatureMetadata {
                 id: "factory-feature-definition",
                 title: "工厂页面",
                 path: "/factory",
                 content_scrollable: true,
+                visible_permissions_any: &[],
             },
             FeatureMetadata {
                 id: "user",
                 title: "用户详情",
                 path: "/users/:id",
                 content_scrollable: false,
+                visible_permissions_any: &[],
             },
         ]
     );

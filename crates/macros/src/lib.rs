@@ -9,8 +9,8 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
 use syn::{
-    Attribute, Data, DeriveInput, Error, Expr, ExprGroup, ExprLit, ExprParen, ExprPath, ExprUnary,
-    Fields, Ident, Lit, LitBool, LitInt, LitStr, Result, Type, UnOp, parse_macro_input,
+    Attribute, Data, DeriveInput, Error, Expr, ExprArray, ExprGroup, ExprLit, ExprParen, ExprPath,
+    ExprUnary, Fields, Ident, Lit, LitBool, LitInt, LitStr, Result, Type, UnOp, parse_macro_input,
     spanned::Spanned as _,
 };
 
@@ -160,6 +160,7 @@ struct FeatureArguments {
     order: Option<i32>,
     navigation: Option<LitBool>,
     content_scrollable: Option<LitBool>,
+    visible_permissions_any: Option<Vec<LitStr>>,
     path_params: Option<Type>,
     query_params: Option<Type>,
     factory: Option<ExprPath>,
@@ -244,6 +245,10 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let icon = optional_string(arguments.icon);
     let group = optional_string(arguments.group);
     let order = arguments.order.unwrap_or_default();
+    let visible_permissions = arguments.visible_permissions_any.map_or_else(
+        proc_macro2::TokenStream::new,
+        |permissions| quote!(.with_visible_permissions_any(&[#(#permissions),*])),
+    );
     let nexora = nexora_path();
     let path_params = arguments
         .path_params
@@ -279,7 +284,7 @@ fn expand_feature(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 #group,
                 #order,
                 #navigation,
-            ).with_content_scrollable(#content_scrollable);
+            ).with_content_scrollable(#content_scrollable)#visible_permissions;
 
             const REGISTRATION: ::core::option::Option<#nexora::__private::FeatureRegistration> =
                 ::core::option::Option::Some(#nexora::__private::FeatureRegistration::new(
@@ -932,6 +937,28 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 meta.path.span(),
                 "content_scrollable",
             )
+        } else if meta.path.is_ident("visible_permissions") {
+            let mut any = None;
+            meta.parse_nested_meta(|nested| {
+                if nested.path.is_ident("any") {
+                    let expression = nested.value()?.parse::<Expr>()?;
+                    let permissions = parse_string_array(expression, "visible_permissions(any)")?;
+                    set_once(&mut any, permissions, nested.path.span(), "any")
+                } else {
+                    Err(nested.error(
+                        "visible_permissions only supports any = [\"permission:read\"]",
+                    ))
+                }
+            })?;
+            let any = any.ok_or_else(|| {
+                meta.error("visible_permissions requires any = [\"permission:read\"]")
+            })?;
+            set_once(
+                &mut arguments.visible_permissions_any,
+                any,
+                meta.path.span(),
+                "visible_permissions",
+            )
         } else if meta.path.is_ident("path_params") {
             let path_params = meta.value()?.parse::<Type>()?;
             set_once(
@@ -957,7 +984,7 @@ fn parse_feature_arguments(attributes: &[Attribute]) -> Result<FeatureArguments>
                 "factory",
             )
         } else {
-            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、group、order、navigation、content_scrollable、path_params、query_params 和 factory；页面目录请声明 NavigationGroup"))
+            Err(meta.error("不支持的 feature 属性；允许 id、title、path、section、icon、group、order、navigation、content_scrollable、visible_permissions、path_params、query_params 和 factory；页面目录请声明 NavigationGroup"))
         }
     })?;
 
@@ -1176,6 +1203,29 @@ fn parse_integer(value: &LitInt) -> Result<i64> {
     value
         .base10_parse::<i64>()
         .map_err(|_| Error::new(value.span(), "order 必须位于 i32 可表示的范围内"))
+}
+
+fn parse_string_array(expression: Expr, label: &str) -> Result<Vec<LitStr>> {
+    let Expr::Array(ExprArray { elems, .. }) = expression else {
+        return Err(Error::new_spanned(
+            expression,
+            format!("{label} must be a string array"),
+        ));
+    };
+
+    elems
+        .into_iter()
+        .map(|expression| match expression {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(value),
+                ..
+            }) => Ok(value),
+            expression => Err(Error::new_spanned(
+                expression,
+                format!("{label} only accepts string literals"),
+            )),
+        })
+        .collect()
 }
 
 pub(crate) fn set_once<T>(

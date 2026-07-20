@@ -8,14 +8,15 @@ pub use crate::account_module::{
     AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
     ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
-    Page, Permission, PermissionDefinition, PermissionKey, Role, SystemRole, User, UserStatus,
+    Page, Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role,
+    SystemRole, User, UserStatus,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
     },
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
-    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
-    replace_user_roles,
+    create_permission_catalog, create_permissions, create_role, create_user,
+    create_user_with_roles, replace_role_permissions, replace_user_roles,
 };
 
 #[cfg(feature = "desktop")]

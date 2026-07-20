@@ -116,6 +116,58 @@ pub struct FeatureMetadata {
     order: i32,
     navigation: bool,
     content_scrollable: bool,
+    visible_permissions: FeatureVisiblePermissions,
+}
+
+/// Feature 在桌面导航与路由可见性中使用的权限条件。
+///
+/// 该元数据只用于客户端决定当前用户是否看见或打开某个 Feature，不替代服务端
+/// `nexora::server::Authorized` 或业务 API 的授权校验。当前仅支持 `any` 语义：
+/// 用户拥有任意一个列出的权限即可看见该 Feature；空集合表示不需要额外权限。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FeatureVisiblePermissions {
+    any: &'static [&'static str],
+}
+
+impl FeatureVisiblePermissions {
+    /// 创建一个不要求额外权限的可见性条件。
+    pub const fn none() -> Self {
+        Self { any: &[] }
+    }
+
+    /// 创建一个“任意权限满足即可可见”的可见性条件。
+    ///
+    /// `permissions` 中的值应使用与 Account `/me.permissions` 相同的稳定权限键，例如
+    /// `employees:read`。该函数不会执行安全授权，只记录静态元数据。
+    pub const fn any(permissions: &'static [&'static str]) -> Self {
+        Self { any: permissions }
+    }
+
+    /// 返回满足 Feature 可见性所需的任意权限集合。
+    pub const fn any_permissions(self) -> &'static [&'static str] {
+        self.any
+    }
+
+    /// 判断给定登录快照是否满足当前 Feature 的客户端可见性条件。
+    ///
+    /// 空权限集合始终可见；超级管理员始终可见；普通用户只要拥有 `any` 列表中的任意一个权限即可见。该判断
+    /// 只用于桌面导航和路由可见性，不替代服务端授权校验。
+    #[cfg(feature = "desktop")]
+    pub fn allows_profile(
+        self,
+        profile: Option<&contracts::account::AccessProfileResponse>,
+    ) -> bool {
+        self.any.is_empty()
+            || profile.is_some_and(|profile| {
+                profile.user.is_super_admin
+                    || self.any.iter().any(|required| {
+                        profile
+                            .permissions
+                            .iter()
+                            .any(|granted| granted == required)
+                    })
+            })
+    }
 }
 
 impl FeatureMetadata {
@@ -147,6 +199,7 @@ impl FeatureMetadata {
             order,
             navigation,
             content_scrollable: true,
+            visible_permissions: FeatureVisiblePermissions::none(),
         }
     }
 
@@ -211,6 +264,34 @@ impl FeatureMetadata {
     /// 形成嵌套滚动区域并破坏内部组件的尺寸计算与滚动交互。
     pub const fn content_scrollable(self) -> bool {
         self.content_scrollable
+    }
+
+    /// 设置当前 Feature 的客户端可见性权限条件。
+    ///
+    /// 该方法主要供手写 [`Feature`] 元数据使用；派生宏会在声明
+    /// `visible_permissions(any = ["..."])` 时生成等价调用。权限判断只影响桌面导航和
+    /// 路由可见性，不应作为服务端安全边界。
+    #[must_use]
+    pub const fn with_visible_permissions(
+        mut self,
+        visible_permissions: FeatureVisiblePermissions,
+    ) -> Self {
+        self.visible_permissions = visible_permissions;
+        self
+    }
+
+    /// 设置当前 Feature 的“任意权限满足即可可见”条件。
+    ///
+    /// 这是 [`Self::with_visible_permissions`] 的便捷形式，适合在手写静态元数据中直接
+    /// 传入权限键字面量切片。
+    #[must_use]
+    pub const fn with_visible_permissions_any(self, permissions: &'static [&'static str]) -> Self {
+        self.with_visible_permissions(FeatureVisiblePermissions::any(permissions))
+    }
+
+    /// 返回当前 Feature 的客户端可见性权限条件。
+    pub const fn visible_permissions(self) -> FeatureVisiblePermissions {
+        self.visible_permissions
     }
 }
 

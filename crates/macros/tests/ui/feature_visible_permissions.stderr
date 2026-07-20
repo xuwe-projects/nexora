@@ -1,0 +1,5 @@
+error: visible_permissions(any) must be a string array
+   --> tests/ui/feature_visible_permissions.rs:102:31
+    |
+102 |     visible_permissions(any = "employees:read")
+    |                               ^^^^^^^^^^^^^^^^

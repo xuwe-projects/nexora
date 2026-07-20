@@ -245,6 +245,7 @@ async fn insert_permissions(
     permission_ids: &[i64],
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), StoreError> {
+    let permission_ids = canonical_permission_ids(permission_ids, transaction).await?;
     if permission_ids.is_empty() {
         return Ok(());
     }
@@ -257,13 +258,58 @@ async fn insert_permissions(
         "#,
     )
     .bind(role_id)
-    .bind(permission_ids)
+    .bind(&permission_ids)
     .execute(&mut **transaction)
     .await?;
     if result.rows_affected() != permission_ids.len() as u64 {
         return Err(StoreError::NotFound("权限"));
     }
     Ok(())
+}
+
+async fn canonical_permission_ids(
+    permission_ids: &[i64],
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<i64>, StoreError> {
+    if permission_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM account.permissions WHERE id = ANY($1)")
+            .bind(permission_ids)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if existing_count != permission_ids.len() as i64 {
+        return Err(StoreError::NotFound("权限"));
+    }
+
+    let expanded = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH RECURSIVE expanded(permission_id, path) AS (
+            SELECT id, ARRAY[id]
+            FROM account.permissions
+            WHERE id = ANY($1)
+
+            UNION
+
+            SELECT implication.implied_permission_id,
+                   expanded.path || implication.implied_permission_id
+            FROM expanded
+            JOIN account.permission_implications implication
+              ON implication.permission_id = expanded.permission_id
+            WHERE NOT implication.implied_permission_id = ANY(expanded.path)
+        )
+        SELECT DISTINCT permission_id
+        FROM expanded
+        ORDER BY permission_id
+        "#,
+    )
+    .bind(permission_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+
+    Ok(expanded)
 }
 
 async fn ensure_mutable(

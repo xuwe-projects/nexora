@@ -10,7 +10,7 @@ order: 2
 Install a published GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.12.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.13.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:

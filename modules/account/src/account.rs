@@ -35,8 +35,8 @@ pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;
 
 pub use entities::account::{
-    AccessProfile, ExternalIdentity, Permission, PermissionDefinition, PermissionKey, Role,
-    SystemRole, User, UserStatus,
+    AccessProfile, ExternalIdentity, Permission, PermissionCatalogDefinition, PermissionDefinition,
+    PermissionKey, Role, SystemRole, User, UserStatus,
 };
 pub use errors::{AccountError, StoreError};
 
@@ -226,10 +226,28 @@ pub async fn create_permissions(
     Ok(stores::permissions::register(definitions, pool).await?)
 }
 
+/// 使用宿主共享连接池创建或更新带蕴含关系的应用权限目录。
+///
+/// `definitions` 中的每个权限仍会按权限键幂等更新显示信息；`implies` 声明当前权限在写入角色授权关系前
+/// 需要递归补入的下游权限键。未声明蕴含关系的旧权限定义行为不变。该函数只注册目录元数据，不执行当前
+/// 用户授权，应仅由可信宿主启动或管理边界调用。
+///
+/// # Errors
+///
+/// 权限定义数量、权限键、蕴含权限键、名称或说明不符合约束，批次内出现重复权限键，权限蕴含自身，
+/// 蕴含的目标权限不存在，或数据库写入失败时返回 [`AccountError`]。
+pub async fn create_permission_catalog(
+    pool: &PgPool,
+    definitions: &[PermissionCatalogDefinition],
+) -> Result<Vec<Permission>, AccountError> {
+    validate_permission_catalog_definitions(definitions)?;
+    Ok(stores::permissions::register_catalog(definitions, pool).await?)
+}
+
 /// 使用宿主共享连接池创建一个可由应用管理的自定义角色。
 ///
-/// `permission_ids` 是角色创建后直接包含的完整权限集合；角色与权限写入由 Account Store
-/// 在同一事务中完成。该函数不执行当前用户授权，不允许创建系统角色。
+/// `permission_ids` 是调用方请求授予的权限集合；Account Store 会在同一事务中按已注册的权限蕴含关系递归展开、
+/// 去重并稳定排序，然后把展开后的最终权限集写入 `role_permissions`。该函数不执行当前用户授权，不允许创建系统角色。
 ///
 /// # Errors
 ///
@@ -248,10 +266,10 @@ pub async fn create_role(
     Ok(stores::roles::create(key, name, description, permission_ids.as_slice(), pool).await?)
 }
 
-/// 使用宿主共享连接池原子替换自定义角色的直接权限集合。
+/// 使用宿主共享连接池原子替换自定义角色的权限集合。
 ///
-/// `permission_ids` 表示替换后的完整集合，而不是增量添加列表。空集合会清除该自定义角色的
-/// 全部直接权限；系统角色始终不可修改。
+/// `permission_ids` 表示调用方请求保留的权限集合，而不是增量添加列表。Account Store 会按已注册的权限蕴含关系
+/// 递归展开并只保存最终集合；空集合会清除该自定义角色的全部权限；系统角色始终不可修改。
 ///
 /// # Errors
 ///
@@ -471,6 +489,21 @@ impl Account {
         create_permissions(&self.state.pool, definitions).await
     }
 
+    /// 幂等注册带蕴含关系的应用权限目录，并返回本次注册后的权限实体。
+    ///
+    /// 该方法与 [`create_permission_catalog`] 使用相同校验和 Store 写入路径，适合宿主在 Account 初始化后继续同步
+    /// 应用自定义权限。蕴含关系会在创建或替换角色权限时展开成最终 `role_permissions` 记录。
+    ///
+    /// # Errors
+    ///
+    /// 权限定义或蕴含关系不符合约束，蕴含目标权限不存在，或数据库写入失败时返回错误。
+    pub async fn register_permission_catalog(
+        &self,
+        definitions: &[PermissionCatalogDefinition],
+    ) -> Result<Vec<Permission>, AccountError> {
+        create_permission_catalog(&self.state.pool, definitions).await
+    }
+
     /// 返回内置权限与应用自定义权限组成的完整目录。
     ///
     /// # Errors
@@ -502,7 +535,8 @@ impl Account {
 
     /// 创建一个可由应用管理的自定义角色。
     ///
-    /// 该方法不会执行当前用户授权；HTTP 或其他不可信入口必须先验证调用者拥有角色管理权限。
+    /// `permission_ids` 会先按已注册的权限蕴含关系递归展开，再把展开后的最终权限集写入数据库。该方法不会执行
+    /// 当前用户授权；HTTP 或其他不可信入口必须先验证调用者拥有角色管理权限。
     ///
     /// # Errors
     ///
@@ -556,7 +590,9 @@ impl Account {
         Ok(stores::roles::delete(role_id, &self.state.pool).await?)
     }
 
-    /// 原子替换一个自定义角色直接包含的权限集合。
+    /// 原子替换一个自定义角色包含的权限集合。
+    ///
+    /// `permission_ids` 会先按已注册的权限蕴含关系递归展开，再把展开后的最终权限集写入数据库。
     ///
     /// # Errors
     ///
@@ -815,24 +851,51 @@ fn normalized_create_human_identity(
 fn validate_permission_definitions(
     definitions: &[PermissionDefinition],
 ) -> Result<(), AccountError> {
+    let definitions = definitions
+        .iter()
+        .cloned()
+        .map(PermissionCatalogDefinition::from)
+        .collect::<Vec<_>>();
+    validate_permission_catalog_definitions(definitions.as_slice())
+}
+
+fn validate_permission_catalog_definitions(
+    definitions: &[PermissionCatalogDefinition],
+) -> Result<(), AccountError> {
     if definitions.len() > 256 {
         return Err(ValidationError::new("permissions", "权限定义数量不能超过 256").into());
     }
     let mut keys = BTreeSet::new();
     for definition in definitions {
-        let key = PermissionKey::try_from(definition.key.as_str()).map_err(|()| {
+        let key = PermissionKey::try_from(definition.permission.key.as_str()).map_err(|()| {
             ValidationError::new(
                 "key",
                 "权限键必须使用 resource:action 格式；两段都必须为 2 到 64 位小写字母、数字、点、下划线或连字符，并以字母开头",
             )
         })?;
-        if !keys.insert(key) {
+        if !keys.insert(key.clone()) {
             return Err(ValidationError::new("key", "同一批权限定义不能包含重复键").into());
         }
-        if definition.name.trim().is_empty() || definition.name.chars().count() > 100 {
+        let mut implied_keys = BTreeSet::new();
+        for implied in &definition.implies {
+            let implied_key = PermissionKey::try_from(implied.as_str()).map_err(|()| {
+                ValidationError::new(
+                    "implies",
+                    "蕴含权限键必须使用 resource:action 格式；两段都必须为 2 到 64 位小写字母、数字、点、下划线或连字符，并以字母开头",
+                )
+            })?;
+            if implied_key == key {
+                return Err(ValidationError::new("implies", "权限不能蕴含自身").into());
+            }
+            implied_keys.insert(implied_key);
+        }
+        if definition.permission.name.trim().is_empty()
+            || definition.permission.name.chars().count() > 100
+        {
             return Err(ValidationError::new("name", "权限名称必须为 1 到 100 个字符").into());
         }
         if definition
+            .permission
             .description
             .as_deref()
             .is_some_and(|description| description.chars().count() > 1_000)

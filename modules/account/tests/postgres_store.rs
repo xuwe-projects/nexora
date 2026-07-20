@@ -110,6 +110,118 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn role_permissions_store_expanded_implied_permissions(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let permissions = account
+        .register_permission_catalog(&[
+            PermissionDefinition {
+                key: "employees:read".to_owned(),
+                name: "查看员工".to_owned(),
+                description: None,
+            }
+            .into(),
+            PermissionDefinition {
+                key: "employees:write".to_owned(),
+                name: "编辑员工".to_owned(),
+                description: None,
+            }
+            .with_implies(["employees:read"]),
+            PermissionDefinition {
+                key: "employees:approve".to_owned(),
+                name: "审批员工".to_owned(),
+                description: None,
+            }
+            .with_implies(["employees:write", "employees:read"]),
+        ])
+        .await
+        .expect("带蕴含关系的权限目录应当可以注册");
+    let permission_id = |key: &str| {
+        permissions
+            .iter()
+            .find(|permission| permission.key.as_str() == key)
+            .map(|permission| permission.id)
+            .expect("测试权限应当存在")
+    };
+
+    let role = account
+        .create_role(
+            "employee-editor",
+            "员工编辑员",
+            None,
+            &[permission_id("employees:write")],
+        )
+        .await
+        .expect("创建角色时应当展开写权限蕴含的读权限");
+    assert_eq!(
+        permission_keys(&role.permissions),
+        ["employees:read", "employees:write"]
+    );
+    assert_eq!(
+        stored_role_permission_keys(role.id, &pool).await,
+        ["employees:read", "employees:write"]
+    );
+
+    let role = account
+        .replace_role_permissions(role.id, &[permission_id("employees:approve")])
+        .await
+        .expect("替换角色权限时应当传递展开蕴含权限");
+    assert_eq!(
+        permission_keys(&role.permissions),
+        ["employees:approve", "employees:read", "employees:write"]
+    );
+    assert_eq!(
+        stored_role_permission_keys(role.id, &pool).await,
+        ["employees:approve", "employees:read", "employees:write"]
+    );
+
+    let loop_permissions = account
+        .register_permission_catalog(&[
+            PermissionDefinition {
+                key: "loops:a".to_owned(),
+                name: "循环 A".to_owned(),
+                description: None,
+            }
+            .with_implies(["loops:b"]),
+            PermissionDefinition {
+                key: "loops:b".to_owned(),
+                name: "循环 B".to_owned(),
+                description: None,
+            }
+            .with_implies(["loops:a"]),
+        ])
+        .await
+        .expect("循环蕴含关系不应导致注册失败");
+    let loop_a_id = loop_permissions
+        .iter()
+        .find(|permission| permission.key.as_str() == "loops:a")
+        .map(|permission| permission.id)
+        .expect("循环测试权限应当存在");
+    let loop_role = account
+        .create_role("loop-reader", "循环权限角色", None, &[loop_a_id])
+        .await
+        .expect("循环蕴含关系不应导致权限展开无限递归");
+    assert_eq!(
+        permission_keys(&loop_role.permissions),
+        ["loops:a", "loops:b"]
+    );
+
+    let user = account
+        .provision_user(identity("employee-authorized"))
+        .await
+        .expect("测试用户应当可以开通");
+    account
+        .replace_user_roles(user.id.as_str(), &[role.id], user.id.as_str())
+        .await
+        .expect("测试用户应当可以授予角色");
+
+    let profile = current_profile(&account, "employee-authorized").await;
+    assert_eq!(
+        profile.permissions,
+        ["employees:approve", "employees:read", "employees:write"]
+    );
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
 async fn provisioning_with_initial_roles_is_atomic(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let grantor = account
@@ -1097,6 +1209,29 @@ async fn permission_id(key: &str, pool: &PgPool) -> i64 {
         .fetch_one(pool)
         .await
         .expect("测试权限应当存在")
+}
+
+fn permission_keys(permissions: &[account::Permission]) -> Vec<&str> {
+    permissions
+        .iter()
+        .map(|permission| permission.key.as_str())
+        .collect()
+}
+
+async fn stored_role_permission_keys(role_id: i64, pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT permissions.key
+        FROM account.role_permissions
+        JOIN account.permissions ON permissions.id = role_permissions.permission_id
+        WHERE role_permissions.role_id = $1
+        ORDER BY permissions.key
+        "#,
+    )
+    .bind(role_id)
+    .fetch_all(pool)
+    .await
+    .expect("应当可以读取角色最终权限")
 }
 
 async fn insert_user(id: &str, identity_id: &str, pool: &PgPool) {

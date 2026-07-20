@@ -154,6 +154,45 @@ pub struct PermissionDefinition {
     pub description: Option<String>,
 }
 
+impl PermissionDefinition {
+    /// 将普通权限定义与它蕴含的下游权限键组合成可注册的权限目录定义。
+    ///
+    /// 该方法不会修改当前权限自身的展示信息，只声明当角色获得当前权限时，Account 在写入
+    /// `role_permissions` 前还应补入哪些最终权限。旧代码继续直接使用 [`PermissionDefinition`]
+    /// 时不会产生任何蕴含关系。
+    pub fn with_implies(
+        self,
+        implies: impl IntoIterator<Item = impl Into<String>>,
+    ) -> PermissionCatalogDefinition {
+        PermissionCatalogDefinition {
+            permission: self,
+            implies: implies.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// 带蕴含关系的权限目录定义。
+///
+/// `permission` 描述要注册或更新的权限本身；`implies` 描述该权限在保存到角色权限集合时
+/// 自动补入的下游权限键。Account 会在写入角色授权关系前递归展开这些关系，并把展开后的最终
+/// 权限集合保存到数据库。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionCatalogDefinition {
+    /// 要注册或更新的权限目录项。
+    pub permission: PermissionDefinition,
+    /// 当前权限自动蕴含的下游权限键列表。
+    pub implies: Vec<String>,
+}
+
+impl From<PermissionDefinition> for PermissionCatalogDefinition {
+    fn from(permission: PermissionDefinition) -> Self {
+        Self {
+            permission,
+            implies: Vec::new(),
+        }
+    }
+}
+
 /// PostgreSQL `account.user_status` 对应的用户访问状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[sqlx(type_name = "account.user_status", rename_all = "snake_case")]

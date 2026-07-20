@@ -351,6 +351,40 @@ impl AppRegistry {
         &self.navigation_groups
     }
 
+    /// 返回当前登录快照可见的主导航 Feature。
+    ///
+    /// `account_enabled` 为 `false` 时跳过权限可见性过滤；为 `true` 时，带可见权限声明的 Feature 只有在
+    /// `profile` 满足权限或属于超级管理员时才会返回。该方法只用于桌面导航可见性计算，不替代服务端授权。
+    #[cfg(feature = "desktop")]
+    pub fn visible_navigation_features(
+        &self,
+        account_enabled: bool,
+        profile: Option<&contracts::account::AccessProfileResponse>,
+    ) -> Vec<FeatureMetadata> {
+        self.navigation_features()
+            .filter(|metadata| feature_visible_to_profile(*metadata, account_enabled, profile))
+            .collect()
+    }
+
+    /// 返回当前登录快照可见且至少包含一个可见子项的导航目录。
+    ///
+    /// 目录本身不承载权限；当目录下所有 Feature 都因为可见权限过滤被隐藏，且没有任何可见子目录时，该目录也会
+    /// 从结果中隐藏。
+    #[cfg(feature = "desktop")]
+    pub fn visible_navigation_groups(
+        &self,
+        account_enabled: bool,
+        profile: Option<&contracts::account::AccessProfileResponse>,
+    ) -> Vec<NavigationGroupMetadata> {
+        self.navigation_groups
+            .iter()
+            .copied()
+            .filter(|metadata| {
+                navigation_group_has_visible_children(self, metadata.id(), account_enabled, profile)
+            })
+            .collect()
+    }
+
     /// 返回自动发现或手动注册的全部独立 Window。
     ///
     /// 该方法只用于窗口目录、调试和其他只读查询，不负责触发注册。顺序由 `order`、路径
@@ -886,6 +920,30 @@ fn validate_navigation_graph(
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "desktop")]
+fn navigation_group_has_visible_children(
+    registry: &AppRegistry,
+    group_id: &str,
+    account_enabled: bool,
+    profile: Option<&contracts::account::AccessProfileResponse>,
+) -> bool {
+    registry
+        .features_in_group(group_id)
+        .any(|metadata| feature_visible_to_profile(metadata, account_enabled, profile))
+        || registry.groups_in_group(group_id).any(|metadata| {
+            navigation_group_has_visible_children(registry, metadata.id(), account_enabled, profile)
+        })
+}
+
+#[cfg(feature = "desktop")]
+fn feature_visible_to_profile(
+    metadata: FeatureMetadata,
+    account_enabled: bool,
+    profile: Option<&contracts::account::AccessProfileResponse>,
+) -> bool {
+    !account_enabled || metadata.visible_permissions().allows_profile(profile)
 }
 
 fn validate_feature(metadata: FeatureMetadata) -> Result<String, RegistryError> {

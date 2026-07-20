@@ -22,7 +22,8 @@ pub(super) const ROLES_METADATA: FeatureMetadata = FeatureMetadata::new(
     None,
     910,
     true,
-);
+)
+.with_visible_permissions_any(&["roles:read"]);
 
 #[derive(Default)]
 struct DefaultRolesFeature {

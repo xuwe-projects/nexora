@@ -711,6 +711,8 @@ enum NavigationError {
     #[cfg(feature = "desktop")]
     #[error("未登录时不能打开独立窗口 `{path}`")]
     AuthenticationRequired { path: String },
+    #[error("当前用户无权查看 Feature `{id}`")]
+    FeatureHidden { id: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -899,7 +901,16 @@ impl ApplicationShell {
         let sidebar_footer = registry.create_sidebar_footer(window, cx);
         #[cfg(feature = "desktop")]
         let (feature_instances, navigation_error) = if authenticated {
-            create_initial_feature(&registry, initial_route.route().clone(), window, cx)
+            if let crate::RouteTarget::Feature(metadata) = initial_route.route().target()
+                && !Self::feature_visible_for_account(account_enabled, metadata, cx)
+            {
+                (
+                    HashMap::new(),
+                    Some(NavigationError::FeatureHidden { id: metadata.id() }.to_string()),
+                )
+            } else {
+                create_initial_feature(&registry, initial_route.route().clone(), window, cx)
+            }
         } else {
             (HashMap::new(), None)
         };
@@ -1016,6 +1027,13 @@ impl ApplicationShell {
     #[cfg(feature = "desktop")]
     fn activate_selected_feature(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_route = self.active_route.clone();
+        if let crate::RouteTarget::Feature(metadata) = active_route.route().target()
+            && !self.feature_visible(metadata, cx)
+        {
+            self.navigation_error =
+                Some(NavigationError::FeatureHidden { id: metadata.id() }.to_string());
+            return;
+        }
         match self.ensure_feature_instance(&active_route, window, cx) {
             Ok(()) => {
                 self.feature_instances
@@ -1237,6 +1255,11 @@ impl ApplicationShell {
             return Ok(());
         }
 
+        if let crate::RouteTarget::Feature(metadata) = route.target()
+            && !self.feature_visible(metadata, cx)
+        {
+            return Err(NavigationError::FeatureHidden { id: metadata.id() });
+        }
         let route = ShellRoute::new(route);
         #[cfg(feature = "desktop")]
         if self.account_enabled && !self.authenticated {
@@ -1555,7 +1578,7 @@ impl ApplicationShell {
         let group_id = metadata.id();
         let expanded = self.expanded_navigation_groups.contains(group_id);
         let children = self
-            .navigation_children(Some(group_id), metadata.section())
+            .navigation_children(Some(group_id), metadata.section(), cx)
             .into_iter()
             .map(|entry| self.render_navigation_entry(entry, cx))
             .collect::<Vec<_>>();
@@ -1585,6 +1608,7 @@ impl ApplicationShell {
         &self,
         parent: Option<&str>,
         section: &'static str,
+        cx: &App,
     ) -> Vec<NavigationEntry> {
         let mut entries = self
             .registry
@@ -1592,6 +1616,7 @@ impl ApplicationShell {
             .iter()
             .copied()
             .filter(|group| group.parent() == parent && group.section() == section)
+            .filter(|group| self.navigation_group_visible(*group, cx))
             .map(NavigationEntry::Group)
             .chain(
                 self.registry
@@ -1599,6 +1624,7 @@ impl ApplicationShell {
                     .filter(|feature| {
                         feature.group() == parent
                             && self.registry.feature_section(*feature) == section
+                            && self.feature_visible(*feature, cx)
                     })
                     .map(NavigationEntry::Feature),
             )
@@ -1607,7 +1633,7 @@ impl ApplicationShell {
         entries
     }
 
-    fn navigation_sections(&self) -> Vec<(&'static str, Vec<NavigationEntry>)> {
+    fn navigation_sections(&self, cx: &App) -> Vec<(&'static str, Vec<NavigationEntry>)> {
         let mut sections = Vec::<(&'static str, Vec<NavigationEntry>)>::new();
         let mut roots = self
             .registry
@@ -1615,11 +1641,13 @@ impl ApplicationShell {
             .iter()
             .copied()
             .filter(|group| group.parent().is_none())
+            .filter(|group| self.navigation_group_visible(*group, cx))
             .map(NavigationEntry::Group)
             .chain(
                 self.registry
                     .navigation_features()
                     .filter(|feature| feature.group().is_none())
+                    .filter(|feature| self.feature_visible(*feature, cx))
                     .map(NavigationEntry::Feature),
             )
             .collect::<Vec<_>>();
@@ -1636,6 +1664,38 @@ impl ApplicationShell {
             }
         }
         sections
+    }
+
+    fn navigation_group_visible(&self, metadata: NavigationGroupMetadata, cx: &App) -> bool {
+        !self
+            .navigation_children(Some(metadata.id()), metadata.section(), cx)
+            .is_empty()
+    }
+
+    fn feature_visible(&self, metadata: FeatureMetadata, cx: &App) -> bool {
+        Self::feature_visible_for_account(self.account_enabled, metadata, cx)
+    }
+
+    fn feature_visible_for_account(
+        account_enabled: bool,
+        metadata: FeatureMetadata,
+        cx: &App,
+    ) -> bool {
+        if !account_enabled {
+            return true;
+        }
+
+        #[cfg(feature = "desktop")]
+        {
+            metadata
+                .visible_permissions()
+                .allows_profile(crate::account::client::login_profile(cx))
+        }
+
+        #[cfg(not(feature = "desktop"))]
+        {
+            false
+        }
     }
 
     fn render_default_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1747,7 +1807,7 @@ impl ApplicationShell {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
-        let navigation_sections = self.navigation_sections();
+        let navigation_sections = self.navigation_sections(cx);
         let navigation_groups = navigation_sections
             .into_iter()
             .map(|(section, items)| {

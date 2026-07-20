@@ -1,10 +1,11 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
+use contracts::account::{AccessProfileResponse, UserResponse, UserStatus, UserType};
 use gpui::{Context, Empty, IntoElement, Window as GpuiWindow};
 use nexora::{
-    AppRegistry, Feature, FeatureElement, FeatureMetadata, NavigationGroup, NoPath, NoQuery, Path,
-    Query, RegistryError, ResolveError, RouteExtractError, RouteTarget, RouteTargetKind, Window,
-    WindowElement,
+    AppRegistry, Feature, FeatureElement, FeatureMetadata, FeatureVisiblePermissions,
+    NavigationGroup, NoPath, NoQuery, Path, Query, RegistryError, ResolveError, RouteExtractError,
+    RouteTarget, RouteTargetKind, Window, WindowElement,
 };
 use serde::Deserialize;
 
@@ -87,12 +88,41 @@ struct NewUserFeature;
 )]
 struct UserRolesFeature;
 
+#[derive(Default, Feature)]
+#[nexora(
+    title = "员工权限",
+    path = "/employees",
+    group = "user-access",
+    visible_permissions(any = ["employees:read"])
+)]
+struct EmployeesFeature;
+
+struct ManualVisibleFeature;
+
+impl Feature for ManualVisibleFeature {
+    type Path = NoPath;
+    type Query = NoQuery;
+
+    const METADATA: FeatureMetadata = FeatureMetadata::new(
+        "manual-visible",
+        "手写可见性",
+        "/manual-visible",
+        Some("访问控制"),
+        None,
+        Some("user-access"),
+        30,
+        true,
+    )
+    .with_visible_permissions(FeatureVisiblePermissions::any(&["manual:read"]));
+}
+
 impl_empty_feature_element!(
     HomeFeature,
     UsersFeature,
     UserDetailsFeature,
     NewUserFeature,
     UserRolesFeature,
+    EmployeesFeature,
 );
 
 #[derive(Default, nexora::SettingsWindow)]
@@ -120,12 +150,96 @@ fn derive_exposes_stable_feature_and_window_metadata() {
     assert_eq!(UserAccessGroup::METADATA.section(), "访问控制");
     assert_eq!(UserAccessGroup::METADATA.icon(), Some("users"));
     assert_eq!(UserRolesFeature::METADATA.group(), Some("user-access"));
+    assert_eq!(
+        EmployeesFeature::METADATA
+            .visible_permissions()
+            .any_permissions(),
+        ["employees:read"]
+    );
+    assert_eq!(
+        ManualVisibleFeature::METADATA
+            .visible_permissions()
+            .any_permissions(),
+        ["manual:read"]
+    );
 
     assert_eq!(UserDetailsFeature::METADATA.id(), "user-details");
     assert!(!UserDetailsFeature::METADATA.navigation());
     assert!(!UserDetailsFeature::METADATA.content_scrollable());
     assert_eq!(SettingsWindow::METADATA.id(), "settings");
     assert_eq!(SettingsWindow::METADATA.path(), "/settings");
+}
+
+#[test]
+fn visible_permissions_match_login_profiles() {
+    let permissions = FeatureVisiblePermissions::any(&["employees:read"]);
+
+    assert!(FeatureVisiblePermissions::none().allows_profile(None));
+    assert!(!permissions.allows_profile(None));
+    assert!(!permissions.allows_profile(Some(&profile(false, &["roles:read"]))));
+    assert!(permissions.allows_profile(Some(&profile(false, &["employees:read"]))));
+    assert!(permissions.allows_profile(Some(&profile(true, &[]))));
+}
+
+#[test]
+fn navigation_groups_without_visible_children_are_hidden() {
+    let registry = AppRegistry::builder()
+        .navigation_group::<UserAccessGroup>()
+        .feature::<EmployeesFeature>()
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        registry
+            .visible_navigation_features(true, None)
+            .iter()
+            .map(|metadata| metadata.id())
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+    assert_eq!(registry.visible_navigation_groups(true, None), []);
+
+    let profile = profile(false, &["employees:read"]);
+    assert_eq!(
+        registry
+            .visible_navigation_features(true, Some(&profile))
+            .iter()
+            .map(|metadata| metadata.id())
+            .collect::<Vec<_>>(),
+        ["employees"]
+    );
+    assert_eq!(
+        registry
+            .visible_navigation_groups(true, Some(&profile))
+            .iter()
+            .map(|metadata| metadata.id())
+            .collect::<Vec<_>>(),
+        ["user-access"]
+    );
+}
+
+fn profile(is_super_admin: bool, permissions: &[&str]) -> AccessProfileResponse {
+    AccessProfileResponse {
+        user: UserResponse {
+            id: "user0001".to_owned(),
+            identity_id: "identity-user0001".to_owned(),
+            username: Some("user0001".to_owned()),
+            email: Some("user0001@example.com".to_owned()),
+            display_name: "测试用户".to_owned(),
+            avatar_url: None,
+            status: UserStatus::Active,
+            user_type: UserType::Human,
+            is_super_admin,
+            created_at: 1,
+            updated_at: 1,
+            last_login_at: 1,
+        },
+        roles: Vec::new(),
+        permissions: permissions
+            .iter()
+            .map(|permission| (*permission).to_owned())
+            .collect(),
+    }
 }
 
 #[test]

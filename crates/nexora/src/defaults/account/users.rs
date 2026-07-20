@@ -23,6 +23,7 @@ pub(super) const USERS_METADATA: FeatureMetadata = FeatureMetadata::new(
     900,
     true,
 )
+.with_visible_permissions_any(&["users:read"])
 .with_content_scrollable(false);
 
 #[derive(Default)]

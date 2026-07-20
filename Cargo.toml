@@ -22,26 +22,26 @@ members = [
 ]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xuwe-projects/nexora"
 homepage = "https://github.com/xuwe-projects/nexora"
 
 [workspace.dependencies]
-account = { version = "0.12.0", path = "modules/account", default-features = false }
+account = { version = "0.13.0", path = "modules/account", default-features = false }
 actions = { path = "crates/actions" }
 api = { path = "crates/api" }
 changelog = { path = "crates/changelog" }
-configuration = { version = "0.12.0", path = "crates/configuration" }
-contracts = { version = "0.12.0", path = "crates/contracts" }
-desktop = { version = "0.12.0", path = "crates/desktop" }
+configuration = { version = "0.13.0", path = "crates/configuration" }
+contracts = { version = "0.13.0", path = "crates/contracts" }
+desktop = { version = "0.13.0", path = "crates/desktop" }
 kernel = { path = "crates/kernel" }
 logging = { path = "crates/logging" }
-macros = { package = "nexora-macros", version = "0.12.0", path = "crates/macros" }
-migrate = { version = "0.12.0", path = "crates/migrate", default-features = false }
-nexora = { version = "0.12.0", path = "crates/nexora" }
-oidc = { version = "0.12.0", path = "crates/oidc" }
+macros = { package = "nexora-macros", version = "0.13.0", path = "crates/macros" }
+migrate = { version = "0.13.0", path = "crates/migrate", default-features = false }
+nexora = { version = "0.13.0", path = "crates/nexora" }
+oidc = { version = "0.13.0", path = "crates/oidc" }
 theme = { path = "crates/theme" }
 ui = { path = "crates/ui" }
 updater = { path = "crates/updater" }
