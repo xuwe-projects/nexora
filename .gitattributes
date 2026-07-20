@@ -1,0 +1,2 @@
+# Keep SQL migrations byte-stable across operating systems.
+*.sql text eol=lf
