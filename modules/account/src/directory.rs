@@ -18,7 +18,7 @@ use crate::{
         project::v2::{AddProjectRoleRequest, project_service_client::ProjectServiceClient},
         user::v2::{
             CreateUserRequest, DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery,
-            ListUsersRequest, SearchQuery, SendEmailVerificationCode, SetHumanEmail,
+            ListUsersRequest, Password, SearchQuery, SendEmailVerificationCode, SetHumanEmail,
             SetHumanProfile, StateQuery, Type, TypeQuery, UserFieldName, UserState, UserView,
             create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
         },
@@ -199,14 +199,14 @@ impl ZitadelUserDirectory {
             .find(|user| user.identity_id == identity_id))
     }
 
-    /// 在配置的 ZITADEL Organization 中创建人类用户并发送默认邮箱验证邮件。
+    /// 在配置的 ZITADEL Organization 中创建带初始密码的人类用户并发送默认邮箱验证邮件。
     ///
     /// 返回值中的 identity ID 完全来自 ZITADEL `CreateUser` 响应，调用方无需也不能提交
     /// 裸 subject。头像由用户后续在身份服务中维护，因此创建时为 `None`。
     ///
     /// # Errors
     ///
-    /// UserService v2 拒绝请求、用户名或邮箱冲突、响应缺少用户 ID 时返回错误。
+    /// UserService v2 拒绝请求、用户名、邮箱或密码无效/冲突、响应缺少用户 ID 时返回错误。
     pub async fn create_human_user(
         &self,
         request: &CreateHumanIdentity,
@@ -225,6 +225,10 @@ impl ZitadelUserDirectory {
         let mut human = CreateHumanUser::new();
         human.set_profile(profile);
         human.set_email(email);
+        let mut password = Password::new();
+        password.set_password(request.initial_password.as_str());
+        password.set_change_required(request.require_password_change);
+        human.set_password(password);
 
         let mut create = CreateUserRequest::new();
         create.set_organization_id(self.organization_id.as_str());

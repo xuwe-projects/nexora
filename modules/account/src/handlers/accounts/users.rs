@@ -36,6 +36,8 @@ pub(crate) async fn provision_user(
         family_name,
         email,
         display_name,
+        initial_password,
+        require_password_change,
         role_ids,
     } = request;
     let roles_write_permission = <WriteUserRoles as RequiredPermission>::KEY;
@@ -55,6 +57,8 @@ pub(crate) async fn provision_user(
                 family_name,
                 email,
                 display_name,
+                initial_password,
+                require_password_change,
             },
             role_ids.as_slice(),
             granted_by.as_str(),

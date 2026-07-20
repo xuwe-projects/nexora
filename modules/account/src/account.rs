@@ -3,7 +3,7 @@
 //! 模块通过私有运行状态直接持有服务端创建的共享 [`sqlx::PgPool`] 句柄，内部完成
 //! HTTP 与 PostgreSQL store 的装配；宿主服务只负责创建外部依赖并合并路由。
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{Router, extract::FromRef};
@@ -57,7 +57,10 @@ pub struct AccountDependencies {
 }
 
 /// 在外部身份目录创建人类用户所需的领域输入。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `initial_password` 只用于写入外部身份目录，不写入 Nexora 数据库。该类型的 `Debug` 输出会
+/// 隐藏密码内容，调用方也不应把完整请求写入日志或错误详情。
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateHumanIdentity {
     /// 组织内唯一、可用于登录的用户名。
     pub username: String,
@@ -69,6 +72,25 @@ pub struct CreateHumanIdentity {
     pub email: String,
     /// 可选展示名称；省略时由身份目录使用名字与姓氏生成。
     pub display_name: Option<String>,
+    /// 写入身份目录的初始明文密码；仅在本次 Provider 调用中使用。
+    pub initial_password: String,
+    /// 是否要求用户首次登录后立即修改密码。
+    pub require_password_change: bool,
+}
+
+impl fmt::Debug for CreateHumanIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateHumanIdentity")
+            .field("username", &self.username)
+            .field("given_name", &self.given_name)
+            .field("family_name", &self.family_name)
+            .field("email", &self.email)
+            .field("display_name", &self.display_name)
+            .field("initial_password", &"<redacted>")
+            .field("require_password_change", &self.require_password_change)
+            .finish()
+    }
 }
 
 /// 外部身份目录的稳定错误分类。
@@ -98,11 +120,11 @@ pub trait IdentityDirectory: Send + Sync {
         identity_id: &str,
     ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError>;
 
-    /// 在 Provider 创建人类用户并返回包含 Provider identity ID 的完整资料。
+    /// 在 Provider 创建带初始密码的人类用户并返回包含 Provider identity ID 的完整资料。
     ///
     /// # Errors
     ///
-    /// 用户名或邮箱冲突、Provider 拒绝请求、暂时不可用或响应无效时返回稳定目录错误。
+    /// 用户名、邮箱或密码无效/冲突、Provider 拒绝请求、暂时不可用或响应无效时返回稳定目录错误。
     async fn create_human_identity(
         &self,
         request: &CreateHumanIdentity,
@@ -666,10 +688,11 @@ impl Account {
         create_user_with_roles(&self.state.pool, identity, role_ids, granted_by).await
     }
 
-    /// 在外部身份目录创建人类用户，并在同一业务操作中绑定本地账号和初始角色。
+    /// 在外部身份目录创建带初始密码的人类用户，并在同一业务操作中绑定本地账号和初始角色。
     ///
     /// Provider 创建成功而本地事务失败时会尽力删除刚创建的 Provider 用户；补偿失败只记录
-    /// 脱敏错误，原始本地错误仍返回给调用方。未配置身份目录时不会回退到接收裸 identity ID。
+    /// 脱敏错误，原始本地错误仍返回给调用方。初始密码只发送给身份目录，不写入本地数据库；
+    /// 未配置身份目录时不会回退到接收裸 identity ID。
     ///
     /// # Errors
     ///
@@ -772,12 +795,20 @@ fn normalized_create_human_identity(
     if display_name.is_some_and(|value| value.chars().count() > 200) {
         return Err(ValidationError::new("display_name", "展示名称不能超过 200 个字符").into());
     }
+    if request.initial_password.trim().is_empty() || request.initial_password.chars().count() > 200
+    {
+        return Err(
+            ValidationError::new("initial_password", "初始密码必须为 1 到 200 个字符").into(),
+        );
+    }
     Ok(CreateHumanIdentity {
         username: username.to_owned(),
         given_name: given_name.to_owned(),
         family_name: family_name.to_owned(),
         email: email.to_owned(),
         display_name: display_name.map(str::to_owned),
+        initial_password: request.initial_password,
+        require_password_change: request.require_password_change,
     })
 }
 

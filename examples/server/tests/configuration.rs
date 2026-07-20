@@ -330,7 +330,25 @@ fn clean_config_command(directory: &Path) -> Command {
 fn assert_config_log(output: &std::process::Output, expected_address: &str) {
     assert!(output.status.success());
     assert!(output.stdout.is_empty(), "配置检查不应绕过日志写入 stdout");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = strip_ansi_sequences(&String::from_utf8_lossy(&output.stderr));
     assert!(stderr.contains("服务端配置已加载"));
     assert!(stderr.contains(format!("address={expected_address}").as_str()));
+}
+
+fn strip_ansi_sequences(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            _ = chars.next();
+            for code in chars.by_ref() {
+                if code.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
 }

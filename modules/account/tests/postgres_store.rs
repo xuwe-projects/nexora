@@ -1,6 +1,6 @@
 #![cfg(feature = "database-tests")]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
@@ -161,6 +161,129 @@ async fn provisioning_with_initial_roles_is_atomic(pool: PgPool) {
     .await
     .expect("应当可以核对事务回滚结果");
     assert!(!user_exists);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn managed_user_with_initial_password_sets_directory_password(pool: PgPool) {
+    let directory = Arc::new(RecordingIdentityDirectory::default());
+    let account = test_account_with_directory(pool.clone(), directory.clone()).await;
+    let grantor = account
+        .provision_user(identity("password-grantor"))
+        .await
+        .expect("测试授权人应当可以开通");
+    let role = account
+        .create_role("employee", "员工", None, &[])
+        .await
+        .expect("测试角色应当可以创建");
+
+    let user = account
+        .create_managed_user_with_roles(
+            password_identity("13800000000", "imes13800000000."),
+            &[role.id],
+            grantor.id.as_str(),
+        )
+        .await
+        .expect("带初始密码的人类用户应当可以创建并绑定本地账号");
+
+    assert_eq!(user.identity_id, "13800000000");
+    let created = directory.created.lock().expect("测试目录记录应可读取");
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].username, "13800000000");
+    assert!(created[0].initial_password_matches("imes13800000000."));
+    assert!(!created[0].require_password_change);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn managed_user_with_initial_password_compensates_local_binding_failure(pool: PgPool) {
+    let directory = Arc::new(RecordingIdentityDirectory::default());
+    let account = test_account_with_directory(pool.clone(), directory.clone()).await;
+    let grantor = account
+        .provision_user(identity("password-rollback-grantor"))
+        .await
+        .expect("测试授权人应当可以开通");
+
+    let error = account
+        .create_managed_user_with_roles(
+            password_identity("rollback-password-user", "imes13800000001."),
+            &[i64::MAX],
+            grantor.id.as_str(),
+        )
+        .await
+        .expect_err("本地初始角色无效时整体创建必须失败");
+
+    assert!(matches!(error, AccountError::NotFound("角色")));
+    let deleted = directory
+        .deleted
+        .lock()
+        .expect("测试目录删除记录应可读取")
+        .clone();
+    assert_eq!(deleted.as_slice(), ["rollback-password-user"]);
+    let user_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM account.users WHERE identity_id = 'rollback-password-user')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对本地用户回滚结果");
+    assert!(!user_exists);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn managed_user_with_initial_password_directory_conflict_does_not_bind_local_user(
+    pool: PgPool,
+) {
+    let account =
+        test_account_with_directory(pool.clone(), Arc::new(ConflictingIdentityDirectory)).await;
+    let grantor = account
+        .provision_user(identity("password-conflict-grantor"))
+        .await
+        .expect("测试授权人应当可以开通");
+
+    let error = account
+        .create_managed_user_with_roles(
+            password_identity("conflict-password-user", "imes13800000002."),
+            &[],
+            grantor.id.as_str(),
+        )
+        .await
+        .expect_err("目录冲突时应当直接返回冲突");
+
+    assert!(matches!(
+        error,
+        AccountError::IdentityDirectory(IdentityDirectoryError::Conflict)
+    ));
+    let user_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM account.users WHERE identity_id = 'conflict-password-user')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对目录冲突不会绑定本地用户");
+    assert!(!user_exists);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn managed_user_with_initial_password_rejects_missing_or_invalid_password(pool: PgPool) {
+    let directory = Arc::new(RecordingIdentityDirectory::default());
+    let account = test_account_with_directory(pool, directory.clone()).await;
+
+    let too_long_password = "x".repeat(201);
+    for password in ["", "   ", too_long_password.as_str()] {
+        let error = account
+            .create_managed_user_with_roles(
+                password_identity("invalid-password-user", password),
+                &[],
+                "grantor",
+            )
+            .await
+            .expect_err("缺失或超长初始密码应当在调用目录前被拒绝");
+        assert!(matches!(error, AccountError::InvalidInput(_)));
+    }
+    assert!(
+        directory
+            .created
+            .lock()
+            .expect("测试目录记录应可读取")
+            .is_empty()
+    );
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
@@ -604,6 +727,8 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         family_name: "User".to_owned(),
         email: "provisioned-user@example.com".to_owned(),
         display_name: Some("已开通用户".to_owned()),
+        initial_password: "imes13800000003.".to_owned(),
+        require_password_change: false,
         role_ids: vec![initial_role.id],
     };
     let forbidden = request_json(
@@ -651,6 +776,8 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         family_name: "User".to_owned(),
         email: "rollback-http-user@example.com".to_owned(),
         display_name: Some("应回滚用户".to_owned()),
+        initial_password: "imes13800000004.".to_owned(),
+        require_password_change: false,
         role_ids: vec![i64::MAX],
     };
     let invalid = request_json(
@@ -739,6 +866,8 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "empty-role-user@example.com".to_owned(),
         display_name: Some("默认成员用户".to_owned()),
+        initial_password: "imes13800000005.".to_owned(),
+        require_password_change: false,
         role_ids: Vec::new(),
     };
     assert_eq!(
@@ -759,6 +888,8 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "denied-role-user@example.com".to_owned(),
         display_name: Some("越权角色用户".to_owned()),
+        initial_password: "imes13800000006.".to_owned(),
+        require_password_change: false,
         role_ids: vec![initial_role.id],
     };
     let denied = request_json_response(
@@ -783,6 +914,8 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "allowed-role-user@example.com".to_owned(),
         display_name: Some("已授权角色用户".to_owned()),
+        initial_password: "imes13800000007.".to_owned(),
+        require_password_change: false,
         role_ids: vec![initial_role.id],
     };
     assert_eq!(
@@ -799,13 +932,20 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
 }
 
 async fn test_account(pool: PgPool) -> Account {
+    test_account_with_directory(pool, Arc::new(TestIdentityDirectory)).await
+}
+
+async fn test_account_with_directory(
+    pool: PgPool,
+    identity_directory: Arc<dyn IdentityDirectory>,
+) -> Account {
     Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
         .await
         .expect("测试部署 issuer 应当可以绑定或核对");
     Account::new(AccountDependencies {
         pool,
         token_verifier: Arc::new(TokenIdentityVerifier),
-        identity_directory: Some(Arc::new(TestIdentityDirectory)),
+        identity_directory: Some(identity_directory),
     })
 }
 
@@ -985,6 +1125,18 @@ fn identity(identity_id: &str) -> ExternalIdentity {
     }
 }
 
+fn password_identity(username: &str, password: &str) -> CreateHumanIdentity {
+    CreateHumanIdentity {
+        username: username.to_owned(),
+        given_name: "Test".to_owned(),
+        family_name: "User".to_owned(),
+        email: format!("{username}@example.com"),
+        display_name: Some(username.to_owned()),
+        initial_password: password.to_owned(),
+        require_password_change: false,
+    }
+}
+
 struct TokenIdentityVerifier;
 
 struct TestIdentityDirectory;
@@ -1012,6 +1164,89 @@ impl IdentityDirectory for TestIdentityDirectory {
                 .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
             avatar_url: None,
         })
+    }
+
+    async fn delete_identity(&self, _identity_id: &str) -> Result<(), IdentityDirectoryError> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RecordingIdentityDirectory {
+    created: Mutex<Vec<RecordedDirectoryCreate>>,
+    deleted: Mutex<Vec<String>>,
+}
+
+struct RecordedDirectoryCreate {
+    username: String,
+    initial_password: String,
+    require_password_change: bool,
+}
+
+impl RecordedDirectoryCreate {
+    fn initial_password_matches(&self, expected: &str) -> bool {
+        self.initial_password == expected
+    }
+}
+
+#[async_trait]
+impl IdentityDirectory for RecordingIdentityDirectory {
+    async fn identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError> {
+        Ok(Some(identity(identity_id)))
+    }
+
+    async fn create_human_identity(
+        &self,
+        request: &CreateHumanIdentity,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        self.created
+            .lock()
+            .expect("测试目录创建记录应可写入")
+            .push(RecordedDirectoryCreate {
+                username: request.username.clone(),
+                initial_password: request.initial_password.clone(),
+                require_password_change: request.require_password_change,
+            });
+        Ok(ExternalIdentity {
+            identity_id: request.username.clone(),
+            username: Some(request.username.clone()),
+            email: Some(request.email.clone()),
+            display_name: request
+                .display_name
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
+            avatar_url: None,
+        })
+    }
+
+    async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError> {
+        self.deleted
+            .lock()
+            .expect("测试目录删除记录应可写入")
+            .push(identity_id.to_owned());
+        Ok(())
+    }
+}
+
+struct ConflictingIdentityDirectory;
+
+#[async_trait]
+impl IdentityDirectory for ConflictingIdentityDirectory {
+    async fn identity(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError> {
+        Ok(Some(identity(identity_id)))
+    }
+
+    async fn create_human_identity(
+        &self,
+        _request: &CreateHumanIdentity,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        Err(IdentityDirectoryError::Conflict)
     }
 
     async fn delete_identity(&self, _identity_id: &str) -> Result<(), IdentityDirectoryError> {

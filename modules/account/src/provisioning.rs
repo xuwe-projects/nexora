@@ -37,9 +37,9 @@ use crate::{
             UpdateProjectGrantRequest, project_service_client::ProjectServiceClient,
         },
         user::v2::{
-            CreateUserRequest, DeactivateUserRequest, DeleteUserRequest, SendEmailVerificationCode,
-            SetHumanEmail, SetHumanProfile, create_user_request::Human as CreateHumanUser,
-            user_service_client::UserServiceClient,
+            CreateUserRequest, DeactivateUserRequest, DeleteUserRequest, Password,
+            SendEmailVerificationCode, SetHumanEmail, SetHumanProfile,
+            create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
         },
     },
     zitadel::{self, REQUEST_TIMEOUT},
@@ -463,6 +463,8 @@ impl ZitadelProvisioningClient {
         let family_name = required_input(request.family_name.as_str(), "user.family_name")?;
         let email_address = required_input(request.email.as_str(), "user.email")?;
         let display_name = optional_input(request.display_name.as_deref(), "user.display_name")?;
+        let initial_password =
+            required_input(request.initial_password.as_str(), "user.initial_password")?;
 
         let mut profile = SetHumanProfile::new();
         profile.set_given_name(given_name.as_str());
@@ -478,6 +480,10 @@ impl ZitadelProvisioningClient {
         let mut human = CreateHumanUser::new();
         human.set_profile(profile);
         human.set_email(email);
+        let mut password = Password::new();
+        password.set_password(initial_password.as_str());
+        password.set_change_required(request.require_password_change);
+        human.set_password(password);
 
         let mut create = CreateUserRequest::new();
         create.set_organization_id(organization_id.as_str());

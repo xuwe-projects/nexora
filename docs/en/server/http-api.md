@@ -159,7 +159,8 @@ Requires `users:read`. Accepts `page` and `page_size`; unknown query keys are re
 ### `POST /users`
 
 Requires `users:provision` and, for a non-empty `role_ids`, `users:roles.write`. The server creates a
-human user through ZITADEL gRPC and binds the returned identity ID locally.
+human user with an initial password through ZITADEL gRPC and binds the returned identity ID locally.
+`initial_password` is never stored in the local database, logs, or error details.
 
 | Body field | Required | Constraints |
 | --- | --- | --- |
@@ -168,6 +169,8 @@ human user through ZITADEL gRPC and binds the returned identity ID locally.
 | `family_name` | Yes | Trimmed 1–200 characters |
 | `email` | Yes | Valid email without whitespace, up to 200 characters |
 | `display_name` | No | Nullable, up to 200 characters; names are used when omitted |
+| `initial_password` | Yes | 1–200 characters; written only to ZITADEL |
+| `require_password_change` | No | Defaults to `false`; whether the user must change the password after first login |
 | `role_ids` | No | Defaults to `[]`, at most 64 IDs; deduplicated by the server |
 
 ```json
@@ -177,6 +180,8 @@ human user through ZITADEL gRPC and binds the returned identity ID locally.
   "family_name": "Chen",
   "email": "lin@example.com",
   "display_name": "Lin Chen",
+  "initial_password": "imes13800000000.",
+  "require_password_change": false,
   "role_ids": [3, 5]
 }
 ```

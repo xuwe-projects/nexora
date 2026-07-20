@@ -135,12 +135,15 @@ impl ProvisionUserDialog {
             cx.notify();
             return;
         }
+        let initial_password = format!("nexora{}.", username);
         let request = ProvisionUserRequest {
             username,
             given_name,
             family_name,
             email,
             display_name: optional_text(self.display_name.read(cx).value().as_ref()),
+            initial_password,
+            require_password_change: true,
             role_ids: if can_assign_initial_roles(cx) {
                 self.selected_role_ids.iter().copied().collect()
             } else {

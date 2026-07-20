@@ -34,10 +34,18 @@ message SetHumanEmail {
   }
 }
 
+message Password {
+  string password = 1;
+  bool change_required = 2;
+}
+
 message CreateUserRequest {
   message Human {
     SetHumanProfile profile = 1;
     SetHumanEmail email = 2;
+    oneof password_type {
+      Password password = 4;
+    }
   }
 
   message Machine {}

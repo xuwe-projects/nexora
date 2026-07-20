@@ -80,6 +80,8 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
             family_name: "User".to_owned(),
             email: "user@example.com".to_owned(),
             display_name: Some("测试用户".to_owned()),
+            initial_password: "imes13800000000.".to_owned(),
+            require_password_change: false,
             role_ids: vec![7, 9],
         })
         .expect("201 响应应按 User 契约解码");
@@ -89,7 +91,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
     assert_request(&request, "POST", "/users");
     assert_eq!(
         request_body(&request),
-        r#"{"username":"tester","given_name":"Test","family_name":"User","email":"user@example.com","display_name":"测试用户","role_ids":[7,9]}"#
+        r#"{"username":"tester","given_name":"Test","family_name":"User","email":"user@example.com","display_name":"测试用户","initial_password":"imes13800000000.","require_password_change":false,"role_ids":[7,9]}"#
     );
 }
 

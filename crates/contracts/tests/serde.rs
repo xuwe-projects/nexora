@@ -101,6 +101,8 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
         family_name: "User".to_owned(),
         email: "user@example.com".to_owned(),
         display_name: Some("测试用户".to_owned()),
+        initial_password: "imes13800000000.".to_owned(),
+        require_password_change: false,
         role_ids: vec![7, 11],
     };
 
@@ -108,9 +110,15 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
     assert_eq!(json["username"], "tester");
     assert_eq!(json["given_name"], "Test");
     assert_eq!(json["family_name"], "User");
+    assert_eq!(json["initial_password"], "imes13800000000.");
+    assert_eq!(json["require_password_change"], false);
     assert_eq!(json["role_ids"], json!([7, 11]));
     assert!(json.get("givenName").is_none());
+    assert!(json.get("initialPassword").is_none());
     assert!(json.get("identity_id").is_none());
+    let debug = format!("{request:?}");
+    assert!(!debug.contains("imes13800000000."));
+    assert!(debug.contains("<redacted>"));
     assert_eq!(
         serde_json::from_value::<ProvisionUserRequest>(json).expect("用户开通请求应当可以反序列化"),
         request
@@ -121,6 +129,7 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
             "identity_id": "legacy-user",
             "username": "legacy-user",
             "email": "legacy@example.com",
+            "initial_password": "imes13800000000.",
             "display_name": "旧客户端用户"
         }))
         .is_err()
@@ -132,6 +141,8 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
         family_name: "Member".to_owned(),
         email: "member@example.com".to_owned(),
         display_name: Some("默认成员".to_owned()),
+        initial_password: "imes13800000001.".to_owned(),
+        require_password_change: false,
         role_ids: Vec::new(),
     };
     let empty_roles_json = serde_json::to_value(empty_roles).expect("空初始角色请求应当可以序列化");

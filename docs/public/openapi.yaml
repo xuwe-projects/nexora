@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.11.3
+  version: 0.12.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -186,10 +186,10 @@ paths:
       operationId: provisionUser
       summary: 在 ZITADEL 创建用户并建立本地账号与初始角色关联
       description: >-
-        服务端调用 ZITADEL UserService v2 创建人类用户，再使用返回的 identity ID 创建本地
+        服务端调用 ZITADEL UserService v2 创建带初始密码的人类用户，再使用返回的 identity ID 创建本地
         用户，并在同一事务中建立 role_ids 指定的初始角色关联。role_ids 缺省时只保留内置
         member 角色。空集合只要求 users:provision，非空集合还要求 users:roles.write；本地
-        事务失败时会尽力删除刚创建的 Provider 用户。
+        事务失败时会尽力删除刚创建的 Provider 用户。initial_password 不会写入本地数据库或错误详情。
       security:
         - bearerAuth: []
       requestBody:
@@ -950,7 +950,7 @@ components:
     ProvisionUserRequest:
       type: object
       additionalProperties: false
-      required: [username, given_name, family_name, email]
+      required: [username, given_name, family_name, email, initial_password]
       properties:
         username:
           type: string
@@ -976,6 +976,17 @@ components:
           type: [string, "null"]
           maxLength: 200
           description: 可选展示名；省略时由名字与姓氏生成
+        initial_password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 200
+          writeOnly: true
+          description: 写入 ZITADEL 的初始密码；服务端不得写入本地数据库或错误详情
+        require_password_change:
+          type: boolean
+          default: false
+          description: 是否要求用户首次登录后立即修改密码
         role_ids:
           type: array
           default: []

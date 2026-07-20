@@ -1,11 +1,16 @@
 //! 账号、角色、权限和授权快照的请求与响应契约。
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{pagination::PageResponse, patch::PatchField};
 
-/// 管理员在身份目录创建人类用户并绑定本地账号的请求正文。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+/// 管理员在身份目录创建人类用户、设置初始密码并绑定本地账号的请求正文。
+///
+/// `initial_password` 只传输到服务端并写入外部身份目录，不应被客户端记录到日志或错误详情。
+/// `Debug` 输出会主动隐藏密码内容。
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProvisionUserRequest {
     /// 身份提供方中的登录用户名，在组织内必须唯一。
@@ -19,9 +24,30 @@ pub struct ProvisionUserRequest {
     /// 可选展示名称；省略时使用名字与姓氏组合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// 创建用户时写入身份目录的初始密码。
+    pub initial_password: String,
+    /// 是否要求用户首次登录后立即修改密码。
+    #[serde(default)]
+    pub require_password_change: bool,
     /// 创建用户时直接授予的角色 ID 集合；省略时使用 Account 的默认成员角色。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role_ids: Vec<i64>,
+}
+
+impl fmt::Debug for ProvisionUserRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProvisionUserRequest")
+            .field("username", &self.username)
+            .field("given_name", &self.given_name)
+            .field("family_name", &self.family_name)
+            .field("email", &self.email)
+            .field("display_name", &self.display_name)
+            .field("initial_password", &"<redacted>")
+            .field("require_password_change", &self.require_password_change)
+            .field("role_ids", &self.role_ids)
+            .finish()
+    }
 }
 
 /// 创建自定义角色的请求正文。

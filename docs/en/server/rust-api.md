@@ -118,8 +118,8 @@ Organization ID, and Project ID and creates the gRPC clients;
 `list_active_human_users()` reads at most 10,000 enabled human users; and
 `active_human_user(identity_id)` re-verifies one selection. Calls use a 15-second timeout.
 It also implements `IdentityDirectory`: `identity` refreshes a profile, `create_human_identity`
-creates a UserService v2 human user and requests email verification, and `delete_identity` supports
-compensation after a failed local transaction.
+creates a UserService v2 human user, sets the initial password, requests email verification, and
+`delete_identity` supports compensation after a failed local transaction.
 `DirectoryUser` carries identity ID, username, display name, optional email, and optional avatar;
 `into_external_identity()` preserves those trusted fields. `DirectoryError` distinguishes invalid
 configuration, TLS, UserService/ProjectService requests, invalid UTF-8, and the safety limit, without
@@ -158,7 +158,7 @@ exposing PAT metadata.
 | `replace_user_roles` | user ID, complete roles, actor ID | Atomic replacement retaining `member` |
 | `provision_user` | trusted `ExternalIdentity` | Creates a user without a local password |
 | `provision_user_with_roles` | identity, roles, actor ID | Transactional user and initial role creation |
-| `create_managed_user_with_roles` | `CreateHumanIdentity`, roles, actor ID | Creates the Provider user, binds it locally, and attempts Provider deletion if the local transaction fails |
+| `create_managed_user_with_roles` | `CreateHumanIdentity`, roles, actor ID | Creates the Provider user with `initial_password`, binds it locally, and attempts Provider deletion if the local transaction fails |
 | `routers::<S>` | none | Router with private Account State injected |
 
 Facade writes do not authorize the current caller. Built-in HTTP handlers apply `Authorized<P>`;
@@ -236,6 +236,9 @@ The matching permission still must be registered with `create_permissions` or
 `ExternalIdentity` contains stable `identity_id`, optional `username`, optional `email`, required
 `display_name`, and optional `avatar_url`. `identity_id` is the only stable binding key; username is
 metadata. Outputs include `User`, `Permission`, `Role`, `SystemRole`, and `AccessProfile`.
+`CreateHumanIdentity` contains `username`, `given_name`, `family_name`, `email`, optional
+`display_name`, required `initial_password`, and `require_password_change`; the password is sent only
+to the identity directory and is not stored in the local Account database.
 `AccessProfile::allows` always permits the super administrator and otherwise checks the merged
 `BTreeSet<PermissionKey>`.
 
