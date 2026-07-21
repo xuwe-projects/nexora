@@ -12,7 +12,8 @@ use nexora::desktop::{
     client_config,
     contract::{
         CreateRoleRequest, ProvisionUserRequest, ReplaceRolePermissionsRequest,
-        ReplaceUserRolesRequest, UpdateRoleRequest, UpdateUserStatusRequest, UserStatus,
+        ReplaceUserRolesRequest, UpdateRoleRequest, UpdateUserAvatarRequest,
+        UpdateUserStatusRequest, UserStatus,
     },
 };
 use serde::Deserialize;
@@ -62,6 +63,10 @@ const ACCESS_PROFILE_JSON: &str = r#"{
     "permissions":["factories:read"]
 }"#;
 
+const AVATAR_UPLOAD_JSON: &str = r#"{
+    "avatar_url":"https://cdn.example.com/avatar.png"
+}"#;
+
 #[derive(Debug, Deserialize, nexora::Settings)]
 struct DesktopSettings {
     api: ApiSettings,
@@ -80,6 +85,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
             family_name: "User".to_owned(),
             email: "user@example.com".to_owned(),
             display_name: Some("测试用户".to_owned()),
+            avatar_url: Some("https://cdn.example.com/avatar.png".to_owned()),
             initial_password: "imes13800000000.".to_owned(),
             require_password_change: false,
             role_ids: vec![7, 9],
@@ -91,7 +97,7 @@ fn provision_user_posts_initial_role_ids_and_accepts_created_response() {
     assert_request(&request, "POST", "/users");
     assert_eq!(
         request_body(&request),
-        r#"{"username":"tester","given_name":"Test","family_name":"User","email":"user@example.com","display_name":"测试用户","initial_password":"imes13800000000.","require_password_change":false,"role_ids":[7,9]}"#
+        r#"{"username":"tester","given_name":"Test","family_name":"User","email":"user@example.com","display_name":"测试用户","avatar_url":"https://cdn.example.com/avatar.png","initial_password":"imes13800000000.","require_password_change":false,"role_ids":[7,9]}"#
     );
 }
 
@@ -111,6 +117,46 @@ fn update_user_status_patches_snake_case_status() {
     assert_eq!(user.identity_id, "subject-1");
     assert_request(&request, "PATCH", "/users/User0001");
     assert_eq!(request_body(&request), r#"{"status":"suspended"}"#);
+}
+
+#[test]
+fn update_user_avatar_patches_snake_case_avatar_url() {
+    let (endpoint, server) = spawn_mock("200 OK", USER_JSON, &[]);
+    let user = session(endpoint)
+        .update_user_avatar(
+            "User0001",
+            &UpdateUserAvatarRequest {
+                avatar_url: Some("https://cdn.example.com/avatar.png".to_owned()),
+            },
+        )
+        .expect("200 响应应按 User 契约解码");
+    let request = server.join().expect("测试服务线程应结束");
+
+    assert_eq!(user.identity_id, "subject-1");
+    assert_request(&request, "PATCH", "/users/User0001/avatar");
+    assert_eq!(
+        request_body(&request),
+        r#"{"avatar_url":"https://cdn.example.com/avatar.png"}"#
+    );
+}
+
+#[test]
+fn upload_avatar_posts_image_bytes_and_decodes_avatar_url() {
+    let (endpoint, server) = spawn_mock("200 OK", AVATAR_UPLOAD_JSON, &[]);
+    let response = session(endpoint)
+        .upload_avatar("image/png", b"fake-image".to_vec())
+        .expect("200 响应应按 AvatarUpload 契约解码");
+    let request = server.join().expect("测试服务线程应结束");
+
+    assert_eq!(response.avatar_url, "https://cdn.example.com/avatar.png");
+    assert_request(&request, "POST", "/avatars");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("content-type: image/png\r\n"),
+        "上传头像必须发送调用方提供的 Content-Type"
+    );
+    assert_eq!(request_body(&request), "fake-image");
 }
 
 #[test]

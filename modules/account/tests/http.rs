@@ -30,6 +30,7 @@ async fn protected_resource_rejects_missing_bearer_token_before_database_access(
         pool,
         token_verifier: Arc::new(StaticVerifier),
         identity_directory: None,
+        avatar_storage: None,
     });
     let router = with_http_layers(account.routers::<()>());
     let reusable_router = with_http_layers(account.routers::<()>());

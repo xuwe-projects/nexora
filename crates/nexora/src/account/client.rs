@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use contracts::{
     account::{
-        AccessProfileResponse, CreateRoleRequest, PermissionResponse, ProvisionUserRequest,
-        ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse, UpdateRoleRequest,
-        UpdateUserStatusRequest, UserPageResponse, UserResponse,
+        AccessProfileResponse, AvatarUploadResponse, CreateRoleRequest, PermissionResponse,
+        ProvisionUserRequest, ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse,
+        UpdateRoleRequest, UpdateUserAvatarRequest, UpdateUserStatusRequest, UserPageResponse,
+        UserResponse,
     },
     collection::ItemsResponse,
     error::ErrorEnvelope,
@@ -400,6 +401,23 @@ impl AccountSession {
         self.send_json(self.request(Method::POST, "users").json(request))
     }
 
+    /// 涓婁紶澶村儚鏂囦欢骞惰繑鍥炲彲鍐欏叆鐢ㄦ埛鐨?URL銆?
+    ///
+    /// # Errors
+    ///
+    /// 缃戠粶銆佸瓨鍌ㄥ眰鎴栨湇鍔＄鏍￠獙澶辫触鏃惰繑鍥為敊璇€?
+    pub fn upload_avatar(
+        &self,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<AvatarUploadResponse, AccountClientError> {
+        self.send_json(
+            self.request(Method::POST, "avatars")
+                .header("content-type", content_type)
+                .body(bytes),
+        )
+    }
+
     /// 读取指定用户及其直接角色和合并权限。
     ///
     /// # Errors
@@ -422,6 +440,23 @@ impl AccountSession {
     ) -> Result<UserResponse, AccountClientError> {
         self.send_json(
             self.request(Method::PATCH, format!("users/{user_id}"))
+                .json(request),
+        )
+    }
+
+    /// 淇敼鎸囧畾鐢ㄦ埛鐨勫ご鍍?URL銆?
+    ///
+    /// # Errors
+    ///
+    /// 缃戠粶銆佽姹?鍝嶅簲澶勭悊澶辫触锛岀敤鎴蜂笉瀛樺湪鎴栧綋鍓嶇敤鎴锋病鏈?`users:avatar.write`
+    /// 鏉冮檺鏃惰繑鍥為敊璇€?
+    pub fn update_user_avatar(
+        &self,
+        user_id: &str,
+        request: &UpdateUserAvatarRequest,
+    ) -> Result<UserResponse, AccountClientError> {
+        self.send_json(
+            self.request(Method::PATCH, format!("users/{user_id}/avatar"))
                 .json(request),
         )
     }

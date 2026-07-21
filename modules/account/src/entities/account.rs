@@ -94,6 +94,8 @@ impl PermissionKey {
     pub const UsersRolesWrite: Self = Self(Cow::Borrowed("users:roles.write"));
     /// 启用或停用用户访问。
     pub const UsersStatusWrite: Self = Self(Cow::Borrowed("users:status.write"));
+    /// 涓婁紶銆佹洿鏂版垨娓呯┖鐢ㄦ埛澶村儚銆?
+    pub const UsersAvatarWrite: Self = Self(Cow::Borrowed("users:avatar.write"));
     /// 把经过管理员确认的外部身份显式开通为本地用户。
     pub const UsersProvision: Self = Self(Cow::Borrowed("users:provision"));
     /// 查看角色及角色包含的权限。

@@ -58,6 +58,7 @@ pub async fn initialize(config: &ServerConfig) -> Result<InitializedServer, Boot
         pool: pool.clone(),
         token_verifier: Arc::new(verifier),
         identity_directory: Some(Arc::new(directory.clone())),
+        avatar_storage: None,
     });
     let system_initialized = account.is_system_initialized().await?;
     if system_initialized {

@@ -7,6 +7,8 @@ package zitadel.user.v2;
 service UserService {
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc SetUserMetadata(SetUserMetadataRequest) returns (SetUserMetadataResponse);
+  rpc ListUserMetadata(ListUserMetadataRequest) returns (ListUserMetadataResponse);
   rpc DeactivateUser(DeactivateUserRequest) returns (DeactivateUserResponse);
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
 }
@@ -171,4 +173,24 @@ message ListUsersResponse {
   ListDetails details = 1;
   UserFieldName sorting_column = 2;
   repeated User result = 3;
+}
+
+message Metadata {
+  string key = 1;
+  bytes value = 2;
+}
+
+message SetUserMetadataRequest {
+  string user_id = 1;
+  repeated Metadata metadata = 2;
+}
+
+message SetUserMetadataResponse {}
+
+message ListUserMetadataRequest {
+  string user_id = 1;
+}
+
+message ListUserMetadataResponse {
+  repeated Metadata metadata = 2;
 }

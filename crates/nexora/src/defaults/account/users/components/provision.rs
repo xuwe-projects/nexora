@@ -31,6 +31,7 @@ pub(in crate::defaults::account::users) struct ProvisionUserDialog {
     given_name: Entity<InputState>,
     family_name: Entity<InputState>,
     display_name: Entity<InputState>,
+    avatar_url: Entity<InputState>,
     email: Entity<InputState>,
     roles: Vec<RoleResponse>,
     selected_role_ids: BTreeSet<i64>,
@@ -51,12 +52,16 @@ impl ProvisionUserDialog {
         let given_name = cx.new(|cx| InputState::new(window, cx).placeholder("名字"));
         let family_name = cx.new(|cx| InputState::new(window, cx).placeholder("姓氏"));
         let display_name = cx.new(|cx| InputState::new(window, cx).placeholder("可选展示名称"));
+        let avatar_url = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("https://cdn.example.com/avatar.png")
+        });
         let email = cx.new(|cx| InputState::new(window, cx).placeholder("user@example.com"));
         let subscriptions = vec![
             track_input(cx, &form, &username, "username", "登录用户名"),
             track_input(cx, &form, &given_name, "given_name", "名字"),
             track_input(cx, &form, &family_name, "family_name", "姓氏"),
             track_input(cx, &form, &display_name, "display_name", "展示名称"),
+            track_input(cx, &form, &avatar_url, "avatar_url", "头像 URL"),
             track_input(cx, &form, &email, "email", "邮箱"),
         ];
         Self {
@@ -66,6 +71,7 @@ impl ProvisionUserDialog {
             given_name,
             family_name,
             display_name,
+            avatar_url,
             email,
             roles: Vec::new(),
             selected_role_ids: BTreeSet::new(),
@@ -142,6 +148,7 @@ impl ProvisionUserDialog {
             family_name,
             email,
             display_name: optional_text(self.display_name.read(cx).value().as_ref()),
+            avatar_url: optional_text(self.avatar_url.read(cx).value().as_ref()),
             initial_password,
             require_password_change: true,
             role_ids: if can_assign_initial_roles(cx) {
@@ -187,6 +194,7 @@ impl ProvisionUserDialog {
             &self.given_name,
             &self.family_name,
             &self.display_name,
+            &self.avatar_url,
             &self.email,
         ] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
@@ -279,6 +287,12 @@ impl Render for ProvisionUserDialog {
                 FormItem::new("展示名称")
                     .description("可选；省略时使用名字与姓氏。")
                     .input(&self.display_name)
+                    .disabled(self.saving),
+            )
+            .child(
+                FormItem::new("头像 URL")
+                    .description("可选；创建后会同步到身份目录")
+                    .input(&self.avatar_url)
                     .disabled(self.saving),
             )
             .section(roles_section)

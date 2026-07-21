@@ -3,23 +3,24 @@
 use api::{ApiJson, ApiPath, ApiQuery};
 use axum::{
     Json,
+    body::Bytes,
     extract::State,
-    http::{StatusCode, header::LOCATION},
+    http::{HeaderMap, StatusCode, header::LOCATION},
     response::IntoResponse,
 };
 use contracts::{
     account::{
-        AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest,
-        UpdateUserStatusRequest, UserPageResponse, UserResponse,
+        AccessProfileResponse, AvatarUploadResponse, ProvisionUserRequest, ReplaceUserRolesRequest,
+        UpdateUserAvatarRequest, UpdateUserStatusRequest, UserPageResponse, UserResponse,
     },
     pagination::PageQuery,
 };
 
 use crate::{
-    Account, AccountError, AccountState, ApiError, CreateHumanIdentity,
+    Account, AccountError, AccountState, ApiError, AvatarUpload, CreateHumanIdentity,
     authorization::{
         Authorized, RequiredPermission,
-        accounts::{ProvisionUsers, ReadUsers, WriteUserRoles, WriteUserStatus},
+        accounts::{ProvisionUsers, ReadUsers, WriteUserAvatar, WriteUserRoles, WriteUserStatus},
     },
     handlers::accounts::{access_profile_response, user_page_response, user_response, user_status},
 };
@@ -36,6 +37,7 @@ pub(crate) async fn provision_user(
         family_name,
         email,
         display_name,
+        avatar_url,
         initial_password,
         require_password_change,
         role_ids,
@@ -57,6 +59,7 @@ pub(crate) async fn provision_user(
                 family_name,
                 email,
                 display_name,
+                avatar_url,
                 initial_password,
                 require_password_change,
             },
@@ -73,6 +76,40 @@ pub(crate) async fn provision_user(
 }
 
 /// 分页返回用户集合。
+/// 上传头像并返回可访问 URL。
+pub(crate) async fn upload_avatar(
+    _authorization: Authorized<WriteUserAvatar>,
+    State(state): State<AccountState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<AvatarUploadResponse>, ApiError> {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let avatar_url = Account { state }
+        .upload_avatar(AvatarUpload {
+            content_type,
+            bytes: body.to_vec(),
+        })
+        .await?;
+    Ok(Json(AvatarUploadResponse { avatar_url }))
+}
+
+/// 修改指定用户的头像 URL。
+pub(crate) async fn update_user_avatar(
+    _authorization: Authorized<WriteUserAvatar>,
+    State(state): State<AccountState>,
+    ApiPath(user_id): ApiPath<String>,
+    ApiJson(request): ApiJson<UpdateUserAvatarRequest>,
+) -> Result<Json<UserResponse>, ApiError> {
+    let user = Account { state }
+        .update_user_avatar(user_id.as_str(), request.avatar_url.as_deref())
+        .await?;
+    Ok(Json(user_response(user)))
+}
+
 pub(crate) async fn list_users(
     _authorization: Authorized<ReadUsers>,
     State(state): State<AccountState>,

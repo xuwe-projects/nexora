@@ -152,6 +152,28 @@ pub(crate) async fn update_status(
 }
 
 /// 原子替换用户直接角色，并始终保留 `member` 角色。
+pub(crate) async fn update_avatar_url(
+    user_id: &str,
+    avatar_url: Option<&str>,
+    pool: &PgPool,
+) -> Result<User, StoreError> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE account.users
+        SET avatar_url = $2, updated_at = NOW()
+        WHERE id = $1
+          AND NOT (is_super_admin = FALSE AND username IS NULL AND email IS NULL)
+        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
+                  is_super_admin, created_at, updated_at, last_login_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(avatar_url)
+    .fetch_optional(pool)
+    .await?;
+    user.ok_or(StoreError::NotFound("鐢ㄦ埛"))
+}
+
 pub(crate) async fn replace_roles(
     user_id: &str,
     role_ids: &[i64],

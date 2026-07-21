@@ -1,7 +1,7 @@
 use contracts::{
     account::{
-        PermissionResponse, ProvisionUserRequest, RoleResponse, UpdateRoleRequest, UserResponse,
-        UserStatus, UserType,
+        AvatarUploadResponse, PermissionResponse, ProvisionUserRequest, RoleResponse,
+        UpdateRoleRequest, UpdateUserAvatarRequest, UserResponse, UserStatus, UserType,
     },
     pagination::{PageMetadata, PageQuery, PageResponse},
     patch::PatchField,
@@ -101,6 +101,7 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
         family_name: "User".to_owned(),
         email: "user@example.com".to_owned(),
         display_name: Some("测试用户".to_owned()),
+        avatar_url: Some("https://cdn.example.com/avatar.png".to_owned()),
         initial_password: "imes13800000000.".to_owned(),
         require_password_change: false,
         role_ids: vec![7, 11],
@@ -111,10 +112,12 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
     assert_eq!(json["given_name"], "Test");
     assert_eq!(json["family_name"], "User");
     assert_eq!(json["initial_password"], "imes13800000000.");
+    assert_eq!(json["avatar_url"], "https://cdn.example.com/avatar.png");
     assert_eq!(json["require_password_change"], false);
     assert_eq!(json["role_ids"], json!([7, 11]));
     assert!(json.get("givenName").is_none());
     assert!(json.get("initialPassword").is_none());
+    assert!(json.get("avatarUrl").is_none());
     assert!(json.get("identity_id").is_none());
     let debug = format!("{request:?}");
     assert!(!debug.contains("imes13800000000."));
@@ -141,12 +144,38 @@ fn provision_user_request_uses_profile_fields_and_snake_case() {
         family_name: "Member".to_owned(),
         email: "member@example.com".to_owned(),
         display_name: Some("默认成员".to_owned()),
+        avatar_url: None,
         initial_password: "imes13800000001.".to_owned(),
         require_password_change: false,
         role_ids: Vec::new(),
     };
     let empty_roles_json = serde_json::to_value(empty_roles).expect("空初始角色请求应当可以序列化");
     assert!(empty_roles_json.get("role_ids").is_none());
+}
+
+#[test]
+fn avatar_contracts_use_snake_case_url_fields() {
+    let update = UpdateUserAvatarRequest {
+        avatar_url: Some("https://cdn.example.com/avatar.png".to_owned()),
+    };
+    let json = serde_json::to_value(&update).expect("头像更新请求应当可以序列化");
+
+    assert_eq!(json["avatar_url"], "https://cdn.example.com/avatar.png");
+    assert!(json.get("avatarUrl").is_none());
+    assert_eq!(
+        serde_json::from_value::<UpdateUserAvatarRequest>(json)
+            .expect("头像更新请求应当可以反序列化"),
+        update
+    );
+
+    let response = AvatarUploadResponse {
+        avatar_url: "https://cdn.example.com/avatar.png".to_owned(),
+    };
+    let response_json = serde_json::to_value(&response).expect("头像上传响应应当可以序列化");
+    assert_eq!(
+        response_json,
+        json!({ "avatar_url": "https://cdn.example.com/avatar.png" })
+    );
 }
 
 #[test]

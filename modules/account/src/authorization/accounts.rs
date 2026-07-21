@@ -26,6 +26,13 @@ impl RequiredPermission for WriteUserStatus {
 }
 
 /// 显式开通可信外部身份所需的权限标记。
+/// 绠＄悊鐢ㄦ埛澶村儚鎵€闇€鐨勬潈闄愭爣璁般€?
+pub struct WriteUserAvatar;
+
+impl RequiredPermission for WriteUserAvatar {
+    const KEY: PermissionKey = PermissionKey::UsersAvatarWrite;
+}
+
 pub struct ProvisionUsers;
 
 impl RequiredPermission for ProvisionUsers {

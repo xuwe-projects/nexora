@@ -6,10 +6,11 @@
 #[cfg(feature = "server")]
 pub use crate::account_module::{
     AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
-    AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
-    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
-    Page, Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role,
-    SystemRole, User, UserStatus,
+    AccountInitializationOutcome, AccountInitializationStatus, AvatarStorage, AvatarStorageError,
+    AvatarUpload, CreateHumanIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
+    IdentityIssuerBindingOutcome, LocalAvatarStorage, Page, Permission,
+    PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role, SystemRole, User,
+    UserStatus,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
@@ -144,6 +145,7 @@ pub(crate) mod server {
             pool,
             token_verifier: Arc::new(verifier),
             identity_directory: None,
+            avatar_storage: None,
         })
     }
 
