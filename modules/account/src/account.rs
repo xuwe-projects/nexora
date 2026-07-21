@@ -100,7 +100,6 @@ impl fmt::Debug for CreateHumanIdentity {
     }
 }
 
-/// 外部身份目录的稳定错误分类。
 /// Account 头像上传载荷。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvatarUpload {
@@ -114,6 +113,10 @@ pub struct AvatarUpload {
 #[async_trait]
 pub trait AvatarStorage: Send + Sync {
     /// 保存头像并返回可通过 HTTP 访问的 URL。
+    ///
+    /// # Errors
+    ///
+    /// 上传内容不符合存储约束、底层存储不可用或无法返回公共 URL 时返回头像存储错误。
     async fn store_avatar(&self, upload: AvatarUpload) -> Result<String, AvatarStorageError>;
 }
 
@@ -126,6 +129,10 @@ pub struct LocalAvatarStorage {
 
 impl LocalAvatarStorage {
     /// 创建本地头像存储。
+    ///
+    /// # Errors
+    ///
+    /// 头像目录为空，或公开访问基准 URL 不是 HTTPS/本机 loopback HTTP 地址时返回错误。
     pub fn new(
         directory: impl Into<PathBuf>,
         public_base_url: &str,
@@ -171,15 +178,26 @@ impl AvatarStorage for LocalAvatarStorage {
 pub enum AvatarStorageError {
     /// 存储配置无效。
     #[error("invalid avatar storage configuration: {0}")]
-    InvalidConfiguration(&'static str),
+    InvalidConfiguration(
+        /// 配置无效的稳定说明，供日志和诊断使用。
+        &'static str,
+    ),
     /// 上传内容无效。
     #[error("invalid avatar upload: {0}")]
-    InvalidUpload(&'static str),
+    InvalidUpload(
+        /// 上传内容不符合约束的稳定说明，供日志和诊断使用。
+        &'static str,
+    ),
     /// 文件系统读写失败。
     #[error("avatar storage I/O failed")]
-    Io(#[from] std::io::Error),
+    Io(
+        /// 底层文件系统错误。
+        #[from]
+        std::io::Error,
+    ),
 }
 
+/// 外部身份目录的稳定错误分类。
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityDirectoryError {
     /// 目录中已经存在相同用户名、邮箱或其他唯一身份。
@@ -210,6 +228,10 @@ pub trait IdentityDirectory: Send + Sync {
     ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError>;
 
     /// 在 Provider 创建 human user 并返回 Provider identity ID。
+    ///
+    /// # Errors
+    ///
+    /// 用户资料无效、目录中存在冲突身份、Provider 拒绝请求或目录暂时不可用时返回稳定目录错误。
     async fn create_human_identity(
         &self,
         request: &CreateHumanIdentity,
@@ -223,6 +245,10 @@ pub trait IdentityDirectory: Send + Sync {
     async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError>;
 
     /// 在 Provider 中更新或清空 human user 的头像 URL。
+    ///
+    /// # Errors
+    ///
+    /// 身份不存在、Provider 不支持头像同步或目录暂时不可用时返回稳定目录错误。
     async fn update_identity_avatar(
         &self,
         identity_id: &str,
@@ -725,15 +751,11 @@ impl Account {
             .ok_or(AccountError::NotFound("用户"))
     }
 
-    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
-    ///
-    /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
-    /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
+    /// 保存头像文件并返回可访问 URL。
     ///
     /// # Errors
     ///
-    /// 身份目录不可用、目录资料无效、本地用户不存在或数据库更新失败时返回错误。
-    /// 保存头像文件并返回可访问 URL。
+    /// 未配置头像存储、上传内容无效、存储失败或返回 URL 不符合公共访问约束时返回错误。
     pub async fn upload_avatar(&self, upload: AvatarUpload) -> Result<String, AccountError> {
         let storage = self
             .state
@@ -746,6 +768,10 @@ impl Account {
     }
 
     /// 更新本地账号头像 URL，并同步到外部身份目录。
+    ///
+    /// # Errors
+    ///
+    /// 用户不存在、头像 URL 无效、身份目录同步失败或本地数据库更新失败时返回错误。
     pub async fn update_user_avatar(
         &self,
         user_id: &str,
@@ -766,26 +792,33 @@ impl Account {
         {
             Ok(user) => Ok(user),
             Err(error) => {
-                if let Some(directory) = self.state.identity_directory.as_ref() {
-                    if let Err(rollback_error) = directory
+                if let Some(directory) = self.state.identity_directory.as_ref()
+                    && let Err(rollback_error) = directory
                         .update_identity_avatar(
                             current.identity_id.as_str(),
                             current.avatar_url.as_deref(),
                         )
                         .await
-                    {
-                        tracing::error!(
-                            error = ?rollback_error,
-                            business_operation = "user_avatar_sync_compensation",
-                            "failed to restore avatar_url in identity directory after local update failure"
-                        );
-                    }
+                {
+                    tracing::error!(
+                        error = ?rollback_error,
+                        business_operation = "user_avatar_sync_compensation",
+                        "failed to restore avatar_url in identity directory after local update failure"
+                    );
                 }
                 Err(error.into())
             }
         }
     }
 
+    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
+    ///
+    /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
+    /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
+    ///
+    /// # Errors
+    ///
+    /// 身份目录不可用、目录资料无效、本地用户不存在或数据库更新失败时返回错误。
     pub async fn refresh_user_from_directory(
         &self,
         identity_id: &str,

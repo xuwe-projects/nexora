@@ -401,11 +401,11 @@ impl AccountSession {
         self.send_json(self.request(Method::POST, "users").json(request))
     }
 
-    /// 涓婁紶澶村儚鏂囦欢骞惰繑鍥炲彲鍐欏叆鐢ㄦ埛鐨?URL銆?
+    /// 上传头像文件并返回可写入用户资料的可访问 URL。
     ///
     /// # Errors
     ///
-    /// 缃戠粶銆佸瓨鍌ㄥ眰鎴栨湇鍔＄鏍￠獙澶辫触鏃惰繑鍥為敊璇€?
+    /// 网络、存储层或服务端校验失败时返回错误。
     pub fn upload_avatar(
         &self,
         content_type: &str,
@@ -444,12 +444,12 @@ impl AccountSession {
         )
     }
 
-    /// 淇敼鎸囧畾鐢ㄦ埛鐨勫ご鍍?URL銆?
+    /// 修改指定用户的头像 URL。
     ///
     /// # Errors
     ///
-    /// 缃戠粶銆佽姹?鍝嶅簲澶勭悊澶辫触锛岀敤鎴蜂笉瀛樺湪鎴栧綋鍓嶇敤鎴锋病鏈?`users:avatar.write`
-    /// 鏉冮檺鏃惰繑鍥為敊璇€?
+    /// 网络、请求/响应处理失败，用户不存在，或当前用户没有 `users:avatar.write`
+    /// 权限时返回错误。
     pub fn update_user_avatar(
         &self,
         user_id: &str,

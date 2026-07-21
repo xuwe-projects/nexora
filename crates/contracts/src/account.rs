@@ -54,7 +54,6 @@ impl fmt::Debug for ProvisionUserRequest {
     }
 }
 
-/// 创建自定义角色的请求正文。
 /// 头像上传后的可访问 URL 响应。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AvatarUploadResponse {
@@ -70,6 +69,7 @@ pub struct UpdateUserAvatarRequest {
     pub avatar_url: Option<String>,
 }
 
+/// 创建自定义角色的请求正文。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRoleRequest {

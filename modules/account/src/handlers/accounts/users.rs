@@ -80,7 +80,10 @@ pub(crate) async fn provision_user(
 pub(crate) async fn upload_avatar(
     _authorization: Authorized<WriteUserAvatar>,
     State(state): State<AccountState>,
+    // nexora-lint: allow(nexora::raw_axum_request) reason="头像上传接口需要读取原始 Content-Type 头"
     headers: HeaderMap,
+    // nexora-lint: allow(nexora::raw_axum_request) reason="头像上传接口接收图片二进制正文"
+    // nexora-lint: allow(nexora::unbounded_request_body) reason="路由在 accounts router 中配置 2 MiB DefaultBodyLimit"
     body: Bytes,
 ) -> Result<Json<AvatarUploadResponse>, ApiError> {
     let content_type = headers

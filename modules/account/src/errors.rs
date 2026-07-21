@@ -111,12 +111,16 @@ pub enum AccountError {
     /// 认证身份尚未在本地账号模块中创建对应用户。
     #[error("当前账号尚未在系统中开通")]
     UserNotRegistered,
-    /// 鏈厤缃ご鍍忓瓨鍌ㄥ眰锛屾棤娉曟帴鏀朵笂浼犮€?
-    #[error("澶村儚瀛樺偍灏氭湭閰嶇疆")]
+    /// 未配置头像存储层，无法接收上传。
+    #[error("头像存储尚未配置")]
     AvatarStorageUnavailable,
-    /// 澶村儚瀛樺偍鎿嶄綔澶辫触銆?
+    /// 头像存储操作失败。
     #[error(transparent)]
-    AvatarStorage(#[from] AvatarStorageError),
+    AvatarStorage(
+        /// 底层头像存储错误。
+        #[from]
+        AvatarStorageError,
+    ),
     /// 当前用户没有执行操作所需权限。
     #[error("缺少权限: {0}")]
     Forbidden(

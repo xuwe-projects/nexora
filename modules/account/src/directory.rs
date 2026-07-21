@@ -245,20 +245,19 @@ impl ZitadelUserDirectory {
         if identity_id.trim().is_empty() {
             return Err(DirectoryError::InvalidString("create_user.id"));
         }
-        if let Some(avatar_url) = request.avatar_url.as_deref() {
-            if let Err(error) = self
+        if let Some(avatar_url) = request.avatar_url.as_deref()
+            && let Err(error) = self
                 .update_user_avatar_metadata(identity_id.as_str(), Some(avatar_url))
                 .await
-            {
-                if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
-                    tracing::error!(
-                        error = ?delete_error,
-                        business_operation = "zitadel_avatar_metadata_compensation",
-                        "failed to delete ZITADEL user after avatar metadata write failure"
-                    );
-                }
-                return Err(error);
+        {
+            if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
+                tracing::error!(
+                    error = ?delete_error,
+                    business_operation = "zitadel_avatar_metadata_compensation",
+                    "failed to delete ZITADEL user after avatar metadata write failure"
+                );
             }
+            return Err(error);
         }
         Ok(DirectoryUser {
             identity_id,
@@ -294,6 +293,10 @@ impl ZitadelUserDirectory {
     }
 
     /// 在 ZITADEL user metadata 中写入或清空 Nexora 头像 URL。
+    ///
+    /// # Errors
+    ///
+    /// identity ID 为空、ZITADEL 拒绝 metadata 写入或目录请求暂时不可用时返回目录错误。
     pub async fn update_user_avatar_metadata(
         &self,
         identity_id: &str,

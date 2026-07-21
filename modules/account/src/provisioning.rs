@@ -500,20 +500,19 @@ impl ZitadelProvisioningClient {
         if identity_id.trim().is_empty() {
             return Err(ZitadelProvisioningError::InvalidResponse("create_user.id"));
         }
-        if let Some(avatar_url) = request.avatar_url.as_deref() {
-            if let Err(error) = self
+        if let Some(avatar_url) = request.avatar_url.as_deref()
+            && let Err(error) = self
                 .update_user_avatar_metadata(identity_id.as_str(), Some(avatar_url))
                 .await
-            {
-                if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
-                    tracing::error!(
-                        error = ?delete_error,
-                        business_operation = "zitadel_provisioning_avatar_metadata_compensation",
-                        "failed to delete ZITADEL user after avatar metadata write failure"
-                    );
-                }
-                return Err(error);
+        {
+            if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
+                tracing::error!(
+                    error = ?delete_error,
+                    business_operation = "zitadel_provisioning_avatar_metadata_compensation",
+                    "failed to delete ZITADEL user after avatar metadata write failure"
+                );
             }
+            return Err(error);
         }
         Ok(DirectoryUser {
             identity_id,
@@ -553,6 +552,11 @@ impl ZitadelProvisioningClient {
         Ok(())
     }
 
+    /// 停用指定 ZITADEL 用户。
+    ///
+    /// # Errors
+    ///
+    /// user ID 为空或 ZITADEL 拒绝停用请求时返回开通错误。
     pub async fn deactivate_user(&self, user_id: &str) -> Result<(), ZitadelProvisioningError> {
         let user_id = required_input(user_id, "user_id")?;
         let mut request = DeactivateUserRequest::new();

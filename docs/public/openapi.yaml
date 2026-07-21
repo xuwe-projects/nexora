@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.13.0
+  version: 0.14.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -229,6 +229,58 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /avatars:
+    post:
+      tags: [Users]
+      operationId: uploadAvatar
+      summary: 上传用户头像并返回可访问 URL
+      description: >-
+        要求 users:avatar.write。请求正文是图片二进制，服务端限制为 2 MiB，支持 PNG、JPEG、WebP
+        与 GIF。宿主必须配置头像存储；返回 URL 可继续写入用户头像字段并同步到身份目录。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+          image/gif:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: 头像已保存
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvatarUploadResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /users/{user_id}:
     parameters:
       - $ref: "#/components/parameters/UserId"
@@ -271,6 +323,51 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/UpdateUserStatus"
+      responses:
+        "200":
+          description: 更新后的用户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /users/{user_id}/avatar:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+    patch:
+      tags: [Users]
+      operationId: updateUserAvatar
+      summary: 更新或清空用户头像
+      description: >-
+        要求 users:avatar.write。avatar_url 为 HTTP(S) 可访问地址；传 null 表示清空头像。接口会同步身份
+        目录后再更新本地账号，本地更新失败时会尽力恢复身份目录中的旧头像。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserAvatar"
       responses:
         "200":
           description: 更新后的用户
@@ -976,6 +1073,11 @@ components:
           type: [string, "null"]
           maxLength: 200
           description: 可选展示名；省略时由名字与姓氏生成
+        avatar_url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 2048
+          description: 创建用户时同步写入身份目录和本地账号的可访问头像 URL
         initial_password:
           type: string
           format: password
@@ -997,6 +1099,25 @@ components:
             type: integer
             format: int64
             minimum: 1
+    AvatarUploadResponse:
+      type: object
+      required: [avatar_url]
+      properties:
+        avatar_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: 可供客户端展示并同步到用户资料的头像 URL
+    UpdateUserAvatar:
+      type: object
+      additionalProperties: false
+      required: [avatar_url]
+      properties:
+        avatar_url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 2048
+          description: 新头像 URL；传 null 表示清空头像
     ReplaceUserRoles:
       type: object
       additionalProperties: false
