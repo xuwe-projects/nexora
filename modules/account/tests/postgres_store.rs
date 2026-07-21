@@ -303,6 +303,32 @@ async fn managed_user_with_initial_password_sets_directory_password(pool: PgPool
     assert_eq!(created[0].username, "13800000000");
     assert!(created[0].initial_password_matches("imes13800000000."));
     assert!(!created[0].require_password_change);
+    assert_eq!(created[0].contact_phone, None);
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn managed_user_with_contact_phone_passes_phone_to_directory(pool: PgPool) {
+    let directory = Arc::new(RecordingIdentityDirectory::default());
+    let account = test_account_with_directory(pool.clone(), directory.clone()).await;
+    let grantor = account
+        .provision_user(identity("phone-grantor"))
+        .await
+        .expect("测试授权人应当可以开通");
+
+    let user = account
+        .create_managed_user_with_roles(
+            password_identity("13800000000", "imes13800000000.").with_contact_phone("13800000000"),
+            &[],
+            grantor.id.as_str(),
+        )
+        .await
+        .expect("带联系手机号的人类用户应当可以创建并绑定本地账号");
+
+    assert_eq!(user.identity_id, "13800000000");
+    let created = directory.created.lock().expect("测试目录记录应可读取");
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].username, "13800000000");
+    assert_eq!(created[0].contact_phone.as_deref(), Some("13800000000"));
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
@@ -1335,6 +1361,7 @@ struct RecordedDirectoryCreate {
     username: String,
     initial_password: String,
     require_password_change: bool,
+    contact_phone: Option<String>,
 }
 
 impl RecordedDirectoryCreate {
@@ -1356,24 +1383,17 @@ impl IdentityDirectory for RecordingIdentityDirectory {
         &self,
         request: &CreateHumanIdentity,
     ) -> Result<ExternalIdentity, IdentityDirectoryError> {
-        self.created
-            .lock()
-            .expect("测试目录创建记录应可写入")
-            .push(RecordedDirectoryCreate {
-                username: request.username.clone(),
-                initial_password: request.initial_password.clone(),
-                require_password_change: request.require_password_change,
-            });
-        Ok(ExternalIdentity {
-            identity_id: request.username.clone(),
-            username: Some(request.username.clone()),
-            email: Some(request.email.clone()),
-            display_name: request
-                .display_name
-                .clone()
-                .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
-            avatar_url: request.avatar_url.clone(),
-        })
+        self.record_create(request, None);
+        Ok(directory_identity(request))
+    }
+
+    async fn create_human_identity_with_contact(
+        &self,
+        request: &CreateHumanIdentity,
+        contact_phone: Option<&str>,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        self.record_create(request, contact_phone);
+        Ok(directory_identity(request))
     }
 
     async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError> {
@@ -1390,6 +1410,33 @@ impl IdentityDirectory for RecordingIdentityDirectory {
         _avatar_url: Option<&str>,
     ) -> Result<(), IdentityDirectoryError> {
         Ok(())
+    }
+}
+
+impl RecordingIdentityDirectory {
+    fn record_create(&self, request: &CreateHumanIdentity, contact_phone: Option<&str>) {
+        self.created
+            .lock()
+            .expect("测试目录创建记录应可写入")
+            .push(RecordedDirectoryCreate {
+                username: request.username.clone(),
+                initial_password: request.initial_password.clone(),
+                require_password_change: request.require_password_change,
+                contact_phone: contact_phone.map(str::to_owned),
+            });
+    }
+}
+
+fn directory_identity(request: &CreateHumanIdentity) -> ExternalIdentity {
+    ExternalIdentity {
+        identity_id: request.username.clone(),
+        username: Some(request.username.clone()),
+        email: Some(request.email.clone()),
+        display_name: request
+            .display_name
+            .clone()
+            .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
+        avatar_url: request.avatar_url.clone(),
     }
 }
 

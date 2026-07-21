@@ -17,14 +17,13 @@ use crate::{
     generated::zitadel::{
         project::v2::{AddProjectRoleRequest, project_service_client::ProjectServiceClient},
         user::v2::{
-            CreateUserRequest, DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery,
-            ListUserMetadataRequest, ListUsersRequest, Metadata, Password, SearchQuery,
-            SendEmailVerificationCode, SetHumanEmail, SetHumanProfile, SetUserMetadataRequest,
-            StateQuery, Type, TypeQuery, UserFieldName, UserState, UserView,
-            create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
+            DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery, ListUserMetadataRequest,
+            ListUsersRequest, Metadata, SearchQuery, SetUserMetadataRequest, StateQuery, Type,
+            TypeQuery, UserFieldName, UserState, UserView, user_service_client::UserServiceClient,
         },
     },
     zitadel::{self, REQUEST_TIMEOUT},
+    zitadel_user,
 };
 
 const PAGE_SIZE: u32 = 100;
@@ -201,10 +200,11 @@ impl ZitadelUserDirectory {
             .find(|user| user.identity_id == identity_id))
     }
 
-    /// 在配置的 ZITADEL Organization 中创建带初始密码的人类用户并发送默认邮箱验证邮件。
+    /// 在配置的 ZITADEL Organization 中创建带初始密码的人类用户。
     ///
     /// 返回值中的 identity ID 完全来自 ZITADEL `CreateUser` 响应，调用方无需也不能提交
-    /// 裸 subject。头像由用户后续在身份服务中维护，因此创建时为 `None`。
+    /// 裸 subject。邮箱会按已验证写入；需要同步手机号时使用
+    /// [`Self::create_human_user_with_contact`]。
     ///
     /// # Errors
     ///
@@ -213,29 +213,27 @@ impl ZitadelUserDirectory {
         &self,
         request: &CreateHumanIdentity,
     ) -> Result<DirectoryUser, DirectoryError> {
-        let mut profile = SetHumanProfile::new();
-        profile.set_given_name(request.given_name.as_str());
-        profile.set_family_name(request.family_name.as_str());
-        if let Some(display_name) = request.display_name.as_deref() {
-            profile.set_display_name(display_name);
-        }
+        self.create_human_user_with_contact(request, None).await
+    }
 
-        let mut email = SetHumanEmail::new();
-        email.set_email(request.email.as_str());
-        email.set_send_code(SendEmailVerificationCode::new());
-
-        let mut human = CreateHumanUser::new();
-        human.set_profile(profile);
-        human.set_email(email);
-        let mut password = Password::new();
-        password.set_password(request.initial_password.as_str());
-        password.set_change_required(request.require_password_change);
-        human.set_password(password);
-
-        let mut create = CreateUserRequest::new();
-        create.set_organization_id(self.organization_id.as_str());
-        create.set_username(request.username.as_str());
-        create.set_human(human);
+    /// 在配置的 ZITADEL Organization 中创建 human user 并可写入已验证联系手机号。
+    ///
+    /// `contact_phone` 非空时会写入 ZITADEL human phone/mobile 联系信息，并与邮箱一样标记为
+    /// 已验证，不发送验证码。为空时保持旧行为，只创建用户名、邮箱、资料和密码。
+    ///
+    /// # Errors
+    ///
+    /// UserService v2 拒绝请求、用户名、邮箱、手机号或密码无效/冲突、响应缺少用户 ID 时返回错误。
+    pub async fn create_human_user_with_contact(
+        &self,
+        request: &CreateHumanIdentity,
+        contact_phone: Option<&str>,
+    ) -> Result<DirectoryUser, DirectoryError> {
+        let create = zitadel_user::create_human_user_request(
+            self.organization_id.as_str(),
+            request,
+            contact_phone,
+        );
         let response = self
             .user_client
             .create_user(create.as_view())
@@ -413,7 +411,18 @@ impl IdentityDirectory for ZitadelUserDirectory {
         &self,
         request: &CreateHumanIdentity,
     ) -> Result<ExternalIdentity, IdentityDirectoryError> {
-        self.create_human_user(request)
+        self.create_human_user_with_contact(request, None)
+            .await
+            .map(DirectoryUser::into_external_identity)
+            .map_err(identity_directory_error)
+    }
+
+    async fn create_human_identity_with_contact(
+        &self,
+        request: &CreateHumanIdentity,
+        contact_phone: Option<&str>,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        self.create_human_user_with_contact(request, contact_phone)
             .await
             .map(DirectoryUser::into_external_identity)
             .map_err(identity_directory_error)

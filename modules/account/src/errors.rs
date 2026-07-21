@@ -117,7 +117,7 @@ pub enum AccountError {
     /// 头像存储操作失败。
     #[error(transparent)]
     AvatarStorage(
-        /// 底层头像存储错误。
+        /// 头像存储端口返回的稳定错误。
         #[from]
         AvatarStorageError,
     ),

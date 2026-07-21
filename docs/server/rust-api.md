@@ -170,8 +170,9 @@ pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, Directory
 
 该类型同时实现 `IdentityDirectory`：`identity` 读取当前用户资料；`create_human_identity`
 使用 `CreateHumanIdentity { username, given_name, family_name, email, display_name, initial_password, require_password_change }`
-调用 UserService v2 创建人类用户、设置初始密码并请求默认邮箱验证；`delete_identity`
-用于本地事务失败后的补偿。
+调用 UserService v2 创建人类用户、设置初始密码，并把邮箱按已验证写入；`create_human_identity_with_contact`
+会在额外传入 `contact_phone` 时同步写入 ZITADEL human phone/mobile 联系信息并标记为已验证；
+`delete_identity` 用于本地事务失败后的补偿。
 错误稳定映射为 `Conflict`、`NotFound` 或 `Unavailable`，不会把 PAT 或 Provider 内部响应返回
 给 HTTP 客户端。
 
@@ -372,10 +373,17 @@ async fn list_factories(auth: Authorized<ReadFactories>) {
 | `display_name` | `Option<String>` | 可选；最多 200 个字符 |
 | `initial_password` | `String` | 1 至 200 个字符；只写入身份目录，不进入本地数据库或错误详情 |
 | `require_password_change` | `bool` | 是否要求用户首次登录后修改密码 |
+| `avatar_url` | `Option<String>` | 可选；同步到身份目录和本地账号的头像 URL |
+
+`CreateHumanIdentity` 保持旧结构体字面量兼容。需要把手机号同时作为登录名和 ZITADEL
+联系手机号保存时，使用 `CreateHumanIdentity { username: phone, ... }.with_contact_phone(phone)`，
+再传给 `Account::create_managed_user_with_roles`；空白 `contact_phone` 会按未提供处理。
+ZITADEL 默认实现会把 email 和 contact phone 都以已验证状态创建，不发送邮箱或短信验证码。
 
 `IdentityDirectory` 是服务端目录端口，包含 `identity`、`create_human_identity` 与
-`delete_identity` 三个异步方法；`IdentityDirectoryError` 稳定区分 `Conflict`、`NotFound`
-和 `Unavailable`。应用可以注入其他 Provider 实现，默认 Server 注入 ZITADEL。
+`create_human_identity_with_contact`、`delete_identity` 等异步方法；`IdentityDirectoryError`
+稳定区分 `Conflict`、`NotFound` 和 `Unavailable`。应用可以注入其他 Provider 实现，默认
+Server 注入 ZITADEL。
 
 ### 结果实体
 

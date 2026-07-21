@@ -75,7 +75,6 @@ pub(crate) async fn provision_user(
     ))
 }
 
-/// 分页返回用户集合。
 /// 上传头像并返回可访问 URL。
 pub(crate) async fn upload_avatar(
     _authorization: Authorized<WriteUserAvatar>,
