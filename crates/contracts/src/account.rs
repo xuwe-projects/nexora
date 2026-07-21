@@ -70,6 +70,10 @@ pub struct UpdateUserAvatarRequest {
     pub avatar_url: Option<String>,
 }
 
+/// 创建自定义角色的请求正文。
+///
+/// 管理端在创建业务角色时提交该结构；服务端会校验角色键、名称、说明和权限 ID，并在同一事务中
+/// 写入角色与权限关系。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRoleRequest {

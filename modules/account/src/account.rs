@@ -32,6 +32,19 @@ mod routers;
 mod stores;
 #[cfg(feature = "zitadel")]
 mod zitadel;
+#[cfg(feature = "zitadel")]
+mod zitadel_user;
+
+/// 框架内部测试与脚手架验证使用的非稳定入口。
+///
+/// 应用代码不应依赖本模块；其中的类型和函数可能在不增加主版本号的情况下调整。
+#[cfg(feature = "zitadel")]
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::zitadel_user::{
+        ZitadelCreateHumanUserRequestInspection, inspect_create_human_user_request,
+    };
+}
 
 pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;
@@ -84,6 +97,54 @@ pub struct CreateHumanIdentity {
     pub avatar_url: Option<String>,
 }
 
+/// 创建人类身份时可选携带的 Provider 联系信息。
+///
+/// 该类型用于在不破坏旧 `CreateHumanIdentity` 结构体字面量调用的前提下，给 ZITADEL 等
+/// Provider 传入手机号等联系字段。`identity` 仍保存登录名、邮箱、姓名、初始密码和头像；
+/// `contact_phone` 只发送给支持该能力的身份目录，不写入 Nexora 本地账号快照。
+#[derive(Clone, PartialEq, Eq)]
+pub struct CreateHumanIdentityProvision {
+    /// 创建人类身份所需的基础登录、资料和密码字段。
+    pub identity: CreateHumanIdentity,
+    /// 写入 Provider human phone/mobile 联系信息的手机号；为空或只包含空白时忽略。
+    pub contact_phone: Option<String>,
+}
+
+impl CreateHumanIdentity {
+    /// 在现有人类身份创建请求上附加 Provider 联系手机号。
+    ///
+    /// 该方法供业务系统继续用手机号作为 `username` 登录名，同时把同一个手机号写入 ZITADEL
+    /// human phone 联系信息。传入空字符串时会在 Account 标准化阶段按未提供处理。
+    pub fn with_contact_phone(
+        self,
+        contact_phone: impl Into<String>,
+    ) -> CreateHumanIdentityProvision {
+        CreateHumanIdentityProvision {
+            identity: self,
+            contact_phone: Some(contact_phone.into()),
+        }
+    }
+}
+
+impl From<CreateHumanIdentity> for CreateHumanIdentityProvision {
+    fn from(identity: CreateHumanIdentity) -> Self {
+        Self {
+            identity,
+            contact_phone: None,
+        }
+    }
+}
+
+impl fmt::Debug for CreateHumanIdentityProvision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateHumanIdentityProvision")
+            .field("identity", &self.identity)
+            .field("contact_phone", &self.contact_phone)
+            .finish()
+    }
+}
+
 impl fmt::Debug for CreateHumanIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -100,8 +161,10 @@ impl fmt::Debug for CreateHumanIdentity {
     }
 }
 
-/// 外部身份目录的稳定错误分类。
 /// Account 头像上传载荷。
+///
+/// 该结构由 HTTP 上传入口或宿主服务构造，传给 [`AvatarStorage`] 保存头像文件。字节内容只在
+/// 当前请求内使用，不会写入账号数据库。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvatarUpload {
     /// 上传内容的 MIME 类型。
@@ -114,6 +177,10 @@ pub struct AvatarUpload {
 #[async_trait]
 pub trait AvatarStorage: Send + Sync {
     /// 保存头像并返回可通过 HTTP 访问的 URL。
+    ///
+    /// # Errors
+    ///
+    /// 上传内容无效、存储配置错误或底层文件/对象存储写入失败时返回头像存储错误。
     async fn store_avatar(&self, upload: AvatarUpload) -> Result<String, AvatarStorageError>;
 }
 
@@ -126,6 +193,10 @@ pub struct LocalAvatarStorage {
 
 impl LocalAvatarStorage {
     /// 创建本地头像存储。
+    ///
+    /// # Errors
+    ///
+    /// 本地目录为空、公开访问基准 URL 不是可访问的 HTTP(S) URL，或 URL 配置不符合安全约束时返回错误。
     pub fn new(
         directory: impl Into<PathBuf>,
         public_base_url: &str,
@@ -171,15 +242,28 @@ impl AvatarStorage for LocalAvatarStorage {
 pub enum AvatarStorageError {
     /// 存储配置无效。
     #[error("invalid avatar storage configuration: {0}")]
-    InvalidConfiguration(&'static str),
+    InvalidConfiguration(
+        /// 不包含秘密的配置错误说明。
+        &'static str,
+    ),
     /// 上传内容无效。
     #[error("invalid avatar upload: {0}")]
-    InvalidUpload(&'static str),
+    InvalidUpload(
+        /// 可返回给调用方或日志的上传校验失败说明。
+        &'static str,
+    ),
     /// 文件系统读写失败。
     #[error("avatar storage I/O failed")]
-    Io(#[from] std::io::Error),
+    Io(
+        /// 底层文件系统错误。
+        #[from]
+        std::io::Error,
+    ),
 }
 
+/// 外部身份目录的稳定错误分类。
+///
+/// 该错误类型屏蔽 Provider 内部细节，只暴露 Account 调用方可以稳定处理的目录失败类别。
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityDirectoryError {
     /// 目录中已经存在相同用户名、邮箱或其他唯一身份。
@@ -210,10 +294,32 @@ pub trait IdentityDirectory: Send + Sync {
     ) -> Result<Option<ExternalIdentity>, IdentityDirectoryError>;
 
     /// 在 Provider 创建 human user 并返回 Provider identity ID。
+    ///
+    /// # Errors
+    ///
+    /// Provider 拒绝创建、目录暂时不可用、唯一字段冲突或返回资料无法映射为 Account 身份时返回错误。
     async fn create_human_identity(
         &self,
         request: &CreateHumanIdentity,
     ) -> Result<ExternalIdentity, IdentityDirectoryError>;
+
+    /// 在 Provider 创建 human user，并在支持时同步额外联系手机号。
+    ///
+    /// 默认实现保持旧目录适配器兼容，忽略 `contact_phone` 并委托给
+    /// [`Self::create_human_identity`]。ZITADEL 适配器会把非空手机号写入 human phone/mobile
+    /// 联系信息，并把邮箱与手机号都标记为已验证。
+    ///
+    /// # Errors
+    ///
+    /// 与 [`Self::create_human_identity`] 相同；支持联系手机号的 Provider 还可能因手机号格式或唯一约束返回错误。
+    async fn create_human_identity_with_contact(
+        &self,
+        request: &CreateHumanIdentity,
+        contact_phone: Option<&str>,
+    ) -> Result<ExternalIdentity, IdentityDirectoryError> {
+        _ = contact_phone;
+        self.create_human_identity(request).await
+    }
 
     /// 删除刚创建但尚未成功绑定本地账号的 Provider 用户，用于失败补偿。
     ///
@@ -223,6 +329,10 @@ pub trait IdentityDirectory: Send + Sync {
     async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError>;
 
     /// 在 Provider 中更新或清空 human user 的头像 URL。
+    ///
+    /// # Errors
+    ///
+    /// identity ID 不存在、Provider 不支持头像同步、拒绝更新或暂时不可用时返回稳定目录错误。
     async fn update_identity_avatar(
         &self,
         identity_id: &str,
@@ -725,15 +835,11 @@ impl Account {
             .ok_or(AccountError::NotFound("用户"))
     }
 
-    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
-    ///
-    /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
-    /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
+    /// 保存头像文件并返回可访问 URL。
     ///
     /// # Errors
     ///
-    /// 身份目录不可用、目录资料无效、本地用户不存在或数据库更新失败时返回错误。
-    /// 保存头像文件并返回可访问 URL。
+    /// 未配置头像存储、上传内容无效、存储失败或存储返回的 URL 不符合 Account 公开 URL 约束时返回错误。
     pub async fn upload_avatar(&self, upload: AvatarUpload) -> Result<String, AccountError> {
         let storage = self
             .state
@@ -746,6 +852,11 @@ impl Account {
     }
 
     /// 更新本地账号头像 URL，并同步到外部身份目录。
+    ///
+    /// # Errors
+    ///
+    /// 头像 URL 无效、用户不存在、身份目录同步失败或数据库更新失败时返回错误。若数据库更新失败，
+    /// 会尽力把身份目录中的头像 URL 回滚到原值。
     pub async fn update_user_avatar(
         &self,
         user_id: &str,
@@ -766,26 +877,33 @@ impl Account {
         {
             Ok(user) => Ok(user),
             Err(error) => {
-                if let Some(directory) = self.state.identity_directory.as_ref() {
-                    if let Err(rollback_error) = directory
+                if let Some(directory) = self.state.identity_directory.as_ref()
+                    && let Err(rollback_error) = directory
                         .update_identity_avatar(
                             current.identity_id.as_str(),
                             current.avatar_url.as_deref(),
                         )
                         .await
-                    {
-                        tracing::error!(
-                            error = ?rollback_error,
-                            business_operation = "user_avatar_sync_compensation",
-                            "failed to restore avatar_url in identity directory after local update failure"
-                        );
-                    }
+                {
+                    tracing::error!(
+                        error = ?rollback_error,
+                        business_operation = "user_avatar_sync_compensation",
+                        "failed to restore avatar_url in identity directory after local update failure"
+                    );
                 }
                 Err(error.into())
             }
         }
     }
 
+    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
+    ///
+    /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
+    /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
+    ///
+    /// # Errors
+    ///
+    /// 身份目录不可用、目录资料无效、本地用户不存在或数据库更新失败时返回错误。
     pub async fn refresh_user_from_directory(
         &self,
         identity_id: &str,
@@ -882,20 +1000,23 @@ impl Account {
     ///
     /// 输入字段无效、目录不可用或冲突、本地身份已绑定、角色或授权人不存在，以及数据库
     /// 事务失败时返回错误。
-    pub async fn create_managed_user_with_roles(
+    pub async fn create_managed_user_with_roles<R>(
         &self,
-        request: CreateHumanIdentity,
+        request: R,
         role_ids: &[i64],
         granted_by: &str,
-    ) -> Result<User, AccountError> {
-        let request = normalized_create_human_identity(request)?;
+    ) -> Result<User, AccountError>
+    where
+        R: Into<CreateHumanIdentityProvision>,
+    {
+        let request = normalized_create_human_identity_provision(request.into())?;
         let directory = self
             .state
             .identity_directory
             .as_ref()
             .ok_or(IdentityDirectoryError::Unavailable)?;
         let identity = directory
-            .create_human_identity(&request)
+            .create_human_identity_with_contact(&request.identity, request.contact_phone.as_deref())
             .await?
             .normalized()?;
         let identity_id = identity.identity_id.clone();
@@ -995,6 +1116,23 @@ fn normalized_create_human_identity(
         initial_password: request.initial_password,
         require_password_change: request.require_password_change,
         avatar_url,
+    })
+}
+
+fn normalized_create_human_identity_provision(
+    request: CreateHumanIdentityProvision,
+) -> Result<CreateHumanIdentityProvision, AccountError> {
+    let contact_phone = request
+        .contact_phone
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if contact_phone.is_some_and(|value| value.chars().count() > 200) {
+        return Err(ValidationError::new("contact_phone", "联系电话不能超过 200 个字符").into());
+    }
+    Ok(CreateHumanIdentityProvision {
+        identity: normalized_create_human_identity(request.identity)?,
+        contact_phone: contact_phone.map(str::to_owned),
     })
 }
 

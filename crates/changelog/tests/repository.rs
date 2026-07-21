@@ -10,26 +10,31 @@ fn current_release_is_newer_than_previous_release() {
 }
 
 #[test]
-fn embedded_repository_finds_current_console_changelog() {
+fn embedded_repository_finds_current_api_changelog() {
     let repository = EmbeddedChangelogRepository::load().unwrap();
     let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let entry = repository.find("console", &version, "zh-CN").unwrap();
+    let entry = repository.find("api", &version, "zh-CN").unwrap();
 
     assert_eq!(entry.version(), &version);
-    assert_eq!(entry.component(), "console");
+    assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
-    assert_eq!(entry.source_path(), format!("{version}/console/zh-CN.md"));
-    assert!(entry.markdown().contains("初始密码"));
-    assert!(entry.markdown().contains("initial_password"));
+    assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
+    assert!(entry.markdown().contains("ZITADEL"));
+    assert!(entry.markdown().contains("with_contact_phone"));
 }
 
 #[test]
-fn embedded_repository_supports_multiple_release_components() {
+fn embedded_repository_supports_sparse_release_components() {
     let repository = EmbeddedChangelogRepository::load().unwrap();
     let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
 
     assert!(repository.find("api", &version, "zh-CN").is_some());
-    assert!(repository.find("console", &version, "zh-CN").is_some());
+    assert!(repository.find("console", &version, "zh-CN").is_none());
+    assert!(
+        repository
+            .find("console", &Version::parse("0.13.0").unwrap(), "zh-CN")
+            .is_some()
+    );
     assert!(
         repository
             .find("customer-desktop", &version, "zh-CN")
@@ -41,7 +46,7 @@ fn embedded_repository_supports_multiple_release_components() {
 fn component_releases_are_sorted_from_newest_to_oldest() {
     let repository = EmbeddedChangelogRepository::load().unwrap();
     let versions = repository
-        .releases("console", "zh-CN")
+        .releases("api", "zh-CN")
         .map(|entry| entry.version().to_string())
         .collect::<Vec<_>>();
 
@@ -49,6 +54,8 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.13.0",
+            "0.12.0",
             "0.11.3",
             "0.11.2",
             "0.11.1",
@@ -70,7 +77,6 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
             "0.1.2",
             "0.1.1",
             "0.1.0",
-            "0.0.1"
         ]
     );
 }

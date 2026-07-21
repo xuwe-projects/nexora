@@ -25,12 +25,13 @@ pub use crate::account::server::{
 };
 pub use crate::account::{
     AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, AvatarStorage,
-    AvatarStorageError, AvatarUpload, BearerAccessToken, CreateHumanIdentity, ExternalIdentity,
-    IdentityDirectory, IdentityDirectoryError, LocalAvatarStorage, OidcAccessTokenVerifier,
-    OidcResourceServer, Permission, PermissionCatalogDefinition, PermissionDefinition,
-    PermissionKey, RequiredPermission, Role, User, VerifiedBearerIdentity, VerifiedIdentity,
-    VerifiedOrganizationContext, create_permission_catalog, create_permissions, create_role,
-    create_user, create_user_with_roles, replace_role_permissions, replace_user_roles,
+    AvatarStorageError, AvatarUpload, BearerAccessToken, CreateHumanIdentity,
+    CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
+    LocalAvatarStorage, OidcAccessTokenVerifier, OidcResourceServer, Permission,
+    PermissionCatalogDefinition, PermissionDefinition, PermissionKey, RequiredPermission, Role,
+    User, VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
+    create_permission_catalog, create_permissions, create_role, create_user,
+    create_user_with_roles, replace_role_permissions, replace_user_roles,
 };
 
 /// 可组合 Nexora 默认模块与应用 Router 的服务端实例。

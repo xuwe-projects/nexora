@@ -237,8 +237,14 @@ The matching permission still must be registered with `create_permissions` or
 `display_name`, and optional `avatar_url`. `identity_id` is the only stable binding key; username is
 metadata. Outputs include `User`, `Permission`, `Role`, `SystemRole`, and `AccessProfile`.
 `CreateHumanIdentity` contains `username`, `given_name`, `family_name`, `email`, optional
-`display_name`, required `initial_password`, and `require_password_change`; the password is sent only
-to the identity directory and is not stored in the local Account database.
+`display_name`, required `initial_password`, `require_password_change`, and optional `avatar_url`;
+the password is sent only to the identity directory and is not stored in the local Account database.
+Existing struct literals remain compatible. To keep a phone number as the login username and also
+store it as ZITADEL human phone/mobile contact information, pass
+`CreateHumanIdentity { username: phone, ... }.with_contact_phone(phone)` to
+`Account::create_managed_user_with_roles`. Blank contact phones are ignored. The default ZITADEL
+implementation creates both email and phone contact fields as verified and does not send email or
+SMS verification codes.
 `AccessProfile::allows` always permits the super administrator and otherwise checks the merged
 `BTreeSet<PermissionKey>`.
 

@@ -36,6 +36,19 @@ message SetHumanEmail {
   }
 }
 
+message SendPhoneVerificationCode {}
+
+message ReturnPhoneVerificationCode {}
+
+message SetHumanPhone {
+  string phone = 1;
+  oneof verification {
+    SendPhoneVerificationCode send_code = 2;
+    ReturnPhoneVerificationCode return_code = 3;
+    bool is_verified = 4;
+  }
+}
+
 message Password {
   string password = 1;
   bool change_required = 2;
@@ -45,6 +58,7 @@ message CreateUserRequest {
   message Human {
     SetHumanProfile profile = 1;
     SetHumanEmail email = 2;
+    optional SetHumanPhone phone = 3;
     oneof password_type {
       Password password = 4;
     }
@@ -142,11 +156,18 @@ message HumanProfile {
 
 message HumanEmail {
   string email = 1;
+  bool is_verified = 2;
+}
+
+message HumanPhone {
+  string phone = 1;
+  bool is_verified = 2;
 }
 
 message HumanUser {
   HumanProfile profile = 6;
   HumanEmail email = 7;
+  HumanPhone phone = 8;
 }
 
 message MachineUser {}

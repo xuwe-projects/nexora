@@ -7,10 +7,10 @@
 pub use crate::account_module::{
     AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, AvatarStorage, AvatarStorageError,
-    AvatarUpload, CreateHumanIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
-    IdentityIssuerBindingOutcome, LocalAvatarStorage, Page, Permission,
-    PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role, SystemRole, User,
-    UserStatus,
+    AvatarUpload, CreateHumanIdentity, CreateHumanIdentityProvision, ExternalIdentity,
+    IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome, LocalAvatarStorage,
+    Page, Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role,
+    SystemRole, User, UserStatus,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,

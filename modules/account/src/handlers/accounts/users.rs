@@ -75,12 +75,14 @@ pub(crate) async fn provision_user(
     ))
 }
 
-/// 分页返回用户集合。
 /// 上传头像并返回可访问 URL。
 pub(crate) async fn upload_avatar(
     _authorization: Authorized<WriteUserAvatar>,
     State(state): State<AccountState>,
+    // nexora-lint: allow(nexora::raw_axum_request) reason="头像上传需要读取 Content-Type header"
     headers: HeaderMap,
+    // nexora-lint: allow(nexora::raw_axum_request) reason="头像上传需要读取原始图片字节"
+    // nexora-lint: allow(nexora::unbounded_request_body) reason="正文大小由 api::with_http_layers 的 DefaultBodyLimit 统一限制"
     body: Bytes,
 ) -> Result<Json<AvatarUploadResponse>, ApiError> {
     let content_type = headers

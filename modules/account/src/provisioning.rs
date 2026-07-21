@@ -37,12 +37,12 @@ use crate::{
             UpdateProjectGrantRequest, project_service_client::ProjectServiceClient,
         },
         user::v2::{
-            CreateUserRequest, DeactivateUserRequest, DeleteUserRequest, Metadata, Password,
-            SendEmailVerificationCode, SetHumanEmail, SetHumanProfile, SetUserMetadataRequest,
-            create_user_request::Human as CreateHumanUser, user_service_client::UserServiceClient,
+            DeactivateUserRequest, DeleteUserRequest, Metadata, SetUserMetadataRequest,
+            user_service_client::UserServiceClient,
         },
     },
     zitadel::{self, REQUEST_TIMEOUT},
+    zitadel_user,
 };
 
 const PAGE_SIZE: u32 = 100;
@@ -447,7 +447,8 @@ impl ZitadelProvisioningClient {
     /// 在指定客户 Organization 中创建 portal 人类用户。
     ///
     /// 返回的 identity ID 来自 ZITADEL `CreateUser` 响应；调用方应把它保存到业务库或本地
-    /// Account 映射中。该方法不把用户写入 Nexora 默认内部 Account 用户表。
+    /// Account 映射中。该方法不把用户写入 Nexora 默认内部 Account 用户表。邮箱会按已验证
+    /// 写入；需要同步手机号时使用 [`Self::create_human_user_with_contact`]。
     ///
     /// # Errors
     ///
@@ -458,6 +459,25 @@ impl ZitadelProvisioningClient {
         organization_id: &str,
         request: &CreateHumanIdentity,
     ) -> Result<DirectoryUser, ZitadelProvisioningError> {
+        self.create_human_user_with_contact(organization_id, request, None)
+            .await
+    }
+
+    /// 在指定客户 Organization 中创建 portal 人类用户并可写入已验证联系手机号。
+    ///
+    /// `contact_phone` 非空时写入 ZITADEL human phone/mobile 联系信息，并与邮箱一样设置为
+    /// 已验证，不触发短信或邮箱验证码发送。为空时保持旧的用户名、邮箱、资料和密码创建行为。
+    ///
+    /// # Errors
+    ///
+    /// organization ID、用户名、邮箱、手机号或姓名无效，ZITADEL 拒绝创建用户，或响应缺少用户 ID 时
+    /// 返回错误。
+    pub async fn create_human_user_with_contact(
+        &self,
+        organization_id: &str,
+        request: &CreateHumanIdentity,
+        contact_phone: Option<&str>,
+    ) -> Result<DirectoryUser, ZitadelProvisioningError> {
         let organization_id = required_input(organization_id, "organization_id")?;
         let username = required_input(request.username.as_str(), "user.username")?;
         let given_name = required_input(request.given_name.as_str(), "user.given_name")?;
@@ -466,30 +486,25 @@ impl ZitadelProvisioningClient {
         let display_name = optional_input(request.display_name.as_deref(), "user.display_name")?;
         let initial_password =
             required_input(request.initial_password.as_str(), "user.initial_password")?;
-
-        let mut profile = SetHumanProfile::new();
-        profile.set_given_name(given_name.as_str());
-        profile.set_family_name(family_name.as_str());
-        if let Some(display_name) = display_name.as_deref() {
-            profile.set_display_name(display_name);
-        }
-
-        let mut email = SetHumanEmail::new();
-        email.set_email(email_address.as_str());
-        email.set_send_code(SendEmailVerificationCode::new());
-
-        let mut human = CreateHumanUser::new();
-        human.set_profile(profile);
-        human.set_email(email);
-        let mut password = Password::new();
-        password.set_password(initial_password.as_str());
-        password.set_change_required(request.require_password_change);
-        human.set_password(password);
-
-        let mut create = CreateUserRequest::new();
-        create.set_organization_id(organization_id.as_str());
-        create.set_username(username.as_str());
-        create.set_human(human);
+        let contact_phone = contact_phone
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let normalized_request = CreateHumanIdentity {
+            username: username.clone(),
+            given_name: given_name.clone(),
+            family_name: family_name.clone(),
+            email: email_address.clone(),
+            display_name: display_name.clone(),
+            initial_password,
+            require_password_change: request.require_password_change,
+            avatar_url: request.avatar_url.clone(),
+        };
+        let create = zitadel_user::create_human_user_request(
+            organization_id.as_str(),
+            &normalized_request,
+            contact_phone.as_deref(),
+        );
         let response = self
             .user_client
             .create_user(create.as_view())
@@ -500,20 +515,19 @@ impl ZitadelProvisioningClient {
         if identity_id.trim().is_empty() {
             return Err(ZitadelProvisioningError::InvalidResponse("create_user.id"));
         }
-        if let Some(avatar_url) = request.avatar_url.as_deref() {
-            if let Err(error) = self
+        if let Some(avatar_url) = request.avatar_url.as_deref()
+            && let Err(error) = self
                 .update_user_avatar_metadata(identity_id.as_str(), Some(avatar_url))
                 .await
-            {
-                if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
-                    tracing::error!(
-                        error = ?delete_error,
-                        business_operation = "zitadel_provisioning_avatar_metadata_compensation",
-                        "failed to delete ZITADEL user after avatar metadata write failure"
-                    );
-                }
-                return Err(error);
+        {
+            if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
+                tracing::error!(
+                    error = ?delete_error,
+                    business_operation = "zitadel_provisioning_avatar_metadata_compensation",
+                    "failed to delete ZITADEL user after avatar metadata write failure"
+                );
             }
+            return Err(error);
         }
         Ok(DirectoryUser {
             identity_id,
@@ -524,14 +538,6 @@ impl ZitadelProvisioningClient {
         })
     }
 
-    /// 停用指定 ZITADEL 用户。
-    ///
-    /// 停用会保留用户资料但阻止后续登录，适合客户员工离职或门户访问冻结。若 ZITADEL 返回
-    /// “已停用”状态错误，调用方可按自己的幂等策略处理。
-    ///
-    /// # Errors
-    ///
-    /// user ID 为空或 ZITADEL 拒绝停用用户时返回错误。
     async fn update_user_avatar_metadata(
         &self,
         identity_id: &str,
@@ -553,6 +559,14 @@ impl ZitadelProvisioningClient {
         Ok(())
     }
 
+    /// 停用指定 ZITADEL 用户。
+    ///
+    /// 停用会保留用户资料但阻止后续登录，适合客户员工离职或门户访问冻结。若 ZITADEL 返回
+    /// “已停用”状态错误，调用方可按自己的幂等策略处理。
+    ///
+    /// # Errors
+    ///
+    /// user ID 为空、ZITADEL 拒绝停用用户或 UserService v2 暂时不可用时返回错误。
     pub async fn deactivate_user(&self, user_id: &str) -> Result<(), ZitadelProvisioningError> {
         let user_id = required_input(user_id, "user_id")?;
         let mut request = DeactivateUserRequest::new();
