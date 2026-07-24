@@ -1,6 +1,7 @@
 use contracts::{
     account::{
-        AvatarUploadResponse, PermissionResponse, ProvisionUserRequest, RoleResponse,
+        AvatarUploadResponse, CreateRoleRequest, PermissionResponse, ProvisionUserRequest,
+        ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER,
         UpdateRoleRequest, UpdateUserAvatarRequest, UserResponse, UserStatus, UserType,
     },
     pagination::{PageMetadata, PageQuery, PageResponse},
@@ -38,6 +39,40 @@ fn update_role_request_preserves_missing_null_and_value_states() {
 }
 
 #[test]
+fn role_owner_defaults_to_system_scope_in_requests() {
+    let create: CreateRoleRequest = serde_json::from_value(json!({
+        "key": "customer_manager",
+        "name": "客户管理员",
+        "description": null,
+        "permission_ids": [1]
+    }))
+    .expect("缺省 owner 的创建角色请求应当兼容旧客户端");
+    assert_eq!(create.owner, SYSTEM_ROLE_OWNER);
+
+    let replace_permissions: ReplaceRolePermissionsRequest = serde_json::from_value(json!({
+        "permission_ids": [1, 2]
+    }))
+    .expect("缺省 owner 的替换权限请求应当兼容旧客户端");
+    assert_eq!(replace_permissions.owner, SYSTEM_ROLE_OWNER);
+
+    let replace_roles: ReplaceUserRolesRequest = serde_json::from_value(json!({
+        "role_ids": [3, 4]
+    }))
+    .expect("缺省 owner 的替换用户角色请求应当兼容旧客户端");
+    assert_eq!(replace_roles.owner, SYSTEM_ROLE_OWNER);
+
+    let scoped = CreateRoleRequest {
+        owner: "customer-1".to_owned(),
+        key: "customer_manager".to_owned(),
+        name: "客户管理员".to_owned(),
+        description: None,
+        permission_ids: Vec::new(),
+    };
+    let json = serde_json::to_value(scoped).expect("owner 作用域请求应当可以序列化");
+    assert_eq!(json["owner"], "customer-1");
+}
+
+#[test]
 fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let now = 1_784_044_800;
     let response = UserResponse {
@@ -71,6 +106,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
 
     let role = RoleResponse {
         id: 42,
+        owner: "IMES".to_owned(),
         key: "project_manager".to_owned(),
         name: "项目管理员".to_owned(),
         description: None,
@@ -86,11 +122,15 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     };
     let json = serde_json::to_value(role).expect("角色响应应当可以序列化");
     assert_eq!(json["id"], 42);
+    assert_eq!(json["owner"], "IMES");
     assert_eq!(json["permissions"][0]["id"], 7);
     assert_eq!(json["created_at"], now);
     assert_eq!(json["updated_at"], now);
     assert!(json["created_at"].is_i64());
     assert!(json["updated_at"].is_i64());
+    let decoded: RoleResponse =
+        serde_json::from_value(json).expect("SDK 应当可以反序列化服务端角色响应");
+    assert_eq!(decoded.owner, "IMES");
 }
 
 #[test]

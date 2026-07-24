@@ -397,6 +397,7 @@ fn account_api_replaces_user_roles_through_real_resource_endpoint() {
     api.replace_user_roles(
         "User0001",
         &contracts::account::ReplaceUserRolesRequest {
+            owner: contracts::account::SYSTEM_ROLE_OWNER.to_owned(),
             role_ids: vec![1, 3],
         },
     )
@@ -411,6 +412,7 @@ fn account_api_replaces_user_roles_through_real_resource_endpoint() {
 fn account_api_replaces_role_permissions_through_real_resource_endpoint() {
     let body = r#"{
         "id": 7,
+        "owner": "IMES",
         "key": "project_manager",
         "name": "项目经理",
         "description": null,
@@ -425,6 +427,7 @@ fn account_api_replaces_role_permissions_through_real_resource_endpoint() {
     api.replace_role_permissions(
         7,
         &contracts::account::ReplaceRolePermissionsRequest {
+            owner: contracts::account::SYSTEM_ROLE_OWNER.to_owned(),
             permission_ids: vec![2, 5],
         },
     )
@@ -464,6 +467,7 @@ fn account_api_updates_user_status_and_creates_custom_role() {
 
     let role_body = r#"{
         "id": 8,
+        "owner": "IMES",
         "key": "auditor",
         "name": "审计员",
         "description": "只读审计角色",
@@ -475,6 +479,7 @@ fn account_api_updates_user_status_and_creates_custom_role() {
     let (base_url, role_server) = serve_single_api_response("201 Created", role_body);
     let api = test_account_api(base_url.as_str());
     api.create_role(&contracts::account::CreateRoleRequest {
+        owner: contracts::account::SYSTEM_ROLE_OWNER.to_owned(),
         key: "auditor".to_owned(),
         name: "审计员".to_owned(),
         description: Some("只读审计角色".to_owned()),
@@ -490,6 +495,7 @@ fn account_api_updates_user_status_and_creates_custom_role() {
 fn account_api_updates_and_deletes_custom_role() {
     let role_body = r#"{
         "id": 8,
+        "owner": "IMES",
         "key": "auditor",
         "name": "高级审计员",
         "description": "负责安全审计",
@@ -525,6 +531,7 @@ fn account_api_loads_role_and_permission_catalogs() {
     let roles_body = r#"{
         "items": [{
             "id": 1,
+            "owner": "IMES",
             "key": "admin",
             "name": "管理员",
             "description": "系统内置管理员",

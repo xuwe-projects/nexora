@@ -12,7 +12,7 @@ use ui::{FormDialog, FormDialogState};
 use crate::defaults::account::has_permission;
 use crate::desktop::{
     api_session,
-    contract::{AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse},
+    contract::{AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER},
 };
 
 pub(in crate::defaults::account::users) struct UserRoleEditor {
@@ -134,6 +134,7 @@ impl UserRoleEditor {
         };
         let user_id = profile.user.id.clone();
         let request = ReplaceUserRolesRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             role_ids: self.selected_role_ids.iter().copied().collect(),
         };
         self.saving = true;

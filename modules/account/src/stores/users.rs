@@ -6,7 +6,7 @@ use kernel::{Page, PageRequest};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{
-    StoreError,
+    SYSTEM_ROLE_OWNER, StoreError,
     entities::account::{AccessProfile, PermissionKey, User, UserStatus},
     stores::roles,
 };
@@ -171,18 +171,22 @@ pub(crate) async fn update_avatar_url(
     .bind(avatar_url)
     .fetch_optional(pool)
     .await?;
-    user.ok_or(StoreError::NotFound("鐢ㄦ埛"))
+    user.ok_or(StoreError::NotFound("用户"))
 }
 
-pub(crate) async fn replace_roles(
+pub(crate) async fn replace_roles_for_owner(
+    owner: &str,
     user_id: &str,
     role_ids: &[i64],
     granted_by: &str,
     pool: &PgPool,
 ) -> Result<AccessProfile, StoreError> {
     let mut transaction = pool.begin().await?;
-    let administrator_role_id =
-        roles::query_system_role_id("admin", true, &mut transaction).await?;
+    let administrator_role_id = if owner == SYSTEM_ROLE_OWNER {
+        Some(roles::query_system_role_id("admin", true, &mut transaction).await?)
+    } else {
+        None
+    };
     let (target_status, is_super_admin, username, email) =
         sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
             r#"
@@ -202,21 +206,27 @@ pub(crate) async fn replace_roles(
     if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
         return Err(StoreError::ServiceAccountImmutable);
     }
-    let desired_role_ids = desired_role_ids(role_ids, &mut transaction).await?;
-    let currently_administrator = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(
-            SELECT 1
-            FROM account.user_roles
-            WHERE user_id = $1 AND role_id = $2
+    ensure_user_exists(granted_by, &mut transaction).await?;
+    let desired_role_ids = desired_role_ids_for_owner(owner, role_ids, &mut transaction).await?;
+    let currently_administrator = if let Some(administrator_role_id) = administrator_role_id {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM account.user_roles
+                WHERE user_id = $1 AND role_id = $2
+            )
+            "#,
         )
-        "#,
-    )
-    .bind(user_id)
-    .bind(administrator_role_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if currently_administrator
+        .bind(user_id)
+        .bind(administrator_role_id)
+        .fetch_one(&mut *transaction)
+        .await?
+    } else {
+        false
+    };
+    if let Some(administrator_role_id) = administrator_role_id
+        && currently_administrator
         && target_status == UserStatus::Active
         && !role_ids.contains(&administrator_role_id)
         && lock_active_administrators(administrator_role_id, &mut transaction)
@@ -227,10 +237,19 @@ pub(crate) async fn replace_roles(
         return Err(StoreError::LastAdministrator);
     }
 
-    sqlx::query("DELETE FROM account.user_roles WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await?;
+    sqlx::query(
+        r#"
+        DELETE FROM account.user_roles
+        USING account.roles
+        WHERE user_roles.role_id = roles.id
+          AND user_roles.user_id = $1
+          AND roles.owner = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(owner)
+    .execute(&mut *transaction)
+    .await?;
     insert_role_grants(
         user_id,
         desired_role_ids.as_slice(),
@@ -242,6 +261,57 @@ pub(crate) async fn replace_roles(
     query_access_profile(user_id, pool)
         .await?
         .ok_or(StoreError::NotFound("用户"))
+}
+
+pub(crate) async fn grant_user_role(
+    user_id: &str,
+    role_id: i64,
+    granted_by: &str,
+    pool: &PgPool,
+) -> Result<AccessProfile, StoreError> {
+    let mut transaction = pool.begin().await?;
+    let (_, is_super_admin, username, email) =
+        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
+            r#"
+        SELECT status, is_super_admin, username, email
+        FROM account.users
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::NotFound("用户"))?;
+    if is_super_admin {
+        return Err(StoreError::SuperAdministratorImmutable);
+    }
+    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
+        return Err(StoreError::ServiceAccountImmutable);
+    }
+    ensure_user_exists(granted_by, &mut transaction).await?;
+    let result = sqlx::query(
+        r#"
+        INSERT INTO account.user_roles (user_id, role_id, granted_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, role_id) DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(role_id)
+    .bind(granted_by)
+    .execute(&mut *transaction)
+    .await;
+    match result {
+        Ok(_) => {
+            transaction.commit().await?;
+            query_access_profile(user_id, pool)
+                .await?
+                .ok_or(StoreError::NotFound("用户"))
+        }
+        Err(error) if is_foreign_key_violation(&error) => Err(StoreError::NotFound("用户或角色")),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(super) async fn grant_initial_roles(
@@ -264,17 +334,33 @@ async fn desired_role_ids(
     role_ids: &[i64],
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<i64>, StoreError> {
-    let member_role_id = roles::query_system_role_id("member", false, transaction).await?;
-    let existing_role_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM account.roles WHERE id = ANY($1)")
-            .bind(role_ids)
-            .fetch_one(&mut **transaction)
-            .await?;
+    desired_role_ids_for_owner(SYSTEM_ROLE_OWNER, role_ids, transaction).await
+}
+
+async fn desired_role_ids_for_owner(
+    owner: &str,
+    role_ids: &[i64],
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<i64>, StoreError> {
+    let member_role_id = if owner == SYSTEM_ROLE_OWNER {
+        Some(roles::query_system_role_id("member", false, transaction).await?)
+    } else {
+        None
+    };
+    let existing_role_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM account.roles WHERE owner = $1 AND id = ANY($2)",
+    )
+    .bind(owner)
+    .bind(role_ids)
+    .fetch_one(&mut **transaction)
+    .await?;
     if existing_role_count != role_ids.len() as i64 {
         return Err(StoreError::NotFound("角色"));
     }
     let mut desired_role_ids = role_ids.to_vec();
-    desired_role_ids.push(member_role_id);
+    if let Some(member_role_id) = member_role_id {
+        desired_role_ids.push(member_role_id);
+    }
     desired_role_ids.sort_unstable();
     desired_role_ids.dedup();
     Ok(desired_role_ids)
@@ -303,6 +389,36 @@ async fn insert_role_grants(
 
 fn is_service_account(is_super_admin: bool, username: Option<&str>, email: Option<&str>) -> bool {
     !is_super_admin && username.is_none() && email.is_none()
+}
+
+async fn ensure_user_exists(
+    user_id: &str,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), StoreError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM account.users
+            WHERE id = $1
+        )
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(StoreError::NotFound("用户"))
+    }
+}
+
+fn is_foreign_key_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == "23503")
 }
 
 async fn protect_active_administrator(

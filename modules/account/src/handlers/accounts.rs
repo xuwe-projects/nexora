@@ -9,7 +9,7 @@ use contracts::{
 };
 use kernel::{Page, PageRequest, ValidationError};
 
-use crate::{AccessProfile, AccountError, Permission, Role, User, UserStatus};
+use crate::{AccessProfile, AccountError, Permission, PermissionKey, Role, User, UserStatus};
 
 pub(crate) mod me;
 pub(crate) mod permissions;
@@ -17,6 +17,7 @@ pub(crate) mod roles;
 pub(crate) mod users;
 
 const MAX_PAGE_SIZE: u32 = 100;
+const MAX_ROLE_OWNER_LENGTH: usize = 200;
 const MAX_ROLE_NAME_LENGTH: usize = 100;
 const MAX_DESCRIPTION_LENGTH: usize = 1_000;
 const MAX_ROLE_PERMISSIONS: usize = 256;
@@ -49,6 +50,14 @@ pub(crate) fn validate_role_key(key: &str) -> Result<(), AccountError> {
     }
 }
 
+pub(crate) fn role_owner(owner: &str) -> Result<String, AccountError> {
+    let owner = owner.trim();
+    if owner.is_empty() || owner.chars().count() > MAX_ROLE_OWNER_LENGTH {
+        return Err(invalid("owner", "角色 owner 必须为 1 到 200 个字符"));
+    }
+    Ok(owner.to_owned())
+}
+
 pub(crate) fn validate_role_fields(
     name: &str,
     description: Option<&str>,
@@ -64,6 +73,29 @@ pub(crate) fn validate_role_fields(
 
 pub(crate) fn role_permission_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
     deduplicate_ids(ids, MAX_ROLE_PERMISSIONS, "permission_ids")
+}
+
+pub(crate) fn role_permission_keys(keys: &[&str]) -> Result<Vec<String>, AccountError> {
+    if keys.len() > MAX_ROLE_PERMISSIONS {
+        return Err(invalid("permission_keys", "权限键数量超过限制"));
+    }
+    let mut keys = keys
+        .iter()
+        .map(|key| key.trim())
+        .map(|key| {
+            PermissionKey::try_from(key).map(|validated| validated.as_str().to_owned()).map_err(
+                |()| {
+                    invalid(
+                        "permission_keys",
+                        "权限键必须使用 resource:action 格式；两段都必须为 2 到 64 位小写字母、数字、点、下划线或连字符，并以字母开头",
+                    )
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
 }
 
 pub(crate) fn user_role_ids(ids: Vec<i64>) -> Result<Vec<i64>, AccountError> {
@@ -121,6 +153,7 @@ fn response_user_type(user: &User) -> UserType {
 pub(super) fn role_response(role: Role) -> RoleResponse {
     RoleResponse {
         id: role.id,
+        owner: role.owner,
         key: role.key,
         name: role.name,
         description: role.description,

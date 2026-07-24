@@ -9,15 +9,18 @@ pub use crate::account_module::{
     AccountInitializationOutcome, AccountInitializationStatus, AvatarStorage, AvatarStorageError,
     AvatarUpload, CreateHumanIdentity, CreateHumanIdentityProvision, ExternalIdentity,
     IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome, LocalAvatarStorage,
-    Page, Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role,
-    SystemRole, User, UserStatus,
+    PORTAL_ADMIN_ROLE_KEY, Page, Permission, PermissionCatalogDefinition, PermissionDefinition,
+    PermissionKey, Role, SYSTEM_ROLE_OWNER, SystemRole, User, UserStatus,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
     },
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
-    create_permission_catalog, create_permissions, create_role, create_user,
-    create_user_with_roles, replace_role_permissions, replace_user_roles,
+    create_generated_role_for_owner, create_permission_catalog, create_permissions, create_role,
+    create_role_for_owner, create_user, create_user_with_roles,
+    ensure_system_role_with_permissions, grant_user_role, replace_role_permissions,
+    replace_role_permissions_for_owner, replace_user_roles, replace_user_roles_for_owner,
+    role_for_owner, roles_for_owner,
 };
 
 #[cfg(feature = "desktop")]

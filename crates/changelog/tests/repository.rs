@@ -19,8 +19,8 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
-    assert!(entry.markdown().contains("ZITADEL"));
-    assert!(entry.markdown().contains("with_contact_phone"));
+    assert!(entry.markdown().contains("owner"));
+    assert!(entry.markdown().contains("portal_admin"));
 }
 
 #[test]
@@ -54,6 +54,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.15.1",
             "0.14.0",
             "0.13.0",
             "0.12.0",

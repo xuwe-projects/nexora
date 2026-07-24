@@ -84,15 +84,17 @@ permission membership; other users receive permissions through roles.
 ### Permission and Role
 
 `Permission` contains `id: int64`, stable `key`, `name`, and nullable `description`. `Role` contains
-`id`, stable `key`, `name`, nullable `description`, `is_system`, direct `permissions`, and
-`created_at`/`updated_at` Unix seconds. System roles cannot be changed or deleted.
+`id`, `owner`, stable `key`, `name`, nullable `description`, `is_system`, direct `permissions`, and
+`created_at`/`updated_at` Unix seconds. `owner` isolates role ownership; `IMES` is the default
+backend/system scope, and customer portals can use customer IDs. System roles cannot be changed or
+deleted.
 
 ### AccessProfile
 
 ```json
 {
   "user": { "id": "A1b2C3d4", "identity_id": "279693210507280451", "username": "lin.chen", "email": null, "display_name": "Lin Chen", "avatar_url": null, "status": "active", "is_super_admin": false, "created_at": 1784304000, "updated_at": 1784304000, "last_login_at": 1784304000 },
-  "roles": [],
+  "roles": [{ "id": 2, "owner": "IMES", "key": "member", "name": "Member", "description": null, "is_system": true, "permissions": [], "created_at": 1784304000, "updated_at": 1784304000 }],
   "permissions": ["users:read"]
 }
 ```
@@ -213,18 +215,21 @@ cannot be suspended (`409 super_administrator_immutable` or `409 last_administra
 Requires `users:roles.write`:
 
 ```json
-{ "role_ids": [3, 5] }
+{ "owner": "customer-1", "role_ids": [3, 5] }
 ```
 
-This replaces the complete business-role set rather than appending. The server deduplicates up to
-64 IDs and retains the built-in `member` role. Returns `200 AccessProfile`. The super administrator
-cannot receive roles, and the operation cannot remove the final administrator.
+This replaces the complete direct role set for the supplied owner rather than appending. `owner`
+defaults to `IMES`; in that backend scope the server retains the built-in `member` role and prevents
+removing the final administrator. With a customer owner, only roles in that owner are replaced; `IMES`
+and other customer owners are unaffected. The server deduplicates up to 64 IDs. Returns
+`200 AccessProfile`. The super administrator cannot receive roles.
 
 ## Roles
 
 ### `GET /roles`
 
-Requires `roles:read`. Returns `200 {"items": Role[]}`.
+Requires `roles:read`. Optional query `owner` defaults to `IMES`. Returns
+`200 {"items": Role[]}` for the requested owner.
 
 ### `POST /roles`
 
@@ -233,21 +238,24 @@ Requires `roles:write`.
 | Body field | Required | Constraints |
 | --- | --- | --- |
 | `key` | Yes | 2–64 characters; lowercase letter first, then lowercase letters, digits, `.`, `_`, `-` |
+| `owner` | No | Defaults to `IMES`; 1–200 characters |
 | `name` | Yes | Trimmed 1–100 characters |
 | `description` | No | May be omitted or null, at most 1000 characters |
 | `permission_ids` | No | Defaults to `[]`, at most 256 IDs |
 
-Returns `201`, `Location: /roles/{id}`, and `Role`. Duplicate key returns `409 role_key_exists`;
-missing permission returns `404`; invalid fields return `422`.
+Returns `201`, `Location: /roles/{id}`, and `Role`. Role keys remain globally unique across owners.
+Duplicate key returns `409 role_key_exists`; missing permission returns `404`; invalid fields return
+`422`.
 
 ### `GET /roles/{role_id}`
 
-Requires `roles:read`. `role_id` is a positive int64. Returns `200 Role`, `404`, or
-`400 invalid_path_parameter`.
+Requires `roles:read`. `role_id` is a positive int64. Optional query `owner` defaults to `IMES`.
+Returns `200 Role`, `404` when the role does not belong to that owner, or `400 invalid_path_parameter`.
 
 ### `PATCH /roles/{role_id}`
 
-Requires `roles:write`. At least one field must be supplied:
+Requires `roles:write`. Optional query `owner` defaults to `IMES`. At least one field must be
+supplied:
 
 ```json
 { "name": "Senior support", "description": null }
@@ -259,19 +267,20 @@ Returns `200 Role`; an empty body returns `422`; a system role returns
 
 ### `DELETE /roles/{role_id}`
 
-Requires `roles:write`. Returns `204` with no body. A system role cannot be deleted and a role still
-assigned to users returns `409 role_in_use`.
+Requires `roles:write`. Optional query `owner` defaults to `IMES`. Returns `204` with no body. A
+system role cannot be deleted and a role still assigned to users returns `409 role_in_use`.
 
 ### `PUT /roles/{role_id}/permissions`
 
 Requires `roles:write`:
 
 ```json
-{ "permission_ids": [1, 2, 7] }
+{ "owner": "customer-1", "permission_ids": [1, 2, 7] }
 ```
 
-Replaces the complete direct permission set. Up to 256 IDs are deduplicated; an empty array clears
-all direct permissions. Returns `200 Role`.
+Replaces the complete direct permission set for the role in the supplied owner. `owner` defaults to
+`IMES`. Up to 256 IDs are deduplicated; an empty array clears all direct permissions. Returns
+`200 Role`.
 
 ## Permissions
 

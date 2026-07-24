@@ -19,7 +19,7 @@ use crate::{
     defaults::account::has_permission,
     desktop::{
         api_session,
-        contract::{CreateRoleRequest, PermissionResponse},
+        contract::{CreateRoleRequest, PermissionResponse, SYSTEM_ROLE_OWNER},
     },
 };
 
@@ -114,6 +114,7 @@ impl RoleCreateDialog {
             return;
         }
         let request = CreateRoleRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             key: generated_role_key(name.as_str(), &self.existing_role_keys),
             name,
             description: optional_text(self.description.read(cx).value().as_ref()),

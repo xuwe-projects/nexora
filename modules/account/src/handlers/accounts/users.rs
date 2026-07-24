@@ -152,7 +152,8 @@ pub(crate) async fn replace_user_roles(
     ApiJson(request): ApiJson<ReplaceUserRolesRequest>,
 ) -> Result<Json<AccessProfileResponse>, ApiError> {
     let profile = Account { state }
-        .replace_user_roles(
+        .replace_user_roles_for_owner(
+            request.owner.as_str(),
             user_id.as_str(),
             request.role_ids.as_slice(),
             authorization.profile().user.id.as_str(),

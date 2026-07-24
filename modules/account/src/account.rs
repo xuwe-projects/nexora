@@ -49,11 +49,19 @@ pub mod __private {
 pub(crate) use api::ApiError;
 use authentication::AccessTokenVerifier;
 
+pub use contracts::account::SYSTEM_ROLE_OWNER;
 pub use entities::account::{
     AccessProfile, ExternalIdentity, Permission, PermissionCatalogDefinition, PermissionDefinition,
     PermissionKey, Role, SystemRole, User, UserStatus,
 };
 pub use errors::{AccountError, StoreError};
+
+/// 全局客户门户管理员系统角色键。
+///
+/// 该角色归属 [`SYSTEM_ROLE_OWNER`]，由宿主启动时调用
+/// [`ensure_system_role_with_permissions`] 同步权限集合，并可通过 [`grant_user_role`]
+/// 幂等授予门户管理员用户。
+pub const PORTAL_ADMIN_ROLE_KEY: &str = "portal_admin";
 
 /// 宿主服务创建账号模块时必须提供的外部依赖。
 ///
@@ -447,6 +455,37 @@ pub async fn create_permission_catalog(
     Ok(stores::permissions::register_catalog(definitions, pool).await?)
 }
 
+/// 使用宿主共享连接池按 owner 查询角色目录。
+///
+/// `owner` 用于隔离后台系统角色和客户门户角色；传入 [`SYSTEM_ROLE_OWNER`] 时返回后台管理
+/// 默认可见的角色集合。该函数不执行当前用户授权，只应从可信宿主边界调用。
+///
+/// # Errors
+///
+/// owner 无效、数据库不可访问或角色权限数据无效时返回 [`AccountError`]。
+pub async fn roles_for_owner(pool: &PgPool, owner: &str) -> Result<Vec<Role>, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
+    Ok(stores::roles::query_all_for_owner(owner.as_str(), pool).await?)
+}
+
+/// 使用宿主共享连接池按 owner 与角色 ID 查询角色。
+///
+/// 该函数只在给定 owner 范围内查找角色；同一个 ID 若不属于该 owner，会按不存在处理。
+///
+/// # Errors
+///
+/// owner 无效、角色不存在、数据库不可访问或角色权限数据无效时返回 [`AccountError`]。
+pub async fn role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    role_id: i64,
+) -> Result<Role, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
+    stores::roles::query_by_id_for_owner(owner.as_str(), role_id, pool)
+        .await?
+        .ok_or(AccountError::NotFound("角色"))
+}
+
 /// 使用宿主共享连接池创建一个可由应用管理的自定义角色。
 ///
 /// `permission_ids` 是调用方请求授予的权限集合；Account Store 会在同一事务中按已注册的权限蕴含关系递归展开、
@@ -463,10 +502,75 @@ pub async fn create_role(
     description: Option<&str>,
     permission_ids: &[i64],
 ) -> Result<Role, AccountError> {
+    create_role_for_owner(
+        pool,
+        SYSTEM_ROLE_OWNER,
+        key,
+        name,
+        description,
+        permission_ids,
+    )
+    .await
+}
+
+/// 使用宿主共享连接池在指定 owner 下创建自定义角色。
+///
+/// role key 仍然保持全局唯一；owner 只用于查询、替换用户角色和门户范围隔离。权限 ID 会按
+/// 既有权限蕴含关系展开后保存。
+///
+/// # Errors
+///
+/// owner、角色键、名称、说明或权限 ID 集合无效，角色键已存在，权限不存在，或数据库写入失败时
+/// 返回 [`AccountError`]。
+pub async fn create_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
     handlers::accounts::validate_role_key(key)?;
     handlers::accounts::validate_role_fields(name, description)?;
     let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
-    Ok(stores::roles::create(key, name, description, permission_ids.as_slice(), pool).await?)
+    Ok(stores::roles::create_for_owner(
+        owner.as_str(),
+        key,
+        name,
+        description,
+        permission_ids.as_slice(),
+        pool,
+    )
+    .await?)
+}
+
+/// 使用宿主共享连接池在指定 owner 下创建自动生成 key 的自定义角色。
+///
+/// 数据库会先从 `account.roles_id_seq` 取号，再生成形如 `role_123` 的全局唯一角色 key；
+/// 适合客户门户角色不需要人工填写编码的场景。
+///
+/// # Errors
+///
+/// owner、名称、说明或权限 ID 集合无效，权限不存在，或数据库写入失败时返回 [`AccountError`]。
+pub async fn create_generated_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
+    handlers::accounts::validate_role_fields(name, description)?;
+    let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
+    Ok(stores::roles::create_generated_for_owner(
+        owner.as_str(),
+        name,
+        description,
+        permission_ids.as_slice(),
+        pool,
+    )
+    .await?)
 }
 
 /// 使用宿主共享连接池原子替换自定义角色的权限集合。
@@ -483,8 +587,61 @@ pub async fn replace_role_permissions(
     role_id: i64,
     permission_ids: &[i64],
 ) -> Result<Role, AccountError> {
+    replace_role_permissions_for_owner(pool, SYSTEM_ROLE_OWNER, role_id, permission_ids).await
+}
+
+/// 使用宿主共享连接池按 owner 原子替换自定义角色的权限集合。
+///
+/// 该函数会先确认角色属于指定 owner，再替换权限集合；系统角色仍不可通过本函数编辑。
+///
+/// # Errors
+///
+/// owner 无效、权限数量超限、权限或角色不存在、角色不属于该 owner、目标为系统角色，或数据库事务失败时
+/// 返回 [`AccountError`]。
+pub async fn replace_role_permissions_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    role_id: i64,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
     let permission_ids = handlers::accounts::role_permission_ids(permission_ids.to_vec())?;
-    Ok(stores::roles::replace_permissions(role_id, permission_ids.as_slice(), pool).await?)
+    Ok(stores::roles::replace_permissions_for_owner(
+        owner.as_str(),
+        role_id,
+        permission_ids.as_slice(),
+        pool,
+    )
+    .await?)
+}
+
+/// 使用宿主共享连接池创建或更新后台系统角色，并按权限 key 重建权限集合。
+///
+/// 该函数始终把角色写入 [`SYSTEM_ROLE_OWNER`]，并设置 `is_system = true`。宿主应在启动时用它
+/// 同步 `portal_admin` 等系统角色的权限，确保系统角色不可通过普通角色编辑/删除入口修改。
+///
+/// # Errors
+///
+/// 角色键、名称、说明或权限 key 集合无效，任一权限 key 尚未注册，或数据库写入失败时返回
+/// [`AccountError`]。
+pub async fn ensure_system_role_with_permissions(
+    pool: &PgPool,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_keys: &[&str],
+) -> Result<Role, AccountError> {
+    handlers::accounts::validate_role_key(key)?;
+    handlers::accounts::validate_role_fields(name, description)?;
+    let permission_keys = handlers::accounts::role_permission_keys(permission_keys)?;
+    Ok(stores::roles::ensure_system_with_permissions(
+        key,
+        name,
+        description,
+        permission_keys.as_slice(),
+        pool,
+    )
+    .await?)
 }
 
 /// 使用宿主共享连接池创建一个已经由宿主确认的外部身份对应的本地用户。
@@ -546,8 +703,53 @@ pub async fn replace_user_roles(
     role_ids: &[i64],
     granted_by: &str,
 ) -> Result<AccessProfile, AccountError> {
+    replace_user_roles_for_owner(pool, SYSTEM_ROLE_OWNER, user_id, role_ids, granted_by).await
+}
+
+/// 使用宿主共享连接池只替换指定 owner 下的用户直接角色集合。
+///
+/// 当 owner 为 [`SYSTEM_ROLE_OWNER`] 时沿用后台用户管理语义，自动保留内置 `member` 角色并保护
+/// 最后一个启用管理员。其他 owner 的替换只影响该 owner 下的角色授权，不会删除后台或其他客户
+/// owner 的角色。
+///
+/// # Errors
+///
+/// owner、用户、角色或操作者无效，角色数量超限，目标为超级管理员，后台范围替换会移除最后一个管理员，
+/// 或数据库事务失败时返回 [`AccountError`]。
+pub async fn replace_user_roles_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    user_id: &str,
+    role_ids: &[i64],
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError> {
+    let owner = handlers::accounts::role_owner(owner)?;
     let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
-    Ok(stores::users::replace_roles(user_id, role_ids.as_slice(), granted_by, pool).await?)
+    Ok(stores::users::replace_roles_for_owner(
+        owner.as_str(),
+        user_id,
+        role_ids.as_slice(),
+        granted_by,
+        pool,
+    )
+    .await?)
+}
+
+/// 使用宿主共享连接池幂等追加一个用户角色。
+///
+/// 已存在的用户角色关系会保持不变并按成功返回；该函数不会清空用户在任何 owner 下的已有角色，
+/// 适合门户管理员开通后绑定 `portal_admin` 等系统角色。
+///
+/// # Errors
+///
+/// 用户、角色或授权人不存在，目标用户不允许挂载角色，或数据库写入失败时返回 [`AccountError`]。
+pub async fn grant_user_role(
+    pool: &PgPool,
+    user_id: &str,
+    role_id: i64,
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError> {
+    Ok(stores::users::grant_user_role(user_id, role_id, granted_by, pool).await?)
 }
 
 impl Account {
@@ -727,6 +929,17 @@ impl Account {
         Ok(stores::roles::query_all(&self.state.pool).await?)
     }
 
+    /// 按 owner 返回角色及其直接权限。
+    ///
+    /// 该方法不执行当前用户授权，适合宿主在可信管理边界中读取客户或后台范围角色。
+    ///
+    /// # Errors
+    ///
+    /// owner 无效、数据库不可访问或角色权限数据无效时返回错误。
+    pub async fn roles_for_owner(&self, owner: &str) -> Result<Vec<Role>, AccountError> {
+        roles_for_owner(&self.state.pool, owner).await
+    }
+
     /// 按数据库 ID 返回一个角色及其直接权限。
     ///
     /// # Errors
@@ -736,6 +949,15 @@ impl Account {
         stores::roles::query_by_id(role_id, &self.state.pool)
             .await?
             .ok_or(AccountError::NotFound("角色"))
+    }
+
+    /// 按 owner 与数据库 ID 返回一个角色及其直接权限。
+    ///
+    /// # Errors
+    ///
+    /// owner 无效、角色不存在、数据库不可访问或角色数据无效时返回错误。
+    pub async fn role_for_owner(&self, owner: &str, role_id: i64) -> Result<Role, AccountError> {
+        role_for_owner(&self.state.pool, owner, role_id).await
     }
 
     /// 创建一个可由应用管理的自定义角色。
@@ -756,6 +978,46 @@ impl Account {
         create_role(&self.state.pool, key, name, description, permission_ids).await
     }
 
+    /// 在指定 owner 下创建一个可由应用管理的自定义角色。
+    ///
+    /// # Errors
+    ///
+    /// owner、角色字段或权限集合无效，角色键已存在，权限不存在或数据库失败时返回错误。
+    pub async fn create_role_for_owner(
+        &self,
+        owner: &str,
+        key: &str,
+        name: &str,
+        description: Option<&str>,
+        permission_ids: &[i64],
+    ) -> Result<Role, AccountError> {
+        create_role_for_owner(
+            &self.state.pool,
+            owner,
+            key,
+            name,
+            description,
+            permission_ids,
+        )
+        .await
+    }
+
+    /// 在指定 owner 下创建自动生成 key 的自定义角色。
+    ///
+    /// # Errors
+    ///
+    /// owner、角色字段或权限集合无效，权限不存在或数据库失败时返回错误。
+    pub async fn create_generated_role_for_owner(
+        &self,
+        owner: &str,
+        name: &str,
+        description: Option<&str>,
+        permission_ids: &[i64],
+    ) -> Result<Role, AccountError> {
+        create_generated_role_for_owner(&self.state.pool, owner, name, description, permission_ids)
+            .await
+    }
+
     /// 修改一个自定义角色的名称或说明。
     ///
     /// `description` 为 `None` 时保持原值，`Some(None)` 清空说明，`Some(Some(value))` 设置
@@ -770,10 +1032,27 @@ impl Account {
         name: Option<&str>,
         description: Option<Option<&str>>,
     ) -> Result<Role, AccountError> {
+        self.update_role_for_owner(SYSTEM_ROLE_OWNER, role_id, name, description)
+            .await
+    }
+
+    /// 按 owner 修改一个自定义角色的名称或说明。
+    ///
+    /// # Errors
+    ///
+    /// owner 或字段无效、角色不存在、目标是系统角色或数据库失败时返回错误。
+    pub async fn update_role_for_owner(
+        &self,
+        owner: &str,
+        role_id: i64,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+    ) -> Result<Role, AccountError> {
         if name.is_none() && description.is_none() {
             return Err(ValidationError::new("role", "至少需要提供一个要修改的角色字段").into());
         }
-        let current = self.role(role_id).await?;
+        let owner = handlers::accounts::role_owner(owner)?;
+        let current = self.role_for_owner(owner.as_str(), role_id).await?;
         if current.is_system {
             return Err(AccountError::Conflict {
                 code: "system_role_immutable",
@@ -783,7 +1062,14 @@ impl Account {
         let final_name = name.unwrap_or(current.name.as_str());
         let final_description = description.unwrap_or(current.description.as_deref());
         handlers::accounts::validate_role_fields(final_name, final_description)?;
-        Ok(stores::roles::update(role_id, name, description, &self.state.pool).await?)
+        Ok(stores::roles::update_for_owner(
+            owner.as_str(),
+            role_id,
+            name,
+            description,
+            &self.state.pool,
+        )
+        .await?)
     }
 
     /// 删除一个尚未被用户引用的自定义角色。
@@ -793,6 +1079,20 @@ impl Account {
     /// 角色不存在、角色是系统角色、仍被用户引用或数据库失败时返回错误。
     pub async fn delete_role(&self, role_id: i64) -> Result<(), AccountError> {
         Ok(stores::roles::delete(role_id, &self.state.pool).await?)
+    }
+
+    /// 按 owner 删除一个尚未被用户引用的自定义角色。
+    ///
+    /// # Errors
+    ///
+    /// owner 无效、角色不存在、角色是系统角色、仍被用户引用或数据库失败时返回错误。
+    pub async fn delete_role_for_owner(
+        &self,
+        owner: &str,
+        role_id: i64,
+    ) -> Result<(), AccountError> {
+        let owner = handlers::accounts::role_owner(owner)?;
+        Ok(stores::roles::delete_for_owner(owner.as_str(), role_id, &self.state.pool).await?)
     }
 
     /// 原子替换一个自定义角色包含的权限集合。
@@ -808,6 +1108,42 @@ impl Account {
         permission_ids: &[i64],
     ) -> Result<Role, AccountError> {
         replace_role_permissions(&self.state.pool, role_id, permission_ids).await
+    }
+
+    /// 按 owner 原子替换一个自定义角色包含的权限集合。
+    ///
+    /// # Errors
+    ///
+    /// owner、权限集合或角色无效，目标是系统角色或数据库失败时返回错误。
+    pub async fn replace_role_permissions_for_owner(
+        &self,
+        owner: &str,
+        role_id: i64,
+        permission_ids: &[i64],
+    ) -> Result<Role, AccountError> {
+        replace_role_permissions_for_owner(&self.state.pool, owner, role_id, permission_ids).await
+    }
+
+    /// 创建或更新后台系统角色，并按权限 key 重建权限集合。
+    ///
+    /// # Errors
+    ///
+    /// 角色字段或权限 key 集合无效，任一权限 key 尚未注册，或数据库失败时返回错误。
+    pub async fn ensure_system_role_with_permissions(
+        &self,
+        key: &str,
+        name: &str,
+        description: Option<&str>,
+        permission_keys: &[&str],
+    ) -> Result<Role, AccountError> {
+        ensure_system_role_with_permissions(
+            &self.state.pool,
+            key,
+            name,
+            description,
+            permission_keys,
+        )
+        .await
     }
 
     /// 分页返回本地用户目录。
@@ -955,6 +1291,36 @@ impl Account {
         granted_by: &str,
     ) -> Result<AccessProfile, AccountError> {
         replace_user_roles(&self.state.pool, user_id, role_ids, granted_by).await
+    }
+
+    /// 只替换指定 owner 下的用户直接角色集合。
+    ///
+    /// # Errors
+    ///
+    /// owner、用户、角色或操作者无效，角色数量超限，目标为超级管理员，后台范围替换会移除最后一个管理员，
+    /// 或数据库失败时返回错误。
+    pub async fn replace_user_roles_for_owner(
+        &self,
+        owner: &str,
+        user_id: &str,
+        role_ids: &[i64],
+        granted_by: &str,
+    ) -> Result<AccessProfile, AccountError> {
+        replace_user_roles_for_owner(&self.state.pool, owner, user_id, role_ids, granted_by).await
+    }
+
+    /// 幂等追加一个用户角色，不清空用户已有角色。
+    ///
+    /// # Errors
+    ///
+    /// 用户、角色或授权人不存在，目标用户不允许挂载角色，或数据库失败时返回错误。
+    pub async fn grant_user_role(
+        &self,
+        user_id: &str,
+        role_id: i64,
+        granted_by: &str,
+    ) -> Result<AccessProfile, AccountError> {
+        grant_user_role(&self.state.pool, user_id, role_id, granted_by).await
     }
 
     /// 把经过宿主服务确认的外部身份显式开通为普通本地用户。

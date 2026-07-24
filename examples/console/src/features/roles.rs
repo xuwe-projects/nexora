@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use contracts::{
     account::{
         CreateRoleRequest, PermissionResponse, ReplaceRolePermissionsRequest, RoleResponse,
-        UpdateRoleRequest,
+        SYSTEM_ROLE_OWNER, UpdateRoleRequest,
     },
     patch::PatchField,
 };
@@ -102,6 +102,7 @@ impl RoleCreateDialog {
             return;
         };
         let request = CreateRoleRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             key: self.role_key.read(cx).value().trim().to_owned(),
             name: self.role_name.read(cx).value().trim().to_owned(),
             description: optional_text(self.description.read(cx).value().as_ref()),
@@ -392,6 +393,7 @@ impl RolesFeature {
             return;
         }
         let request = ReplaceRolePermissionsRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             permission_ids: self.selected_permission_ids.iter().copied().collect(),
         };
         self.start_role_update(role.id, "角色权限已保存", cx, move |api| {

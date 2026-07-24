@@ -6,11 +6,13 @@ use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
     ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
-    PermissionDefinition, PermissionKey, User,
+    PORTAL_ADMIN_ROLE_KEY, PermissionDefinition, PermissionKey, SYSTEM_ROLE_OWNER, User,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
-    create_permissions, create_role, create_user, create_user_with_roles, replace_role_permissions,
-    replace_user_roles,
+    create_generated_role_for_owner, create_permissions, create_role, create_role_for_owner,
+    create_user, create_user_with_roles, ensure_system_role_with_permissions, grant_user_role,
+    replace_role_permissions, replace_role_permissions_for_owner, replace_user_roles,
+    replace_user_roles_for_owner, roles_for_owner,
 };
 use api::with_http_layers;
 use async_trait::async_trait;
@@ -107,6 +109,289 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
         .expect("宿主应能替换用户角色关联");
     assert_eq!(profile.user, user);
     assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn owner_scoped_roles_crud_permissions_and_generated_keys(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let permissions = account
+        .register_permissions(&[PermissionDefinition {
+            key: "portal:read".to_owned(),
+            name: "查看门户".to_owned(),
+            description: None,
+        }])
+        .await
+        .expect("宿主应当可以注册门户权限");
+    let permission_id = permissions[0].id;
+
+    let role = create_role_for_owner(
+        &pool,
+        "customer-1",
+        "customer_manager",
+        "客户管理员",
+        Some("管理单个客户门户"),
+        &[permission_id],
+    )
+    .await
+    .expect("应当可以在客户 owner 下创建角色");
+    assert_eq!(role.owner, "customer-1");
+    assert_eq!(permission_keys(&role.permissions), ["portal:read"]);
+    assert!(
+        account
+            .roles()
+            .await
+            .expect("默认后台角色查询应当成功")
+            .iter()
+            .all(|role| role.owner == SYSTEM_ROLE_OWNER)
+    );
+
+    let scoped_roles = roles_for_owner(&pool, "customer-1")
+        .await
+        .expect("应当可以按 owner 查询角色");
+    assert_eq!(scoped_roles.len(), 1);
+    assert_eq!(scoped_roles[0].id, role.id);
+
+    let generated = create_generated_role_for_owner(
+        &pool,
+        "customer-1",
+        "自动编码客户角色",
+        None,
+        &[permission_id],
+    )
+    .await
+    .expect("应当可以创建数据库序列参与生成 key 的角色");
+    assert_eq!(generated.owner, "customer-1");
+    assert!(generated.key.starts_with("role_"));
+
+    let duplicate = create_role_for_owner(
+        &pool,
+        "customer-2",
+        "customer_manager",
+        "另一个客户管理员",
+        None,
+        &[],
+    )
+    .await
+    .expect_err("role key 应当保持全局唯一");
+    assert!(matches!(
+        duplicate,
+        AccountError::Conflict {
+            code: "role_key_exists",
+            ..
+        }
+    ));
+
+    let updated = account
+        .update_role_for_owner("customer-1", role.id, Some("客户主管"), Some(None))
+        .await
+        .expect("应当可以按 owner 更新自定义角色");
+    assert_eq!(updated.name, "客户主管");
+    assert_eq!(updated.description, None);
+
+    let replaced = replace_role_permissions_for_owner(&pool, "customer-1", role.id, &[])
+        .await
+        .expect("应当可以按 owner 替换权限集合");
+    assert!(replaced.permissions.is_empty());
+
+    let wrong_scope = account
+        .role_for_owner(SYSTEM_ROLE_OWNER, role.id)
+        .await
+        .expect_err("后台默认 owner 不应读取客户角色");
+    assert!(matches!(wrong_scope, AccountError::NotFound("角色")));
+
+    account
+        .delete_role_for_owner("customer-1", role.id)
+        .await
+        .expect("应当可以按 owner 删除未引用角色");
+    let remaining = roles_for_owner(&pool, "customer-1")
+        .await
+        .expect("删除后仍应可查询客户 owner");
+    assert_eq!(
+        remaining
+            .into_iter()
+            .map(|role| role.id)
+            .collect::<Vec<_>>(),
+        vec![generated.id]
+    );
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn replace_user_roles_for_owner_preserves_other_owner_roles(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let grantor = account
+        .provision_user(identity("owner-scope-grantor"))
+        .await
+        .expect("授权人应当可以开通");
+    let user = account
+        .provision_user(identity("owner-scope-user"))
+        .await
+        .expect("目标用户应当可以开通");
+    let backend_role = account
+        .create_role("backend_reader", "后台查看员", None, &[])
+        .await
+        .expect("后台角色应当可以创建");
+    let customer_a_role = account
+        .create_role_for_owner(
+            "customer-a",
+            "customer_a_reader",
+            "客户 A 查看员",
+            None,
+            &[],
+        )
+        .await
+        .expect("客户 A 角色应当可以创建");
+    let customer_b_role = account
+        .create_role_for_owner(
+            "customer-b",
+            "customer_b_reader",
+            "客户 B 查看员",
+            None,
+            &[],
+        )
+        .await
+        .expect("客户 B 角色应当可以创建");
+
+    replace_user_roles(
+        &pool,
+        user.id.as_str(),
+        &[backend_role.id],
+        grantor.id.as_str(),
+    )
+    .await
+    .expect("后台角色替换应当成功");
+    replace_user_roles_for_owner(
+        &pool,
+        "customer-a",
+        user.id.as_str(),
+        &[customer_a_role.id],
+        grantor.id.as_str(),
+    )
+    .await
+    .expect("客户 A 角色替换应当成功");
+    replace_user_roles_for_owner(
+        &pool,
+        "customer-b",
+        user.id.as_str(),
+        &[customer_b_role.id],
+        grantor.id.as_str(),
+    )
+    .await
+    .expect("客户 B 角色替换应当成功");
+    replace_user_roles_for_owner(
+        &pool,
+        "customer-a",
+        user.id.as_str(),
+        &[],
+        grantor.id.as_str(),
+    )
+    .await
+    .expect("清空客户 A 角色不应影响其他 owner");
+
+    let profile = account
+        .user_access(user.id.as_str())
+        .await
+        .expect("应当可以读取最终授权快照");
+    let assigned = profile
+        .roles
+        .iter()
+        .map(|role| (role.owner.as_str(), role.key.as_str()))
+        .collect::<Vec<_>>();
+    assert!(assigned.contains(&(SYSTEM_ROLE_OWNER, "backend_reader")));
+    assert!(assigned.contains(&(SYSTEM_ROLE_OWNER, "member")));
+    assert!(assigned.contains(&("customer-b", "customer_b_reader")));
+    assert!(!assigned.contains(&("customer-a", "customer_a_reader")));
+}
+
+#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+async fn system_role_sync_and_grant_user_role_are_immutable_and_idempotent(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    create_permissions(
+        &pool,
+        &[PermissionDefinition {
+            key: "portal:admin".to_owned(),
+            name: "管理门户".to_owned(),
+            description: Some("允许管理客户门户".to_owned()),
+        }],
+    )
+    .await
+    .expect("门户管理员权限应当可以注册");
+
+    let portal_role = ensure_system_role_with_permissions(
+        &pool,
+        PORTAL_ADMIN_ROLE_KEY,
+        "门户管理员",
+        Some("全局客户门户管理员"),
+        &["portal:admin"],
+    )
+    .await
+    .expect("宿主应当可以同步门户管理员系统角色");
+    assert_eq!(portal_role.owner, SYSTEM_ROLE_OWNER);
+    assert_eq!(portal_role.key, PORTAL_ADMIN_ROLE_KEY);
+    assert!(portal_role.is_system);
+    assert_eq!(permission_keys(&portal_role.permissions), ["portal:admin"]);
+
+    let update_error = account
+        .update_role(portal_role.id, Some("不可修改"), None)
+        .await
+        .expect_err("系统角色不可编辑");
+    assert!(matches!(
+        update_error,
+        AccountError::Conflict {
+            code: "system_role_immutable",
+            ..
+        }
+    ));
+    let delete_error = account
+        .delete_role(portal_role.id)
+        .await
+        .expect_err("系统角色不可删除");
+    assert!(matches!(
+        delete_error,
+        AccountError::Conflict {
+            code: "system_role_immutable",
+            ..
+        }
+    ));
+
+    let grantor = account
+        .provision_user(identity("portal-grantor"))
+        .await
+        .expect("授权人应当可以开通");
+    let user = account
+        .provision_user(identity("portal-admin-user"))
+        .await
+        .expect("门户管理员用户应当可以开通");
+    let existing_role = account
+        .create_role("ops_viewer", "运营查看员", None, &[])
+        .await
+        .expect("已有角色应当可以创建");
+    account
+        .replace_user_roles(user.id.as_str(), &[existing_role.id], grantor.id.as_str())
+        .await
+        .expect("预置已有角色应当成功");
+
+    grant_user_role(&pool, user.id.as_str(), portal_role.id, grantor.id.as_str())
+        .await
+        .expect("首次追加门户管理员角色应当成功");
+    let profile = grant_user_role(&pool, user.id.as_str(), portal_role.id, grantor.id.as_str())
+        .await
+        .expect("重复追加门户管理员角色应当幂等成功");
+    let portal_grant_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM account.user_roles WHERE user_id = $1 AND role_id = $2",
+    )
+    .bind(user.id.as_str())
+    .bind(portal_role.id)
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对门户管理员角色授权数量");
+    assert_eq!(portal_grant_count, 1);
+    assert!(profile.roles.iter().any(|role| role.id == portal_role.id));
+    assert!(profile.roles.iter().any(|role| role.id == existing_role.id));
+
+    let missing_grantor = grant_user_role(&pool, user.id.as_str(), portal_role.id, "Missing1")
+        .await
+        .expect_err("幂等重复追加也应校验授权人存在");
+    assert!(matches!(missing_grantor, AccountError::NotFound("用户")));
 }
 
 #[sqlx::test(migrations = "../../crates/migrate/migrations")]
@@ -441,6 +726,7 @@ async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPo
             ("admin".to_owned(), "系统管理员".to_owned()),
             ("auditor".to_owned(), "审计员".to_owned()),
             ("member".to_owned(), "普通成员".to_owned()),
+            ("portal_admin".to_owned(), "门户管理员".to_owned()),
         ]
     );
 }
@@ -633,6 +919,7 @@ async fn last_active_administrator_cannot_be_suspended_or_demoted(pool: PgPool) 
         format!("/users/{}/roles", administrator.user.id),
         "super-admin",
         &ReplaceUserRolesRequest {
+            owner: account::SYSTEM_ROLE_OWNER.to_owned(),
             role_ids: vec![member_role_id],
         },
     )

@@ -94,7 +94,7 @@ impl PermissionKey {
     pub const UsersRolesWrite: Self = Self(Cow::Borrowed("users:roles.write"));
     /// 启用或停用用户访问。
     pub const UsersStatusWrite: Self = Self(Cow::Borrowed("users:status.write"));
-    /// 涓婁紶銆佹洿鏂版垨娓呯┖鐢ㄦ埛澶村儚銆?
+    /// 上传、更新或清空用户头像。
     pub const UsersAvatarWrite: Self = Self(Cow::Borrowed("users:avatar.write"));
     /// 把经过管理员确认的外部身份显式开通为本地用户。
     pub const UsersProvision: Self = Self(Cow::Borrowed("users:provision"));
@@ -277,6 +277,8 @@ pub struct Permission {
 pub struct Role {
     /// 数据库生成的 BIGSERIAL 角色 ID。
     pub id: i64,
+    /// 角色所属范围。
+    pub owner: String,
     /// 业务规则和授权配置使用的稳定角色键。
     pub key: String,
     /// 面向管理界面展示的角色名称。
@@ -348,6 +350,7 @@ impl TryFrom<PermissionRow> for Permission {
 #[derive(Debug, FromRow)]
 pub(crate) struct RoleRow {
     pub(crate) id: i64,
+    pub(crate) owner: String,
     pub(crate) key: String,
     pub(crate) name: String,
     pub(crate) description: Option<String>,
@@ -360,6 +363,7 @@ impl RoleRow {
     pub(crate) fn with_permissions(self, permissions: Vec<Permission>) -> Role {
         Role {
             id: self.id,
+            owner: self.owner,
             key: self.key,
             name: self.name,
             description: self.description,

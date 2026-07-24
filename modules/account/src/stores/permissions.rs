@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
 use crate::{
-    StoreError,
+    SYSTEM_ROLE_OWNER, StoreError,
     entities::account::{
         Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionRow,
     },
@@ -34,8 +34,14 @@ pub(crate) async fn register_catalog(
     }
     let mut transaction = pool.begin().await?;
     let administrator_role_id = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM account.roles WHERE key = 'admin' AND is_system = TRUE FOR SHARE",
+        r#"
+        SELECT id
+        FROM account.roles
+        WHERE key = 'admin' AND owner = $1 AND is_system = TRUE
+        FOR SHARE
+        "#,
     )
+    .bind(SYSTEM_ROLE_OWNER)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(StoreError::NotFound("系统管理员角色"))?;

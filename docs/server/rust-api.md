@@ -216,17 +216,20 @@ pub async fn authorize(
 | --- | --- | --- | --- |
 | `register_permissions` | `&[PermissionDefinition]` | `Vec<Permission>` | 按 key 幂等创建或更新，并在同一事务中授予系统管理员 |
 | `permissions` | 无 | `Vec<Permission>` | 完整权限目录 |
-| `roles` | 无 | `Vec<Role>` | 全部角色及直接权限 |
-| `role` | `role_id: i64` | `Role` | 不存在返回 `NotFound` |
-| `create_role` | key、name、description、permission IDs | `Role` | 同事务创建自定义角色与权限关联 |
-| `update_role` | role ID、可选 name、三态 description | `Role` | 系统角色不可修改 |
-| `delete_role` | role ID | `()` | 系统角色或被引用角色不可删除 |
-| `replace_role_permissions` | role ID、完整 permission IDs | `Role` | 原子替换；空数组清空 |
+| `roles` / `roles_for_owner` | owner 可选 | `Vec<Role>` | 缺省只返回 `IMES` 后台角色；owner 版本查询指定范围 |
+| `role` / `role_for_owner` | role ID、owner 可选 | `Role` | 角色不属于指定 owner 时按不存在处理 |
+| `create_role` / `create_role_for_owner` | owner、key、name、description、permission IDs | `Role` | 同事务创建自定义角色与权限关联；role key 仍全局唯一 |
+| `create_generated_role_for_owner` | owner、name、description、permission IDs | `Role` | 使用数据库序列生成 `role_<id>` 全局唯一 key |
+| `update_role` / `update_role_for_owner` | owner、role ID、可选 name、三态 description | `Role` | 系统角色不可修改 |
+| `delete_role` / `delete_role_for_owner` | owner、role ID | `()` | 系统角色或被引用角色不可删除 |
+| `replace_role_permissions` / `replace_role_permissions_for_owner` | owner、role ID、完整 permission IDs | `Role` | 原子替换指定 owner 下的自定义角色权限；空数组清空 |
+| `ensure_system_role_with_permissions` | key、name、description、permission keys | `Role` | 在 `IMES` 下创建/更新系统角色并按权限 key 重建权限集合 |
 | `users` | page、page_size | `Page<User>` | page 从 1 开始，size 限制到 1..=100 |
 | `user_access` | user ID | `AccessProfile` | 用户、直接角色与合并权限 |
 | `refresh_user_from_directory` | identity ID | `AccessProfile` | 同步目录用户名、邮箱、展示名、头像与最近登录时间，不创建陌生用户 |
 | `update_user_status` | user ID、`UserStatus` | `User` | 超级管理员和最后管理员受保护 |
-| `replace_user_roles` | user ID、完整 role IDs、granted_by | `AccessProfile` | 原子替换并保留 `member` |
+| `replace_user_roles` / `replace_user_roles_for_owner` | owner、user ID、完整 role IDs、granted_by | `AccessProfile` | 缺省替换 `IMES` 并保留 `member`；owner 版本只替换指定范围 |
+| `grant_user_role` | user ID、role ID、granted_by | `AccessProfile` | 幂等追加角色，不清空已有角色 |
 | `provision_user` | `ExternalIdentity` | `User` | 不验证身份来源，不自动授权角色 |
 | `provision_user_with_roles` | identity、role IDs、granted_by | `User` | 用户与初始角色在同一事务中创建 |
 | `create_managed_user_with_roles` | `CreateHumanIdentity`、role IDs、granted_by | `User` | 先创建 Provider 用户，再事务绑定本地账号；失败时尽力删除 Provider 用户 |
@@ -255,7 +258,7 @@ pub async fn create_permissions(
 最多 256 项；同批 key 不能重复。key 必须是 `resource:action`，两段各 2 至 64 位，小写
 字母开头；name 为 1 至 100 个字符，description 最多 1000 个字符。相同 key 会更新元数据。
 
-### `create_role`
+### owner 作用域角色
 
 ```rust
 pub async fn create_role(
@@ -265,11 +268,30 @@ pub async fn create_role(
     description: Option<&str>,
     permission_ids: &[i64],
 ) -> Result<Role, AccountError>
+
+pub async fn create_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>
+
+pub async fn create_generated_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>
 ```
 
-创建自定义角色，最多 256 个权限 ID。角色和关联在同一事务中写入。
+`create_role` 默认写入 `IMES`；`create_role_for_owner` 写入指定 owner。role key 仍全局唯一。
+`create_generated_role_for_owner` 通过数据库序列生成 `role_<id>` key，适合门户角色无需人工编码的场景。
+最多 256 个权限 ID，角色和关联在同一事务中写入。
 
-### `replace_role_permissions`
+### owner 作用域权限替换
 
 ```rust
 pub async fn replace_role_permissions(
@@ -277,9 +299,47 @@ pub async fn replace_role_permissions(
     role_id: i64,
     permission_ids: &[i64],
 ) -> Result<Role, AccountError>
+
+pub async fn replace_role_permissions_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    role_id: i64,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>
 ```
 
-替换完整集合；空数组清空。系统角色不可修改。
+替换完整集合；空数组清空。owner 版本会先确认角色属于指定 owner。系统角色不可修改。
+
+### 系统角色同步与用户角色授予
+
+```rust
+pub async fn ensure_system_role_with_permissions(
+    pool: &PgPool,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_keys: &[&str],
+) -> Result<Role, AccountError>
+
+pub async fn replace_user_roles_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    user_id: &str,
+    role_ids: &[i64],
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError>
+
+pub async fn grant_user_role(
+    pool: &PgPool,
+    user_id: &str,
+    role_id: i64,
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError>
+```
+
+`ensure_system_role_with_permissions` 始终在 `IMES` 下创建或更新系统角色，并按权限 key 重建权限集合。
+全局门户管理员使用 `PORTAL_ADMIN_ROLE_KEY`（`portal_admin`）。`replace_user_roles_for_owner` 只替换
+指定 owner 下的用户角色；`grant_user_role` 幂等追加角色，不清空已有角色。
 
 ### `create_user`
 

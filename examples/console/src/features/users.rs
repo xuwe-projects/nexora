@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use contracts::account::{
-    AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse, UpdateUserStatusRequest,
-    UserResponse, UserStatus,
+    AccessProfileResponse, ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER,
+    UpdateUserStatusRequest, UserResponse, UserStatus,
 };
 use gpui::{
     AnyElement, Context, EventEmitter, IntoElement as _, Task, Window, div, prelude::*, px,
@@ -202,6 +202,7 @@ impl UsersFeature {
         };
         let user_id = editor.profile.user.id.clone();
         let request = ReplaceUserRolesRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             role_ids: editor.selected_role_ids.iter().copied().collect(),
         };
         self.busy_user_id = Some(user_id.clone());

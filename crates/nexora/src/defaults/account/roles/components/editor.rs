@@ -21,7 +21,8 @@ use crate::{
     desktop::{
         api_session,
         contract::{
-            PermissionResponse, ReplaceRolePermissionsRequest, RoleResponse, UpdateRoleRequest,
+            PermissionResponse, ReplaceRolePermissionsRequest, RoleResponse, SYSTEM_ROLE_OWNER,
+            UpdateRoleRequest,
         },
     },
 };
@@ -188,6 +189,7 @@ impl RoleEditor {
                 .unwrap_or(PatchField::Null),
         };
         let permissions = ReplaceRolePermissionsRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             permission_ids: self.selected_permission_ids.iter().copied().collect(),
         };
         self.saving = true;

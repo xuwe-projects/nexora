@@ -12,7 +12,7 @@ use nexora::desktop::{
     client_config,
     contract::{
         CreateRoleRequest, ProvisionUserRequest, ReplaceRolePermissionsRequest,
-        ReplaceUserRolesRequest, UpdateRoleRequest, UpdateUserAvatarRequest,
+        ReplaceUserRolesRequest, SYSTEM_ROLE_OWNER, UpdateRoleRequest, UpdateUserAvatarRequest,
         UpdateUserStatusRequest, UserStatus,
     },
 };
@@ -35,6 +35,7 @@ const USER_JSON: &str = r#"{
 
 const ROLE_JSON: &str = r#"{
     "id":42,
+    "owner":"IMES",
     "key":"factory_manager",
     "name":"工厂管理员",
     "description":"管理工厂",
@@ -166,6 +167,7 @@ fn replace_user_roles_puts_complete_role_id_set() {
         .replace_user_roles(
             "User0001",
             &ReplaceUserRolesRequest {
+                owner: SYSTEM_ROLE_OWNER.to_owned(),
                 role_ids: vec![7, 9],
             },
         )
@@ -182,6 +184,7 @@ fn create_role_posts_initial_permission_ids_and_accepts_created_response() {
     let (endpoint, server) = spawn_mock("201 Created", ROLE_JSON, &[("Location", "/roles/42")]);
     let role = session(endpoint)
         .create_role(&CreateRoleRequest {
+            owner: SYSTEM_ROLE_OWNER.to_owned(),
             key: "factory_manager".to_owned(),
             name: "工厂管理员".to_owned(),
             description: Some("管理工厂".to_owned()),
@@ -239,6 +242,7 @@ fn replace_role_permissions_puts_complete_permission_id_set() {
         .replace_role_permissions(
             42,
             &ReplaceRolePermissionsRequest {
+                owner: SYSTEM_ROLE_OWNER.to_owned(),
                 permission_ids: vec![11, 12],
             },
         )

@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{pagination::PageResponse, patch::PatchField};
 
+/// Account 后台系统角色使用的默认 owner。
+///
+/// 管理后台角色、系统角色以及历史迁移回填角色都归属该范围；客户门户等宿主侧范围应传入
+/// 客户 ID 或其他稳定业务范围 ID。
+pub const SYSTEM_ROLE_OWNER: &str = "IMES";
+
 /// 管理员在身份目录创建人类用户、设置初始密码并绑定本地账号的请求正文。
 ///
 /// `initial_password` 只传输到服务端并写入外部身份目录，不应被客户端记录到日志或错误详情。
@@ -76,6 +82,12 @@ pub struct UpdateUserAvatarRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRoleRequest {
+    /// 角色所属范围；缺省时使用后台系统范围 `IMES`。
+    #[serde(
+        default = "default_role_owner",
+        skip_serializing_if = "is_default_role_owner"
+    )]
+    pub owner: String,
     /// 在 API 和授权规则中使用的稳定角色键。
     pub key: String,
     /// 面向管理界面展示的角色名称。
@@ -102,6 +114,12 @@ pub struct UpdateRoleRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRolePermissionsRequest {
+    /// 要替换权限的角色所属范围；缺省时只允许替换后台系统范围 `IMES` 下的角色。
+    #[serde(
+        default = "default_role_owner",
+        skip_serializing_if = "is_default_role_owner"
+    )]
+    pub owner: String,
     /// 替换后角色应当直接包含的权限 ID 集合。
     pub permission_ids: Vec<i64>,
 }
@@ -110,8 +128,23 @@ pub struct ReplaceRolePermissionsRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceUserRolesRequest {
+    /// 要替换的用户角色所属范围；缺省时只替换后台系统范围 `IMES` 的角色。
+    #[serde(
+        default = "default_role_owner",
+        skip_serializing_if = "is_default_role_owner"
+    )]
+    pub owner: String,
     /// 替换后用户应当直接拥有的角色 ID 集合。
     pub role_ids: Vec<i64>,
+}
+
+/// 按 owner 查询或修改角色资源时使用的 query 参数。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoleOwnerQuery {
+    /// 角色所属范围；缺省时使用后台系统范围 `IMES`。
+    #[serde(default = "default_role_owner")]
+    pub owner: String,
 }
 
 /// 用户是否允许访问受保护 API 的公开状态。
@@ -190,6 +223,8 @@ pub struct UserResponse {
 pub struct RoleResponse {
     /// 数据库生成的 BIGSERIAL 角色 ID。
     pub id: i64,
+    /// 角色所属范围。
+    pub owner: String,
     /// 在授权判断中使用的稳定角色键。
     pub key: String,
     /// 面向管理界面展示的角色名称。
@@ -221,3 +256,11 @@ pub struct PermissionResponse {
 
 /// 后台用户列表的页码分页响应。
 pub type UserPageResponse = PageResponse<UserResponse>;
+
+fn default_role_owner() -> String {
+    SYSTEM_ROLE_OWNER.to_owned()
+}
+
+fn is_default_role_owner(owner: &String) -> bool {
+    owner == SYSTEM_ROLE_OWNER
+}

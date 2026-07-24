@@ -138,12 +138,15 @@ mod server {
         server::{
             Account, AccountOidcSettings as OidcSettings, AccountSettings as Settings,
             AuthenticatedUser, Authorized, DirectoryUser, ExternalIdentity,
-            OidcAccessTokenVerifier, OidcResourceServer, PermissionDefinition, PermissionKey,
-            RequiredPermission, Setup, SetupCompletionRequest, SetupUnlockRequest,
-            VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
-            ZitadelAuthorizationRequest, ZitadelProvisioningClient, create_permissions,
-            create_role, create_user, create_user_with_roles, migrations, provisioning_client,
-            replace_role_permissions, replace_user_roles,
+            OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
+            PermissionDefinition, PermissionKey, RequiredPermission, SYSTEM_ROLE_OWNER, Setup,
+            SetupCompletionRequest, SetupUnlockRequest, VerifiedBearerIdentity, VerifiedIdentity,
+            VerifiedOrganizationContext, ZitadelAuthorizationRequest, ZitadelProvisioningClient,
+            create_generated_role_for_owner, create_permissions, create_role,
+            create_role_for_owner, create_user, create_user_with_roles,
+            ensure_system_role_with_permissions, grant_user_role, migrations, provisioning_client,
+            replace_role_permissions, replace_role_permissions_for_owner, replace_user_roles,
+            replace_user_roles_for_owner, role_for_owner, roles_for_owner,
         },
     };
     use serde::Deserialize;
@@ -268,8 +271,24 @@ mod server {
             }];
             _ = account.register_permissions(&definitions);
             _ = account.create_role("project-reader", "项目查看者", None, &[]);
+            _ = account.create_role_for_owner(
+                "customer-1",
+                "project-owner",
+                "项目负责人",
+                None,
+                &[],
+            );
+            _ = account.create_generated_role_for_owner("customer-1", "自动角色", None, &[]);
             _ = account.permissions();
             _ = account.roles();
+            _ = account.roles_for_owner(SYSTEM_ROLE_OWNER);
+            _ = account.role_for_owner(SYSTEM_ROLE_OWNER, 1);
+            _ = account.ensure_system_role_with_permissions(
+                PORTAL_ADMIN_ROLE_KEY,
+                "门户管理员",
+                None,
+                &[],
+            );
             _ = account.users(1, 20);
             _ = account.authorize("access-token", PermissionKey::from_static("projects:read"));
         }
@@ -370,8 +389,22 @@ mod server {
             _ = create_user_with_roles(pool, identity, &[], "Admin001");
             _ = create_permissions(pool, &definitions);
             _ = create_role(pool, "project-reader", "项目查看者", None, &[]);
+            _ = create_role_for_owner(pool, "customer-1", "project-owner", "项目负责人", None, &[]);
+            _ = create_generated_role_for_owner(pool, "customer-1", "自动角色", None, &[]);
+            _ = roles_for_owner(pool, SYSTEM_ROLE_OWNER);
+            _ = role_for_owner(pool, SYSTEM_ROLE_OWNER, 1);
+            _ = ensure_system_role_with_permissions(
+                pool,
+                PORTAL_ADMIN_ROLE_KEY,
+                "门户管理员",
+                None,
+                &[],
+            );
             _ = replace_role_permissions(pool, 1, &[]);
+            _ = replace_role_permissions_for_owner(pool, SYSTEM_ROLE_OWNER, 1, &[]);
             _ = replace_user_roles(pool, "User0001", &[], "Admin001");
+            _ = replace_user_roles_for_owner(pool, SYSTEM_ROLE_OWNER, "User0001", &[], "Admin001");
+            _ = grant_user_role(pool, "User0001", 1, "Admin001");
         }
 
         _ = assert_management_api as fn(&sqlx::PgPool);

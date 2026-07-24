@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.15.1
+  version: 0.16.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -22,7 +22,7 @@ tags:
   - name: Users
     description: 本地用户、访问状态与直接角色
   - name: Roles
-    description: 系统角色与自定义角色
+    description: 按 owner 隔离的系统角色与自定义角色
   - name: Permissions
     description: 内置和宿主注册的权限目录
 paths:
@@ -403,8 +403,9 @@ paths:
       operationId: replaceUserRoles
       summary: 原子替换用户角色
       description: >-
-        要求 users:roles.write。role_ids 是替换后的完整业务角色集合；空数组会移除业务角色，
-        但保留内置 member。超级管理员不可挂载角色。
+        要求 users:roles.write。owner 缺省为 IMES，此时 role_ids 是替换后的完整后台业务角色集合；
+        空数组会移除后台业务角色但保留内置 member。传入其他 owner 时仅替换该 owner 下的用户角色，
+        不影响 IMES 或其他客户 owner。超级管理员不可挂载角色。
       security:
         - bearerAuth: []
       requestBody:
@@ -448,6 +449,8 @@ paths:
       description: 要求 roles:read。
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RoleOwner"
       responses:
         "200":
           description: 角色集合
@@ -516,6 +519,7 @@ paths:
   /roles/{role_id}:
     parameters:
       - $ref: "#/components/parameters/RoleId"
+      - $ref: "#/components/parameters/RoleOwner"
     get:
       tags: [Roles]
       operationId: getRole
@@ -616,7 +620,8 @@ paths:
       operationId: replaceRolePermissions
       summary: 原子替换自定义角色权限
       description: >-
-        要求 roles:write。permission_ids 是替换后的完整直接权限集合；空数组会清空。
+        要求 roles:write。owner 缺省为 IMES；permission_ids 是替换后的完整直接权限集合；
+        空数组会清空指定 owner 下的该角色权限。
       security:
         - bearerAuth: []
       requestBody:
@@ -707,6 +712,15 @@ components:
         type: integer
         format: int64
         minimum: 1
+    RoleOwner:
+      name: owner
+      in: query
+      description: 角色所属范围；缺省为后台系统范围 IMES，客户门户可传入客户 ID
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        default: IMES
     Page:
       name: page
       in: query
@@ -969,12 +983,17 @@ components:
           maxLength: 1000
     Role:
       type: object
-      required: [id, key, name, is_system, permissions, created_at, updated_at]
+      required: [id, owner, key, name, is_system, permissions, created_at, updated_at]
       properties:
         id:
           type: integer
           format: int64
           minimum: 1
+        owner:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 角色所属范围；IMES 表示后台系统范围，其他值由宿主作为客户或业务范围 ID
         key:
           type: string
           minLength: 2
@@ -1123,6 +1142,12 @@ components:
       additionalProperties: false
       required: [role_ids]
       properties:
+        owner:
+          type: string
+          minLength: 1
+          maxLength: 200
+          default: IMES
+          description: 要替换的角色所属范围；缺省时只替换后台系统范围 IMES
         role_ids:
           type: array
           maxItems: 64
@@ -1136,6 +1161,12 @@ components:
       additionalProperties: false
       required: [key, name]
       properties:
+        owner:
+          type: string
+          minLength: 1
+          maxLength: 200
+          default: IMES
+          description: 角色所属范围；缺省为后台系统范围 IMES，客户门户可传入客户 ID
         key:
           type: string
           pattern: "^[a-z][a-z0-9._-]{1,63}$"
@@ -1172,6 +1203,12 @@ components:
       additionalProperties: false
       required: [permission_ids]
       properties:
+        owner:
+          type: string
+          minLength: 1
+          maxLength: 200
+          default: IMES
+          description: 要替换权限的角色所属范围；缺省为后台系统范围 IMES
         permission_ids:
           type: array
           maxItems: 256

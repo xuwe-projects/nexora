@@ -146,16 +146,20 @@ exposing PAT metadata.
 | --- | --- | --- |
 | `register_permissions` | permission definitions | Idempotently upsert metadata and grant every registered permission to the system administrator in the same transaction |
 | `permissions` | none | Complete permission catalog |
-| `roles`, `role` | optional role ID | Roles with direct permissions |
-| `create_role` | key, name, description, permission IDs | Transactional custom role creation |
-| `update_role` | ID, optional name, three-state description | System roles are immutable |
-| `delete_role` | ID | Rejects system or referenced roles |
-| `replace_role_permissions` | ID and complete ID set | Atomic replacement; empty clears |
+| `roles` / `roles_for_owner` | optional owner | Defaults to `IMES`; owner variants query a specific role scope |
+| `role` / `role_for_owner` | role ID and optional owner | A role outside the requested owner is treated as missing |
+| `create_role` / `create_role_for_owner` | owner, key, name, description, permission IDs | Transactional custom role creation; role keys remain globally unique |
+| `create_generated_role_for_owner` | owner, name, description, permission IDs | Uses the database sequence to generate a globally unique `role_<id>` key |
+| `update_role` / `update_role_for_owner` | owner, ID, optional name, three-state description | System roles are immutable |
+| `delete_role` / `delete_role_for_owner` | owner, ID | Rejects system or referenced roles |
+| `replace_role_permissions` / `replace_role_permissions_for_owner` | owner, ID and complete ID set | Atomic replacement in that owner; empty clears |
 | `users` | page and page size | `Page<User>`; size clamped to 1–100 |
 | `user_access` | user ID | `AccessProfile` |
 | `refresh_user_from_directory` | identity ID | Synchronizes username, email, display name, avatar, and last-login time without creating unknown users |
 | `update_user_status` | user ID and status | Protects the super admin and final enabled admin |
-| `replace_user_roles` | user ID, complete roles, actor ID | Atomic replacement retaining `member` |
+| `replace_user_roles` / `replace_user_roles_for_owner` | owner, user ID, complete roles, actor ID | Defaults to replacing `IMES` roles and retaining `member`; owner variant only replaces that owner |
+| `ensure_system_role_with_permissions` | role key, name, description, permission keys | Creates or updates an `IMES` system role and rebuilds its direct permission set |
+| `grant_user_role` | user ID, role ID, actor ID | Idempotently appends one direct role without clearing existing roles |
 | `provision_user` | trusted `ExternalIdentity` | Creates a user without a local password |
 | `provision_user_with_roles` | identity, roles, actor ID | Transactional user and initial role creation |
 | `create_managed_user_with_roles` | `CreateHumanIdentity`, roles, actor ID | Creates the Provider user with `initial_password`, binds it locally, and attempts Provider deletion if the local transaction fails |
@@ -180,8 +184,32 @@ pub async fn create_role(
     permission_ids: &[i64],
 ) -> Result<Role, AccountError>;
 
+pub async fn create_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>;
+
+pub async fn create_generated_role_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>;
+
 pub async fn replace_role_permissions(
     pool: &PgPool,
+    role_id: i64,
+    permission_ids: &[i64],
+) -> Result<Role, AccountError>;
+
+pub async fn replace_role_permissions_for_owner(
+    pool: &PgPool,
+    owner: &str,
     role_id: i64,
     permission_ids: &[i64],
 ) -> Result<Role, AccountError>;
@@ -204,11 +232,35 @@ pub async fn replace_user_roles(
     role_ids: &[i64],
     granted_by: &str,
 ) -> Result<AccessProfile, AccountError>;
+
+pub async fn replace_user_roles_for_owner(
+    pool: &PgPool,
+    owner: &str,
+    user_id: &str,
+    role_ids: &[i64],
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError>;
+
+pub async fn ensure_system_role_with_permissions(
+    pool: &PgPool,
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_keys: &[&str],
+) -> Result<Role, AccountError>;
+
+pub async fn grant_user_role(
+    pool: &PgPool,
+    user_id: &str,
+    role_id: i64,
+    granted_by: &str,
+) -> Result<AccessProfile, AccountError>;
 ```
 
-All reuse the supplied pool and perform no current-request authorization. Permission definitions are
-limited to 256 unique keys; role permissions to 256 IDs; user roles to 64 IDs. User/role relationship
-writes are transactional. `granted_by` is an existing local actor ID used for audit records.
+All reuse the supplied pool and perform no current-request authorization. Existing non-owner
+functions keep the backend default owner `IMES`. Permission definitions are limited to 256 unique
+keys; role permissions to 256 IDs; user roles to 64 IDs. User/role relationship writes are
+transactional. `granted_by` is an existing local actor ID used for audit records.
 
 ## Authorization extractors
 
@@ -235,7 +287,9 @@ The matching permission still must be registered with `create_permissions` or
 
 `ExternalIdentity` contains stable `identity_id`, optional `username`, optional `email`, required
 `display_name`, and optional `avatar_url`. `identity_id` is the only stable binding key; username is
-metadata. Outputs include `User`, `Permission`, `Role`, `SystemRole`, and `AccessProfile`.
+metadata. Outputs include `User`, `Permission`, `Role`, `SystemRole`, and `AccessProfile`. `Role`
+includes `owner`; `SYSTEM_ROLE_OWNER` is `IMES`, and `PORTAL_ADMIN_ROLE_KEY` is the immutable
+`portal_admin` system role key intended for host-synchronized customer portal administration.
 `CreateHumanIdentity` contains `username`, `given_name`, `family_name`, `email`, optional
 `display_name`, required `initial_password`, `require_password_change`, and optional `avatar_url`;
 the password is sent only to the identity directory and is not stored in the local Account database.
@@ -283,10 +337,12 @@ Hosts can import these stable boundaries directly from `nexora::server`:
   `AccountServerInitializationError`, `migrations`, `dependencies`, `user_directory`;
 - Account facade/entities: `Account`, `AccountError`, `AccessProfile`, `ExternalIdentity`,
   `CreateHumanIdentity`, `IdentityDirectory`, `IdentityDirectoryError`, `User`, `Role`, `Permission`,
-  `PermissionDefinition`, `PermissionKey`;
+  `PermissionDefinition`, `PermissionKey`, `SYSTEM_ROLE_OWNER`, `PORTAL_ADMIN_ROLE_KEY`;
 - auth: `AuthenticatedUser`, `Authorized<P>`, `RequiredPermission`;
-- trusted writes: `create_permissions`, `create_role`, `create_user`, `create_user_with_roles`,
-  `replace_role_permissions`, `replace_user_roles`;
+- trusted writes: `create_permissions`, `create_role`, `create_role_for_owner`,
+  `create_generated_role_for_owner`, `create_user`, `create_user_with_roles`,
+  `replace_role_permissions`, `replace_role_permissions_for_owner`, `replace_user_roles`,
+  `replace_user_roles_for_owner`, `ensure_system_role_with_permissions`, `grant_user_role`;
 - Setup/directory: `DefaultSetup`, both default request types, the three Setup traits,
   `setup_routes`, `setup_routes_with`, `DirectoryUser`, `DirectoryError`, and
   `ZitadelUserDirectory`.

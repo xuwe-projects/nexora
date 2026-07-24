@@ -1,6 +1,6 @@
 //! 角色与角色权限 handlers。
 
-use api::{ApiJson, ApiPath};
+use api::{ApiJson, ApiPath, ApiQuery};
 use axum::{
     Json,
     extract::State,
@@ -8,7 +8,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use contracts::{
-    account::{CreateRoleRequest, ReplaceRolePermissionsRequest, RoleResponse, UpdateRoleRequest},
+    account::{
+        CreateRoleRequest, ReplaceRolePermissionsRequest, RoleOwnerQuery, RoleResponse,
+        UpdateRoleRequest,
+    },
     collection::ItemsResponse,
     patch::PatchField,
 };
@@ -26,9 +29,10 @@ use crate::{
 pub(crate) async fn list_roles(
     _authorization: Authorized<ReadRoles>,
     State(state): State<AccountState>,
+    ApiQuery(query): ApiQuery<RoleOwnerQuery>,
 ) -> Result<Json<ItemsResponse<RoleResponse>>, ApiError> {
     let items = Account { state }
-        .roles()
+        .roles_for_owner(query.owner.as_str())
         .await?
         .into_iter()
         .map(role_response)
@@ -41,8 +45,11 @@ pub(crate) async fn get_role(
     _authorization: Authorized<ReadRoles>,
     State(state): State<AccountState>,
     ApiPath(role_id): ApiPath<i64>,
+    ApiQuery(query): ApiQuery<RoleOwnerQuery>,
 ) -> Result<Json<RoleResponse>, ApiError> {
-    let role = Account { state }.role(role_id).await?;
+    let role = Account { state }
+        .role_for_owner(query.owner.as_str(), role_id)
+        .await?;
     Ok(Json(role_response(role)))
 }
 
@@ -53,7 +60,8 @@ pub(crate) async fn create_role(
     ApiJson(request): ApiJson<CreateRoleRequest>,
 ) -> Result<Response, ApiError> {
     let role = Account { state }
-        .create_role(
+        .create_role_for_owner(
+            request.owner.as_str(),
             request.key.as_str(),
             request.name.as_str(),
             request.description.as_deref(),
@@ -74,6 +82,7 @@ pub(crate) async fn update_role(
     _authorization: Authorized<WriteRoles>,
     State(state): State<AccountState>,
     ApiPath(role_id): ApiPath<i64>,
+    ApiQuery(query): ApiQuery<RoleOwnerQuery>,
     ApiJson(request): ApiJson<UpdateRoleRequest>,
 ) -> Result<Json<RoleResponse>, ApiError> {
     if request.name.is_none() && request.description == PatchField::Missing {
@@ -89,7 +98,12 @@ pub(crate) async fn update_role(
         PatchField::Value(value) => Some(Some(value.as_str())),
     };
     let role = Account { state }
-        .update_role(role_id, request.name.as_deref(), description)
+        .update_role_for_owner(
+            query.owner.as_str(),
+            role_id,
+            request.name.as_deref(),
+            description,
+        )
         .await?;
     Ok(Json(role_response(role)))
 }
@@ -99,8 +113,11 @@ pub(crate) async fn delete_role(
     _authorization: Authorized<WriteRoles>,
     State(state): State<AccountState>,
     ApiPath(role_id): ApiPath<i64>,
+    ApiQuery(query): ApiQuery<RoleOwnerQuery>,
 ) -> Result<StatusCode, ApiError> {
-    Account { state }.delete_role(role_id).await?;
+    Account { state }
+        .delete_role_for_owner(query.owner.as_str(), role_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -112,7 +129,11 @@ pub(crate) async fn replace_role_permissions(
     ApiJson(request): ApiJson<ReplaceRolePermissionsRequest>,
 ) -> Result<Json<RoleResponse>, ApiError> {
     let role = Account { state }
-        .replace_role_permissions(role_id, request.permission_ids.as_slice())
+        .replace_role_permissions_for_owner(
+            request.owner.as_str(),
+            role_id,
+            request.permission_ids.as_slice(),
+        )
         .await?;
     Ok(Json(role_response(role)))
 }

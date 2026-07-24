@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{
-    StoreError,
+    SYSTEM_ROLE_OWNER, StoreError,
     entities::account::{Permission, Role, RolePermissionRow, RoleRow, SystemRole},
 };
 
@@ -15,10 +15,11 @@ pub(crate) async fn query_system(pool: &PgPool) -> Result<Vec<SystemRole>, Store
         r#"
         SELECT key, name
         FROM account.roles
-        WHERE is_system
+        WHERE owner = $1 AND is_system
         ORDER BY key
         "#,
     )
+    .bind(SYSTEM_ROLE_OWNER)
     .fetch_all(pool)
     .await?;
     if roles.is_empty() {
@@ -27,29 +28,49 @@ pub(crate) async fn query_system(pool: &PgPool) -> Result<Vec<SystemRole>, Store
     Ok(roles)
 }
 
-/// 返回全部角色及其直接权限。
+/// 返回后台系统范围内的全部角色及其直接权限。
 pub(crate) async fn query_all(pool: &PgPool) -> Result<Vec<Role>, StoreError> {
+    query_all_for_owner(SYSTEM_ROLE_OWNER, pool).await
+}
+
+/// 按 owner 返回全部角色及其直接权限。
+pub(crate) async fn query_all_for_owner(
+    owner: &str,
+    pool: &PgPool,
+) -> Result<Vec<Role>, StoreError> {
     let rows = sqlx::query_as::<_, RoleRow>(
         r#"
-        SELECT id, key, name, description, is_system, created_at, updated_at
+        SELECT id, owner, key, name, description, is_system, created_at, updated_at
         FROM account.roles
+        WHERE owner = $1
         ORDER BY is_system DESC, key
         "#,
     )
+    .bind(owner)
     .fetch_all(pool)
     .await?;
     attach_permissions(rows, pool).await
 }
 
-/// 按角色 ID 返回角色及其直接权限。
+/// 按角色 ID 返回后台系统范围内的角色及其直接权限。
 pub(crate) async fn query_by_id(role_id: i64, pool: &PgPool) -> Result<Option<Role>, StoreError> {
+    query_by_id_for_owner(SYSTEM_ROLE_OWNER, role_id, pool).await
+}
+
+/// 按 owner 与角色 ID 返回角色及其直接权限。
+pub(crate) async fn query_by_id_for_owner(
+    owner: &str,
+    role_id: i64,
+    pool: &PgPool,
+) -> Result<Option<Role>, StoreError> {
     let rows = sqlx::query_as::<_, RoleRow>(
         r#"
-        SELECT id, key, name, description, is_system, created_at, updated_at
+        SELECT id, owner, key, name, description, is_system, created_at, updated_at
         FROM account.roles
-        WHERE id = $1
+        WHERE owner = $1 AND id = $2
         "#,
     )
+    .bind(owner)
     .bind(role_id)
     .fetch_all(pool)
     .await?;
@@ -60,12 +81,12 @@ pub(crate) async fn query_by_id(role_id: i64, pool: &PgPool) -> Result<Option<Ro
 pub(crate) async fn query_for_user(user_id: &str, pool: &PgPool) -> Result<Vec<Role>, StoreError> {
     let rows = sqlx::query_as::<_, RoleRow>(
         r#"
-        SELECT roles.id, roles.key, roles.name, roles.description, roles.is_system,
+        SELECT roles.id, roles.owner, roles.key, roles.name, roles.description, roles.is_system,
                roles.created_at, roles.updated_at
         FROM account.roles
         JOIN account.user_roles ON user_roles.role_id = roles.id
         WHERE user_roles.user_id = $1
-        ORDER BY roles.key
+        ORDER BY roles.owner, roles.key
         "#,
     )
     .bind(user_id)
@@ -74,8 +95,9 @@ pub(crate) async fn query_for_user(user_id: &str, pool: &PgPool) -> Result<Vec<R
     attach_permissions(rows, pool).await
 }
 
-/// 创建自定义角色并写入初始权限集合。
-pub(crate) async fn create(
+/// 按 owner 创建自定义角色并写入初始权限集合。
+pub(crate) async fn create_for_owner(
+    owner: &str,
     key: &str,
     name: &str,
     description: Option<&str>,
@@ -85,12 +107,13 @@ pub(crate) async fn create(
     let mut transaction = pool.begin().await?;
     let role_id = match sqlx::query_scalar::<_, i64>(
         r#"
-        INSERT INTO account.roles (key, name, description)
-        VALUES ($1, $2, $3)
+        INSERT INTO account.roles (key, owner, name, description)
+        VALUES ($1, $2, $3, $4)
         RETURNING id
         "#,
     )
     .bind(key)
+    .bind(owner)
     .bind(name.trim())
     .bind(normalized_optional(description))
     .fetch_one(&mut *transaction)
@@ -101,13 +124,50 @@ pub(crate) async fn create(
     };
     insert_permissions(role_id, permission_ids, &mut transaction).await?;
     transaction.commit().await?;
-    query_by_id(role_id, pool)
+    query_by_id_for_owner(owner, role_id, pool)
         .await?
         .ok_or(StoreError::NotFound("角色"))
 }
 
-/// 修改自定义角色名称或说明。
-pub(crate) async fn update(
+/// 按 owner 创建由数据库序列参与生成全局唯一 key 的自定义角色。
+pub(crate) async fn create_generated_for_owner(
+    owner: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_ids: &[i64],
+    pool: &PgPool,
+) -> Result<Role, StoreError> {
+    let mut transaction = pool.begin().await?;
+    let role_id = match sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH generated AS (
+            SELECT nextval('account.roles_id_seq')::BIGINT AS id
+        )
+        INSERT INTO account.roles (id, key, owner, name, description)
+        SELECT id, 'role_' || id::TEXT, $1, $2, $3
+        FROM generated
+        RETURNING id
+        "#,
+    )
+    .bind(owner)
+    .bind(name.trim())
+    .bind(normalized_optional(description))
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(role_id) => role_id,
+        Err(error) => return Err(map_insert_error(error)),
+    };
+    insert_permissions(role_id, permission_ids, &mut transaction).await?;
+    transaction.commit().await?;
+    query_by_id_for_owner(owner, role_id, pool)
+        .await?
+        .ok_or(StoreError::NotFound("角色"))
+}
+
+/// 按 owner 修改自定义角色名称或说明。
+pub(crate) async fn update_for_owner(
+    owner: &str,
     role_id: i64,
     name: Option<&str>,
     description: Option<Option<&str>>,
@@ -116,12 +176,13 @@ pub(crate) async fn update(
     let result = sqlx::query(
         r#"
         UPDATE account.roles
-        SET name = COALESCE($2, name),
-            description = CASE WHEN $3 THEN $4 ELSE description END,
+        SET name = COALESCE($3, name),
+            description = CASE WHEN $4 THEN $5 ELSE description END,
             updated_at = NOW()
-        WHERE id = $1 AND NOT is_system
+        WHERE owner = $1 AND id = $2 AND NOT is_system
         "#,
     )
+    .bind(owner)
     .bind(role_id)
     .bind(name.map(str::trim))
     .bind(description.is_some())
@@ -129,46 +190,91 @@ pub(crate) async fn update(
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
-        return Err(classify_mutation(role_id, pool).await?);
+        return Err(classify_mutation_for_owner(owner, role_id, pool).await?);
     }
-    query_by_id(role_id, pool)
+    query_by_id_for_owner(owner, role_id, pool)
         .await?
         .ok_or(StoreError::NotFound("角色"))
 }
 
-/// 删除未被用户引用的自定义角色。
+/// 删除后台系统范围内未被用户引用的自定义角色。
 pub(crate) async fn delete(role_id: i64, pool: &PgPool) -> Result<(), StoreError> {
-    let result = sqlx::query("DELETE FROM account.roles WHERE id = $1 AND NOT is_system")
-        .bind(role_id)
-        .execute(pool)
-        .await;
+    delete_for_owner(SYSTEM_ROLE_OWNER, role_id, pool).await
+}
+
+/// 按 owner 删除未被用户引用的自定义角色。
+pub(crate) async fn delete_for_owner(
+    owner: &str,
+    role_id: i64,
+    pool: &PgPool,
+) -> Result<(), StoreError> {
+    let result =
+        sqlx::query("DELETE FROM account.roles WHERE owner = $1 AND id = $2 AND NOT is_system")
+            .bind(owner)
+            .bind(role_id)
+            .execute(pool)
+            .await;
     match result {
         Ok(result) if result.rows_affected() == 1 => Ok(()),
-        Ok(_) => Err(classify_mutation(role_id, pool).await?),
+        Ok(_) => Err(classify_mutation_for_owner(owner, role_id, pool).await?),
         Err(error) if is_foreign_key_violation(&error) => Err(StoreError::Conflict("role_in_use")),
         Err(error) => Err(error.into()),
     }
 }
 
-/// 原子替换自定义角色包含的权限集合。
-pub(crate) async fn replace_permissions(
+/// 按 owner 原子替换自定义角色包含的权限集合。
+pub(crate) async fn replace_permissions_for_owner(
+    owner: &str,
     role_id: i64,
     permission_ids: &[i64],
     pool: &PgPool,
 ) -> Result<Role, StoreError> {
     let mut transaction = pool.begin().await?;
-    ensure_mutable(role_id, &mut transaction).await?;
-    sqlx::query("DELETE FROM account.role_permissions WHERE role_id = $1")
-        .bind(role_id)
-        .execute(&mut *transaction)
-        .await?;
-    insert_permissions(role_id, permission_ids, &mut transaction).await?;
-    sqlx::query("UPDATE account.roles SET updated_at = NOW() WHERE id = $1")
-        .bind(role_id)
-        .execute(&mut *transaction)
+    ensure_mutable_for_owner(owner, role_id, &mut transaction).await?;
+    replace_permissions_in_transaction(role_id, permission_ids, &mut transaction).await?;
+    transaction.commit().await?;
+    query_by_id_for_owner(owner, role_id, pool)
+        .await?
+        .ok_or(StoreError::NotFound("角色"))
+}
+
+/// 创建或更新后台系统角色，并按权限 key 重建权限集合。
+pub(crate) async fn ensure_system_with_permissions(
+    key: &str,
+    name: &str,
+    description: Option<&str>,
+    permission_keys: &[String],
+    pool: &PgPool,
+) -> Result<Role, StoreError> {
+    let mut transaction = pool.begin().await?;
+    let role_id = match sqlx::query_scalar::<_, i64>(
+        r#"
+        INSERT INTO account.roles (key, owner, name, description, is_system)
+        VALUES ($1, $2, $3, $4, TRUE)
+        ON CONFLICT (key) DO UPDATE
+        SET owner = EXCLUDED.owner,
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            is_system = TRUE,
+            updated_at = NOW()
+        RETURNING id
+        "#,
+    )
+    .bind(key)
+    .bind(SYSTEM_ROLE_OWNER)
+    .bind(name.trim())
+    .bind(normalized_optional(description))
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(role_id) => role_id,
+        Err(error) => return Err(map_insert_error(error)),
+    };
+    let permission_ids = permission_ids_for_keys(permission_keys, &mut transaction).await?;
+    replace_permissions_in_transaction(role_id, permission_ids.as_slice(), &mut transaction)
         .await?;
     transaction.commit().await?;
-    query_by_id(role_id, pool)
+    query_by_id_for_owner(SYSTEM_ROLE_OWNER, role_id, pool)
         .await?
         .ok_or(StoreError::NotFound("角色"))
 }
@@ -183,11 +289,12 @@ pub(super) async fn query_system_role_id(
             r#"
             SELECT id
             FROM account.roles
-            WHERE key = $1 AND is_system
+            WHERE key = $1 AND owner = $2 AND is_system
             FOR UPDATE
             "#,
         )
         .bind(role_key)
+        .bind(SYSTEM_ROLE_OWNER)
         .fetch_optional(&mut **transaction)
         .await?
     } else {
@@ -195,10 +302,11 @@ pub(super) async fn query_system_role_id(
             r#"
             SELECT id
             FROM account.roles
-            WHERE key = $1 AND is_system
+            WHERE key = $1 AND owner = $2 AND is_system
             "#,
         )
         .bind(role_key)
+        .bind(SYSTEM_ROLE_OWNER)
         .fetch_optional(&mut **transaction)
         .await?
     };
@@ -238,6 +346,23 @@ async fn attach_permissions(rows: Vec<RoleRow>, pool: &PgPool) -> Result<Vec<Rol
             row.with_permissions(permissions)
         })
         .collect())
+}
+
+async fn replace_permissions_in_transaction(
+    role_id: i64,
+    permission_ids: &[i64],
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), StoreError> {
+    sqlx::query("DELETE FROM account.role_permissions WHERE role_id = $1")
+        .bind(role_id)
+        .execute(&mut **transaction)
+        .await?;
+    insert_permissions(role_id, permission_ids, transaction).await?;
+    sqlx::query("UPDATE account.roles SET updated_at = NOW() WHERE id = $1")
+        .bind(role_id)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 async fn insert_permissions(
@@ -312,7 +437,32 @@ async fn canonical_permission_ids(
     Ok(expanded)
 }
 
-async fn ensure_mutable(
+async fn permission_ids_for_keys(
+    permission_keys: &[String],
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<i64>, StoreError> {
+    if permission_keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let permission_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM account.permissions
+        WHERE key = ANY($1)
+        ORDER BY key
+        "#,
+    )
+    .bind(permission_keys)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if permission_ids.len() != permission_keys.len() {
+        return Err(StoreError::NotFound("权限"));
+    }
+    Ok(permission_ids)
+}
+
+async fn ensure_mutable_for_owner(
+    owner: &str,
     role_id: i64,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), StoreError> {
@@ -320,10 +470,11 @@ async fn ensure_mutable(
         r#"
         SELECT is_system
         FROM account.roles
-        WHERE id = $1
+        WHERE owner = $1 AND id = $2
         FOR UPDATE
         "#,
     )
+    .bind(owner)
     .bind(role_id)
     .fetch_optional(&mut **transaction)
     .await?
@@ -335,10 +486,14 @@ async fn ensure_mutable(
     }
 }
 
-async fn classify_mutation(role_id: i64, pool: &PgPool) -> Result<StoreError, StoreError> {
-    let is_system = sqlx::query_scalar::<_, bool>(
+async fn classify_mutation_for_owner(
+    owner: &str,
+    role_id: i64,
+    pool: &PgPool,
+) -> Result<StoreError, StoreError> {
+    let row = sqlx::query_as::<_, (String, bool)>(
         r#"
-        SELECT is_system
+        SELECT owner, is_system
         FROM account.roles
         WHERE id = $1
         "#,
@@ -346,10 +501,12 @@ async fn classify_mutation(role_id: i64, pool: &PgPool) -> Result<StoreError, St
     .bind(role_id)
     .fetch_optional(pool)
     .await?;
-    Ok(match is_system {
-        Some(true) => StoreError::SystemRole,
-        Some(false) => StoreError::Conflict("role_not_modified"),
-        None => StoreError::NotFound("角色"),
+    Ok(match row {
+        Some((stored_owner, true)) if stored_owner == owner => StoreError::SystemRole,
+        Some((stored_owner, false)) if stored_owner == owner => {
+            StoreError::Conflict("role_not_modified")
+        }
+        Some(_) | None => StoreError::NotFound("角色"),
     })
 }
 
