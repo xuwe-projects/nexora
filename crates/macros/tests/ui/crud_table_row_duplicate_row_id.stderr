@@ -1,0 +1,6 @@
+error: CrudTableRow 必须且只能声明一个 #[nexora(row_id)] 字段
+ --> tests/ui/crud_table_row_duplicate_row_id.rs:7:5
+  |
+7 | /     #[nexora(row_id, column)]
+8 | |     other_id: u64,
+  | |_________________^

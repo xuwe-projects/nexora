@@ -108,9 +108,9 @@ CrudPanel::new("城市", table)
 ```
 
 CRUD 表格优先使用 `#[derive(nexora::CrudTableRow)]` 描述行数据，再用
-`CrudTableDelegate<T>` 接入 gpui-component `DataTable`。字段属性只增强 `Column` 声明、表头/
-正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加。复杂表格仍可直接手写
-原生 `TableDelegate`。
+`CrudTableDelegate<T>` 接入 gpui-component `DataTable`。字段属性显式声明 `row_id`，并增强
+`Column` 声明、表头/正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加。
+复杂表格仍可直接手写原生 `TableDelegate`。
 
 ```rust
 use gpui_component::table::{Column, DataTable, TableState};
@@ -118,7 +118,7 @@ use nexora::desktop::{CrudTableDelegate, TableCell};
 
 #[derive(Clone, nexora::CrudTableRow)]
 struct CityRow {
-    #[nexora(column(name = "ID", width = 64., fixed_left))]
+    #[nexora(row_id, column(name = "ID", width = 64., fixed_left))]
     id: u64,
     #[nexora(column(title = "城市", width = 160., sortable))]
     name: String,
@@ -133,7 +133,6 @@ impl CityRow {
 }
 
 let delegate = CrudTableDelegate::new(rows)
-    .row_id(|row| format!("city-{}", row.id))
     .action_column(Column::new("actions", "操作").width(gpui::px(160.)), render_actions);
 let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
 ```

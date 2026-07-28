@@ -104,6 +104,8 @@ mod __private {
 }
 
 mod desktop {
+    use std::{fmt::Display, hash::Hash};
+
     use crate::__private::gpui::{AnyElement, App, IntoElement, TextAlign, Window};
     use crate::__private::gpui_component::table::Column;
 
@@ -132,6 +134,10 @@ mod desktop {
     impl IntoElement for TableCell {}
 
     pub trait CrudTableRow: Clone + 'static {
+        type Id: Clone + Eq + Hash + Display + 'static;
+
+        fn row_id(&self) -> &Self::Id;
+
         fn columns() -> Vec<Column>;
 
         fn header_alignment(_key: &str) -> TextAlign {

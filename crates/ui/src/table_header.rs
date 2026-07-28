@@ -3,24 +3,35 @@
 //! 本模块提供轻量表头单元格，适合在 `gpui-component` 的 `TableDelegate::render_th`
 //! 中复用，让业务表格默认拥有稳定的水平与垂直对齐方式。
 
-use gpui::{App, IntoElement, RenderOnce, SharedString, TextAlign, Window, div, prelude::*};
+use gpui::{
+    AnyElement, App, IntoElement, RenderOnce, SharedString, TextAlign, Window, div, prelude::*,
+};
 
 /// 默认垂直居中、水平居中的表头单元格。
 ///
 /// 调用方可以通过 [`Self::left`]、[`Self::center`]、[`Self::right`] 或 [`Self::align`]
 /// 覆盖水平对齐方式；需要完全自定义表头内容时，仍可直接在 `TableDelegate::render_th`
 /// 返回自己的 GPUI 元素。
-#[derive(Clone, Debug, IntoElement)]
+#[derive(IntoElement)]
 pub struct TableHeaderCell {
-    label: SharedString,
+    content: AnyElement,
     align: TextAlign,
 }
 
 impl TableHeaderCell {
     /// 创建一个默认居中的表头单元格。
     pub fn new(label: impl Into<SharedString>) -> Self {
+        Self::element(label.into())
+    }
+
+    /// 使用任意 GPUI 元素创建一个默认居中的表头单元格。
+    ///
+    /// 该构造器适合选择框、图标按钮等非文本表头内容。表头仍复用本组件的垂直居中布局，
+    /// 水平对齐可继续通过 [`Self::align`]、[`Self::left`]、[`Self::center`] 或
+    /// [`Self::right`] 调整。
+    pub fn element(content: impl IntoElement) -> Self {
         Self {
-            label: label.into(),
+            content: content.into_any_element(),
             align: TextAlign::Center,
         }
     }
@@ -71,7 +82,7 @@ impl RenderOnce for TableHeaderCell {
                     .truncate()
                     .when(self.align == TextAlign::Center, |this| this.text_center())
                     .when(self.align == TextAlign::Right, |this| this.text_right())
-                    .child(self.label),
+                    .child(self.content),
             )
     }
 }

@@ -214,6 +214,10 @@ fn assert_generated_skills(project: &Path) {
         generated_files.contains(&PathBuf::from("publish-nexora-release/SKILL.md")),
         "生成项目应包含 Nexora 版本发布 Skill"
     );
+    assert!(
+        generated_files.contains(&PathBuf::from("refine-implementation-spec/SKILL.md")),
+        "生成项目应包含需求澄清与实施规格 Skill"
+    );
     for relative_path in template_files {
         assert_eq!(
             fs::read(generated_root.join(&relative_path)).unwrap(),

@@ -140,6 +140,8 @@ mod __private {
 }
 
 mod desktop {
+    use std::{fmt::Display, hash::Hash};
+
     use crate::__private::gpui::{AnyElement, App, IntoElement, TextAlign, Window};
     use crate::__private::gpui_component::table::Column;
 
@@ -168,6 +170,10 @@ mod desktop {
     impl IntoElement for TableCell {}
 
     pub trait CrudTableRow: Clone + 'static {
+        type Id: Clone + Eq + Hash + Display + 'static;
+
+        fn row_id(&self) -> &Self::Id;
+
         fn columns() -> Vec<Column>;
 
         fn header_alignment(_key: &str) -> TextAlign {
@@ -190,7 +196,7 @@ mod desktop {
 
 #[derive(Clone, nexora_macros::CrudTableRow)]
 struct DerivedCityRow {
-    #[nexora(column(name = "ID", width = 64., min_width = 48., fixed_left))]
+    #[nexora(row_id, column(name = "ID", width = 64., min_width = 48., fixed_left))]
     id: u64,
     #[nexora(column(title = "城市", width = 160., sortable))]
     name: String,
@@ -233,6 +239,12 @@ struct HandwrittenCityRow {
 }
 
 impl desktop::CrudTableRow for HandwrittenCityRow {
+    type Id = u64;
+
+    fn row_id(&self) -> &Self::Id {
+        &self.id
+    }
+
     fn columns() -> Vec<__private::gpui_component::table::Column> {
         vec![
             __private::gpui_component::table::Column::new("id", "ID")

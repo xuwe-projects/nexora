@@ -40,7 +40,6 @@ impl UsersTable {
         let action_page = page.clone();
         let load_page = page.clone();
         let delegate = CrudTableDelegate::new(Vec::new())
-            .row_id(|row: &UserTableRow| format!("default-user-row-{}", row.source.id))
             .empty_title("暂无用户")
             .empty_description("点击右上角“创建用户”添加第一个用户")
             .action_column(
@@ -287,6 +286,8 @@ impl Render for UsersTable {
 
 #[derive(Clone, nexora::CrudTableRow)]
 struct UserTableRow {
+    #[nexora(row_id, skip)]
+    id: String,
     #[nexora(skip)]
     source: UserResponse,
     #[nexora(column(
@@ -348,6 +349,7 @@ struct UserTableRow {
 impl From<UserResponse> for UserTableRow {
     fn from(user: UserResponse) -> Self {
         Self {
+            id: user.id.clone(),
             display_name: user.display_name.clone(),
             user_type: user.user_type,
             username: user.username.clone().unwrap_or_else(|| "未绑定".to_owned()),

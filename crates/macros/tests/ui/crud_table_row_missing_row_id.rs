@@ -1,8 +1,8 @@
 include!("crud_table_support.rs");
 
 #[derive(Clone, nexora_macros::CrudTableRow)]
-struct DuplicateSort {
-    #[nexora(row_id, column(sortable, ascending))]
+struct MissingRowId {
+    #[nexora(column)]
     name: String,
 }
 

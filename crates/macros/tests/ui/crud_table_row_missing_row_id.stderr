@@ -1,0 +1,8 @@
+error: CrudTableRow 必须声明一个 #[nexora(row_id)] 字段
+ --> tests/ui/crud_table_row_missing_row_id.rs:4:1
+  |
+4 | / struct MissingRowId {
+5 | |     #[nexora(column)]
+6 | |     name: String,
+7 | | }
+  | |_^

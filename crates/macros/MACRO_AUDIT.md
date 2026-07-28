@@ -44,6 +44,12 @@ cargo expand -p nexora-macros --test crud_table_row | sed -n '392,566p'
 
 ```rust
 impl ::nexora::desktop::CrudTableRow for CityRow {
+    type Id = u64;
+
+    fn row_id(&self) -> &Self::Id {
+        &self.id
+    }
+
     fn columns() -> ::std::vec::Vec<::nexora::__private::gpui_component::table::Column> {
         vec![
             ::nexora::__private::gpui_component::table::Column::new("id", "ID")

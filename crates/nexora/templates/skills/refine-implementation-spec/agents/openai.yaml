@@ -1,0 +1,4 @@
+interface:
+  display_name: "需求澄清与实施规格"
+  short_description: "把新需求或 Bug 澄清为可交接、可验收的实施指令"
+  default_prompt: "使用 $refine-implementation-spec 调研并澄清当前需求，先不要实现，最终输出可复制给另一智能体的实施规格。"

@@ -133,6 +133,8 @@ mod __private {
 }
 
 mod desktop {
+    use std::{fmt::Display, hash::Hash};
+
     use crate::__private::gpui::{AnyElement, App, IntoElement, TextAlign, Window};
     use crate::__private::gpui_component::table::Column;
 
@@ -162,6 +164,10 @@ mod desktop {
     impl IntoElement for TableCell {}
 
     pub trait CrudTableRow: Clone + 'static {
+        type Id: Clone + Eq + Hash + Display + 'static;
+
+        fn row_id(&self) -> &Self::Id;
+
         fn columns() -> Vec<Column>;
 
         fn header_alignment(_key: &str) -> TextAlign {
@@ -186,7 +192,7 @@ use desktop::CrudTableRow as _;
 
 #[derive(Clone, nexora_macros::CrudTableRow)]
 struct CityRow {
-    #[nexora(column(name = "ID", width = 64., min_width = 48., fixed_left))]
+    #[nexora(row_id, column(name = "ID", width = 64., min_width = 48., fixed_left))]
     id: u64,
     #[nexora(column(title = "城市", width = 160., sortable))]
     name: String,
@@ -215,6 +221,14 @@ struct CityRow {
         selectable = false
     ))]
     enabled: bool,
+}
+
+#[derive(Clone, nexora_macros::CrudTableRow)]
+struct HiddenIdRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(title = "城市", width = 160.))]
+    name: String,
 }
 
 impl CityRow {
@@ -287,6 +301,7 @@ fn crud_table_row_derive_generates_columns_rendering_and_text_accessors() {
         sort_order: 1,
         enabled: true,
     };
+    assert_eq!(*row.row_id(), 7);
     let app = __private::gpui::App;
     assert_eq!(row.cell_text("id", &app), "7");
     assert_eq!(row.cell_text("name", &app), "北京");
@@ -297,6 +312,18 @@ fn crud_table_row_derive_generates_columns_rendering_and_text_accessors() {
     let mut window = __private::gpui::Window;
     let mut app = __private::gpui::App;
     let _element = row.render_cell("status", &mut window, &mut app);
+}
+
+#[test]
+fn crud_table_row_derive_supports_hidden_row_id() {
+    let row = HiddenIdRow {
+        id: "city-1".to_owned(),
+        name: "北京".to_owned(),
+    };
+
+    assert_eq!(HiddenIdRow::columns().len(), 1);
+    assert_eq!(HiddenIdRow::columns()[0].key, "name");
+    assert_eq!(row.row_id(), "city-1");
 }
 
 #[test]

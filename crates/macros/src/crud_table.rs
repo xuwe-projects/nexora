@@ -58,9 +58,20 @@ struct ColumnField {
     arguments: ColumnArguments,
 }
 
+struct RowIdField {
+    field_ident: Ident,
+    ty: TokenStream,
+}
+
+struct ParsedCrudTableRow {
+    columns: Vec<ColumnField>,
+    row_id: RowIdField,
+}
+
 pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
     reject_generics(&input, "CrudTableRow")?;
-    let fields = parse_column_fields(&input)?;
+    let parsed = parse_crud_table_row(&input)?;
+    let fields = parsed.columns;
     if fields.is_empty() {
         return Err(Error::new_spanned(
             input,
@@ -88,9 +99,17 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
         .iter()
         .map(|field| expand_render_cell_arm(field, &nexora));
     let text_arms = fields.iter().map(expand_cell_text_arm);
+    let row_id_ident = &parsed.row_id.field_ident;
+    let row_id_ty = &parsed.row_id.ty;
 
     Ok(quote! {
         impl #nexora::desktop::CrudTableRow for #ident {
+            type Id = #row_id_ty;
+
+            fn row_id(&self) -> &Self::Id {
+                &self.#row_id_ident
+            }
+
             fn columns() -> ::std::vec::Vec<#nexora::__private::gpui_component::table::Column> {
                 ::std::vec![#(#column_definitions),*]
             }
@@ -140,7 +159,7 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
     })
 }
 
-fn parse_column_fields(input: &DeriveInput) -> Result<Vec<ColumnField>> {
+fn parse_crud_table_row(input: &DeriveInput) -> Result<ParsedCrudTableRow> {
     let Data::Struct(data) = &input.data else {
         return Err(Error::new_spanned(
             input,
@@ -154,37 +173,83 @@ fn parse_column_fields(input: &DeriveInput) -> Result<Vec<ColumnField>> {
         ));
     };
 
-    fields.named.iter().filter_map(parse_column_field).collect()
+    let mut columns = Vec::new();
+    let mut row_id = None;
+    for field in &fields.named {
+        let parsed = parse_field(field)?;
+        if parsed.row_id {
+            if row_id.is_some() {
+                return Err(Error::new_spanned(
+                    field,
+                    "CrudTableRow 必须且只能声明一个 #[nexora(row_id)] 字段",
+                ));
+            }
+            let Some(field_ident) = field.ident.clone() else {
+                return Err(Error::new_spanned(
+                    field,
+                    "CrudTableRow 只能派生在具有命名字段的结构体上",
+                ));
+            };
+            let ty = &field.ty;
+            row_id = Some(RowIdField {
+                field_ident,
+                ty: quote!(#ty),
+            });
+        }
+        if let Some(column) = parsed.column {
+            columns.push(column);
+        }
+    }
+    let Some(row_id) = row_id else {
+        return Err(Error::new_spanned(
+            input,
+            "CrudTableRow 必须声明一个 #[nexora(row_id)] 字段",
+        ));
+    };
+
+    Ok(ParsedCrudTableRow { columns, row_id })
 }
 
-fn parse_column_field(field: &Field) -> Option<Result<ColumnField>> {
+struct ParsedField {
+    column: Option<ColumnField>,
+    row_id: bool,
+}
+
+fn parse_field(field: &Field) -> Result<ParsedField> {
     let mut column = None;
     let mut skip = false;
+    let mut row_id = false;
     for attribute in field
         .attrs
         .iter()
         .filter(|attribute| attribute.path().is_ident("nexora"))
     {
-        if let Err(error) = parse_field_attribute(attribute, &mut column, &mut skip) {
-            return Some(Err(error));
-        }
+        parse_field_attribute(attribute, &mut column, &mut skip, &mut row_id)?;
     }
 
     if skip && column.is_some() {
-        return Some(Err(Error::new_spanned(
+        return Err(Error::new_spanned(
             field,
             "同一个字段不能同时声明 skip 和 column",
-        )));
+        ));
     }
     if skip {
-        return None;
+        return Ok(ParsedField {
+            column: None,
+            row_id,
+        });
     }
-    let mut arguments = column?;
+    let Some(mut arguments) = column else {
+        return Ok(ParsedField {
+            column: None,
+            row_id,
+        });
+    };
     let Some(field_ident) = field.ident.clone() else {
-        return Some(Err(Error::new_spanned(
+        return Err(Error::new_spanned(
             field,
             "CrudTableRow 只能派生在具有命名字段的结构体上",
-        )));
+        ));
     };
     let default_name = field_ident.to_string();
     let default_name = default_name.strip_prefix("r#").unwrap_or(&default_name);
@@ -197,18 +262,22 @@ fn parse_column_field(field: &Field) -> Option<Result<ColumnField>> {
         .take()
         .unwrap_or_else(|| LitStr::new(default_name, field_ident.span()));
 
-    Some(Ok(ColumnField {
-        field_ident,
-        key,
-        name,
-        arguments,
-    }))
+    Ok(ParsedField {
+        column: Some(ColumnField {
+            field_ident,
+            key,
+            name,
+            arguments,
+        }),
+        row_id,
+    })
 }
 
 fn parse_field_attribute(
     attribute: &Attribute,
     column: &mut Option<ColumnArguments>,
     skip: &mut bool,
+    row_id: &mut bool,
 ) -> Result<()> {
     attribute.parse_nested_meta(|meta| {
         if meta.path.is_ident("column") {
@@ -227,8 +296,14 @@ fn parse_field_attribute(
             }
             *skip = true;
             Ok(())
+        } else if meta.path.is_ident("row_id") {
+            if *row_id {
+                return Err(meta.error("row_id 只能声明一次"));
+            }
+            *row_id = true;
+            Ok(())
         } else {
-            Err(meta.error("CrudTableRow 字段属性只支持 column(...) 或 skip"))
+            Err(meta.error("CrudTableRow 字段属性只支持 row_id、column(...) 或 skip"))
         }
     })
 }

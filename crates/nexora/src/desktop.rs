@@ -17,7 +17,7 @@ pub use crate::account::client::{
 pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
-    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, FormDialog, FormDialogState,
-    FormFieldDraft, FormItem, FormItemControl, SidebarRegion, TableCell, TableCellVerticalAlign,
-    TableHeaderCell,
+    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection, FormDialog,
+    FormDialogState, FormFieldDraft, FormItem, FormItemControl, LoadedRowsSelectionEvent,
+    RowSelectionEvent, SidebarRegion, TableCell, TableCellVerticalAlign, TableHeaderCell,
 };
