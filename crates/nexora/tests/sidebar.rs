@@ -130,6 +130,24 @@ fn shell_uses_gpui_component_sidebar_for_navigation() {
 
 #[test]
 fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
+    let default_header = APPLICATION_SOURCE
+        .split_once("fn render_default_sidebar_header")
+        .and_then(|(_, source)| source.split_once("fn render_sidebar_header_content"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位默认 Sidebar Header 实现");
+    for required in [
+        ".w_full()",
+        ".flex_1()",
+        ".overflow_hidden()",
+        ".whitespace_nowrap()",
+        ".truncate()",
+    ] {
+        assert!(
+            default_header.contains(required),
+            "默认 Sidebar Header 必须防止品牌文案在窄侧边栏中按字符换行：{required}"
+        );
+    }
+
     let default_footer = APPLICATION_SOURCE
         .split_once("fn render_default_account_footer")
         .and_then(|(_, source)| source.split_once("fn render_sidebar"))

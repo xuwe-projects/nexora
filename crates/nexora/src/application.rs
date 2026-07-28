@@ -1773,7 +1773,9 @@ impl ApplicationShell {
             .flex()
             .items_center()
             .gap_2()
+            .w_full()
             .min_w_0()
+            .overflow_hidden()
             .child(
                 img(self
                     .application_logo
@@ -1786,12 +1788,17 @@ impl ApplicationShell {
                 div()
                     .flex()
                     .flex_col()
+                    .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .child(
                         div()
                             .text_sm()
                             .font_semibold()
                             .text_color(theme.sidebar_accent_foreground)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .truncate()
                             .child(self.application_name.clone()),
                     )
                     .when_some(self.sidebar_subtitle.clone(), |this, subtitle| {
@@ -1799,6 +1806,9 @@ impl ApplicationShell {
                             div()
                                 .text_xs()
                                 .text_color(theme.sidebar_foreground.opacity(0.66))
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .truncate()
                                 .child(subtitle),
                         )
                     }),
