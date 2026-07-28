@@ -58,6 +58,35 @@ use nexora::{ApplicationOptions, ApplicationTabStyle};
 ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
 ```
 
+## 主面板标题栏动作
+
+应用可以在 `Application::initialize` 中安装主面板标题栏右侧动作。Shell 会把这些动作渲染到
+所有业务 Feature 的 `PanelHeader` 右侧，并放在框架内置的“置顶当前标签页”按钮之前：
+
+```rust
+use gpui::App;
+use gpui_component::{Sizable as _, button::Button};
+use nexora::{PanelHeaderAction, install_panel_header_actions};
+
+fn initialize(&mut self, cx: &mut App) {
+    install_panel_header_actions(
+        vec![PanelHeaderAction::new(|_cx| {
+            Button::new("open-tasks")
+                .small()
+                .label("任务")
+                .on_click(|_, _, _| {
+                    // 在这里触发导航、打开弹窗或派发应用动作。
+                })
+        })],
+        cx,
+    );
+}
+```
+
+`PanelHeaderAction` 的渲染闭包会在标题栏渲染时收到当前 `App` 上下文。闭包应只读取状态并构造
+元素；导航、弹窗、网络请求或业务副作用应放在按钮等元素自己的事件回调中。再次调用
+`install_panel_header_actions` 会完整替换上一次安装的列表，传入空列表可清空已安装动作。
+
 ## Account 自动发现
 
 `desktop` 会编译 Account 客户端，但普通应用默认不显示认证门禁。应用在

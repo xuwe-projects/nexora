@@ -60,6 +60,38 @@ use nexora::{ApplicationOptions, ApplicationTabStyle};
 ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
 ```
 
+## Panel Header Actions
+
+Applications can install actions for the right side of the main panel header from
+`Application::initialize`. The Shell renders these actions on every business Feature `PanelHeader`,
+before the built-in current-tab pin toggle:
+
+```rust
+use gpui::App;
+use gpui_component::{Sizable as _, button::Button};
+use nexora::{PanelHeaderAction, install_panel_header_actions};
+
+fn initialize(&mut self, cx: &mut App) {
+    install_panel_header_actions(
+        vec![PanelHeaderAction::new(|_cx| {
+            Button::new("open-tasks")
+                .small()
+                .label("Tasks")
+                .on_click(|_, _, _| {
+                    // Trigger navigation, open a dialog, or dispatch an application action here.
+                })
+        })],
+        cx,
+    );
+}
+```
+
+The `PanelHeaderAction` render closure receives the current `App` context while the header is being
+rendered. It should only read state and build elements; navigation, dialogs, network requests, or
+business side effects should live in the element event callbacks. Calling
+`install_panel_header_actions` again replaces the previous list, and passing an empty list clears the
+installed actions.
+
 ## Automatic Account detection
 
 The `desktop` feature compiles Account client capabilities, but regular applications keep the gate
