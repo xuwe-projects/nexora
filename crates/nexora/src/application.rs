@@ -5,6 +5,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
 };
@@ -60,6 +61,74 @@ impl ApplicationLogo {
     pub(crate) fn image(self) -> std::sync::Arc<Image> {
         std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, self.bytes.to_vec()))
     }
+}
+
+/// 主面板标题栏右侧动作的渲染器。
+///
+/// 应用可以在启动阶段安装一组动作，Nexora Shell 会在所有业务页面的
+/// `PanelHeader` 右侧渲染这些动作。渲染闭包只应读取应用状态并构造元素；导航、
+/// 弹窗或业务操作等副作用应放在元素自身的事件回调中。
+#[derive(Clone)]
+pub struct PanelHeaderAction {
+    render: Rc<dyn Fn(&mut App) -> AnyElement>,
+}
+
+impl PanelHeaderAction {
+    /// 创建一个主面板标题栏右侧动作。
+    ///
+    /// `render` 会在标题栏渲染时收到当前 [`App`] 上下文，并返回可插入
+    /// `PanelHeader` 的任意 GPUI 元素。动作对象可以被克隆，便于一次安装多个
+    /// 页面共享的入口。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpui::{div, App, ParentElement as _};
+    /// # use nexora::PanelHeaderAction;
+    /// let action = PanelHeaderAction::new(|_cx: &mut App| div().child("Action"));
+    /// ```
+    pub fn new<E>(render: impl Fn(&mut App) -> E + 'static) -> Self
+    where
+        E: gpui::IntoElement,
+    {
+        Self {
+            render: Rc::new(move |cx| render(cx).into_any_element()),
+        }
+    }
+
+    fn render(&self, cx: &mut App) -> AnyElement {
+        (self.render)(cx)
+    }
+}
+
+#[derive(Clone, Default)]
+struct PanelHeaderActionRegistry {
+    actions: Vec<PanelHeaderAction>,
+}
+
+impl Global for PanelHeaderActionRegistry {}
+
+/// 安装应用级主面板标题栏右侧动作。
+///
+/// 后一次安装会完整替换前一次安装的动作列表，适合应用在启动阶段集中声明稳定入口。
+/// 传入空列表会清空已安装动作。动作会渲染在业务页面标题栏右侧，并位于框架内置的
+/// 当前标签页置顶按钮之前。
+pub fn install_panel_header_actions(actions: Vec<PanelHeaderAction>, cx: &mut App) {
+    let registry = PanelHeaderActionRegistry { actions };
+    if cx.has_global::<PanelHeaderActionRegistry>() {
+        *cx.global_mut::<PanelHeaderActionRegistry>() = registry;
+    } else {
+        cx.set_global(registry);
+    }
+}
+
+fn panel_header_actions(cx: &mut App) -> Vec<AnyElement> {
+    cx.try_global::<PanelHeaderActionRegistry>()
+        .map(|registry| registry.actions.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|action| action.render(cx))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -2228,8 +2297,9 @@ impl ApplicationShell {
         );
         let active_route = self.active_route.clone();
         let pinned = self.is_route_pinned(&active_route);
+        let actions = panel_header_actions(cx);
 
-        PanelHeader::new(breadcrumb).action(
+        PanelHeader::new(breadcrumb).actions(actions).action(
             Toggle::new("panel-pin-current-tab")
                 .small()
                 .checked(pinned)

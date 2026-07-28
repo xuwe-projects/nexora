@@ -39,7 +39,7 @@ pub mod server;
 #[cfg(feature = "desktop")]
 pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
-    ApplicationTabStyle,
+    ApplicationTabStyle, PanelHeaderAction, install_panel_header_actions,
 };
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;

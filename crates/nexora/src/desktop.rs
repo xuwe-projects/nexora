@@ -14,6 +14,7 @@ pub use crate::account::client::{
     login_profile, login_session, login_snapshot, observe_authentication, oidc_config, sign_out,
     start_login,
 };
+pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
     CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, FormDialog, FormDialogState,
