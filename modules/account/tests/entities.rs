@@ -53,7 +53,6 @@ fn profile(permissions: impl IntoIterator<Item = PermissionKey>) -> AccessProfil
             username: Some("test-user".to_owned()),
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
-            avatar_url: None,
             status: UserStatus::Active,
             is_super_admin: false,
             created_at: now,

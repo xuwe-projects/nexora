@@ -30,7 +30,6 @@ async fn protected_resource_rejects_missing_bearer_token_before_database_access(
         pool,
         token_verifier: Arc::new(StaticVerifier),
         identity_directory: None,
-        avatar_storage: None,
     });
     let router = with_http_layers(account.routers::<()>());
     let reusable_router = with_http_layers(account.routers::<()>());
@@ -74,11 +73,50 @@ async fn protected_resource_rejects_missing_bearer_token_before_database_access(
             username: None,
             email: None,
             display_name: "测试用户".to_owned(),
-            avatar_url: None,
         })
         .await
         .expect_err("应用层不能开通缺少 identity ID 的身份");
     assert!(matches!(invalid_identity, AccountError::InvalidInput(_)));
+}
+
+#[tokio::test]
+async fn avatar_routes_are_not_registered() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://postgres:postgres@127.0.0.1:5432/test")
+        .expect("惰性测试连接池配置应当有效");
+    let account = Account::new(AccountDependencies {
+        pool,
+        token_verifier: Arc::new(StaticVerifier),
+        identity_directory: None,
+    });
+    let router = with_http_layers(account.routers::<()>());
+
+    let upload_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/avatars")
+                .header("authorization", "Bearer token")
+                .body(Body::from("image-bytes"))
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应");
+    assert_eq!(upload_response.status(), StatusCode::NOT_FOUND);
+
+    let update_response = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/users/User0001/avatar")
+                .header("authorization", "Bearer token")
+                .body(Body::from("{}"))
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应");
+    assert_eq!(update_response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -160,7 +198,6 @@ impl AccessTokenVerifier for StaticVerifier {
             username: Some("test-user".to_owned()),
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
-            avatar_url: None,
             organization: None,
         })
     }

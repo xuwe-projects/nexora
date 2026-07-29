@@ -176,8 +176,8 @@ pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, Directory
 错误稳定映射为 `Conflict`、`NotFound` 或 `Unavailable`，不会把 PAT 或 Provider 内部响应返回
 给 HTTP 客户端。
 
-`DirectoryUser` 包含 `identity_id`、`username`、`display_name`、可选 `email` 和
-`avatar_url`；`into_external_identity()` 会保留这些可信目录资料。所有 gRPC 请求使用 15 秒
+`DirectoryUser` 包含 `identity_id`、`username`、`display_name` 和可选 `email`；
+`into_external_identity()` 会保留这些可信目录资料。所有 gRPC 请求使用 15 秒
 超时。`DirectoryError` 区分无效配置、TLS、UserService 请求、ProjectService 角色请求、
 非法 UTF-8 和目录安全上限；PAT 不会进入 Debug 或错误正文。
 
@@ -226,7 +226,7 @@ pub async fn authorize(
 | `ensure_system_role_with_permissions` | key、name、description、permission keys | `Role` | 在 `IMES` 下创建/更新系统角色并按权限 key 重建权限集合 |
 | `users` | page、page_size | `Page<User>` | page 从 1 开始，size 限制到 1..=100 |
 | `user_access` | user ID | `AccessProfile` | 用户、直接角色与合并权限 |
-| `refresh_user_from_directory` | identity ID | `AccessProfile` | 同步目录用户名、邮箱、展示名、头像与最近登录时间，不创建陌生用户 |
+| `refresh_user_from_directory` | identity ID | `AccessProfile` | 同步目录用户名、邮箱、展示名与最近登录时间，不创建陌生用户 |
 | `update_user_status` | user ID、`UserStatus` | `User` | 超级管理员和最后管理员受保护 |
 | `replace_user_roles` / `replace_user_roles_for_owner` | owner、user ID、完整 role IDs、granted_by | `AccessProfile` | 缺省替换 `IMES` 并保留 `member`；owner 版本只替换指定范围 |
 | `grant_user_role` | user ID、role ID、granted_by | `AccessProfile` | 幂等追加角色，不清空已有角色 |
@@ -420,7 +420,6 @@ async fn list_factories(auth: Authorized<ReadFactories>) {
 | `username` | `Option<String>` | trim 后非空，最多 200 个字符；可变元数据 |
 | `email` | `Option<String>` | 最多 320 字节 |
 | `display_name` | `String` | trim 后非空，最多 200 个字符 |
-| `avatar_url` | `Option<String>` | 最多 2048 字节 |
 
 ### `CreateHumanIdentity` 与 `IdentityDirectory`
 
@@ -433,9 +432,8 @@ async fn list_factories(auth: Authorized<ReadFactories>) {
 | `display_name` | `Option<String>` | 可选；最多 200 个字符 |
 | `initial_password` | `String` | 1 至 200 个字符；只写入身份目录，不进入本地数据库或错误详情 |
 | `require_password_change` | `bool` | 是否要求用户首次登录后修改密码 |
-| `avatar_url` | `Option<String>` | 可选；同步到身份目录和本地账号的头像 URL |
 
-`CreateHumanIdentity` 保持旧结构体字面量兼容。需要把手机号同时作为登录名和 ZITADEL
+需要把手机号同时作为登录名和 ZITADEL
 联系手机号保存时，使用 `CreateHumanIdentity { username: phone, ... }.with_contact_phone(phone)`，
 再传给 `Account::create_managed_user_with_roles`；空白 `contact_phone` 会按未提供处理。
 ZITADEL 默认实现会把 email 和 contact phone 都以已验证状态创建，不发送邮箱或短信验证码。

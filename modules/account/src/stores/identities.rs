@@ -25,11 +25,10 @@ pub(crate) async fn sync_existing(
         SET username = COALESCE($2, username),
             email = COALESCE($3, email),
             display_name = CASE WHEN $4 = $1 THEN display_name ELSE $4 END,
-            avatar_url = COALESCE($5, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -37,7 +36,6 @@ pub(crate) async fn sync_existing(
     .bind(identity.username.as_deref())
     .bind(identity.email.as_deref())
     .bind(identity.display_name.as_str())
-    .bind(identity.avatar_url.as_deref())
     .fetch_optional(pool)
     .await?)
 }
@@ -85,12 +83,11 @@ async fn insert_new(
                 identity_id,
                 username,
                 email,
-                display_name,
-                avatar_url
+                display_name
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, username, email, display_name, avatar_url, status,
+            RETURNING id, identity_id, username, email, display_name, status,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
@@ -99,7 +96,6 @@ async fn insert_new(
         .bind(identity.username.as_deref())
         .bind(identity.email.as_deref())
         .bind(identity.display_name.as_str())
-        .bind(identity.avatar_url.as_deref())
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some(user) = inserted {
@@ -132,12 +128,11 @@ pub(super) async fn upsert(
                 identity_id,
                 username,
                 email,
-                display_name,
-                avatar_url
+                display_name
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, username, email, display_name, avatar_url, status,
+            RETURNING id, identity_id, username, email, display_name, status,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
@@ -146,7 +141,6 @@ pub(super) async fn upsert(
         .bind(identity.username.as_deref())
         .bind(identity.email.as_deref())
         .bind(identity.display_name.as_str())
-        .bind(identity.avatar_url.as_deref())
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some(user) = inserted {
@@ -172,11 +166,10 @@ async fn update_existing(
         SET username = COALESCE($2, username),
             email = COALESCE($3, email),
             display_name = CASE WHEN $4 = $1 THEN display_name ELSE $4 END,
-            avatar_url = COALESCE($5, avatar_url),
             updated_at = NOW(),
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, username, email, display_name, avatar_url, status,
+        RETURNING id, identity_id, username, email, display_name, status,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -184,7 +177,6 @@ async fn update_existing(
     .bind(identity.username.as_deref())
     .bind(identity.email.as_deref())
     .bind(identity.display_name.as_str())
-    .bind(identity.avatar_url.as_deref())
     .fetch_optional(&mut **transaction)
     .await
 }
@@ -195,7 +187,7 @@ async fn query_existing(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, username, email, display_name, avatar_url, status,
+        SELECT id, identity_id, username, email, display_name, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE identity_id = $1

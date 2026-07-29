@@ -1833,13 +1833,7 @@ impl ApplicationShell {
         let display_name = profile
             .map(|profile| profile.user.display_name.clone())
             .unwrap_or_else(|| "当前账户".to_owned());
-        let avatar = match profile.and_then(|profile| profile.user.avatar_url.clone()) {
-            Some(avatar_url) => Avatar::new()
-                .name(display_name.clone())
-                .src(avatar_url)
-                .small(),
-            None => Avatar::new().name(display_name.clone()).small(),
-        };
+        let avatar = Avatar::new().name(display_name.clone()).small();
         let menu_items = account_actions::menu_actions();
         let action_context = cx.focus_handle();
 

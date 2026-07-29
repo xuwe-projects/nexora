@@ -126,11 +126,10 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
         let profile = state
             .accounts()
             .authenticate(&ExternalIdentity {
-                issuer: identity.issuer,
-                subject: identity.subject,
+                identity_id: identity.subject,
+                username: identity.username,
                 email: identity.email,
                 display_name: identity.display_name,
-                avatar_url: identity.avatar_url,
             })
             .await?;
         Ok(Self { profile })

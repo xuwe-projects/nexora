@@ -3,15 +3,13 @@
 //! 模块通过私有运行状态直接持有服务端创建的共享 [`sqlx::PgPool`] 句柄，内部完成
 //! HTTP 与 PostgreSQL store 的装配；宿主服务只负责创建外部依赖并合并路由。
 
-use std::{collections::BTreeSet, fmt, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{Router, extract::FromRef};
 pub use kernel::Page;
 use kernel::ValidationError;
-use rand::{TryRngCore as _, rngs::OsRng};
 use sqlx::PgPool;
-use url::{Host, Url};
 
 /// 提供 Bearer access token 验证端口及 OIDC/JWKS 实现。
 pub mod authentication;
@@ -77,8 +75,6 @@ pub struct AccountDependencies {
     /// 可选的外部身份目录；配置后 `/me` 会刷新 Provider 资料，管理员创建用户也会先在
     /// Provider 创建身份，再原子绑定本地账号。
     pub identity_directory: Option<Arc<dyn IdentityDirectory>>,
-    /// 可选的账号头像存储实现；配置后 Account HTTP API 可上传头像并返回可访问 URL。
-    pub avatar_storage: Option<Arc<dyn AvatarStorage>>,
 }
 
 /// 在外部身份目录创建人类用户所需的领域输入。
@@ -101,14 +97,12 @@ pub struct CreateHumanIdentity {
     pub initial_password: String,
     /// 是否要求用户首次登录后立即修改密码。
     pub require_password_change: bool,
-    /// 创建 human identity 时同步到身份目录和本地账号的头像 URL。
-    pub avatar_url: Option<String>,
 }
 
 /// 创建人类身份时可选携带的 Provider 联系信息。
 ///
 /// 该类型用于在不破坏旧 `CreateHumanIdentity` 结构体字面量调用的前提下，给 ZITADEL 等
-/// Provider 传入手机号等联系字段。`identity` 仍保存登录名、邮箱、姓名、初始密码和头像；
+/// Provider 传入手机号等联系字段。`identity` 仍保存登录名、邮箱、姓名和初始密码；
 /// `contact_phone` 只发送给支持该能力的身份目录，不写入 Nexora 本地账号快照。
 #[derive(Clone, PartialEq, Eq)]
 pub struct CreateHumanIdentityProvision {
@@ -164,109 +158,8 @@ impl fmt::Debug for CreateHumanIdentity {
             .field("display_name", &self.display_name)
             .field("initial_password", &"<redacted>")
             .field("require_password_change", &self.require_password_change)
-            .field("avatar_url", &self.avatar_url)
             .finish()
     }
-}
-
-/// Account 头像上传载荷。
-///
-/// 该结构由 HTTP 上传入口或宿主服务构造，传给 [`AvatarStorage`] 保存头像文件。字节内容只在
-/// 当前请求内使用，不会写入账号数据库。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AvatarUpload {
-    /// 上传内容的 MIME 类型。
-    pub content_type: String,
-    /// 上传的图片字节。
-    pub bytes: Vec<u8>,
-}
-
-/// Account 头像存储端口。
-#[async_trait]
-pub trait AvatarStorage: Send + Sync {
-    /// 保存头像并返回可通过 HTTP 访问的 URL。
-    ///
-    /// # Errors
-    ///
-    /// 上传内容不符合存储约束、底层存储不可用或无法返回公共 URL 时返回头像存储错误。
-    async fn store_avatar(&self, upload: AvatarUpload) -> Result<String, AvatarStorageError>;
-}
-
-/// 将头像文件保存到本地目录的最小存储实现。
-#[derive(Debug, Clone)]
-pub struct LocalAvatarStorage {
-    directory: PathBuf,
-    public_base_url: String,
-}
-
-impl LocalAvatarStorage {
-    /// 创建本地头像存储。
-    ///
-    /// # Errors
-    ///
-    /// 头像目录为空，或公开访问基准 URL 不是 HTTPS/本机 loopback HTTP 地址时返回错误。
-    pub fn new(
-        directory: impl Into<PathBuf>,
-        public_base_url: &str,
-    ) -> Result<Self, AvatarStorageError> {
-        let directory = directory.into();
-        if directory.as_os_str().is_empty() {
-            return Err(AvatarStorageError::InvalidConfiguration(
-                "avatar directory must not be empty",
-            ));
-        }
-        Ok(Self {
-            directory,
-            public_base_url: normalized_avatar_base_url(public_base_url)?,
-        })
-    }
-}
-
-#[async_trait]
-impl AvatarStorage for LocalAvatarStorage {
-    async fn store_avatar(&self, upload: AvatarUpload) -> Result<String, AvatarStorageError> {
-        const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
-        if upload.bytes.is_empty() {
-            return Err(AvatarStorageError::InvalidUpload(
-                "avatar upload must not be empty",
-            ));
-        }
-        if upload.bytes.len() > MAX_AVATAR_BYTES {
-            return Err(AvatarStorageError::InvalidUpload(
-                "avatar upload must be at most 2 MiB",
-            ));
-        }
-        let extension = avatar_extension(upload.content_type.as_str())?;
-        std::fs::create_dir_all(&self.directory)?;
-        let file_name = format!("{}.{}", random_avatar_name()?, extension);
-        let path = self.directory.join(&file_name);
-        std::fs::write(path, upload.bytes)?;
-        Ok(format!("{}{}", self.public_base_url, file_name))
-    }
-}
-
-/// 头像存储错误。
-#[derive(Debug, thiserror::Error)]
-pub enum AvatarStorageError {
-    /// 存储配置无效。
-    #[error("invalid avatar storage configuration: {0}")]
-    InvalidConfiguration(
-        /// 配置无效的稳定说明，供日志和诊断使用。
-        &'static str,
-    ),
-    /// 上传内容无效。
-    #[error("invalid avatar upload: {0}")]
-    InvalidUpload(
-        /// 上传内容不符合约束的稳定说明，供日志和诊断使用。
-        &'static str,
-    ),
-    /// 文件系统读写失败。
-    #[error("avatar storage I/O failed")]
-    Io(
-        /// 底层文件系统错误。
-        #[from]
-        std::io::Error,
-    ),
 }
 
 /// 外部身份目录的稳定错误分类。
@@ -283,9 +176,6 @@ pub enum IdentityDirectoryError {
     /// 目录暂时不可用或拒绝了服务端管理请求。
     #[error("身份目录暂时不可用")]
     Unavailable,
-    /// 身份目录无法同步头像 URL。
-    #[error("identity directory does not support avatar synchronization")]
-    AvatarUnsupported,
 }
 
 /// Account 创建和刷新身份资料使用的外部目录端口。
@@ -335,17 +225,6 @@ pub trait IdentityDirectory: Send + Sync {
     ///
     /// identity ID 不存在、Provider 拒绝删除或暂时不可用时返回稳定目录错误。
     async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError>;
-
-    /// 在 Provider 中更新或清空 human user 的头像 URL。
-    ///
-    /// # Errors
-    ///
-    /// 身份不存在、Provider 不支持头像同步或目录暂时不可用时返回稳定目录错误。
-    async fn update_identity_avatar(
-        &self,
-        identity_id: &str,
-        avatar_url: Option<&str>,
-    ) -> Result<(), IdentityDirectoryError>;
 }
 
 /// 账号模块首次初始化需要的可信输入。
@@ -409,7 +288,6 @@ pub(crate) struct AccountState {
     pool: PgPool,
     token_verifier: Arc<dyn AccessTokenVerifier>,
     identity_directory: Option<Arc<dyn IdentityDirectory>>,
-    avatar_storage: Option<Arc<dyn AvatarStorage>>,
 }
 
 impl FromRef<AccountState> for Account {
@@ -795,14 +673,12 @@ impl Account {
             pool,
             token_verifier,
             identity_directory,
-            avatar_storage,
         } = dependencies;
         Self {
             state: AccountState {
                 pool,
                 token_verifier,
                 identity_directory,
-                avatar_storage,
             },
         }
     }
@@ -1171,68 +1047,7 @@ impl Account {
             .ok_or(AccountError::NotFound("用户"))
     }
 
-    /// 保存头像文件并返回可访问 URL。
-    ///
-    /// # Errors
-    ///
-    /// 未配置头像存储、上传内容无效、存储失败或返回 URL 不符合公共访问约束时返回错误。
-    pub async fn upload_avatar(&self, upload: AvatarUpload) -> Result<String, AccountError> {
-        let storage = self
-            .state
-            .avatar_storage
-            .as_ref()
-            .ok_or(AccountError::AvatarStorageUnavailable)?;
-        let avatar_url = storage.store_avatar(upload).await?;
-        normalized_avatar_url(Some(avatar_url.as_str()))?
-            .ok_or_else(|| ValidationError::new("avatar_url", "avatar_url is required").into())
-    }
-
-    /// 更新本地账号头像 URL，并同步到外部身份目录。
-    ///
-    /// # Errors
-    ///
-    /// 用户不存在、头像 URL 无效、身份目录同步失败或本地数据库更新失败时返回错误。若数据库更新失败，
-    /// 会尽力把身份目录中的头像 URL 回滚到原值。
-    pub async fn update_user_avatar(
-        &self,
-        user_id: &str,
-        avatar_url: Option<&str>,
-    ) -> Result<User, AccountError> {
-        let avatar_url = normalized_avatar_url(avatar_url)?;
-        let current = stores::users::query_by_id(user_id, &self.state.pool)
-            .await
-            .map_err(StoreError::from)?
-            .ok_or(AccountError::NotFound("用户"))?;
-        if let Some(directory) = self.state.identity_directory.as_ref() {
-            directory
-                .update_identity_avatar(current.identity_id.as_str(), avatar_url.as_deref())
-                .await?;
-        }
-        match stores::users::update_avatar_url(user_id, avatar_url.as_deref(), &self.state.pool)
-            .await
-        {
-            Ok(user) => Ok(user),
-            Err(error) => {
-                if let Some(directory) = self.state.identity_directory.as_ref()
-                    && let Err(rollback_error) = directory
-                        .update_identity_avatar(
-                            current.identity_id.as_str(),
-                            current.avatar_url.as_deref(),
-                        )
-                        .await
-                {
-                    tracing::error!(
-                        error = ?rollback_error,
-                        business_operation = "user_avatar_sync_compensation",
-                        "failed to restore avatar_url in identity directory after local update failure"
-                    );
-                }
-                Err(error.into())
-            }
-        }
-    }
-
-    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和头像。
+    /// 从已配置的外部身份目录刷新当前用户的登录名、邮箱、展示名和最近登录时间。
     ///
     /// 未配置目录时保留现有资料；配置目录但 Provider 不存在该 identity ID 时返回明确错误。
     /// 刷新只更新已开通用户，不会绕过本地开通和停用规则创建新账号。
@@ -1446,7 +1261,6 @@ fn normalized_create_human_identity(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let avatar_url = normalized_avatar_url(request.avatar_url.as_deref())?;
     if username.is_empty() || username.chars().count() > 200 {
         return Err(ValidationError::new("username", "登录用户名必须为 1 到 200 个字符").into());
     }
@@ -1481,7 +1295,6 @@ fn normalized_create_human_identity(
         display_name: display_name.map(str::to_owned),
         initial_password: request.initial_password,
         require_password_change: request.require_password_change,
-        avatar_url,
     })
 }
 
@@ -1500,87 +1313,6 @@ fn normalized_create_human_identity_provision(
         identity: normalized_create_human_identity(request.identity)?,
         contact_phone: contact_phone.map(str::to_owned),
     })
-}
-
-fn normalized_avatar_url(value: Option<&str>) -> Result<Option<String>, AccountError> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if value.len() > 2_048 {
-        return Err(
-            ValidationError::new("avatar_url", "avatar_url must be at most 2048 bytes").into(),
-        );
-    }
-    let url = Url::parse(value).map_err(|_| {
-        ValidationError::new("avatar_url", "avatar_url must be a valid HTTP(S) URL")
-    })?;
-    if !valid_public_url(&url) {
-        return Err(ValidationError::new(
-            "avatar_url",
-            "avatar_url must be an accessible HTTP(S) URL",
-        )
-        .into());
-    }
-    Ok(Some(value.to_owned()))
-}
-
-fn normalized_avatar_base_url(value: &str) -> Result<String, AvatarStorageError> {
-    let value = value.trim();
-    let mut url = Url::parse(value).map_err(|_| {
-        AvatarStorageError::InvalidConfiguration("public avatar URL must be a valid HTTP(S) URL")
-    })?;
-    if !valid_public_url(&url) {
-        return Err(AvatarStorageError::InvalidConfiguration(
-            "public avatar URL must be an accessible HTTP(S) URL",
-        ));
-    }
-    if !url.path().ends_with('/') {
-        let path = format!("{}/", url.path());
-        url.set_path(path.as_str());
-    }
-    Ok(url.to_string())
-}
-
-fn valid_public_url(url: &Url) -> bool {
-    url.host().is_some()
-        && url.username().is_empty()
-        && url.password().is_none()
-        && (url.scheme() == "https" || (url.scheme() == "http" && is_loopback_url(url)))
-}
-
-fn is_loopback_url(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
-}
-
-fn avatar_extension(content_type: &str) -> Result<&'static str, AvatarStorageError> {
-    match content_type.split(';').next().map(str::trim) {
-        Some("image/png") => Ok("png"),
-        Some("image/jpeg") => Ok("jpg"),
-        Some("image/webp") => Ok("webp"),
-        Some("image/gif") => Ok("gif"),
-        _ => Err(AvatarStorageError::InvalidUpload(
-            "avatar content type must be PNG, JPEG, WebP, or GIF",
-        )),
-    }
-}
-
-fn random_avatar_name() -> Result<String, AvatarStorageError> {
-    let mut bytes = [0_u8; 16];
-    OsRng
-        .try_fill_bytes(&mut bytes)
-        .map_err(|_| AvatarStorageError::InvalidUpload("unable to generate avatar file name"))?;
-    Ok(bytes
-        .iter()
-        .fold(String::with_capacity(32), |mut output, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(output, "{byte:02x}");
-            output
-        }))
 }
 
 fn validate_permission_definitions(
@@ -1658,7 +1390,6 @@ impl AccountState {
             username: identity.username,
             email: identity.email,
             display_name: identity.display_name,
-            avatar_url: identity.avatar_url,
         }
         .normalized()?;
         let user = stores::identities::sync_existing(&identity, self.pool())

@@ -185,6 +185,5 @@ fn human_identity(username: &str) -> CreateHumanIdentity {
         display_name: Some("Test Employee".to_owned()),
         initial_password: "correct horse battery staple".to_owned(),
         require_password_change: false,
-        avatar_url: None,
     }
 }

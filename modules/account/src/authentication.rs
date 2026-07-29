@@ -43,8 +43,6 @@ pub struct VerifiedIdentity {
     pub email: Option<String>,
     /// 适合本地界面展示的名称。
     pub display_name: String,
-    /// 可选头像地址。
-    pub avatar_url: Option<String>,
     /// 可选 ZITADEL Organization 上下文，供 portal/openapi 映射业务租户。
     pub organization: Option<VerifiedOrganizationContext>,
 }

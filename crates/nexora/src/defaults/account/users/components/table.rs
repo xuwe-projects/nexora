@@ -382,11 +382,6 @@ impl UserTableRow {
     fn render_user(row: &Self, _window: &mut Window, cx: &mut App) -> TableCell {
         let user = &row.source;
         let avatar = Avatar::new().name(user.display_name.clone()).small();
-        let avatar = if let Some(avatar_url) = user.avatar_url.clone() {
-            avatar.src(avatar_url)
-        } else {
-            avatar
-        };
 
         TableCell::new(
             h_flex().h_full().min_w_0().gap_2().child(avatar).child(

@@ -226,7 +226,6 @@ fn profile(is_super_admin: bool, permissions: &[&str]) -> AccessProfileResponse 
             username: Some("user0001".to_owned()),
             email: Some("user0001@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
-            avatar_url: None,
             status: UserStatus::Active,
             user_type: UserType::Human,
             is_super_admin,

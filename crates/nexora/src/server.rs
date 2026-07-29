@@ -24,10 +24,9 @@ pub use crate::account::server::{
     setup_routes, setup_routes_with, user_directory,
 };
 pub use crate::account::{
-    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, AvatarStorage,
-    AvatarStorageError, AvatarUpload, BearerAccessToken, CreateHumanIdentity,
-    CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
-    LocalAvatarStorage, OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
+    AccessProfile, Account, AccountError, AuthenticatedUser, Authorized, BearerAccessToken,
+    CreateHumanIdentity, CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory,
+    IdentityDirectoryError, OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
     Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey,
     RequiredPermission, Role, SYSTEM_ROLE_OWNER, User, VerifiedBearerIdentity, VerifiedIdentity,
     VerifiedOrganizationContext, create_generated_role_for_owner, create_permission_catalog,

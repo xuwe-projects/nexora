@@ -70,7 +70,6 @@ Authorization: Bearer <access_token>
 | `username` | string | 是 | 身份提供方登录用户名；不会替代 `identity_id` |
 | `email` | string | 是 | 展示邮箱 |
 | `display_name` | string | 否 | 展示名称，最多 200 个字符 |
-| `avatar_url` | string | 是 | 头像 URL |
 | `status` | enum | 否 | `active` 或 `suspended` |
 | `is_super_admin` | boolean | 否 | 是否为系统唯一、不可变的内置超级管理员 |
 | `created_at` | int64 | 否 | 创建时间，Unix 秒 |
@@ -84,7 +83,6 @@ Authorization: Bearer <access_token>
   "username": "lin.chen",
   "email": "lin@example.com",
   "display_name": "陈林",
-  "avatar_url": "https://id.example.com/avatar/279693210507280451",
   "status": "active",
   "is_super_admin": false,
   "created_at": 1784304000,
@@ -122,7 +120,7 @@ Authorization: Bearer <access_token>
 
 ```json
 {
-  "user": { "id": "A1b2C3d4", "identity_id": "279693210507280451", "username": "lin.chen", "email": null, "display_name": "陈林", "avatar_url": null, "status": "active", "is_super_admin": false, "created_at": 1784304000, "updated_at": 1784304000, "last_login_at": 1784304000 },
+  "user": { "id": "A1b2C3d4", "identity_id": "279693210507280451", "username": "lin.chen", "email": null, "display_name": "陈林", "status": "active", "is_super_admin": false, "created_at": 1784304000, "updated_at": 1784304000, "last_login_at": 1784304000 },
   "roles": [
     { "id": 2, "owner": "IMES", "key": "member", "name": "成员", "description": null, "is_system": true, "permissions": [], "created_at": 1784304000, "updated_at": 1784304000 }
   ],
@@ -194,7 +192,7 @@ Authorization: Bearer <access_token>
 ### `GET /me`
 
 验证 Bearer token、本地账号和状态，然后通过配置的 ZITADEL UserService v2 gRPC 按
-`identity_id` 读取最新人类用户，原子同步 `username`、邮箱、展示名、头像与最近登录时间，
+`identity_id` 读取最新人类用户，原子同步 `username`、邮箱、展示名与最近登录时间，
 最后返回 `AccessProfile`。该接口不要求额外权限，也不会为陌生身份自动创建用户；目录中
 不存在该身份时返回 `404 identity_not_found`，目录暂时不可用时返回
 `503 identity_provider_unavailable`。

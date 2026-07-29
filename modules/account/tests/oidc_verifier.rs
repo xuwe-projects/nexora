@@ -50,6 +50,10 @@ async fn verifier_enforces_standard_access_token_claims() {
     assert_eq!(identity.issuer, format!("{issuer}/"));
     assert_eq!(identity.subject, "user-1");
     assert_eq!(identity.display_name, "Ada");
+    assert!(
+        !format!("{identity:?}").contains("https://cdn.example.com/avatar.png"),
+        "OIDC picture claim 不应再映射为 Account 身份资料"
+    );
     let organization = identity
         .organization
         .expect("ZITADEL org context claim 应当被保留");
@@ -231,6 +235,7 @@ fn signed_token_with_key_id(
         "iat": now(),
         "name": "Ada",
         "email": "ada@example.com",
+        "picture": "https://cdn.example.com/avatar.png",
         "urn:zitadel:iam:org:id": "customer-org-1",
         "urn:zitadel:iam:user:resourceowner:id": "resource-owner-1",
         "urn:zitadel:iam:user:resourceowner:name": "Acme",

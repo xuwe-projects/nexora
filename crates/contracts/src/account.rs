@@ -30,9 +30,6 @@ pub struct ProvisionUserRequest {
     /// 可选展示名称；省略时使用名字与姓氏组合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    /// 创建用户时写入身份目录和本地账号的头像 URL。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub avatar_url: Option<String>,
     /// 创建用户时写入身份目录的初始密码。
     pub initial_password: String,
     /// 是否要求用户首次登录后立即修改密码。
@@ -52,27 +49,11 @@ impl fmt::Debug for ProvisionUserRequest {
             .field("family_name", &self.family_name)
             .field("email", &self.email)
             .field("display_name", &self.display_name)
-            .field("avatar_url", &self.avatar_url)
             .field("initial_password", &"<redacted>")
             .field("require_password_change", &self.require_password_change)
             .field("role_ids", &self.role_ids)
             .finish()
     }
-}
-
-/// 头像上传后的可访问 URL 响应。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct AvatarUploadResponse {
-    /// 可供客户端展示并同步到身份目录的头像 URL。
-    pub avatar_url: String,
-}
-
-/// 修改用户头像 URL 的请求正文。
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateUserAvatarRequest {
-    /// 新头像 URL；传 `null` 表示清空头像。
-    pub avatar_url: Option<String>,
 }
 
 /// 创建自定义角色的请求正文。
@@ -201,8 +182,6 @@ pub struct UserResponse {
     pub email: Option<String>,
     /// 用户展示名称。
     pub display_name: String,
-    /// 可选头像 URL。
-    pub avatar_url: Option<String>,
     /// 用户当前访问状态。
     pub status: UserStatus,
     /// 用户类型，用于区分人员用户和服务账号。
