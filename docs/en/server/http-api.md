@@ -58,7 +58,6 @@ permission membership; other users receive permissions through roles.
 | `username` | string | Yes | Identity Provider login name; not a binding key |
 | `email` | string | Yes | Display email |
 | `display_name` | string | No | Display name, at most 200 characters |
-| `avatar_url` | string | Yes | Avatar URL |
 | `status` | enum | No | `active` or `suspended` |
 | `is_super_admin` | boolean | No | Whether this is the unique immutable super administrator |
 | `created_at` | int64 | No | Creation time in Unix seconds |
@@ -72,7 +71,6 @@ permission membership; other users receive permissions through roles.
   "username": "lin.chen",
   "email": "lin@example.com",
   "display_name": "Lin Chen",
-  "avatar_url": null,
   "status": "active",
   "is_super_admin": false,
   "created_at": 1784304000,
@@ -93,7 +91,7 @@ deleted.
 
 ```json
 {
-  "user": { "id": "A1b2C3d4", "identity_id": "279693210507280451", "username": "lin.chen", "email": null, "display_name": "Lin Chen", "avatar_url": null, "status": "active", "is_super_admin": false, "created_at": 1784304000, "updated_at": 1784304000, "last_login_at": 1784304000 },
+  "user": { "id": "A1b2C3d4", "identity_id": "279693210507280451", "username": "lin.chen", "email": null, "display_name": "Lin Chen", "status": "active", "is_super_admin": false, "created_at": 1784304000, "updated_at": 1784304000, "last_login_at": 1784304000 },
   "roles": [{ "id": 2, "owner": "IMES", "key": "member", "name": "Member", "description": null, "is_system": true, "permissions": [], "created_at": 1784304000, "updated_at": 1784304000 }],
   "permissions": ["users:read"]
 }
@@ -146,7 +144,7 @@ responses also include `x-request-id`, matching the error body's `request_id`.
 ### `GET /me`
 
 Requires authentication but no extra permission. It reads the latest human profile from ZITADEL
-UserService v2 by identity ID, synchronizes username, email, display name, avatar, and last-login
+UserService v2 by identity ID, synchronizes username, email, display name, and last-login
 time, then returns `200 AccessProfile`. It never provisions an unknown identity. Common failures are
 invalid token `401`, unregistered or suspended account `403`, missing directory identity `404`, and
 Provider `503`.

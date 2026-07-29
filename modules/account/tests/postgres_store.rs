@@ -1152,7 +1152,6 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         family_name: "User".to_owned(),
         email: "provisioned-user@example.com".to_owned(),
         display_name: Some("已开通用户".to_owned()),
-        avatar_url: Some("https://cdn.example.com/provisioned-user.png".to_owned()),
         initial_password: "imes13800000003.".to_owned(),
         require_password_change: false,
         role_ids: vec![initial_role.id],
@@ -1185,10 +1184,6 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
 
     let profile = current_profile(&account, "provisioned-user").await;
     assert_eq!(profile.user.identity_id, "provisioned-user");
-    assert_eq!(
-        profile.user.avatar_url.as_deref(),
-        Some("https://cdn.example.com/provisioned-user.png")
-    );
     assert!(profile.roles.iter().any(|role| role.id == initial_role.id));
     let granted_by = sqlx::query_scalar::<_, Option<String>>(
         "SELECT granted_by FROM account.user_roles WHERE user_id = $1 AND role_id = $2",
@@ -1206,7 +1201,6 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
         family_name: "User".to_owned(),
         email: "rollback-http-user@example.com".to_owned(),
         display_name: Some("应回滚用户".to_owned()),
-        avatar_url: None,
         initial_password: "imes13800000004.".to_owned(),
         require_password_change: false,
         role_ids: vec![i64::MAX],
@@ -1297,7 +1291,6 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "empty-role-user@example.com".to_owned(),
         display_name: Some("默认成员用户".to_owned()),
-        avatar_url: None,
         initial_password: "imes13800000005.".to_owned(),
         require_password_change: false,
         role_ids: Vec::new(),
@@ -1320,7 +1313,6 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "denied-role-user@example.com".to_owned(),
         display_name: Some("越权角色用户".to_owned()),
-        avatar_url: None,
         initial_password: "imes13800000006.".to_owned(),
         require_password_change: false,
         role_ids: vec![initial_role.id],
@@ -1347,7 +1339,6 @@ async fn provisioning_initial_roles_requires_role_management_permission(pool: Pg
         family_name: "Role".to_owned(),
         email: "allowed-role-user@example.com".to_owned(),
         display_name: Some("已授权角色用户".to_owned()),
-        avatar_url: None,
         initial_password: "imes13800000007.".to_owned(),
         require_password_change: false,
         role_ids: vec![initial_role.id],
@@ -1380,7 +1371,6 @@ async fn test_account_with_directory(
         pool,
         token_verifier: Arc::new(TokenIdentityVerifier),
         identity_directory: Some(identity_directory),
-        avatar_storage: None,
     })
 }
 
@@ -1579,7 +1569,6 @@ fn identity(identity_id: &str) -> ExternalIdentity {
         username: Some(identity_id.to_owned()),
         email: Some(format!("{identity_id}@example.com")),
         display_name: identity_id.to_owned(),
-        avatar_url: None,
     }
 }
 
@@ -1592,7 +1581,6 @@ fn password_identity(username: &str, password: &str) -> CreateHumanIdentity {
         display_name: Some(username.to_owned()),
         initial_password: password.to_owned(),
         require_password_change: false,
-        avatar_url: None,
     }
 }
 
@@ -1621,19 +1609,10 @@ impl IdentityDirectory for TestIdentityDirectory {
                 .display_name
                 .clone()
                 .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
-            avatar_url: request.avatar_url.clone(),
         })
     }
 
     async fn delete_identity(&self, _identity_id: &str) -> Result<(), IdentityDirectoryError> {
-        Ok(())
-    }
-
-    async fn update_identity_avatar(
-        &self,
-        _identity_id: &str,
-        _avatar_url: Option<&str>,
-    ) -> Result<(), IdentityDirectoryError> {
         Ok(())
     }
 }
@@ -1690,14 +1669,6 @@ impl IdentityDirectory for RecordingIdentityDirectory {
             .push(identity_id.to_owned());
         Ok(())
     }
-
-    async fn update_identity_avatar(
-        &self,
-        _identity_id: &str,
-        _avatar_url: Option<&str>,
-    ) -> Result<(), IdentityDirectoryError> {
-        Ok(())
-    }
 }
 
 impl RecordingIdentityDirectory {
@@ -1723,7 +1694,6 @@ fn directory_identity(request: &CreateHumanIdentity) -> ExternalIdentity {
             .display_name
             .clone()
             .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
-        avatar_url: request.avatar_url.clone(),
     }
 }
 
@@ -1748,14 +1718,6 @@ impl IdentityDirectory for ConflictingIdentityDirectory {
     async fn delete_identity(&self, _identity_id: &str) -> Result<(), IdentityDirectoryError> {
         Ok(())
     }
-
-    async fn update_identity_avatar(
-        &self,
-        _identity_id: &str,
-        _avatar_url: Option<&str>,
-    ) -> Result<(), IdentityDirectoryError> {
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -1772,7 +1734,6 @@ impl AccessTokenVerifier for TokenIdentityVerifier {
             username: Some(token.to_owned()),
             email: Some(format!("{token}@example.com")),
             display_name: token.to_owned(),
-            avatar_url: None,
             organization: None,
         })
     }

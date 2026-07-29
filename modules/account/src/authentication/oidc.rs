@@ -195,7 +195,6 @@ impl AccessTokenVerifier for OidcAccessTokenVerifier {
             username: claims.preferred_username,
             email: claims.email,
             display_name,
-            avatar_url: claims.picture,
             organization,
         })
     }
@@ -216,7 +215,6 @@ struct AccessTokenClaims {
     name: Option<String>,
     email: Option<String>,
     preferred_username: Option<String>,
-    picture: Option<String>,
     #[serde(rename = "urn:zitadel:iam:org:id")]
     zitadel_organization_id: Option<String>,
     #[serde(rename = "urn:zitadel:iam:user:resourceowner:id")]

@@ -120,7 +120,7 @@ Organization ID, and Project ID and creates the gRPC clients;
 It also implements `IdentityDirectory`: `identity` refreshes a profile, `create_human_identity`
 creates a UserService v2 human user, sets the initial password, requests email verification, and
 `delete_identity` supports compensation after a failed local transaction.
-`DirectoryUser` carries identity ID, username, display name, optional email, and optional avatar;
+`DirectoryUser` carries identity ID, username, display name, and optional email;
 `into_external_identity()` preserves those trusted fields. `DirectoryError` distinguishes invalid
 configuration, TLS, UserService/ProjectService requests, invalid UTF-8, and the safety limit, without
 exposing PAT metadata.
@@ -155,7 +155,7 @@ exposing PAT metadata.
 | `replace_role_permissions` / `replace_role_permissions_for_owner` | owner, ID and complete ID set | Atomic replacement in that owner; empty clears |
 | `users` | page and page size | `Page<User>`; size clamped to 1–100 |
 | `user_access` | user ID | `AccessProfile` |
-| `refresh_user_from_directory` | identity ID | Synchronizes username, email, display name, avatar, and last-login time without creating unknown users |
+| `refresh_user_from_directory` | identity ID | Synchronizes username, email, display name, and last-login time without creating unknown users |
 | `update_user_status` | user ID and status | Protects the super admin and final enabled admin |
 | `replace_user_roles` / `replace_user_roles_for_owner` | owner, user ID, complete roles, actor ID | Defaults to replacing `IMES` roles and retaining `member`; owner variant only replaces that owner |
 | `ensure_system_role_with_permissions` | role key, name, description, permission keys | Creates or updates an `IMES` system role and rebuilds its direct permission set |
@@ -285,15 +285,15 @@ The matching permission still must be registered with `create_permissions` or
 
 ## Core data types
 
-`ExternalIdentity` contains stable `identity_id`, optional `username`, optional `email`, required
-`display_name`, and optional `avatar_url`. `identity_id` is the only stable binding key; username is
+`ExternalIdentity` contains stable `identity_id`, optional `username`, optional `email`, and required
+`display_name`. `identity_id` is the only stable binding key; username is
 metadata. Outputs include `User`, `Permission`, `Role`, `SystemRole`, and `AccessProfile`. `Role`
 includes `owner`; `SYSTEM_ROLE_OWNER` is `IMES`, and `PORTAL_ADMIN_ROLE_KEY` is the immutable
 `portal_admin` system role key intended for host-synchronized customer portal administration.
 `CreateHumanIdentity` contains `username`, `given_name`, `family_name`, `email`, optional
-`display_name`, required `initial_password`, `require_password_change`, and optional `avatar_url`;
+`display_name`, required `initial_password`, and `require_password_change`;
 the password is sent only to the identity directory and is not stored in the local Account database.
-Existing struct literals remain compatible. To keep a phone number as the login username and also
+To keep a phone number as the login username and also
 store it as ZITADEL human phone/mobile contact information, pass
 `CreateHumanIdentity { username: phone, ... }.with_contact_phone(phone)` to
 `Account::create_managed_user_with_roles`. Blank contact phones are ignored. The default ZITADEL

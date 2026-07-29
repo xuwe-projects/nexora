@@ -6,9 +6,7 @@ use thiserror::Error;
 
 use kernel::ValidationError;
 
-use crate::{
-    AvatarStorageError, IdentityDirectoryError, PermissionKey, authentication::VerificationError,
-};
+use crate::{IdentityDirectoryError, PermissionKey, authentication::VerificationError};
 
 /// Store 在执行持久化操作时返回的结构化错误。
 #[derive(Debug, Error)]
@@ -111,16 +109,6 @@ pub enum AccountError {
     /// 认证身份尚未在本地账号模块中创建对应用户。
     #[error("当前账号尚未在系统中开通")]
     UserNotRegistered,
-    /// 未配置头像存储层，无法接收上传。
-    #[error("头像存储尚未配置")]
-    AvatarStorageUnavailable,
-    /// 头像存储操作失败。
-    #[error(transparent)]
-    AvatarStorage(
-        /// 头像存储端口返回的稳定错误。
-        #[from]
-        AvatarStorageError,
-    ),
     /// 当前用户没有执行操作所需权限。
     #[error("缺少权限: {0}")]
     Forbidden(
@@ -209,32 +197,6 @@ impl From<AccountError> for ApiError {
                 Self::service_unavailable(
                     "identity_provider_unavailable",
                     "身份服务暂时无法完成请求",
-                )
-            }
-            AccountError::IdentityDirectory(IdentityDirectoryError::AvatarUnsupported) => {
-                Self::service_unavailable(
-                    "identity_avatar_unavailable",
-                    "identity provider could not synchronize avatar_url",
-                )
-            }
-            AccountError::AvatarStorageUnavailable => Self::service_unavailable(
-                "avatar_storage_unavailable",
-                "avatar storage is not configured",
-            ),
-            AccountError::AvatarStorage(AvatarStorageError::InvalidUpload(message))
-            | AccountError::AvatarStorage(AvatarStorageError::InvalidConfiguration(message)) => {
-                Self::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "invalid_avatar_upload",
-                    message,
-                )
-            }
-            AccountError::AvatarStorage(AvatarStorageError::Io(error)) => {
-                tracing::error!(error = ?error, "avatar storage write failed");
-                Self::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "avatar_storage_failed",
-                    "avatar storage could not complete the request",
                 )
             }
             AccountError::InvalidIdentity => {

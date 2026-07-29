@@ -129,7 +129,6 @@ pub(super) fn user_response(user: User) -> UserResponse {
         username: user.username,
         email: user.email,
         display_name: user.display_name,
-        avatar_url: user.avatar_url,
         status: match user.status {
             UserStatus::Active => ApiUserStatus::Active,
             UserStatus::Suspended => ApiUserStatus::Suspended,

@@ -157,6 +157,11 @@ fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
         default_footer.contains(".hover("),
         "默认 Footer 必须在自身实现中显式声明 hover"
     );
+    assert!(default_footer.contains("Avatar::new().name(display_name.clone()).small()"));
+    assert!(
+        !default_footer.contains(".src("),
+        "默认登录用户区域只能显示首字母/默认 Avatar，不再读取图片 URL"
+    );
 
     let header_content = APPLICATION_SOURCE
         .split_once("fn render_sidebar_header_content")

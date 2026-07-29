@@ -10,6 +10,11 @@ const ROLE_CREATE_DIALOG_SOURCE: &str =
     include_str!("../src/defaults/account/roles/components/create.rs");
 #[cfg(feature = "desktop")]
 const ROLE_EDITOR_SOURCE: &str = include_str!("../src/defaults/account/roles/components/editor.rs");
+#[cfg(feature = "desktop")]
+const USER_TABLE_SOURCE: &str = include_str!("../src/defaults/account/users/components/table.rs");
+#[cfg(feature = "desktop")]
+const USER_PROVISION_DIALOG_SOURCE: &str =
+    include_str!("../src/defaults/account/users/components/provision.rs");
 
 #[cfg(feature = "desktop")]
 struct CustomUsersFeature;
@@ -214,4 +219,18 @@ fn default_role_forms_hide_role_key_from_operators() {
     assert!(!ROLE_CREATE_DIALOG_SOURCE.contains("FormItem::new(\"角色键\")"));
     assert!(!ROLE_EDITOR_SOURCE.contains("FormItem::new(\"角色键\")"));
     assert!(ROLE_CREATE_DIALOG_SOURCE.contains("generated_role_key("));
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_user_management_keeps_visual_avatar_without_image_source_or_avatar_url_input() {
+    assert!(USER_TABLE_SOURCE.contains("Avatar::new().name(user.display_name.clone()).small()"));
+    assert!(
+        !USER_TABLE_SOURCE.contains(".src("),
+        "默认用户列表只能显示首字母/默认 Avatar，不再读取图片 URL"
+    );
+    assert!(
+        !USER_PROVISION_DIALOG_SOURCE.contains("头像 URL"),
+        "默认用户创建表单不应再暴露头像 URL 输入"
+    );
 }

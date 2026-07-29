@@ -2,7 +2,6 @@
 
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
     routing::{get, put},
 };
 
@@ -18,11 +17,6 @@ pub(super) fn initialize() -> Router<AccountState> {
                 .post(handlers::accounts::users::provision_user),
         )
         .route(
-            "/avatars",
-            axum::routing::post(handlers::accounts::users::upload_avatar)
-                .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
             "/users/{user_id}",
             get(handlers::accounts::users::get_user)
                 .patch(handlers::accounts::users::update_user_status),
@@ -30,10 +24,6 @@ pub(super) fn initialize() -> Router<AccountState> {
         .route(
             "/users/{user_id}/roles",
             put(handlers::accounts::users::replace_user_roles),
-        )
-        .route(
-            "/users/{user_id}/avatar",
-            axum::routing::patch(handlers::accounts::users::update_user_avatar),
         )
         .route(
             "/roles",

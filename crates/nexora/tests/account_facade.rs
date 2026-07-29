@@ -74,7 +74,6 @@ mod client {
                 "identity_id": "subject-1",
                 "email": "user@example.com",
                 "display_name": "测试用户",
-                "avatar_url": null,
                 "status": "active",
                 "user_type": "human",
                 "is_super_admin": false,
@@ -332,7 +331,6 @@ mod server {
                 username: Some("user-1".to_owned()),
                 email: Some("user@example.com".to_owned()),
                 display_name: "测试用户".to_owned(),
-                avatar_url: None,
                 organization: Some(VerifiedOrganizationContext {
                     id: "customer-org".to_owned(),
                     name: None,
@@ -377,7 +375,6 @@ mod server {
                 username: Some("tester".to_owned()),
                 email: None,
                 display_name: "测试用户".to_owned(),
-                avatar_url: None,
             };
             let definitions = [PermissionDefinition {
                 key: "projects:read".to_owned(),

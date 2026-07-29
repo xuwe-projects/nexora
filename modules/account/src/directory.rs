@@ -17,9 +17,9 @@ use crate::{
     generated::zitadel::{
         project::v2::{AddProjectRoleRequest, project_service_client::ProjectServiceClient},
         user::v2::{
-            DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery, ListUserMetadataRequest,
-            ListUsersRequest, Metadata, SearchQuery, SetUserMetadataRequest, StateQuery, Type,
-            TypeQuery, UserFieldName, UserState, UserView, user_service_client::UserServiceClient,
+            DeleteUserRequest, HumanUserView, InUserIDQuery, ListQuery, ListUsersRequest,
+            SearchQuery, StateQuery, Type, TypeQuery, UserFieldName, UserState, UserView,
+            user_service_client::UserServiceClient,
         },
     },
     zitadel::{self, REQUEST_TIMEOUT},
@@ -28,8 +28,6 @@ use crate::{
 
 const PAGE_SIZE: u32 = 100;
 const MAX_DIRECTORY_USERS: u64 = 10_000;
-const AVATAR_METADATA_KEY: &str = "urn:nexora:account:avatar_url";
-
 /// 可用于首次初始化选择的人类用户。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryUser {
@@ -41,8 +39,6 @@ pub struct DirectoryUser {
     pub display_name: String,
     /// 主邮箱；目录没有返回邮箱时为 `None`。
     pub email: Option<String>,
-    /// 头像 URL；目录没有返回头像时为 `None`。
-    pub avatar_url: Option<String>,
 }
 
 impl DirectoryUser {
@@ -53,7 +49,6 @@ impl DirectoryUser {
             username: Some(self.username),
             email: self.email,
             display_name: self.display_name,
-            avatar_url: self.avatar_url,
         }
     }
 }
@@ -243,20 +238,6 @@ impl ZitadelUserDirectory {
         if identity_id.trim().is_empty() {
             return Err(DirectoryError::InvalidString("create_user.id"));
         }
-        if let Some(avatar_url) = request.avatar_url.as_deref()
-            && let Err(error) = self
-                .update_user_avatar_metadata(identity_id.as_str(), Some(avatar_url))
-                .await
-        {
-            if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
-                tracing::error!(
-                    error = ?delete_error,
-                    business_operation = "zitadel_avatar_metadata_compensation",
-                    "failed to delete ZITADEL user after avatar metadata write failure"
-                );
-            }
-            return Err(error);
-        }
         Ok(DirectoryUser {
             identity_id,
             username: request.username.clone(),
@@ -265,7 +246,6 @@ impl ZitadelUserDirectory {
                 .clone()
                 .unwrap_or_else(|| format!("{} {}", request.given_name, request.family_name)),
             email: Some(request.email.clone()),
-            avatar_url: request.avatar_url.clone(),
         })
     }
 
@@ -288,59 +268,6 @@ impl ZitadelUserDirectory {
             .with_timeout(REQUEST_TIMEOUT)
             .await?;
         Ok(())
-    }
-
-    /// 在 ZITADEL user metadata 中写入或清空 Nexora 头像 URL。
-    ///
-    /// # Errors
-    ///
-    /// identity ID 为空、ZITADEL 拒绝 metadata 写入或目录请求暂时不可用时返回目录错误。
-    pub async fn update_user_avatar_metadata(
-        &self,
-        identity_id: &str,
-        avatar_url: Option<&str>,
-    ) -> Result<(), DirectoryError> {
-        let identity_id = identity_id.trim();
-        if identity_id.is_empty() {
-            return Err(DirectoryError::InvalidConfiguration(
-                "avatar metadata user id must not be empty",
-            ));
-        }
-        let mut metadata = Metadata::new();
-        metadata.set_key(AVATAR_METADATA_KEY);
-        metadata.set_value(avatar_url.unwrap_or_default().as_bytes().to_vec());
-
-        let mut request = SetUserMetadataRequest::new();
-        request.set_user_id(identity_id);
-        request.metadata_mut().push(metadata);
-        self.user_client
-            .set_user_metadata(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await?;
-        Ok(())
-    }
-
-    async fn avatar_metadata(&self, identity_id: &str) -> Result<Option<String>, DirectoryError> {
-        let mut request = ListUserMetadataRequest::new();
-        request.set_user_id(identity_id);
-        let response = self
-            .user_client
-            .list_user_metadata(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await?;
-        response
-            .metadata()
-            .iter()
-            .find_map(|metadata| {
-                let key = required_string(metadata.key(), "metadata.key").ok()?;
-                (key == AVATAR_METADATA_KEY).then(|| metadata.value().to_vec())
-            })
-            .map(|bytes| {
-                String::from_utf8(bytes)
-                    .map_err(|_| DirectoryError::InvalidString("metadata.value"))
-            })
-            .transpose()
-            .map(|value| value.and_then(non_empty_owned))
     }
 
     async fn list_users(
@@ -397,14 +324,7 @@ impl IdentityDirectory for ZitadelUserDirectory {
         else {
             return Ok(None);
         };
-        let mut identity = user.into_external_identity();
-        if identity.avatar_url.is_none() {
-            identity.avatar_url = self
-                .avatar_metadata(identity.identity_id.as_str())
-                .await
-                .map_err(identity_directory_error)?;
-        }
-        Ok(Some(identity))
+        Ok(Some(user.into_external_identity()))
     }
 
     async fn create_human_identity(
@@ -433,16 +353,6 @@ impl IdentityDirectory for ZitadelUserDirectory {
             .await
             .map_err(identity_directory_error)
     }
-
-    async fn update_identity_avatar(
-        &self,
-        identity_id: &str,
-        avatar_url: Option<&str>,
-    ) -> Result<(), IdentityDirectoryError> {
-        self.update_user_avatar_metadata(identity_id, avatar_url)
-            .await
-            .map_err(identity_directory_error)
-    }
 }
 
 fn identity_directory_error(error: DirectoryError) -> IdentityDirectoryError {
@@ -452,9 +362,6 @@ fn identity_directory_error(error: DirectoryError) -> IdentityDirectoryError {
         }
         DirectoryError::Request { code, .. } if *code == StatusCodeError::NotFound => {
             IdentityDirectoryError::NotFound
-        }
-        DirectoryError::Request { code, .. } if *code == StatusCodeError::Unimplemented => {
-            IdentityDirectoryError::AvatarUnsupported
         }
         _ => {
             tracing::warn!(error = ?error, "ZITADEL 身份目录请求失败");
@@ -580,11 +487,6 @@ fn directory_user(user: UserView<'_>) -> Result<Option<DirectoryUser>, Directory
     let preferred_login_name =
         required_string(user.preferred_login_name(), "preferred_login_name")?;
     let display_name = human_display_name(human, &preferred_login_name, &username, &identity_id)?;
-    let profile = human.profile_opt().into_option();
-    let avatar_url = profile
-        .map(|profile| required_string(profile.avatar_url(), "avatar_url"))
-        .transpose()?
-        .and_then(non_empty_owned);
     let email = human
         .email_opt()
         .into_option()
@@ -597,7 +499,6 @@ fn directory_user(user: UserView<'_>) -> Result<Option<DirectoryUser>, Directory
         username,
         display_name,
         email,
-        avatar_url,
     }))
 }
 

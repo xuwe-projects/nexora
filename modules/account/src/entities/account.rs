@@ -13,7 +13,6 @@ const MAX_IDENTITY_ISSUER_LENGTH: usize = 2_048;
 const MAX_IDENTITY_NAME_LENGTH: usize = 200;
 const MAX_USERNAME_LENGTH: usize = 200;
 const MAX_EMAIL_LENGTH: usize = 320;
-const MAX_AVATAR_URL_LENGTH: usize = 2_048;
 
 /// 已通过认证授权服务验证、等待同步到本地用户表的身份资料。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,8 +25,6 @@ pub struct ExternalIdentity {
     pub email: Option<String>,
     /// 面向用户界面展示的名称。
     pub display_name: String,
-    /// 身份服务返回的可选头像 URL。
-    pub avatar_url: Option<String>,
 }
 
 impl ExternalIdentity {
@@ -50,11 +47,7 @@ impl ExternalIdentity {
             && self
                 .email
                 .as_deref()
-                .is_none_or(|email| email.len() <= MAX_EMAIL_LENGTH)
-            && self
-                .avatar_url
-                .as_deref()
-                .is_none_or(|url| url.len() <= MAX_AVATAR_URL_LENGTH);
+                .is_none_or(|email| email.len() <= MAX_EMAIL_LENGTH);
         if !valid {
             return Err(AccountError::InvalidIdentity);
         }
@@ -63,7 +56,6 @@ impl ExternalIdentity {
             username: self.username.as_deref().map(str::trim).map(str::to_owned),
             email: self.email.clone(),
             display_name: display_name.to_owned(),
-            avatar_url: self.avatar_url.clone(),
         })
     }
 }
@@ -94,8 +86,6 @@ impl PermissionKey {
     pub const UsersRolesWrite: Self = Self(Cow::Borrowed("users:roles.write"));
     /// 启用或停用用户访问。
     pub const UsersStatusWrite: Self = Self(Cow::Borrowed("users:status.write"));
-    /// 上传、更新或清空用户头像。
-    pub const UsersAvatarWrite: Self = Self(Cow::Borrowed("users:avatar.write"));
     /// 把经过管理员确认的外部身份显式开通为本地用户。
     pub const UsersProvision: Self = Self(Cow::Borrowed("users:provision"));
     /// 查看角色及角色包含的权限。
@@ -218,8 +208,6 @@ pub struct User {
     pub email: Option<String>,
     /// 用户展示名称。
     pub display_name: String,
-    /// 可选头像 URL。
-    pub avatar_url: Option<String>,
     /// 用户当前访问状态。
     pub status: UserStatus,
     /// 是否为不挂载角色和权限、直接绕过权限校验的超级管理员。

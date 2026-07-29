@@ -25,13 +25,6 @@ impl RequiredPermission for WriteUserStatus {
     const KEY: PermissionKey = PermissionKey::UsersStatusWrite;
 }
 
-/// 管理用户头像所需的权限标记。
-pub struct WriteUserAvatar;
-
-impl RequiredPermission for WriteUserAvatar {
-    const KEY: PermissionKey = PermissionKey::UsersAvatarWrite;
-}
-
 /// 显式开通可信外部身份所需的权限标记。
 pub struct ProvisionUsers;
 

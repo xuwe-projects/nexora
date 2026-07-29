@@ -37,8 +37,7 @@ use crate::{
             UpdateProjectGrantRequest, project_service_client::ProjectServiceClient,
         },
         user::v2::{
-            DeactivateUserRequest, DeleteUserRequest, Metadata, SetUserMetadataRequest,
-            user_service_client::UserServiceClient,
+            DeactivateUserRequest, DeleteUserRequest, user_service_client::UserServiceClient,
         },
     },
     zitadel::{self, REQUEST_TIMEOUT},
@@ -46,8 +45,6 @@ use crate::{
 };
 
 const PAGE_SIZE: u32 = 100;
-const AVATAR_METADATA_KEY: &str = "urn:nexora:account:avatar_url";
-
 /// 面向业务客户绑定的 ZITADEL Organization 摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZitadelOrganization {
@@ -498,7 +495,6 @@ impl ZitadelProvisioningClient {
             display_name: display_name.clone(),
             initial_password,
             require_password_change: request.require_password_change,
-            avatar_url: request.avatar_url.clone(),
         };
         let create = zitadel_user::create_human_user_request(
             organization_id.as_str(),
@@ -515,48 +511,12 @@ impl ZitadelProvisioningClient {
         if identity_id.trim().is_empty() {
             return Err(ZitadelProvisioningError::InvalidResponse("create_user.id"));
         }
-        if let Some(avatar_url) = request.avatar_url.as_deref()
-            && let Err(error) = self
-                .update_user_avatar_metadata(identity_id.as_str(), Some(avatar_url))
-                .await
-        {
-            if let Err(delete_error) = self.delete_user(identity_id.as_str()).await {
-                tracing::error!(
-                    error = ?delete_error,
-                    business_operation = "zitadel_provisioning_avatar_metadata_compensation",
-                    "failed to delete ZITADEL user after avatar metadata write failure"
-                );
-            }
-            return Err(error);
-        }
         Ok(DirectoryUser {
             identity_id,
             username,
             display_name: display_name.unwrap_or_else(|| format!("{given_name} {family_name}")),
             email: Some(email_address),
-            avatar_url: request.avatar_url.clone(),
         })
-    }
-
-    async fn update_user_avatar_metadata(
-        &self,
-        identity_id: &str,
-        avatar_url: Option<&str>,
-    ) -> Result<(), ZitadelProvisioningError> {
-        let identity_id = required_input(identity_id, "user_id")?;
-        let mut metadata = Metadata::new();
-        metadata.set_key(AVATAR_METADATA_KEY);
-        metadata.set_value(avatar_url.unwrap_or_default().as_bytes().to_vec());
-
-        let mut request = SetUserMetadataRequest::new();
-        request.set_user_id(identity_id.as_str());
-        request.metadata_mut().push(metadata);
-        self.user_client
-            .set_user_metadata(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(|error| request_error("UserService.SetUserMetadata", error))?;
-        Ok(())
     }
 
     /// 停用指定 ZITADEL 用户。

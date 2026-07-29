@@ -13,7 +13,7 @@ automatically provides:
 - `/users` and `/roles` navigation under Access Control;
 - a default user page for provisioning, status, and role management;
 - a default role page for custom-role and permission-set management;
-- avatar and display name rendering;
+- circular initial/default Avatar rendering and display name rendering;
 - business Feature and Window cleanup on sign-out.
 
 ## Install the client runtime
@@ -31,11 +31,11 @@ an authenticator gets neither the login gate nor the default `/users` and `/role
 
 ## Default management capabilities
 
-`/users` uses a card-styled, content-height DataTable with avatars, login usernames, compact status
+`/users` uses a card-styled, content-height DataTable with circular initial/default Avatar markers, login usernames, compact status
 tags, movable columns, resizable widths, and bottom-triggered continuous loading. The server creates
 the human user through ZITADEL gRPC and binds the returned stable identity ID; the UI never asks for
-that internal ID and no local password is introduced. `GET /me` refreshes username, email, display
-name, and avatar from ZITADEL. The page also selects initial roles, changes access status, and replaces
+that internal ID and no local password is introduced. `GET /me` refreshes username, email, and display
+name from ZITADEL. The page also selects initial roles, changes access status, and replaces
 direct roles. An empty initial role set requires only `users:provision`; a non-empty
 set also requires `users:roles.write`. Listing choices and editing roles also require `roles:read`.
 
