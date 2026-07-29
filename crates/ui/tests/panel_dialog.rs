@@ -73,7 +73,25 @@ fn panel_dialog_is_scoped_to_its_parent_and_exposes_close_action(cx: &mut TestAp
 #[test]
 fn source_contract_keeps_body_scroll_inside_dialog_surface() {
     assert!(PANEL_DIALOG_SOURCE.contains(".debug_selector(|| \"panel-dialog-content\".into())"));
-    assert!(PANEL_DIALOG_SOURCE.contains(".flex_1()"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".flex_auto()"));
     assert!(PANEL_DIALOG_SOURCE.contains(".min_h_0()"));
-    assert!(PANEL_DIALOG_SOURCE.contains(".overflow_y_scrollbar()"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".overflow_y_scroll()"));
+}
+
+#[test]
+fn source_contract_strengthens_existing_panel_overlay_alpha() {
+    assert!(PANEL_DIALOG_SOURCE.contains("PANEL_DIALOG_OVERLAY_ALPHA_LIGHT: f32 = 0.20"));
+    assert!(PANEL_DIALOG_SOURCE.contains("PANEL_DIALOG_OVERLAY_ALPHA_DARK: f32 = 0.28"));
+    assert!(PANEL_DIALOG_SOURCE.contains("fn panel_dialog_overlay_alpha(cx: &App) -> f32"));
+    assert!(PANEL_DIALOG_SOURCE.contains("cx.theme().is_dark()"));
+    assert!(PANEL_DIALOG_SOURCE.contains("cx.theme().overlay.alpha(overlay_alpha)"));
+    assert!(PANEL_DIALOG_SOURCE.contains(".bg(overlay_color)"));
+    assert!(!PANEL_DIALOG_SOURCE.contains(".opacity("));
+    assert_eq!(
+        PANEL_DIALOG_SOURCE
+            .matches(".debug_selector(|| \"panel-dialog-overlay\".into())")
+            .count(),
+        1,
+        "PanelDialog 应只保留一层 Panel 级 overlay"
+    );
 }

@@ -1,10 +1,10 @@
 //! 默认角色管理页面状态。
 
 use gpui::{
-    Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*, px,
+    Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _,
+    Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, api_session,
+        AccountClientError, CrudPanel, LabeledControl, api_session,
         contract::{PermissionResponse, RoleResponse},
     },
 };
@@ -269,31 +269,18 @@ impl Render for RolesPage {
             |page, filter, cx| page.set_kind_filter(filter, cx),
             component_size,
         );
-        let keyword_filter = v_flex()
-            .gap_1()
-            .w(px(280.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("关键词"),
-            )
-            .child(
-                Input::new(&self.keyword_input)
-                    .with_size(component_size)
-                    .cleanable(true)
-                    .disabled(self.loading || editor_busy),
-            );
-        let kind_filter = v_flex()
-            .gap_1()
-            .w(px(160.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("类型"),
-            )
-            .child(kind_filter);
+        let keyword_filter = LabeledControl::new(
+            "关键词",
+            Input::new(&self.keyword_input)
+                .with_size(component_size)
+                .cleanable(true)
+                .disabled(self.loading || editor_busy),
+        )
+        .width(px(280.0))
+        .with_size(component_size);
+        let kind_filter = LabeledControl::new("类型", kind_filter)
+            .width(px(160.0))
+            .with_size(component_size);
 
         let content = v_flex()
             .w_full()

@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.18.0: CRUD table selection and form-field components](./0.18.0)
 - [0.17.1: default sidebar brand text wrapping fix](./0.17.1)
 - [0.17.0: desktop panel-header application actions](./0.17.0)
 - [0.16.0: Account role owner scopes and portal administrator](./0.16.0)

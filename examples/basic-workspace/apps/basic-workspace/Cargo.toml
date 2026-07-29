@@ -1,9 +1,0 @@
-[package]
-name = "basic-workspace"
-version.workspace = true
-edition.workspace = true
-publish = false
-
-[dependencies]
-gpui = { workspace = true }
-nexora = { workspace = true, features = ["desktop", "derive"] }

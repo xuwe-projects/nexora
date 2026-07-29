@@ -1,11 +1,10 @@
 //! 默认用户管理页面状态。
 
 use gpui::{
-    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*,
-    px,
+    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _,
+    Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     input::{Input, InputState},
@@ -16,7 +15,7 @@ use gpui_component::{
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, api_session,
+        AccountClientError, CrudPanel, LabeledControl, api_session,
         contract::{RoleResponse, UpdateUserStatusRequest, UserStatus},
     },
 };
@@ -336,41 +335,21 @@ impl Render for UsersPage {
             |page, filter, cx| page.set_type_filter(filter, cx),
             component_size,
         );
-        let keyword_filter = v_flex()
-            .gap_1()
-            .w(px(280.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("关键词"),
-            )
-            .child(
-                Input::new(&self.keyword_input)
-                    .with_size(component_size)
-                    .cleanable(true)
-                    .disabled(self.loading),
-            );
-        let status_filter = v_flex()
-            .gap_1()
-            .w(px(160.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("状态"),
-            )
-            .child(status_filter);
-        let type_filter = v_flex()
-            .gap_1()
-            .w(px(160.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("类型"),
-            )
-            .child(type_filter);
+        let keyword_filter = LabeledControl::new(
+            "关键词",
+            Input::new(&self.keyword_input)
+                .with_size(component_size)
+                .cleanable(true)
+                .disabled(self.loading),
+        )
+        .width(px(280.0))
+        .with_size(component_size);
+        let status_filter = LabeledControl::new("状态", status_filter)
+            .width(px(160.0))
+            .with_size(component_size);
+        let type_filter = LabeledControl::new("类型", type_filter)
+            .width(px(160.0))
+            .with_size(component_size);
 
         let content = v_flex()
             .w_full()

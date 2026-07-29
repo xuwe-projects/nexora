@@ -42,6 +42,18 @@ src/features/users/components/table.rs
 
 - 先检查 `gpui-component` 是否已经提供对应组件；应用直接依赖并导入 `gpui` 与
   `gpui-component`，不要通过 `nexora::gpui` 等路径使用。
+- 任何可见 GPUI UI 的新增、修改或审查，即使用户没有主动提到组件库，也必须同时使用
+  `desktop-ui-component-selection` 与 `gpui-component` Skill。
+- 实现前按顺序检查：`nexora::desktop` 或仓库已有业务封装；workspace 当前锁定版本的
+  `gpui-component`；`gpui-component` 的组合方式、builder API 和扩展点；基于官方组件的
+  feature 私有薄包装；只有前四项不能满足时，才允许纯 GPUI 自定义。
+- 已有标准组件时禁止重复实现输入框、按钮、选择器、标签页、弹层、菜单、侧边栏、表格、
+  列表、树、分页、通知、加载状态等控件。
+- `div()`、`h_flex()`、`v_flex()` 可以用于普通布局和内容组合，但不得用来模拟已有语义控件
+  及其 hover、focus、selected、disabled、loading、键盘导航等行为。
+- 纯 GPUI 自定义前必须明确记录：检查过的候选组件；无法满足的具体行为；为什么不能通过
+  组合、builder 或薄包装解决；自定义代码的状态归属和作用范围。
+- 自定义默认限制在当前 feature；只有多个 feature 已经真实复用时，才能提升到共享 UI 边界。
 - 状态放在最近的真实使用者：局部状态留在组件，共享状态提升到最近共同父 Entity，只有
   跨窗口且与应用同生命周期的唯一状态才使用 `Global`。
 - `render` 只能读取状态、计算轻量派生值和构建 Element；不得创建长期 Entity、发起

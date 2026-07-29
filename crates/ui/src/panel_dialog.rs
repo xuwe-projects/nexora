@@ -8,19 +8,19 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement, RenderOnce, Role, StyleRefinement, Styled, Window, div, prelude::*,
-    px, relative,
+    MouseButton, ParentElement, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, div, prelude::*, px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, FocusTrapElement as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     dialog::CancelDialog,
-    h_flex,
-    scroll::ScrollableElement as _,
-    v_flex,
+    h_flex, v_flex,
 };
 
 type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+const PANEL_DIALOG_OVERLAY_ALPHA_LIGHT: f32 = 0.20;
+const PANEL_DIALOG_OVERLAY_ALPHA_DARK: f32 = 0.28;
 
 /// 只覆盖当前工作区 Panel 的模态对话框。
 ///
@@ -112,6 +112,8 @@ impl RenderOnce for PanelDialog {
         let close_from_keyboard = self.on_close.clone();
         let close_from_overlay = self.on_close.clone();
         let overlay_closable = self.overlay_closable;
+        let overlay_alpha = panel_dialog_overlay_alpha(cx);
+        let overlay_color = cx.theme().overlay.alpha(overlay_alpha);
 
         let surface = v_flex()
             .id("panel-dialog-surface")
@@ -165,12 +167,13 @@ impl RenderOnce for PanelDialog {
             )
             .child(
                 v_flex()
-                    .flex_1()
+                    .id("panel-dialog-content-scroll")
+                    .flex_auto()
                     .min_h_0()
                     .debug_selector(|| "panel-dialog-content".into())
                     .gap_4()
                     .p_4()
-                    .overflow_y_scrollbar()
+                    .overflow_y_scroll()
                     .children(self.children),
             )
             .when_some(self.footer, |this, footer| {
@@ -197,7 +200,7 @@ impl RenderOnce for PanelDialog {
             .items_center()
             .justify_center()
             .occlude()
-            .bg(cx.theme().overlay)
+            .bg(overlay_color)
             .when(overlay_closable, |this| {
                 this.on_any_mouse_down(move |event, window, cx| {
                     cx.stop_propagation();
@@ -207,5 +210,13 @@ impl RenderOnce for PanelDialog {
                 })
             })
             .child(surface)
+    }
+}
+
+fn panel_dialog_overlay_alpha(cx: &App) -> f32 {
+    if cx.theme().is_dark() {
+        PANEL_DIALOG_OVERLAY_ALPHA_DARK
+    } else {
+        PANEL_DIALOG_OVERLAY_ALPHA_LIGHT
     }
 }

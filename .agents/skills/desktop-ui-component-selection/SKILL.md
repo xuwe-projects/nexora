@@ -1,13 +1,13 @@
 ---
 name: desktop-ui-component-selection
-description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并优先从 gpui-component 选择现有组件。适用于导航、表单、弹层、表格、设置、应用壳、反馈状态，以及任何可能已有官方组件的界面。
+description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，并强制优先从 nexora::desktop 已有封装与 gpui-component 选择组件。适用于页面、导航、表单、按钮、输入、弹层、列表、表格、状态反馈、布局和交互调整；即使用户没有明确提到 gpui-component，也必须使用本 Skill。
 ---
 
 # 桌面 UI 组件选择
 
 ## 核心原则
 
-在 GPUI 桌面程序里实现交互时，先查 `gpui-component` 已有组件，再考虑自定义元素。不要手写已经存在的应用导航、折叠面板、表单控件、弹层、表格、树、列表、设置页、标题栏或状态栏。
+在 GPUI 桌面程序里实现交互时，先查 `nexora::desktop` 已有封装和 `gpui-component` 已有组件，再考虑自定义元素。不要手写已经存在的应用导航、折叠面板、表单控件、弹层、表格、树、列表、设置页、标题栏、状态栏、分页、通知或加载状态。
 
 官方组件文档入口：
 `https://longbridge.github.io/gpui-component/zh-CN/docs/components/`
@@ -15,13 +15,19 @@ description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并�
 文档路由规则：
 `https://longbridge.github.io/gpui-component/zh-CN/docs/components/<component-route>`
 
-## 选择流程
+## 强制选择流程
 
-1. 先判断交互意图：导航、输入、选择、弹层、数据展示、反馈、布局、内容展示。
-2. 从下面的组件表选择最贴近语义的组件。
-3. 打开对应官方文档确认当前 API、示例和主题行为。
-4. 只有当官方组件无法表达业务语义时，才组合 `div()`、`h_flex()`、`v_flex()` 或自定义 `Render`。
-5. 自定义组件要尽量包在 feature 模块内，不要复制官方组件能力。
+1. 识别每个交互区域的产品语义：导航、输入、选择、弹层、数据展示、反馈、布局或内容展示。
+2. 搜索仓库已有业务封装，优先检查 `nexora::desktop` 和当前 feature 已有组件。
+3. 检查 workspace 当前锁定版本的 `gpui-component` 源码或对应官方文档；复杂交互不得只看清单。
+4. 编码前形成简短的“组件选型记录”，至少列出 UI 区域、首选组件或已有封装、是否需要增强、选择依据。
+5. 已有合适组件时直接复用，不要用 `div()`、原始事件或自定义状态重复实现。
+6. 现有组件接近但不足时，优先使用 props、builder API、组合或 feature 私有薄包装增强。
+7. 只有存在有证据的能力缺口时，才进入纯 GPUI 自定义。
+
+自定义升级顺序：
+
+`已有 Nexora 封装 → gpui-component 原生组件 → 原生组件组合 → feature 私有薄包装 → 已证实复用后的共享增强组件 → 纯 GPUI 自定义`
 
 ## 应用壳与导航
 
@@ -68,6 +74,7 @@ description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并�
 | 星级或评分输入 | `Rating` | `rating` | 评分、优先级、满意度使用。 |
 | 开关式按钮状态 | `Toggle` | `toggle` | 工具栏中的 bold、preview、pin 等开关动作使用。 |
 | 按钮动作 | `Button` | `button` | 明确命令、提交、取消、工具按钮使用。 |
+| 通用字段标签容器 | `nexora::desktop::LabeledControl` | 项目封装 | CRUD 筛选项、简单表单字段和设置字段需要“label/description/control/error”纵向布局时使用；先给 child 自身设置 `.with_size(theme::component_size(cx))`，再传入容器。 |
 
 ## 弹层、菜单与临时界面
 
@@ -135,6 +142,15 @@ description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并�
 | 在图标按钮旁边写说明文字解释含义。 | 使用 `Icon` + `Tooltip`。 |
 | 在设置页里堆散乱表单。 | 使用 `Settings`、`Form`、`GroupBox`。 |
 
+## 禁止事项
+
+- 禁止仅凭记忆判断组件库不存在某个组件；必须核对仓库封装、锁定版本源码或官方文档。
+- 禁止用原始 `div()` 和 `on_click` 重写标准 `Button`、`Toggle`、`Tabs`、`Menu` 等交互。
+- 禁止复制官方组件源码后局部修改。
+- 禁止为了视觉微调重写完整控件；先使用主题 token、尺寸 API、props、builder 或组合。
+- 禁止在 feature 私有需求尚未复用时提前创建公共组件。
+- 禁止为了规避现有组件 API 而维护第二套焦点、键盘、主题或状态逻辑。
+
 ## 实现约定
 
 - 公开 Rust API 仍遵守本仓库 rustdoc 规则：公开类型、函数、方法、模块都写中文 rustdoc。
@@ -144,11 +160,25 @@ description: 用于构建、修改或审查 Nexora 的 GPUI 桌面交互，并�
   `nexora::desktop::{CrudPanel, CrudPanelToolbar}`；查询、创建、导入、导出等命令放入工具栏
   action 区，顶部刷新只负责重新拉取当前数据，并通过 `.with_size(theme::component_size(cx))`
   跟随设置中的组件尺寸。
+- CRUD 工具栏筛选字段、`FormItem` 内部字段布局和设置页简单字段优先使用
+  `nexora::desktop::LabeledControl` 表达通用“标签、说明、控件、错误”结构；它不保存业务状
+  态，不会自动给任意 child 传递 Size，固定宽度只用 `.width(px(...))` 表达。
 - 所有实现了 `gpui_component::Sizable` 的按钮、输入、下拉、TabBar、`CrudPanel` 与
   `FormDialog` 都应优先使用 `theme::component_size(cx)`；除非当前交互明确是紧凑表格行或
   图标小按钮，不要在业务页面硬编码 `.small()`、`.medium()` 等尺寸。
 - CRUD 资源表格优先用 `CrudTableRow` 派生宏加 `CrudTableDelegate<T>`；它只增强
   gpui-component `DataTable` 的常规样板，不改变 `Column`、`TableState` 和 `TableDelegate`
   的原生用法。
-- 修改或新增复杂交互前，打开对应组件文档确认当前 API。
-- 如果需要组件库没有覆盖的新交互，先做薄封装，并把封装限制在当前 feature 或明确的共享 UI crate 中。
+- 修改或新增复杂交互前，打开对应组件文档或锁定版本源码确认当前 API。
+- 如果需要组件库没有覆盖的新交互，先做 feature 私有薄包装；只有多个 feature 已经真实复用时，才提升到共享 UI 边界。
+- `div()`、`h_flex()`、`v_flex()` 可以用于普通布局和内容组合，但不得模拟已有语义控件及其
+  hover、focus、selected、disabled、loading、键盘导航等行为。
+- 纯 GPUI 自定义前必须记录检查过的候选组件、无法满足的具体行为、为什么不能通过组合、
+  builder 或薄包装解决，以及自定义代码的状态归属和作用范围。
+
+## 交付检查
+
+- 报告复用了哪些 `nexora::desktop` 或 `gpui-component` 组件。
+- 报告新增了哪些包装或自定义组件，并说明它们是否限制在当前 feature。
+- 每个纯自定义组件都必须给出无法复用现有组件的理由。
+- 未新增自定义组件时明确说明。

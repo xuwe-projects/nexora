@@ -22,7 +22,7 @@ description: 审查 Nexora workspace 中使用 SQLx 与 PostgreSQL 的数据库�
 - `crates/migrate` 负责执行迁移，SQL 文件集中放在 `crates/migrate/migrations`。
 - `modules/<business>/src/store.rs` 定义持久化端口，`store/postgres.rs` 及其子模块执行 SQLx 查询和事务。
 - `crates/api` 的 Router/handler 不执行 SQL；业务 application 不持有具体 `PgPool`。
-- 宿主在 `examples/server` composition root 中异步创建连接池、运行迁移并构造 Postgres store。
+- 宿主在服务端 composition root 中异步创建连接池、运行迁移并构造 Postgres store。
 - 不建议新增 `Repository`/`Service` 命名；本项目使用 `Application`/`Store`。
 
 ## 审查查询

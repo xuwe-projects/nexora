@@ -8,6 +8,7 @@ homepage.workspace = true
 readme = "../../README.md"
 include = [
     "LINTS.md",
+    "examples/**",
     "src/**",
     "templates/scaffold/AGENTS.md",
     "templates/scaffold/README.md",
@@ -115,6 +116,7 @@ url = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
 
 [lib]
 path = "src/lib.rs"
@@ -123,3 +125,13 @@ path = "src/lib.rs"
 name = "nexora"
 path = "src/bin/nexora.rs"
 required-features = ["cli"]
+
+[[example]]
+name = "desktop_basic"
+path = "examples/desktop_basic.rs"
+required-features = ["desktop", "derive"]
+
+[[example]]
+name = "server_basic"
+path = "examples/server_basic.rs"
+required-features = ["server"]

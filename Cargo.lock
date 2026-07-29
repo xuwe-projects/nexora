@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "account"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "api",
  "async-trait",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "actions"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
 ]
@@ -279,7 +279,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "api"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "axum",
  "contracts",
@@ -289,17 +289,6 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
-]
-
-[[package]]
-name = "apple-native-keyring-store"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "797f94b6a53d7d10b56dc18290e0d40a2158352f108bb4ff32350825081a9f29"
-dependencies = [
- "keyring-core",
- "log",
- "security-framework",
 ]
 
 [[package]]
@@ -1164,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "changelog"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "include_dir",
  "semver",
@@ -1405,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "configuration"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "config",
  "directories",
@@ -1424,33 +1413,6 @@ dependencies = [
  "libc",
  "unicode-width",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "console"
-version = "0.17.1"
-dependencies = [
- "actions",
- "changelog",
- "configuration",
- "contracts",
- "desktop",
- "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
- "gpui-component",
- "keyring",
- "logging",
- "nexora",
- "oidc",
- "reqwest",
- "security-framework",
- "serde",
- "sha2 0.10.9",
- "theme",
- "thiserror 2.0.18",
- "tracing",
- "ui",
- "updater",
- "url",
 ]
 
 [[package]]
@@ -1497,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "contracts"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1918,7 +1880,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
@@ -1937,7 +1899,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
 dependencies = [
- "console 0.16.4",
+ "console",
  "shell-words",
 ]
 
@@ -4250,32 +4212,11 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "thiserror 2.0.18",
  "uuid",
-]
-
-[[package]]
-name = "keyring"
-version = "4.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ee8d4dae108d4177d0a0ce241f98acc1ef28e20837bdef43cff4d160cf70fe"
-dependencies = [
- "apple-native-keyring-store",
- "keyring-core",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
-]
-
-[[package]]
-name = "keyring-core"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb1e621458ca9c51aa110bd0339d4751a056b9576bf1253aee1aa560dda0fc9d"
-dependencies = [
- "log",
 ]
 
 [[package]]
@@ -4488,7 +4429,7 @@ dependencies = [
 
 [[package]]
 name = "logging"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "thiserror 2.0.18",
  "tracing-subscriber",
@@ -4735,7 +4676,7 @@ dependencies = [
 
 [[package]]
 name = "migrate"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "clap",
  "configuration",
@@ -4859,7 +4800,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexora"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "account",
  "actions",
@@ -4890,6 +4831,7 @@ dependencies = [
  "syn",
  "theme",
  "thiserror 2.0.18",
+ "tokio",
  "toml_edit 0.22.27",
  "tracing",
  "ui",
@@ -4898,7 +4840,7 @@ dependencies = [
 
 [[package]]
 name = "nexora-macros"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "inventory",
  "proc-macro-crate",
@@ -5446,7 +5388,7 @@ dependencies = [
 
 [[package]]
 name = "oidc"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -7170,25 +7112,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "secret-service"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a62d7f86047af0077255a29494136b9aaaf697c76ff70b8e49cded4e2623c14"
-dependencies = [
- "aes",
- "cbc",
- "futures-util",
- "generic-array",
- "getrandom 0.2.17",
- "hkdf 0.12.4",
- "num",
- "once_cell",
- "serde",
- "sha2 0.10.9",
- "zbus",
-]
-
-[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7381,28 +7304,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "server"
-version = "0.17.1"
-dependencies = [
- "account",
- "api",
- "axum",
- "clap",
- "configuration",
- "contracts",
- "logging",
- "migrate",
- "rand 0.9.4",
- "serde",
- "sha2 0.10.9",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -8244,7 +8145,7 @@ dependencies = [
 
 [[package]]
 name = "theme"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
@@ -8778,10 +8679,11 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
  "gpui-component",
+ "regex",
 ]
 
 [[package]]
@@ -8885,7 +8787,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "updater"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "async-channel",
  "gpui 0.2.2 (git+https://github.com/zed-industries/zed?rev=1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba)",
@@ -9832,19 +9734,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
-name = "windows-native-keyring-store"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063426e76fdec7438d56bb777f67e318a84a25c707b07e575cb8b78e10c028f8"
-dependencies = [
- "byteorder",
- "keyring-core",
- "regex",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
 name = "windows-numerics"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10489,17 +10378,6 @@ dependencies = [
  "zbus-lockstep",
  "zbus_xml",
  "zvariant",
-]
-
-[[package]]
-name = "zbus-secret-service-keyring-store"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ccede190ba363386a24e8021c7f3848393976609ec9f5d1f8c6c09ef37075b4"
-dependencies = [
- "keyring-core",
- "secret-service",
- "zbus",
 ]
 
 [[package]]

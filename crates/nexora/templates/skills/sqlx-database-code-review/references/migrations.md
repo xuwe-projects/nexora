@@ -90,7 +90,7 @@ crates/migrate/migrations/
 └── 0002_accounts_add_super_admin.down.sql
 ```
 
-不要把迁移散落在 `modules/accounts`、`crates/database` 或 `examples/server`。`crates/migrate` 是唯一迁移执行边界。
+不要把迁移散落在 `modules/accounts`、`crates/database` 或宿主服务端入口。`crates/migrate` 是唯一迁移执行边界。
 
 ## 可逆迁移
 

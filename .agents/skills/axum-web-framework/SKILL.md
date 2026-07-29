@@ -16,12 +16,12 @@ description: 使用 Axum 0.8、Tokio 与 Tower 在 Nexora workspace 中实现或
 | 通用数据库连接池 | `crates/database` | 连接、健康检查和数据库错误上下文 |
 | 迁移执行与 SQL 文件 | `crates/migrate` | 迁移集中在 `crates/migrate/migrations` |
 | 业务模型、用例和持久化端口 | `modules/<business>` | 使用 `Application` 与 `Store` 命名 |
-| 宿主启动与依赖装配 | `examples/server` | 唯一 composition root |
+| 宿主启动与依赖装配 | 生成项目的 `apps/server` 或应用自己的服务端入口 | 唯一 composition root |
 
 保持以下依赖方向：
 
 ```text
-examples/server -> crates/api -> modules/<business>
+apps/server -> crates/api -> modules/<business>
      |             |                 |
      |             +-> database      +-> Store trait
      +-> database + migrate           -> store/postgres.rs (SQLx)
@@ -36,7 +36,7 @@ examples/server -> crates/api -> modules/<business>
 
 ## 使用 composition root 装配
 
-让 `examples/server` 显式构造依赖，再把完整状态传给 API。路由构建必须保持同步、无 I/O。
+让宿主服务端入口显式构造依赖，再把完整状态传给 API。路由构建必须保持同步、无 I/O。
 
 ```rust
 pub async fn initialize(config: &ServerConfig) -> Result<AppState, BootstrapError> {

@@ -1,6 +1,6 @@
 ---
 name: gpui-desktop-development
-description: 用于设计、实现或审查基于 GPUI 与 gpui-component 的桌面应用架构和组件。涉及 Global 全局状态、Entity 状态归属、RenderOnce/Render/Element 选择、父子通信、局部刷新、ElementId、异步与订阅生命周期、共享组件抽取、gpui-component 增强封装或单进程多窗口时使用。
+description: 用于设计、实现或审查 Nexora/GPUI 桌面应用架构、状态、生命周期和组件边界。任何可见交互编码前必须完成组件选型记录，优先复用 nexora::desktop 与 gpui-component；已有组件时禁止重复实现，纯 GPUI Element 自定义必须有布局、绘制、性能或交互能力缺口证据。
 ---
 
 # GPUI 桌面程序开发规范
@@ -8,8 +8,10 @@ description: 用于设计、实现或审查基于 GPUI 与 gpui-component 的桌
 ## 规范关系
 
 - 同时遵守 `rust-code-style`，处理 Rust 文档、依赖、测试和代码质量。
-- 涉及 UI 交互时先使用 `desktop-ui-component-selection` 检查 `gpui-component` 是否已有对应组件。
+- 涉及 UI 交互时先使用 `desktop-ui-component-selection` 和 `gpui-component`；“检查组件库”是编码前门禁，不是事后清单问题。
 - 以 workspace 当前锁定的 GPUI 和 `gpui-component` 源码 API 为准；外部文档与锁定版本冲突时，先核对源码再实现。
+- 编码前必须写出简短组件选型记录：UI 区域、首选 `nexora::desktop` 封装或 `gpui-component` 组件、是否需要增强、选择依据。
+- 审查时发现手写标准控件，应优先替换为现有组件后再继续新增功能。
 
 ## 核心原则
 
@@ -97,10 +99,10 @@ struct B {
 
 ## 3. 组件抽取范围
 
-- 先检查 `gpui-component` 是否已有满足需求的组件；已有组件禁止重复实现。
+- 先检查 `nexora::desktop`、当前 feature 已有封装和 `gpui-component` 是否已有满足需求的组件；已有组件禁止重复实现。
 - 只在一个位置使用的简单 UI 可以保留为 feature 内的局部渲染函数或 Element 组合。
 - 相同语义在两个或更多位置使用时，必须抽成组件，避免复制布局、状态逻辑、交互和主题样式。
-- 只在单个 feature 内复用的组件放在该 feature 模块；跨 feature 复用的视觉组件放在共享 `ui` crate。
+- 只在单个 feature 内复用或增强的组件放在该 feature 模块；只有多个 feature 已经真实复用时，才提升到共享 UI 边界。
 - 不要仅因一小段 `div()` 相似就制造公共组件；抽取对象必须具有稳定的产品语义或交互契约。
 - 重复组件存在少量合法差异时，使用命名清晰的 variant 或 builder API，不要堆积难以理解的布尔参数。
 - `Card` 等名称只是语义示例。每次实现前检查当前 `gpui-component` 版本；确认不存在后再自行设计。
@@ -118,7 +120,8 @@ struct B {
 
 - 能用 `RenderOnce` 表达时不要创建 Entity。
 - 出现独立变化、独立刷新、焦点、输入、订阅、异步任务、被观察需求或独立生命周期时，才使用 `Entity + Render`。
-- 只有官方 Element 和组合组件无法满足布局、绘制或性能要求时，才实现底层 `Element`。
+- `div()`、`h_flex()`、`v_flex()` 只用于普通布局和内容组合，不得模拟已有语义控件及其 hover、focus、selected、disabled、loading 或键盘导航。
+- 只有 `nexora::desktop`、`gpui-component` 原生组件、组合、builder API 和 feature 私有薄包装都无法满足，并且存在可验证的布局、绘制、性能或交互能力缺口时，才实现底层 `Element`。
 
 ## 5. 保持单向数据流
 
@@ -190,11 +193,11 @@ struct B {
 基础组件不满足业务需求时，创建独立增强组件，不修改、复制或破坏官方组件：
 
 1. 先确认官方组件和扩展点确实无法表达需求。
-2. 在共享 `ui` crate 中使用组合包装官方组件。
-3. 可以在 `ui` crate 中沿用原组件名称，让调用方使用 `ui::DataTable::new(...)`。
+2. 默认在当前 feature 中使用组合薄包装官方组件，保持业务状态和作用范围局部化。
+3. 只有多个 feature 已经真实复用同一增强语义时，才提升到共享 UI 边界；共享后可以沿用原组件名称，让调用方使用 `ui::DataTable::new(...)`。
 4. 保留原组件构造方式、默认行为和项目已使用的基础 builder API。
 5. 只添加增强 API，例如 `.toolbar(element)`、`.filter_bar(element)`。
-6. 增强层只处理通用 UI 能力，不混入某个 feature 的请求、权限或业务状态。
+6. 共享增强层只处理通用 UI 能力，不混入某个 feature 的请求、权限或业务状态。
 7. 官方组件升级后优先适配包装层，不把兼容工作扩散到所有调用方。
 
 概念结构：
@@ -273,22 +276,25 @@ fn feature_entity_updates_inside_gpui(cx: &mut TestAppContext) {
 按顺序执行：
 
 1. 检查 workspace 当前 GPUI、`gpui-component` 版本和已有本地封装。
-2. 判断每份状态属于组件、共同父级、共享 Model 还是 Global。
-3. 删除重复状态和能直接计算的派生状态。
-4. 检查官方组件，再决定局部 Element、`RenderOnce`、`Entity + Render` 或底层 `Element`。
-5. 设计 props 向下、event 向上以及 observe/subscribe 关系。
-6. 明确 Entity、Task、Subscription、窗口和后台工作的生命周期。
-7. 使用稳定 Element ID、主题 token、焦点和可访问语义。
-8. 修改可见状态后只触发必要范围的刷新。
-9. 为公共组件、增强组件、状态转换和多窗口入口添加独立集成测试。
-10. 根据测试是否依赖 GPUI 运行环境，选择普通 `#[test]` 或 `#[gpui::test] + TestAppContext`。
+2. 形成组件选型记录；已有标准组件时先替换或复用，不继续手写控件。
+3. 判断每份状态属于组件、共同父级、共享 Model 还是 Global。
+4. 删除重复状态和能直接计算的派生状态。
+5. 根据选型记录决定原生组件、组合、feature 私有薄包装、`RenderOnce`、`Entity + Render` 或底层 `Element`。
+6. 设计 props 向下、event 向上以及 observe/subscribe 关系。
+7. 明确 Entity、Task、Subscription、窗口和后台工作的生命周期。
+8. 使用稳定 Element ID、主题 token、焦点和可访问语义。
+9. 修改可见状态后只触发必要范围的刷新。
+10. 为共享组件、增强组件、状态转换和多窗口入口添加独立集成测试。
+11. 根据测试是否依赖 GPUI 运行环境，选择普通 `#[test]` 或 `#[gpui::test] + TestAppContext`。
 
 ## 检查清单
 
 - [ ] 真正的全局状态是否实现 `Global`，且没有复制完整 Global？
 - [ ] 局部状态是否留在最近使用者，共享状态是否只提升到最近共同父级？
 - [ ] 是否删除了可计算或重复保存的状态？
-- [ ] 是否先检查了 `gpui-component` 现有组件？
+- [ ] 编码前是否完成组件选型记录？
+- [ ] 是否先检查了 `nexora::desktop`、仓库已有封装和 `gpui-component` 现有组件？
+- [ ] 已有标准组件时，是否避免了手写重复控件？
 - [ ] 组件真的需要 Entity，还是 `RenderOnce` 已足够？
 - [ ] 父子通信是否保持 props 向下、event 向上？
 - [ ] `render()` 是否没有长期副作用？
@@ -296,6 +302,8 @@ fn feature_entity_updates_inside_gpui(cx: &mut TestAppContext) {
 - [ ] Element ID 是否稳定唯一？
 - [ ] Task、Subscription 和 Entity 句柄是否有清晰生命周期？
 - [ ] 增强组件是否保持官方默认行为并只增加 API？
+- [ ] feature 私有增强是否留在当前 feature，只有真实跨 feature 复用时才进入共享 UI 边界？
+- [ ] 纯自定义 `Element` 是否有可验证的布局、绘制、性能或交互能力缺口证据？
 - [ ] 多窗口是否由同一进程中的 `open_window` 创建？
 - [ ] 是否支持焦点、键盘操作和无障碍语义？
 - [ ] 依赖 App、Window、Entity、Global、Action 或 GPUI 异步调度的测试是否使用了 `#[gpui::test] + TestAppContext`？

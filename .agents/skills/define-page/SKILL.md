@@ -132,8 +132,9 @@ impl RenderOnce for CreateUser {
   `Entity<FormDialogState>`。Feature 通过 `panel_overlay` 返回稳定对话框层，遮罩只覆盖当前
   Panel；渲染时用 `FormDialog::new(id, state).title(...).child(FormItem::new(...).input(...))`
   组合标准字段，复杂块用 `.section(...)`，并调用 `.with_size(theme::component_size(cx))`。输入变化
-  调用 `set_field_draft`，默认取消自动提示未保存字段，`on_submit` 必须由业务组件实现。只有非表单
-  确认、Popover 等明确不同语义才选择其他组件。
+  调用 `set_field_draft`，默认取消自动提示未保存字段，`on_submit` 必须由业务组件实现。
+  FormDialog 默认由实际内容撑开，surface 最大高度为当前 Panel 的 80%；需要调整最大比例时使用
+  `.max_panel_height_ratio(ratio)`。只有非表单确认、Popover 等明确不同语义才选择其他组件。
 - 组件通过回调、事件或共享 Entity 与 Feature 通信；不要为了拆文件复制业务状态，也不要让
   Feature 继续包含组件的全部字段和处理函数。
 - 审查页面时如果 Feature 的 `render` 含多个可命名区域，或同一文件同时承担列表与 CRUD

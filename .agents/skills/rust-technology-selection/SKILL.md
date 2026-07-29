@@ -22,7 +22,7 @@ description: 用于设计、实现或审查 Nexora workspace 的数据库访问�
 
 ### 连接池
 
-- 在 `examples/server` composition root 中异步创建一次连接池，通过 `Database`、`AppState` 和 Postgres store 共享。
+- 在宿主服务端 composition root 中异步创建一次连接池，通过 `Database`、`AppState` 和 Postgres store 共享。
 - `PgPool` 可廉价克隆，通常无需 `Arc<PgPool>`；不要每个请求创建连接池。
 - 根据 PostgreSQL 总连接预算、应用副本数和压测结果配置 `max_connections`、`acquire_timeout` 等参数。
 - 不使用静态 `LazyLock` 配合 `Handle::block_on` 初始化异步连接池，也不创建嵌套 runtime。

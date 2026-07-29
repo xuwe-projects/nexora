@@ -8,8 +8,8 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, ElementId, Entity, FocusHandle, IntoElement,
-    ParentElement as _, RenderOnce, SharedString, WeakFocusHandle, Window, div, prelude::*, px,
-    relative,
+    ParentElement as _, RenderOnce, SharedString, Task, WeakFocusHandle, Window, div, prelude::*,
+    px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, Size, StyledExt as _,
@@ -20,7 +20,7 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::PanelDialog;
+use crate::{AnyFormField, FieldValue, LabeledControl, PanelDialog};
 
 type DialogHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
@@ -89,6 +89,7 @@ pub struct FormDialogState {
     focus_handle: FocusHandle,
     previous_focus: Option<WeakFocusHandle>,
     fields: BTreeMap<String, FormFieldDraft>,
+    validation_fields: Vec<AnyFormField>,
     open: bool,
     submitting: bool,
     confirming_discard: bool,
@@ -240,14 +241,33 @@ impl FormItemControl {
 
 /// 标准表单项。
 ///
-/// `FormItem` 负责标签、说明、必填标记与控件的排列；控件可以用 [`FormItemControl`] 的常用
-/// 构造器声明，也可以直接传入完全自定义元素。
+/// `FormItem` 负责表单专用的控件构造、禁用状态、尺寸传递与 [`FormDialog`] 网格语义；
+/// 标签、说明、必填标记、控件和错误文本的通用垂直视觉布局委托给
+/// [`crate::LabeledControl`]。控件可以用 [`FormItemControl`] 的常用构造器声明，也可以
+/// 直接传入完全自定义元素。
+///
+/// # Examples
+///
+/// ```no_run
+/// # use gpui::Entity;
+/// # use gpui_component::input::InputState;
+/// # use ui::FormItem;
+/// # fn item(name: &Entity<InputState>) -> FormItem {
+/// FormItem::new("角色名称")
+///     .description("显示在角色列表中的名称")
+///     .required()
+///     .input(name)
+/// # }
+/// ```
 #[derive(IntoElement)]
 pub struct FormItem {
     label: SharedString,
     description: Option<SharedString>,
     required: bool,
+    error: Option<SharedString>,
     control: Option<FormItemControl>,
+    typed_field: bool,
+    full_row: bool,
     size: Size,
 }
 
@@ -258,7 +278,10 @@ impl FormItem {
             label: label.into(),
             description: None,
             required: false,
+            error: None,
             control: None,
+            typed_field: false,
+            full_row: false,
             size: Size::default(),
         }
     }
@@ -277,11 +300,39 @@ impl FormItem {
         self
     }
 
+    /// 设置控件下方的错误文本。
+    ///
+    /// 该方法直接复用 [`LabeledControl::error`] 的展示语义，不会自动修改控件边框、验证状
+    /// 态或输入数据。
+    #[must_use]
+    pub fn error(mut self, error: impl Into<SharedString>) -> Self {
+        self.error = Some(error.into());
+        self
+    }
+
     /// 设置表单项控件。
     #[must_use]
     pub fn control(mut self, control: FormItemControl) -> Self {
         self.control = Some(control);
         self
+    }
+
+    /// 使用类型化 [`LabeledControl<V>`] 字段 Entity 作为完整表单项。
+    ///
+    /// 该方法不会再次套一层视觉字段容器；字段自身负责渲染标签、说明、必填标记、控件和
+    /// 错误消息。泛型 `V` 来自字段构造器，字段事件回调也会保持同一个业务值类型。
+    #[must_use]
+    pub fn field<V: FieldValue>(field: &Entity<LabeledControl<V>>) -> Self {
+        Self {
+            label: SharedString::default(),
+            description: None,
+            required: false,
+            error: None,
+            control: Some(FormItemControl::element(field.clone())),
+            typed_field: true,
+            full_row: false,
+            size: Size::default(),
+        }
     }
 
     /// 使用自定义元素作为控件。
@@ -325,6 +376,17 @@ impl FormItem {
         self.control = self.control.map(|control| control.disabled(disabled));
         self
     }
+
+    /// 让当前字段在多列表单中跨越整行。
+    ///
+    /// 该设置只作用于 [`FormDialog`] 的字段网格：当 `FormDialog::columns(n)` 大于 1 时，
+    /// 当前 `FormItem` 会跨越全部列；`columns(1)` 时效果与普通字段一致。非字段型整行内容
+    /// 仍应使用 [`FormDialog::section`]，例如角色列表、权限列表或 Alert 提示。
+    #[must_use]
+    pub fn full_row(mut self) -> Self {
+        self.full_row = true;
+        self
+    }
 }
 
 impl gpui_component::Sizable for FormItem {
@@ -338,29 +400,21 @@ impl RenderOnce for FormItem {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let control = self
             .control
-            .map(|control| control.render(self.size, window, cx));
+            .map(|control| control.render(self.size, window, cx))
+            .unwrap_or_else(|| div().into_any_element());
 
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_1()
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(div().text_sm().font_medium().child(self.label))
-                    .when(self.required, |this| {
-                        this.child(div().text_sm().text_color(cx.theme().danger).child("*"))
-                    }),
-            )
+        if self.typed_field {
+            return control;
+        }
+
+        LabeledControl::new(self.label, control)
+            .with_size(self.size)
             .when_some(self.description, |this, description| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(description),
-                )
+                this.description(description)
             })
-            .children(control)
+            .when(self.required, LabeledControl::required)
+            .when_some(self.error, |this, error| this.error(error))
+            .into_any_element()
     }
 }
 
@@ -371,10 +425,21 @@ impl FormDialogState {
             focus_handle: cx.focus_handle(),
             previous_focus: None,
             fields: BTreeMap::new(),
+            validation_fields: Vec::new(),
             open: false,
             submitting: false,
             confirming_discard: false,
         }
+    }
+
+    /// 注册一个由 [`LabeledControl<V>`] 管理的类型化字段。
+    ///
+    /// `FormDialog` 提交时会等待该字段已存在的最新异步事件任务，然后执行声明式规则并读取
+    /// 已有异步事件错误。注册只擦除聚合所需能力，不会破坏字段事件回调的泛型类型安全。
+    #[must_use]
+    pub fn field<V: FieldValue>(mut self, field: &Entity<LabeledControl<V>>) -> Self {
+        self.validation_fields.push(AnyFormField::new(field));
+        self
     }
 
     /// 打开对话框、保存此前焦点并聚焦表单边界。
@@ -441,6 +506,12 @@ impl FormDialogState {
         cx.notify();
     }
 
+    fn reset_validation_fields(&self, cx: &mut App) {
+        for field in &self.validation_fields {
+            field.reset(cx);
+        }
+    }
+
     /// 把当前全部草稿标记为已保存的新基线。
     ///
     /// 提交成功但对话框仍保持打开时调用本方法，后续取消不会把刚保存的字段误报为未保存。
@@ -499,6 +570,7 @@ impl FormDialogState {
             return;
         }
         self.fields.clear();
+        self.reset_validation_fields(cx);
         self.close(window, cx);
     }
 
@@ -510,6 +582,7 @@ impl FormDialogState {
         self.open = false;
         self.submitting = false;
         self.confirming_discard = false;
+        self.reset_validation_fields(cx);
         if let Some(handle) = self
             .previous_focus
             .take()
@@ -519,6 +592,27 @@ impl FormDialogState {
         }
         cx.notify();
     }
+
+    fn take_validation_tasks(&self, cx: &mut App) -> Vec<Task<()>> {
+        self.validation_fields
+            .iter()
+            .filter_map(|field| field.take_pending_task(cx))
+            .collect()
+    }
+
+    fn validate_registered_fields(&self, window: &mut Window, cx: &mut App) -> bool {
+        let mut first_invalid = None;
+        for field in &self.validation_fields {
+            if !field.validate(cx) && first_invalid.is_none() {
+                first_invalid = Some(field.clone());
+            }
+        }
+        if let Some(field) = first_invalid {
+            field.focus(window, cx);
+            return false;
+        }
+        true
+    }
 }
 
 /// 只覆盖当前 Feature Panel 的通用创建/编辑表单对话框。
@@ -526,6 +620,9 @@ impl FormDialogState {
 /// 组件固定提供标题、可选描述、纵向可滚动内容区以及“取消/提交”操作。`on_submit` 是必需
 /// 回调且没有默认业务实现；未设置自定义 `on_cancel` 时，组件使用
 /// [`FormDialogState`] 的脏字段确认与关闭行为。
+///
+/// [`FormItem::full_row`] 只影响通过 [`Self::child`] 添加的标准字段在多列网格中的跨度；
+/// [`Self::section`] 适合权限列表、角色列表、Alert 等不属于单个字段的整行自定义区域。
 #[derive(IntoElement)]
 pub struct FormDialog {
     id: ElementId,
@@ -539,7 +636,7 @@ pub struct FormDialog {
     cancel_label: SharedString,
     submit_label: SharedString,
     submit_disabled: bool,
-    panel_height_ratio: Option<f32>,
+    max_panel_height_ratio: f32,
     on_cancel: Option<DialogHandler>,
     on_submit: Option<DialogHandler>,
 }
@@ -563,7 +660,7 @@ impl FormDialog {
             cancel_label: "取消".into(),
             submit_label: "提交".into(),
             submit_disabled: false,
-            panel_height_ratio: Some(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO),
+            max_panel_height_ratio: DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO,
             on_cancel: None,
             on_submit: None,
         }
@@ -584,13 +681,17 @@ impl FormDialog {
     /// 设置表单项列数。
     ///
     /// 列数只作用于通过 [`Self::child`] 添加的标准表单项；通过 [`Self::section`] 添加的自定义
-    /// 区域始终占据整行。
+    /// 区域始终占据整行。单个字段需要跨越全部列时，在对应 [`FormItem`] 上调用
+    /// [`FormItem::full_row`]。
     pub fn columns(mut self, columns: usize) -> Self {
         self.columns = columns.max(1);
         self
     }
 
     /// 添加一个标准表单项。
+    ///
+    /// 字段默认占据当前表单网格的一列；调用 [`FormItem::full_row`] 后会在多列表单中跨越
+    /// 全部列。
     pub fn child(mut self, item: FormItem) -> Self {
         self.items.push(item);
         self
@@ -598,7 +699,8 @@ impl FormDialog {
 
     /// 添加一段自定义表单内容。
     ///
-    /// 适合权限列表、角色列表、警告提示或其他不能自然表达为单个字段的内容。
+    /// 适合权限列表、角色列表、警告提示或其他不能自然表达为单个字段的内容。若内容本身
+    /// 仍是单个字段，只是需要在多列网格中占据整行，应使用 [`FormItem::full_row`]。
     pub fn section(mut self, section: impl IntoElement) -> Self {
         self.sections.push(section.into_any_element());
         self
@@ -625,22 +727,13 @@ impl FormDialog {
         self
     }
 
-    /// 设置表单对话框相对当前 Feature Panel 的高度比例。
+    /// 设置表单对话框相对当前 Feature Panel 的最大高度比例。
     ///
-    /// 默认值为 `0.8`，表示常规创建/编辑表单 surface 高度固定为当前 Panel 可用高度的
-    /// 80%，标题和底部操作区固定，表单内容区独立纵向滚动。传入值会被限制在 `0.1..=1.0`
-    /// 之间，避免对话框不可用或溢出 Panel。
-    pub fn panel_height_ratio(mut self, ratio: f32) -> Self {
-        self.panel_height_ratio = Some(ratio.clamp(0.1, 1.0));
-        self
-    }
-
-    /// 使用内容自适应高度。
-    ///
-    /// 该模式只适合字段极少的小表单；对话框仍会保留默认的 Panel 高度 80% 上限，字段过多时
-    /// 继续由内容区纵向滚动。
-    pub fn auto_height(mut self) -> Self {
-        self.panel_height_ratio = None;
+    /// 默认值为 `0.8`，表示 surface 会由实际标题、内容和底部操作区撑开，但最高不超过
+    /// 当前 Panel 可用高度的 80%。达到上限后，标题和底部操作区保持固定，仅表单内容区
+    /// 纵向滚动。传入值会被限制在 `0.1..=1.0` 之间，避免对话框不可用或溢出 Panel。
+    pub fn max_panel_height_ratio(mut self, ratio: f32) -> Self {
+        self.max_panel_height_ratio = ratio.clamp(0.1, 1.0);
         self
     }
 
@@ -689,6 +782,7 @@ impl RenderOnce for FormDialog {
         let state_for_stay = self.state.clone();
         let state_for_discard = self.state.clone();
         let custom_cancel = self.on_cancel.clone();
+        let max_panel_height_ratio = self.max_panel_height_ratio;
         let cancel: DialogHandler = Rc::new(move |event, window, cx| {
             if let Some(handler) = custom_cancel.as_ref() {
                 handler(event, window, cx);
@@ -754,7 +848,7 @@ impl RenderOnce for FormDialog {
                 )
                 .w(px(520.0))
                 .max_w(relative(0.92))
-                .max_h(relative(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO))
+                .max_h(relative(max_panel_height_ratio))
                 .into_any_element();
         }
 
@@ -773,13 +867,24 @@ impl RenderOnce for FormDialog {
         let has_submit_handler = self.on_submit.is_some();
         let submit_disabled = submitting || self.submit_disabled || !has_submit_handler;
         let on_submit = self.on_submit.unwrap_or_else(|| Rc::new(|_, _, _| {}));
+        let state_for_submit = self.state.clone();
         let cancel_from_close = cancel.clone();
         let cancel_from_button = cancel;
         let size = self.size;
         let item_elements = self
             .items
             .into_iter()
-            .map(|item| item.with_size(size).into_any_element())
+            .map(|item| {
+                let full_row = item.full_row;
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .when(self.columns > 1 && full_row, |this| {
+                        this.col_span(self.columns as u16)
+                    })
+                    .child(item.with_size(size))
+                    .into_any_element()
+            })
             .collect::<Vec<_>>();
         let items = if item_elements.is_empty() {
             None
@@ -827,20 +932,39 @@ impl RenderOnce for FormDialog {
                             .loading(submitting)
                             .disabled(submit_disabled)
                             .on_click(move |event, window, cx| {
-                                on_submit(event, window, cx);
+                                let click_event = event.clone();
+                                let on_submit = on_submit.clone();
+                                let state_for_submit = state_for_submit.clone();
+                                let tasks = state_for_submit.update(cx, |state, cx| {
+                                    state.set_submitting(true, cx);
+                                    state.take_validation_tasks(cx)
+                                });
+                                window
+                                    .spawn(cx, async move |cx| {
+                                        for task in tasks {
+                                            task.await;
+                                        }
+                                        let _ = cx.update(move |window, cx| {
+                                            let valid = state_for_submit.update(cx, |state, cx| {
+                                                let valid =
+                                                    state.validate_registered_fields(window, cx);
+                                                state.set_submitting(false, cx);
+                                                valid
+                                            });
+                                            if valid {
+                                                on_submit(&click_event, window, cx);
+                                            }
+                                        });
+                                    })
+                                    // nexora-lint: allow(nexora::detached_lifecycle) reason=提交点击创建一次性窗口任务；任务只等待字段当前句柄并回到同一窗口验证，字段关闭会使旧结果失效。
+                                    .detach();
                             }),
                     ),
             )
             .w(px(520.0))
-            .max_w(relative(0.92));
+            .max_w(relative(0.92))
+            .max_h(relative(max_panel_height_ratio));
 
-        form_dialog_height(dialog, self.panel_height_ratio).into_any_element()
-    }
-}
-
-fn form_dialog_height(dialog: PanelDialog, panel_height_ratio: Option<f32>) -> PanelDialog {
-    match panel_height_ratio {
-        Some(ratio) => dialog.h(relative(ratio)).max_h(relative(ratio)),
-        None => dialog.max_h(relative(DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO)),
+        dialog.into_any_element()
     }
 }

@@ -556,7 +556,7 @@ fn valid_workspace(name: &str) -> Fixture {
         "Cargo.toml",
         r#"[workspace]
 resolver = "3"
-members = ["examples/console", "crates/actions"]
+members = ["apps/desktop", "crates/actions"]
 
 [workspace.package]
 version = "0.1.0"
@@ -568,7 +568,7 @@ gpui = "0.2"
 "#,
     );
     fixture.write(
-        "examples/console/Cargo.toml",
+        "apps/desktop/Cargo.toml",
         r#"[package]
 name = "console"
 version.workspace = true
@@ -580,7 +580,7 @@ gpui = { workspace = true }
 "#,
     );
     fixture.write(
-        "examples/console/src/main.rs",
+        "apps/desktop/src/main.rs",
         "//! 控制台入口。\nfn main() {}\n",
     );
     fixture.write(

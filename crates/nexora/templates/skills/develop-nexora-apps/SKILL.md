@@ -93,8 +93,10 @@ impl FeatureElement for UserDetailsFeature {
   Entity 在 `initialize` 创建并由 `panel_overlay` 稳定返回，只遮罩当前 Feature Panel；渲染时用
   `FormDialog::new(id, state).title(...).child(FormItem::new(...).input(...)).section(...)`
   组合表单，并调用 `.with_size(theme::component_size(cx))`。输入变化写入字段草稿，默认取消
-  自动确认未保存内容，业务必须提供 `on_submit`。非表单确认或工厂选择 Popover 不强制使用
-  FormDialog。
+  自动确认未保存内容，业务必须提供 `on_submit`。FormDialog 默认按标题、内容和 footer
+  自适应高度，surface 最大为当前 Panel 高度的 80%；需要调整上限时使用
+  `.max_panel_height_ratio(ratio)`，不要为短表单硬编码高度。非表单确认或工厂选择 Popover
+  不强制使用 FormDialog。
 - 所有 gpui-component `Sizable` 控件默认遵循设置中的组件尺寸；新增页面不要硬编码 `.small()` /
   `.medium()`，除非该控件确实是表格行内紧凑操作或图标按钮。
 

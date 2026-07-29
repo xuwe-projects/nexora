@@ -1,4 +1,0 @@
-/target
-/.agents/
-config/*.toml
-!config/example.*.toml

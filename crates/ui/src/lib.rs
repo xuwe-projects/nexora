@@ -17,6 +17,9 @@ pub mod crud_table;
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
+/// 通用的“标签 + 控件”字段容器。
+pub mod labeled_control;
+
 /// 桌面应用未登录时复用的认证门禁。
 pub mod login_gate;
 
@@ -51,6 +54,10 @@ pub use crud_table::{
     RowSelectionEvent,
 };
 pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl};
+pub use labeled_control::{
+    AnyFormField, Event, FieldValue, FieldValueParseError, LabeledControl, LabeledControlBuilder,
+    LabeledControlTarget, NumberFieldValue,
+};
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
 pub use panel_header::PanelHeader;

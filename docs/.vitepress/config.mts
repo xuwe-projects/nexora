@@ -38,6 +38,8 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     text: "版本发布",
     items: [
       { text: "更新日志", link: "/changelog/" },
+      { text: "0.18.0", link: "/changelog/0.18.0" },
+      { text: "从 0.17.1 升级", link: "/changelog/0.18.0#升级" },
       { text: "0.17.1", link: "/changelog/0.17.1" },
       { text: "从 0.17.0 升级", link: "/changelog/0.17.1#升级" },
       { text: "0.17.0", link: "/changelog/0.17.0" },
@@ -116,6 +118,8 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     text: "Releases",
     items: [
       { text: "Changelog", link: "/en/changelog/" },
+      { text: "0.18.0", link: "/en/changelog/0.18.0" },
+      { text: "Upgrade from 0.17.1", link: "/en/changelog/0.18.0#upgrade" },
       { text: "0.17.1", link: "/en/changelog/0.17.1" },
       { text: "Upgrade from 0.17.0", link: "/en/changelog/0.17.1#upgrade" },
       { text: "0.17.0", link: "/en/changelog/0.17.0" },
@@ -181,6 +185,7 @@ export default defineConfig({
         nav: [
           { text: "指南", link: "/guide/getting-started" },
           { text: "桌面端", link: "/desktop/application" },
+          { text: "组件", link: "/desktop/components" },
           { text: "服务端", link: "/server/overview" },
           { text: "CLI", link: "/reference/cli" },
           { text: "更新日志", link: "/changelog/" },
@@ -210,6 +215,7 @@ export default defineConfig({
         nav: [
           { text: "Guide", link: "/en/guide/getting-started" },
           { text: "Desktop", link: "/en/desktop/application" },
+          { text: "Components", link: "/en/desktop/components" },
           { text: "Server", link: "/en/server/overview" },
           { text: "CLI", link: "/en/reference/cli" },
           { text: "Releases", link: "/en/changelog/" },

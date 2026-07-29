@@ -9,10 +9,10 @@ Feature、桌面 Shell、Account 认证授权、默认用户与角色管理，�
 
 ## 安装 CLI
 
-安装已发布的 `v0.17.1`：
+安装已发布的 `v0.18.0`：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.17.1 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.18.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 在 Nexora 仓库根目录安装本地源码：
@@ -63,6 +63,29 @@ cargo run -- config/my-app.toml
 
 生成项目自带 `publish-nexora-release` Skill，用于整理完整改动、标注处理人、编写上一版本到
 当前版本的升级说明，并在验证通过后发布 tag 与 GitHub Release。
+
+## 运行 examples
+
+仓库提供两个 Cargo 官方 example target，可从仓库根目录零配置运行。
+
+最小桌面示例会打开默认 Nexora 窗口，显示 Sidebar、Feature 注册和 `/` 首页：
+
+```bash
+cargo run -p nexora \
+  --no-default-features \
+  --features desktop,derive \
+  --example desktop_basic
+```
+
+最小服务端示例会绑定 `127.0.0.1:0`，输出系统分配的实际监听地址，并提供始终成功的
+`GET /health`：
+
+```bash
+cargo run -p nexora \
+  --no-default-features \
+  --features server \
+  --example server_basic
+```
 
 ## 开发验证
 

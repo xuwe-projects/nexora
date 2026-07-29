@@ -1,7 +1,16 @@
 ---
 name: gpui-component
-description: 指导如何在 GPUI 应用中使用 gpui-component UI 组件库。使用 gpui-component 组件（Button、Input、Select、Dialog、Tabs、Sidebar、List、Table 等）构建界面、初始化组件库、处理组件状态与主题，或为具体 UI 需求选择合适组件时使用。
+description: 指导所有 GPUI 可见 UI 实现中正确使用 gpui-component 组件库。适用于新增、修改或审查按钮、输入、选择器、表单、弹层、导航、列表、表格、反馈状态和布局交互；即使用户没有明确要求使用组件库，也应优先用 gpui-component，纯 GPUI 控件实现只能作为最后手段。
 ---
+
+## Nexora UI 使用边界
+
+- 涉及 Nexora 可见 UI 时，先执行 `desktop-ui-component-selection`，由它完成组件选型门禁和组件选型记录。
+- 本 Skill 负责 `gpui-component` API、初始化、状态、主题、尺寸和正确使用方式，不复制完整选型表。
+- 组件目录只是快速索引；复杂交互必须核对 workspace 当前锁定版本的源码或对应官方文档。
+- 实现者不能因为不知道组件 API 就改为手写组件；先查源码、文档、story 或已有调用点。
+- 现有组件能力不足时，优先包装、组合或转发其 builder API，保留官方组件默认主题、尺寸、焦点、键盘、disabled 和 loading 等语义。
+- 纯布局容器可以使用 GPUI Element；语义控件必须优先使用组件库。
 
 ## 文档
 

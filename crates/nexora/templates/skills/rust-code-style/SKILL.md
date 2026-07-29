@@ -284,13 +284,13 @@ console -> api -> axum + sqlx + tokio + ...
 - `src/main.rs` 只负责参数解析、配置加载、依赖装配和启动流程，避免直接承载大量可复用业务逻辑。
 - bin crate 需要复用或测试业务逻辑时，将逻辑拆到独立的 workspace library crate，再由 bin crate 通过 `{ workspace = true }` 依赖该 crate。
 - 不要为了让集成测试能够导入 bin crate 而补建薄 `src/lib.rs`，也不要在 `main.rs` 和 `lib.rs` 之间重复声明同一组模块。
-- 同一个产品同时需要命令入口和可复用能力时，使用两个职责明确的 crate，例如 `examples/server` 只保留 `src/main.rs`，可复用能力放在 `crates/application`、`crates/domain` 或具体业务 crate 中。
+- 同一个产品同时需要命令入口和可复用能力时，使用两个职责明确的 crate，例如 `apps/server` 只保留 `src/main.rs`，可复用能力放在 `crates/application`、`crates/domain` 或具体业务 crate 中。
 - library crate 使用 `src/lib.rs`，bin crate 使用 `src/main.rs`；除非用户明确要求特殊 Cargo 多目标 package，否则两种目标不要混放在同一个 crate。
 
 推荐结构：
 
 ```text
-examples/server/
+apps/server/
 ├── Cargo.toml
 └── src/main.rs
 
@@ -341,7 +341,7 @@ src/
 
 ## 测试组织
 
-- 所有 Rust 测试用例必须放在对应 crate 的 `tests/` 集成测试目录中，例如 `examples/console/tests/` 或 `crates/desktop/tests/`。
+- 所有 Rust 测试用例必须放在对应 crate 的 `tests/` 集成测试目录中，例如 `apps/desktop/tests/` 或 `crates/desktop/tests/`。
 - 生产源码中禁止出现 `#[cfg(test)]`、`mod tests`、测试专用导入、测试专用类型或仅为测试条件编译的逻辑。
 - 新增行为或修复缺陷时，优先先编写或调整能够复现预期与失败场景的测试，再实现生产代码。
 - 测试 bin crate 时，优先验证命令入口的外部行为，或直接测试它依赖的独立 library crate；不要通过新增同 package 的 `src/lib.rs` 暴露实现细节。

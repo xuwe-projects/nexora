@@ -1,4 +1,4 @@
 interface:
   display_name: "GPUI 桌面开发规范"
-  short_description: "规范 GPUI 状态、组件、数据流、生命周期与多窗口设计"
-  default_prompt: "Use $gpui-desktop-development to implement or review this GPUI desktop application architecture."
+  short_description: "GPUI 架构与组件复用门禁规范"
+  default_prompt: "使用 $gpui-desktop-development 设计或审查 GPUI 桌面架构，先完成组件选型记录，底层自定义需能力缺口证据。"

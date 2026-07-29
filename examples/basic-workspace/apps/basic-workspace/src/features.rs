@@ -1,2 +1,0 @@
-mod about;
-mod home;
