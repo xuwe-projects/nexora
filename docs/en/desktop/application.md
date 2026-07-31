@@ -46,6 +46,22 @@ divider but does not add interaction styles. When the header should show both br
 context, compose stable-ID `SidebarRegion` values inside the custom header so a non-interactive logo
 and an interactive selector remain separate hit regions.
 
+## Sidebar Navigation Search
+
+Sidebar navigation search is disabled by default. When enabled, the Shell renders a search input
+between the default or custom `SidebarHeader` and the navigation list, filtering only the Section,
+NavigationGroup, and Feature titles visible to the current user:
+
+```rust
+use nexora::ApplicationOptions;
+
+ApplicationOptions::new().sidebar_search(true)
+```
+
+Matching supports original title substrings, tone-less full pinyin, and pinyin initials. During
+search, groups use temporary expansion state; clearing the query restores the user's previous
+expanded/collapsed state.
+
 ## Tab Style
 
 The main-window Feature tabs use the official default `Tabs` style from gpui-component's story by

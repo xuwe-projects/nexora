@@ -26,6 +26,10 @@ let authenticator = nexora::desktop::AccountAuthenticator::new(&config)?;
 nexora::desktop::install_authenticator(authenticator, cx);
 ```
 
+`ApiSettings` accepts HTTPS and loopback HTTP by default. To connect to an intranet plain-HTTP
+service, set `allow_insecure_http = true` under `[api]`. Plain HTTP sends Bearer tokens in clear
+text, so use it only in controlled environments where that risk is accepted.
+
 There is no separate `account_enabled` switch. A regular desktop application that does not install
 an authenticator gets neither the login gate nor the default `/users` and `/roles` pages.
 

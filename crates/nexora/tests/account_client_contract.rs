@@ -259,7 +259,10 @@ fn account_error_preserves_envelope_code_message_and_request_id() {
 
 fn session(endpoint: String) -> nexora::desktop::AccountSession {
     let settings = DesktopSettings {
-        api: ApiSettings { endpoint },
+        api: ApiSettings {
+            endpoint,
+            allow_insecure_http: false,
+        },
         account: AccountSettings {
             oidc: AccountOidcSettings {
                 issuer_url: "https://identity.example.com".to_owned(),

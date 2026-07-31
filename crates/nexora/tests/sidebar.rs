@@ -115,6 +115,12 @@ fn shell_uses_gpui_component_sidebar_for_navigation() {
         APPLICATION_SOURCE.contains("SidebarMenuItem::new(metadata.title())"),
         "Sidebar 导航项必须使用官方 SidebarMenuItem"
     );
+    assert!(
+        APPLICATION_SOURCE.contains("Input::new(input)")
+            && APPLICATION_SOURCE.contains(".prefix(Icon::new(IconName::Search).xsmall())")
+            && APPLICATION_SOURCE.contains(".with_size(theme::component_size(cx))"),
+        "Sidebar 搜索输入必须复用 gpui-component Input、搜索图标前缀并跟随组件尺寸"
+    );
 
     for forbidden in [
         "v_flex()\n            .id(\"nexora-sidebar\")",
@@ -197,6 +203,11 @@ fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
     assert!(sidebar.contains(".border_b_1()"));
     assert!(sidebar.contains(".border_t_1()"));
     assert!(sidebar.contains(".gap_2()"));
+    assert!(
+        sidebar.contains(".child(self.render_sidebar_header_content(cx))")
+            && sidebar.contains(".children(self.render_sidebar_search(cx))"),
+        "Sidebar 搜索必须位于 Header 内容之后、导航列表之前"
+    );
 
     let region_render = SIDEBAR_REGION_SOURCE
         .split_once("impl RenderOnce for SidebarRegion")

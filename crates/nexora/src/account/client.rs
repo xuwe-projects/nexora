@@ -53,6 +53,13 @@ pub struct Settings {
 pub struct ApiSettings {
     /// API 根地址，例如 `http://127.0.0.1:3000` 或 `https://api.example.com`。
     pub endpoint: String,
+    /// 是否显式允许连接非 loopback 的纯 HTTP API。
+    ///
+    /// 默认值为 `false`：HTTPS 始终允许，本机 loopback HTTP 仍可用于开发；其他 HTTP
+    /// 地址会被拒绝。设为 `true` 时，调用方必须已经接受 Bearer Token 会以明文传输的
+    /// 风险，仅应在内网或其他受控环境使用。
+    #[serde(default)]
+    pub allow_insecure_http: bool,
 }
 
 /// 桌面 public client 的 OIDC 参数。
@@ -150,7 +157,7 @@ fn client_config_from(
 ) -> Result<AccountClientConfig, AccountClientConfigError> {
     Ok(AccountClientConfig {
         oidc: oidc_config_from(settings)?,
-        api_endpoint: validated_api_endpoint(api.endpoint.as_str())?,
+        api_endpoint: validated_api_endpoint(api.endpoint.as_str(), api.allow_insecure_http)?,
     })
 }
 
@@ -592,7 +599,10 @@ impl AccountClientError {
     }
 }
 
-fn validated_api_endpoint(endpoint: &str) -> Result<Url, AccountClientConfigError> {
+fn validated_api_endpoint(
+    endpoint: &str,
+    allow_insecure_http: bool,
+) -> Result<Url, AccountClientConfigError> {
     let mut endpoint = Url::parse(endpoint.trim())
         .map_err(|_| AccountClientConfigError::InvalidApiEndpoint("endpoint 必须是有效绝对 URL"))?;
     if endpoint.host().is_none() {
@@ -614,10 +624,19 @@ fn validated_api_endpoint(endpoint: &str) -> Result<Url, AccountClientConfigErro
             "endpoint 必须指向服务根路径",
         ));
     }
-    if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && is_loopback(&endpoint)) {
-        return Err(AccountClientConfigError::InvalidApiEndpoint(
-            "远程 endpoint 必须使用 HTTPS；仅 loopback 开发地址允许 HTTP",
-        ));
+    match endpoint.scheme() {
+        "https" => {}
+        "http" if is_loopback(&endpoint) || allow_insecure_http => {}
+        "http" => {
+            return Err(AccountClientConfigError::InvalidApiEndpoint(
+                "远程 HTTP endpoint 需要显式启用 allow_insecure_http；纯 HTTP 会明文传输 Bearer Token",
+            ));
+        }
+        _ => {
+            return Err(AccountClientConfigError::InvalidApiEndpoint(
+                "endpoint scheme 必须是 http 或 https",
+            ));
+        }
     }
     endpoint.set_path("/");
     Ok(endpoint)

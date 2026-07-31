@@ -45,6 +45,20 @@ ApplicationOptions::new().application_logo(ApplicationLogo::png(include_bytes!(
 Header 内使用 `SidebarRegion::new("application-context")` 等稳定 ID 组合独立命中区域；
 Logo 没有动作时可以完全没有 hover，工厂选择器则可以自行添加 hover 与 Popover。
 
+## Sidebar 导航搜索
+
+Sidebar 导航搜索默认关闭。启用后，Shell 会在默认或自定义 `SidebarHeader` 与导航列表之间
+显示搜索输入框，只过滤当前用户有权看到的 Section、NavigationGroup 和 Feature 标题：
+
+```rust
+use nexora::ApplicationOptions;
+
+ApplicationOptions::new().sidebar_search(true)
+```
+
+搜索支持标题原文、无声调全拼和拼音首字母连续子串匹配。搜索期间目录使用临时展开状态；
+清空搜索词后会恢复用户原来的展开/折叠状态。
+
 ## 标签样式
 
 主窗口顶部 Feature 标签默认使用 gpui-component story 中的官方默认 `Tabs` 样式。需要切换

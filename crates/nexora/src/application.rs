@@ -21,9 +21,9 @@ use configuration::UserConfigStore;
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, AssetSource, Context, Global, Image, ImageFormat, IntoElement as _,
-    MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity, Window,
-    WindowOptions, div, img, prelude::*, px, size,
+    AnyElement, AnyView, App, AssetSource, Context, Entity, Global, Image, ImageFormat,
+    IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity,
+    Window, WindowOptions, div, img, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
@@ -31,6 +31,7 @@ use gpui_component::{
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle},
     h_flex,
+    input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
     tab::{Tab, TabBar},
@@ -39,6 +40,7 @@ use gpui_component::{
 #[cfg(feature = "desktop")]
 use gpui_component::{avatar::Avatar, menu::DropdownMenu as _};
 use percent_encoding::percent_decode_str;
+use pinyin::ToPinyin as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ui::{PanelHeader, SidebarRegion, layout::WorkspaceLayout};
@@ -241,6 +243,11 @@ pub struct ApplicationOptions {
     /// 应用可以切换到 `Underline`、`Pill`、`Outline` 或 `Segmented`，交互行为仍由同一个
     /// gpui-component `TabBar` 负责。
     pub tab_style: ApplicationTabStyle,
+    /// 是否在主窗口 Sidebar 的 Header 与导航列表之间显示导航搜索输入框。
+    ///
+    /// 默认关闭。启用后 Shell 会创建一个 `gpui-component` 输入状态，并仅过滤当前用户
+    /// 有权看到的 Section、NavigationGroup 与 Feature 标题；清空搜索词后恢复原导航树。
+    pub sidebar_search: bool,
 }
 
 impl Default for ApplicationOptions {
@@ -263,6 +270,7 @@ impl Default for ApplicationOptions {
             locale: "zh-CN".to_owned(),
             initial_path: "/".to_owned(),
             tab_style: ApplicationTabStyle::Tab,
+            sidebar_search: false,
         }
     }
 }
@@ -306,6 +314,16 @@ impl ApplicationOptions {
     /// 设置主窗口顶部 Feature 标签栏的官方 `TabBar` 样式。
     pub const fn tab_style(mut self, tab_style: ApplicationTabStyle) -> Self {
         self.tab_style = tab_style;
+        self
+    }
+
+    /// 设置是否在主窗口 Sidebar 中启用导航搜索。
+    ///
+    /// 该开关默认关闭；关闭时 Shell 不会创建搜索输入状态、订阅或搜索索引。启用后，
+    /// 搜索框显示在默认或自定义 `SidebarHeader` 下方，并只影响导航树过滤，不改变路由、
+    /// 标签页或用户手动展开状态。
+    pub const fn sidebar_search(mut self, sidebar_search: bool) -> Self {
+        self.sidebar_search = sidebar_search;
         self
     }
 
@@ -618,6 +636,7 @@ where
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
     let tab_style = options.tab_style;
+    let sidebar_search = options.sidebar_search;
     let preferences_store = ShellPreferences::for_local_application(application_name.as_str());
     let shell_preferences = preferences_store
         .as_ref()
@@ -644,6 +663,7 @@ where
         account_enabled: false,
         sidebar_subtitle,
         tab_style,
+        sidebar_search,
         preferences_store,
         pinned_tab_paths,
         registry: Some(registry),
@@ -666,6 +686,7 @@ struct ApplicationAdapter<A> {
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
     tab_style: ApplicationTabStyle,
+    sidebar_search: bool,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
     registry: Option<AppRegistry>,
@@ -747,6 +768,7 @@ where
         let account_enabled = self.account_enabled;
         let sidebar_subtitle = self.sidebar_subtitle.clone();
         let tab_style = self.tab_style;
+        let sidebar_search = self.sidebar_search;
         let preferences_store = self.preferences_store.clone();
         let pinned_tab_paths = std::mem::take(&mut self.pinned_tab_paths);
         cx.new(|cx| {
@@ -759,6 +781,7 @@ where
                     account_enabled,
                     sidebar_subtitle,
                     tab_style,
+                    sidebar_search,
                     preferences_store,
                     pinned_tab_paths,
                 },
@@ -840,6 +863,7 @@ struct ApplicationShellConfig {
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
     tab_style: ApplicationTabStyle,
+    sidebar_search: bool,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
 }
@@ -851,6 +875,8 @@ struct ApplicationShell {
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
     tab_style: ApplicationTabStyle,
+    sidebar_search_input: Option<Entity<InputState>>,
+    sidebar_search_index: Option<NavigationSearchIndex>,
     initial_route: ShellRoute,
     active_route: ShellRoute,
     opened_tabs: Vec<ShellRoute>,
@@ -876,6 +902,7 @@ struct ApplicationShell {
     navigation_error: Option<String>,
     #[cfg(feature = "desktop")]
     _authentication_subscription: Option<Subscription>,
+    _sidebar_search_subscription: Option<Subscription>,
     _release_subscription: Option<Subscription>,
 }
 
@@ -901,6 +928,123 @@ impl NavigationEntry {
     }
 }
 
+#[derive(Clone)]
+enum NavigationTreeEntry {
+    Group {
+        metadata: NavigationGroupMetadata,
+        children: Vec<NavigationTreeEntry>,
+    },
+    Feature(FeatureMetadata),
+}
+
+impl NavigationTreeEntry {
+    fn collect_group_ids(&self, output: &mut HashSet<&'static str>) {
+        if let Self::Group { metadata, children } = self {
+            output.insert(metadata.id());
+            for child in children {
+                child.collect_group_ids(output);
+            }
+        }
+    }
+}
+
+struct NavigationSearchResult {
+    sections: Vec<(&'static str, Vec<NavigationTreeEntry>)>,
+    expanded_groups: HashSet<&'static str>,
+}
+
+#[derive(Clone)]
+struct NavigationSearchIndex {
+    sections: HashMap<&'static str, SearchableTitle>,
+    groups: HashMap<&'static str, SearchableTitle>,
+    features: HashMap<&'static str, SearchableTitle>,
+}
+
+impl NavigationSearchIndex {
+    fn new(registry: &AppRegistry) -> Self {
+        let mut sections = HashMap::new();
+        let mut groups = HashMap::new();
+        let mut features = HashMap::new();
+
+        for group in registry.navigation_groups() {
+            groups.insert(group.id(), SearchableTitle::new(group.title()));
+            sections
+                .entry(group.section())
+                .or_insert_with(|| SearchableTitle::new(group.section()));
+        }
+        for feature in registry.navigation_features() {
+            features.insert(feature.id(), SearchableTitle::new(feature.title()));
+            let section = registry.feature_section(feature);
+            sections
+                .entry(section)
+                .or_insert_with(|| SearchableTitle::new(section));
+        }
+
+        Self {
+            sections,
+            groups,
+            features,
+        }
+    }
+
+    fn section_matches(&self, section: &'static str, query: &str) -> bool {
+        self.sections
+            .get(section)
+            .is_some_and(|title| title.matches(query))
+    }
+
+    fn group_matches(&self, metadata: NavigationGroupMetadata, query: &str) -> bool {
+        self.groups
+            .get(metadata.id())
+            .is_some_and(|title| title.matches(query))
+    }
+
+    fn feature_matches(&self, metadata: FeatureMetadata, query: &str) -> bool {
+        self.features
+            .get(metadata.id())
+            .is_some_and(|title| title.matches(query))
+    }
+}
+
+#[derive(Clone)]
+struct SearchableTitle {
+    normalized: String,
+    pinyin: String,
+    initials: String,
+}
+
+impl SearchableTitle {
+    fn new(title: &str) -> Self {
+        let normalized = normalize_search_text(title);
+        let pinyin = title
+            .chars()
+            .filter_map(|character| character.to_pinyin().map(|pinyin| pinyin.plain()))
+            .collect::<String>()
+            .to_lowercase();
+        let initials = title
+            .chars()
+            .filter_map(|character| character.to_pinyin().map(|pinyin| pinyin.first_letter()))
+            .collect::<String>()
+            .to_lowercase();
+
+        Self {
+            normalized,
+            pinyin,
+            initials,
+        }
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        self.normalized.contains(query)
+            || self.pinyin.contains(query)
+            || self.initials.contains(query)
+    }
+}
+
+fn normalize_search_text(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
 impl ApplicationShell {
     fn new(
         registry: AppRegistry,
@@ -915,6 +1059,7 @@ impl ApplicationShell {
             account_enabled,
             sidebar_subtitle,
             tab_style,
+            sidebar_search,
             preferences_store,
             pinned_tab_paths,
         } = config;
@@ -1004,6 +1149,16 @@ impl ApplicationShell {
         let preferences_store_for_shell = preferences_store.clone();
         let preferences_writer =
             preferences_store.and_then(|store| PreferencesWriter::start(store).ok());
+        let sidebar_search_input = sidebar_search
+            .then(|| cx.new(|cx| InputState::new(window, cx).placeholder("搜索导航")));
+        let _sidebar_search_subscription = sidebar_search_input.as_ref().map(|input| {
+            cx.subscribe(input, |_, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+        });
+        let sidebar_search_index = sidebar_search.then(|| NavigationSearchIndex::new(&registry));
 
         let expanded_navigation_groups = registry
             .navigation_group_ancestors(initial_route.route().target().id())
@@ -1018,6 +1173,8 @@ impl ApplicationShell {
             account_enabled,
             sidebar_subtitle,
             tab_style,
+            sidebar_search_input,
+            sidebar_search_index,
             initial_route: initial_route.clone(),
             active_route: initial_route.clone(),
             opened_tabs,
@@ -1043,6 +1200,7 @@ impl ApplicationShell {
             navigation_error,
             #[cfg(feature = "desktop")]
             _authentication_subscription,
+            _sidebar_search_subscription,
             _release_subscription,
         }
     }
@@ -1642,34 +1800,46 @@ impl ApplicationShell {
     fn render_navigation_group(
         &self,
         metadata: NavigationGroupMetadata,
+        children: &[NavigationTreeEntry],
+        search_expanded_groups: Option<&HashSet<&'static str>>,
         cx: &mut Context<Self>,
     ) -> SidebarMenuItem {
         let group_id = metadata.id();
-        let expanded = self.expanded_navigation_groups.contains(group_id);
-        let children = self
-            .navigation_children(Some(group_id), metadata.section(), cx)
-            .into_iter()
-            .map(|entry| self.render_navigation_entry(entry, cx))
+        let expanded = search_expanded_groups.map_or_else(
+            || self.expanded_navigation_groups.contains(group_id),
+            |expanded_groups| expanded_groups.contains(group_id),
+        );
+        let children = children
+            .iter()
+            .map(|entry| self.render_navigation_entry(entry, search_expanded_groups, cx))
             .collect::<Vec<_>>();
 
-        SidebarMenuItem::new(metadata.title())
+        let item = SidebarMenuItem::new(metadata.title())
             .icon(feature_icon(metadata.icon()))
             .default_open(expanded)
             .click_to_toggle(true)
-            .children(children)
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .children(children);
+
+        if search_expanded_groups.is_some() {
+            item
+        } else {
+            item.on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_navigation_group(group_id, cx);
             }))
+        }
     }
 
     fn render_navigation_entry(
         &self,
-        entry: NavigationEntry,
+        entry: &NavigationTreeEntry,
+        search_expanded_groups: Option<&HashSet<&'static str>>,
         cx: &mut Context<Self>,
     ) -> SidebarMenuItem {
         match entry {
-            NavigationEntry::Group(metadata) => self.render_navigation_group(metadata, cx),
-            NavigationEntry::Feature(metadata) => self.render_navigation_feature(metadata, cx),
+            NavigationTreeEntry::Group { metadata, children } => {
+                self.render_navigation_group(*metadata, children, search_expanded_groups, cx)
+            }
+            NavigationTreeEntry::Feature(metadata) => self.render_navigation_feature(*metadata, cx),
         }
     }
 
@@ -1733,6 +1903,132 @@ impl ApplicationShell {
             }
         }
         sections
+    }
+
+    fn navigation_tree_children(
+        &self,
+        parent: Option<&str>,
+        section: &'static str,
+        cx: &App,
+    ) -> Vec<NavigationTreeEntry> {
+        self.navigation_children(parent, section, cx)
+            .into_iter()
+            .map(|entry| match entry {
+                NavigationEntry::Group(metadata) => NavigationTreeEntry::Group {
+                    metadata,
+                    children: self.navigation_tree_children(Some(metadata.id()), section, cx),
+                },
+                NavigationEntry::Feature(metadata) => NavigationTreeEntry::Feature(metadata),
+            })
+            .collect()
+    }
+
+    fn navigation_tree_sections(&self, cx: &App) -> Vec<(&'static str, Vec<NavigationTreeEntry>)> {
+        let mut sections = Vec::<(&'static str, Vec<NavigationTreeEntry>)>::new();
+        for (section, roots) in self.navigation_sections(cx) {
+            let entries = roots
+                .into_iter()
+                .map(|entry| match entry {
+                    NavigationEntry::Group(metadata) => NavigationTreeEntry::Group {
+                        metadata,
+                        children: self.navigation_tree_children(Some(metadata.id()), section, cx),
+                    },
+                    NavigationEntry::Feature(metadata) => NavigationTreeEntry::Feature(metadata),
+                })
+                .collect::<Vec<_>>();
+            sections.push((section, entries));
+        }
+        sections
+    }
+
+    fn filtered_navigation_sections(&self, cx: &App) -> NavigationSearchResult {
+        let sections = self.navigation_tree_sections(cx);
+        let Some(query) = self.sidebar_search_query(cx) else {
+            return NavigationSearchResult {
+                sections,
+                expanded_groups: HashSet::new(),
+            };
+        };
+        let Some(index) = self.sidebar_search_index.as_ref() else {
+            return NavigationSearchResult {
+                sections,
+                expanded_groups: HashSet::new(),
+            };
+        };
+
+        let mut expanded_groups = HashSet::new();
+        let sections = sections
+            .into_iter()
+            .filter_map(|(section, entries)| {
+                if index.section_matches(section, query.as_str()) {
+                    for entry in &entries {
+                        entry.collect_group_ids(&mut expanded_groups);
+                    }
+                    return Some((section, entries));
+                }
+
+                let filtered_entries = entries
+                    .into_iter()
+                    .filter_map(|entry| {
+                        Self::filter_navigation_entry(
+                            entry,
+                            index,
+                            query.as_str(),
+                            &mut expanded_groups,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (!filtered_entries.is_empty()).then_some((section, filtered_entries))
+            })
+            .collect();
+
+        NavigationSearchResult {
+            sections,
+            expanded_groups,
+        }
+    }
+
+    fn filter_navigation_entry(
+        entry: NavigationTreeEntry,
+        index: &NavigationSearchIndex,
+        query: &str,
+        expanded_groups: &mut HashSet<&'static str>,
+    ) -> Option<NavigationTreeEntry> {
+        match entry {
+            NavigationTreeEntry::Feature(metadata) => index
+                .feature_matches(metadata, query)
+                .then_some(NavigationTreeEntry::Feature(metadata)),
+            NavigationTreeEntry::Group { metadata, children } => {
+                if index.group_matches(metadata, query) {
+                    let entry = NavigationTreeEntry::Group { metadata, children };
+                    entry.collect_group_ids(expanded_groups);
+                    return Some(entry);
+                }
+
+                let filtered_children = children
+                    .into_iter()
+                    .filter_map(|child| {
+                        Self::filter_navigation_entry(child, index, query, expanded_groups)
+                    })
+                    .collect::<Vec<_>>();
+                if filtered_children.is_empty() {
+                    None
+                } else {
+                    expanded_groups.insert(metadata.id());
+                    Some(NavigationTreeEntry::Group {
+                        metadata,
+                        children: filtered_children,
+                    })
+                }
+            }
+        }
+    }
+
+    fn sidebar_search_query(&self, cx: &App) -> Option<String> {
+        let input = self.sidebar_search_input.as_ref()?;
+        let query = input.read(cx).value();
+        let query = normalize_search_text(query.as_ref());
+        (!query.is_empty()).then_some(query)
     }
 
     fn navigation_group_visible(&self, metadata: NavigationGroupMetadata, cx: &App) -> bool {
@@ -1827,6 +2123,15 @@ impl ApplicationShell {
             .into_any_element()
     }
 
+    fn render_sidebar_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.sidebar_search_input.as_ref().map(|input| {
+            Input::new(input)
+                .prefix(Icon::new(IconName::Search).xsmall())
+                .with_size(theme::component_size(cx))
+                .into_any_element()
+        })
+    }
+
     #[cfg(feature = "desktop")]
     fn render_default_account_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = crate::account::client::login_profile(cx);
@@ -1880,19 +2185,22 @@ impl ApplicationShell {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
-        let navigation_sections = self.navigation_sections(cx);
-        let navigation_groups = navigation_sections
-            .into_iter()
-            .map(|(section, items)| {
-                SidebarGroup::new(section).child(
-                    SidebarMenu::new().children(
-                        items
-                            .into_iter()
-                            .map(|entry| self.render_navigation_entry(entry, cx)),
-                    ),
-                )
-            })
-            .collect::<Vec<_>>();
+        let search_active = self.sidebar_search_query(cx).is_some();
+        let NavigationSearchResult {
+            sections,
+            expanded_groups,
+        } = self.filtered_navigation_sections(cx);
+        let search_expanded_groups = search_active.then_some(&expanded_groups);
+        let has_navigation_results = !sections.is_empty();
+        let navigation_groups =
+            sections
+                .into_iter()
+                .map(|(section, items)| {
+                    SidebarGroup::new(section).child(SidebarMenu::new().children(items.iter().map(
+                        |entry| self.render_navigation_entry(entry, search_expanded_groups, cx),
+                    )))
+                })
+                .collect::<Vec<_>>();
         let header = v_flex()
             .w_full()
             .gap_2()
@@ -1900,7 +2208,13 @@ impl ApplicationShell {
             .pb_3()
             .border_b_1()
             .border_color(sidebar_border)
-            .child(self.render_sidebar_header_content(cx));
+            .child(self.render_sidebar_header_content(cx))
+            .children(self.render_sidebar_search(cx));
+        let empty_navigation = (search_active && !has_navigation_results).then(|| {
+            SidebarGroup::new("").child(
+                SidebarMenu::new().child(SidebarMenuItem::new("未找到匹配的导航").disable(true)),
+            )
+        });
 
         let footer = if let Some(footer) = self.sidebar_footer.as_ref() {
             Some(
@@ -1936,6 +2250,7 @@ impl ApplicationShell {
             .collapsible(SidebarCollapsible::None)
             .header(header)
             .children(navigation_groups)
+            .children(empty_navigation)
             .when_some(footer, |this, footer| this.footer(footer))
             .into_any_element()
     }

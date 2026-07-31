@@ -585,6 +585,7 @@ fn workspace_account_feature_generates_a_composable_server() {
     let desktop_config = fs::read_to_string(project.join("config/fullstack-app.toml")).unwrap();
     assert!(desktop_config.contains("[api]"));
     assert!(desktop_config.contains("endpoint = \"http://127.0.0.1:3000\""));
+    assert!(desktop_config.contains("allow_insecure_http = false"));
     assert!(!desktop_config.contains("[account.api]"));
     assert!(desktop_config.contains("# OIDC Provider 的 issuer URL"));
     let server_config = fs::read_to_string(project.join("config/server.toml")).unwrap();

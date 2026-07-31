@@ -7,6 +7,7 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
+- [0.20.0: Sidebar navigation search and desktop API transport safety](./0.20.0)
 - [0.19.0: Remove Account avatar capability](./0.19.0)
 - [0.18.0: CRUD table selection and form-field components](./0.18.0)
 - [0.17.1: default sidebar brand text wrapping fix](./0.17.1)

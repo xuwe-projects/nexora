@@ -21,6 +21,28 @@ The desktop API endpoint is a root table:
 ```toml
 [api]
 endpoint = "http://127.0.0.1:3000"
+allow_insecure_http = false
+```
+
+HTTPS endpoints are always accepted, and `localhost` plus IPv4/IPv6 loopback HTTP remain available
+for local development. Non-loopback HTTP requires `allow_insecure_http = true`. Plain HTTP transmits
+Bearer tokens in clear text, so enable it only for trusted intranet or otherwise controlled
+environments where that risk is accepted.
+
+Production deployments usually use HTTPS:
+
+```toml
+[api]
+endpoint = "https://api.example.com"
+allow_insecure_http = false
+```
+
+Controlled intranet HTTP must be explicitly allowed after accepting the risk:
+
+```toml
+[api]
+endpoint = "http://10.0.0.20:3000"
+allow_insecure_http = true
 ```
 
 Server listen IP and port are separate fields:

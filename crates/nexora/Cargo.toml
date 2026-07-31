@@ -58,6 +58,7 @@ desktop = [
     "dep:inventory",
     "dep:matchit",
     "dep:percent-encoding",
+    "dep:pinyin",
     "dep:serde_html_form",
     "dep:serde_path_to_error",
     "dep:theme",
@@ -97,6 +98,7 @@ matchit = { workspace = true, optional = true }
 migrate = { workspace = true, optional = true, default-features = false }
 oidc = { workspace = true, optional = true }
 percent-encoding = { workspace = true, optional = true }
+pinyin = { workspace = true, optional = true }
 proc-macro2 = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
@@ -117,6 +119,7 @@ url = { workspace = true, optional = true }
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+toml = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

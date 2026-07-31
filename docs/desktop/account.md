@@ -25,6 +25,10 @@ let authenticator = nexora::desktop::AccountAuthenticator::new(&config)?;
 nexora::desktop::install_authenticator(authenticator, cx);
 ```
 
+`ApiSettings` 默认只允许 HTTPS 或 loopback HTTP。确需连接内网纯 HTTP 服务时，可以在 `[api]`
+中显式设置 `allow_insecure_http = true`；纯 HTTP 会明文传输 Bearer Token，只适用于调用方
+已经接受风险的内网或受控环境。
+
 不需要额外的 `account_enabled` 开关；没有安装认证器的普通桌面应用不会创建登录门禁，也
 不会注入 `/users` 与 `/roles` 默认页面。
 

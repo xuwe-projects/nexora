@@ -22,11 +22,29 @@ mod client {
         account: AccountSettings,
     }
 
+    fn desktop_settings(endpoint: impl Into<String>, allow_insecure_http: bool) -> DesktopSettings {
+        DesktopSettings {
+            api: ApiSettings {
+                endpoint: endpoint.into(),
+                allow_insecure_http,
+            },
+            account: AccountSettings {
+                oidc: AccountOidcSettings {
+                    issuer_url: "https://identity.example.com".to_owned(),
+                    client_id: "desktop-client".to_owned(),
+                    scopes: vec!["openid".to_owned()],
+                    redirect_uri: "http://127.0.0.1:0/auth/callback".to_owned(),
+                },
+            },
+        }
+    }
+
     #[test]
     fn derived_desktop_settings_build_oidc_config() {
         let settings = DesktopSettings {
             api: ApiSettings {
                 endpoint: "http://127.0.0.1:3000".to_owned(),
+                allow_insecure_http: false,
             },
             account: AccountSettings {
                 oidc: AccountOidcSettings {
@@ -48,22 +66,78 @@ mod client {
 
     #[test]
     fn client_config_rejects_remote_http_api_endpoint() {
-        let settings = DesktopSettings {
-            api: ApiSettings {
-                endpoint: "http://api.example.com".to_owned(),
-            },
-            account: AccountSettings {
-                oidc: AccountOidcSettings {
-                    issuer_url: "https://identity.example.com".to_owned(),
-                    client_id: "desktop-client".to_owned(),
-                    scopes: vec!["openid".to_owned()],
-                    redirect_uri: "http://127.0.0.1:0/auth/callback".to_owned(),
-                },
-            },
-        };
+        let settings = desktop_settings("http://api.example.com", false);
 
         assert!(settings.validate().is_ok());
         assert!(client_config(&settings, &settings.api).is_err());
+    }
+
+    #[test]
+    fn api_settings_deserialize_missing_insecure_http_as_false() {
+        let api: ApiSettings = toml::from_str("endpoint = \"https://api.example.com\"")
+            .expect("缺省 insecure HTTP 开关应当可反序列化");
+
+        assert_eq!(api.endpoint, "https://api.example.com");
+        assert!(!api.allow_insecure_http);
+    }
+
+    #[test]
+    fn client_config_applies_api_endpoint_security_matrix() {
+        for (endpoint, allow_insecure_http, accepted) in [
+            ("https://api.example.com", false, true),
+            ("https://api.example.com", true, true),
+            ("http://localhost:3000", false, true),
+            ("http://127.0.0.1:3000", false, true),
+            ("http://[::1]:3000", false, true),
+            ("http://10.0.0.20:3000", false, false),
+            ("http://10.0.0.20:3000", true, true),
+            ("http://api.example.com", true, true),
+            ("ftp://api.example.com", true, false),
+            ("https://api.example.com/v1", true, false),
+            ("https://user:secret@api.example.com", true, false),
+            ("https://api.example.com?token=secret", true, false),
+            ("https://api.example.com#fragment", true, false),
+        ] {
+            let settings = desktop_settings(endpoint, allow_insecure_http);
+            let result = client_config(&settings, &settings.api);
+
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "endpoint {endpoint} with allow_insecure_http={allow_insecure_http} produced {result:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn api_endpoint_errors_do_not_echo_endpoint_or_secrets() {
+        for (endpoint, secrets) in [
+            (
+                "https://desktop-user:credential-value@api.example.com?token=query-secret",
+                ["api.example.com", "credential-value", "query-secret"],
+            ),
+            (
+                "http://private-service.example.com",
+                [
+                    "private-service.example.com",
+                    "credential-value",
+                    "query-secret",
+                ],
+            ),
+        ] {
+            let settings = desktop_settings(endpoint, false);
+            let message = client_config(&settings, &settings.api)
+                .expect_err("不安全 endpoint 应当被拒绝")
+                .to_string();
+
+            assert!(!message.contains(endpoint));
+            for secret in secrets {
+                assert!(
+                    !message.contains(secret),
+                    "配置错误不得回显 endpoint 或秘密：{message}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -100,7 +174,10 @@ mod client {
             String::from_utf8_lossy(&request[..size]).into_owned()
         });
         let settings = DesktopSettings {
-            api: ApiSettings { endpoint },
+            api: ApiSettings {
+                endpoint,
+                allow_insecure_http: false,
+            },
             account: AccountSettings {
                 oidc: AccountOidcSettings {
                     issuer_url: "https://identity.example.com".to_owned(),

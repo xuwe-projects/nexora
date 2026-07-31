@@ -21,6 +21,27 @@ struct Settings {
 ```toml
 [api]
 endpoint = "http://127.0.0.1:3000"
+allow_insecure_http = false
+```
+
+HTTPS endpoint 始终允许；`localhost`、IPv4/IPv6 loopback HTTP 可用于本机开发。非 loopback
+HTTP 只有在显式设置 `allow_insecure_http = true` 时才会通过校验。纯 HTTP 会以明文传输
+Bearer Token，该开关只适用于调用方已经接受风险的内网或受控环境。
+
+生产部署通常使用 HTTPS：
+
+```toml
+[api]
+endpoint = "https://api.example.com"
+allow_insecure_http = false
+```
+
+已接受风险的受控内网 HTTP 需要显式放行：
+
+```toml
+[api]
+endpoint = "http://10.0.0.20:3000"
+allow_insecure_http = true
 ```
 
 服务端监听 IP 与端口分开配置：

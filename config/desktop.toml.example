@@ -1,12 +1,14 @@
 # Console 桌面应用本地运行配置样例。
 # 复制为 config/desktop.toml 后填写；desktop.toml 已加入 .gitignore。
 
-[oidc]
+[api]
+# 桌面客户端完成 OIDC 登录后必须携带 access token 调用该服务的 GET /me。
+endpoint = "http://127.0.0.1:3000"
+# 是否显式允许非 loopback 的纯 HTTP API。纯 HTTP 会明文传输 Bearer Token，仅可在已接受风险的内网或受控环境启用。
+allow_insecure_http = false
+
+[account.oidc]
 issuer_url = "https://id.example.com"
 client_id = "console-native-client-id"
-scopes = "openid profile email offline_access"
+scopes = ["openid", "profile", "email", "offline_access"]
 redirect_uri = "http://127.0.0.1:0/auth/callback"
-
-[api]
-# Console 完成 OIDC 登录后必须携带 access token 调用该服务的 GET /me。
-base_url = "http://127.0.0.1:3000"

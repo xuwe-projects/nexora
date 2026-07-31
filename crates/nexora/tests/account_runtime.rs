@@ -38,6 +38,7 @@ fn test_authenticator() -> AccountAuthenticator {
     let settings = DesktopSettings {
         api: ApiSettings {
             endpoint: "http://127.0.0.1:3000".to_owned(),
+            allow_insecure_http: false,
         },
         account: AccountSettings {
             oidc: AccountOidcSettings {

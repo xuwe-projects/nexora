@@ -358,6 +358,7 @@ impl nexora::Application for DesktopBasicApplication {
         ApplicationOptions::new()
             .application_name("Nexora Desktop Basic")
             .sidebar_subtitle("Cargo example")
+            .sidebar_search(true)
             .initial_path("/")
             .window_size(900.0, 640.0)
     }
