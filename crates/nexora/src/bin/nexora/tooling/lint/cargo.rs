@@ -532,8 +532,8 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
             let target_area = first_component(relative_path(workspace.root(), &target.directory));
             let library_depends_on_app = member_area.as_deref() == Some("crates")
                 && matches!(target_area.as_deref(), Some("apps" | "examples"));
-            let console_depends_on_server =
-                member.name == "console" && matches!(target.name.as_str(), "api" | "server");
+            let application_depends_on_server = member_area.as_deref() == Some("apps")
+                && matches!(target.name.as_str(), "api" | "server");
             let lightweight_contract_has_heavy_dependency = is_contract_crate(&member.name)
                 && matches!(
                     target.name.as_str(),
@@ -541,7 +541,7 @@ fn check_dependency_edges(workspace: &Workspace, report: &mut Report) {
                 );
 
             if library_depends_on_app
-                || console_depends_on_server
+                || application_depends_on_server
                 || lightweight_contract_has_heavy_dependency
             {
                 report.push(

@@ -1,0 +1,7 @@
+/target/
+/dist/
+/config/nexora.toml
+/.secrets/
+/.e2e/
+
+nexora.toml

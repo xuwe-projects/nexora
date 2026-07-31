@@ -1,0 +1,40 @@
+# Nexora Unreleased
+
+## Added
+
+- 新增 `develop-nexora-updater` Skill，并同步到 CLI 脚手架内置 Skill 分发清单。下游项目通过
+  `nexora create`、`nexora init` 或同步 `crates/nexora/templates/skills` 可获得该 Skill；它用于
+  自动更新协议、build/publish、sidecar、强制门禁、撤回和遗留清理任务。
+- `nexora updater keygen` 生成 Ed25519 更新签名密钥；`nexora publish` / `publish yank` 开始使用
+  `nexora.toml` app 配置生成签名 `latest.json`。
+- `nexora publish` 支持 RustFS/S3 兼容真实上传，按不可变产物、不可变 manifest、`latest.json`
+  顺序发布，并在完成前通过匿名公开 URL 验证 `latest.json`。
+- 新增 `examples/updater-macos/`，用于本地 RustFS 验证 macOS v1 → v2、强制更新和健康失败回滚。
+- 新增中英文 updater 文档，覆盖安全模型、RustFS 配置、keygen/build/publish/yank、macOS 签名、
+  Developer ID/notarization 和排障。
+
+## Changed
+
+- 更新协议改为 Ed25519 签名信封和 `build_number` 字段，保留 SHA-256 作为负载完整性校验。
+- macOS updater 安装阶段改为启动复制到随机临时目录的独立 sidecar，并通过一次性健康确认决定
+  保留新版本或回滚旧版本。
+- 账户菜单 key context 从产品命名改为通用 `nexora_account_menu`。
+
+## Removed
+
+- 删除 Jenkinsfile、旧桌面构建 env 示例、旧裸 `latest.json` 示例、macOS shell updater helper
+  及其测试、macOS-only updater README。
+
+## Upgrade Notes
+
+1. 在根目录新增 `nexora.toml`，为每个桌面 app 声明 `app_id`、`publish_target`、`object_prefix`、
+   updater 公钥和 required targets。
+2. 运行 `nexora updater keygen --app <id>`，把公钥写入 `trusted_public_keys`，私钥放入安全文件
+   或 CI Secret。
+3. 下游已有项目同步 `.agents/skills/develop-nexora-updater`，或重新运行 `nexora init .` 让 CLI
+   写入缺失 Skill。
+
+## Validation
+
+- 本变更应至少运行 `cargo fmt --all`、相关 crate 测试、`cargo check`、严格 Clippy 和
+  `nexora lint --deny-warnings`。Windows/Linux 自更新替换和 macOS 签名/公证需要对应宿主验证。

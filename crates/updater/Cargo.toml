@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 async-channel = { workspace = true }
+base64 = { workspace = true }
+directories = { workspace = true }
+ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }

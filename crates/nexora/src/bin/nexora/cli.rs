@@ -196,6 +196,9 @@ enum NexoraCommand {
     /// 构建、签名并打包 macOS 桌面应用。
     Build(Box<tooling::BuildConfig>),
 
+    /// 发布已有桌面更新产物。
+    Publish(Box<tooling::PublishConfig>),
+
     /// 创建一个新的 Nexora 项目。
     Create {
         /// 要创建的项目名称；非交互模式省略时使用 `nexora-app`。
@@ -229,6 +232,9 @@ enum NexoraCommand {
     /// 检查本地 macOS 打包依赖。
     Doctor(tooling::DoctorConfig),
 
+    /// 管理桌面自动更新密钥和本地工具。
+    Updater(tooling::UpdaterConfig),
+
     /// 检查 workspace 是否符合 Nexora 工程规范。
     Lint(tooling::LintConfig),
 
@@ -254,7 +260,10 @@ pub(super) fn run() -> Result<(), String> {
 
     match cli.command {
         Some(NexoraCommand::Build(config)) => {
-            tooling::run_build_command(config).map_err(|error| error.to_string())
+            tooling::run_build_command(*config).map_err(|error| error.to_string())
+        }
+        Some(NexoraCommand::Publish(config)) => {
+            tooling::run_publish_command(*config).map_err(|error| error.to_string())
         }
         Some(NexoraCommand::Create {
             name,
@@ -275,6 +284,9 @@ pub(super) fn run() -> Result<(), String> {
         }
         Some(NexoraCommand::Doctor(config)) => {
             tooling::run_doctor_command(config).map_err(|error| error.to_string())
+        }
+        Some(NexoraCommand::Updater(config)) => {
+            tooling::run_updater_command(config).map_err(|error| error.to_string())
         }
         Some(NexoraCommand::Lint(config)) => {
             tooling::run_lint_command(config).map_err(|error| error.to_string())

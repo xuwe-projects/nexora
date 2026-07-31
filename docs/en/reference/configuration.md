@@ -72,3 +72,25 @@ Environment variables use `__` for nesting. An explicit path wins; otherwise Nex
 
 The Setup secret is only useful before initialization. `_sqlx_migrations` records applied versions,
 so upgrades must not depend on an `initialize_empty_database` boolean switch.
+
+## Updater Publish Configuration
+
+Desktop updater build and publish configuration lives in the repository-root `nexora.toml`; the full
+file is not bundled into clients. Publish targets support S3-compatible object storage:
+
+```toml
+[publish.targets.rustfs]
+provider = "s3"
+endpoint = "http://127.0.0.1:9000"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "http://127.0.0.1:9000/desktop-releases"
+allow_insecure_http = true
+```
+
+`endpoint` is the signed S3 API URL; `public_base_url` is the anonymous client read URL. Local RustFS
+over HTTP must explicitly enable `allow_insecure_http`. Publish credentials come from
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `RUSTFS_ACCESS_KEY_ID` /
+`RUSTFS_SECRET_ACCESS_KEY` and must not be written to configuration files. Each E2E run should use a
+unique `object_prefix`.

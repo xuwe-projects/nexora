@@ -9,6 +9,6 @@ allow_insecure_http = false
 
 [account.oidc]
 issuer_url = "https://id.example.com"
-client_id = "console-native-client-id"
+client_id = "nexora-native-client-id"
 scopes = ["openid", "profile", "email", "offline_access"]
 redirect_uri = "http://127.0.0.1:0/auth/callback"

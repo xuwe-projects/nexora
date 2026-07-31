@@ -72,3 +72,24 @@ personal_access_token = "replace-through-secret-injection"
 
 服务端 Setup secret 只在未初始化时有效。迁移记录由 `_sqlx_migrations` 管理，不需要也不
 允许通过 `initialize_empty_database` 之类的人工布尔开关控制升级。
+
+## 自动更新发布配置
+
+桌面自动更新的构建和发布配置放在仓库根目录 `nexora.toml`，不会完整打包进客户端。`publish`
+目标支持 S3 兼容对象存储：
+
+```toml
+[publish.targets.rustfs]
+provider = "s3"
+endpoint = "http://127.0.0.1:9000"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "http://127.0.0.1:9000/desktop-releases"
+allow_insecure_http = true
+```
+
+`endpoint` 是带签名的 S3 API 地址；`public_base_url` 是客户端匿名读取地址。本地 RustFS 使用
+HTTP 时必须显式开启 `allow_insecure_http`。发布凭据来自 `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` 或 `RUSTFS_ACCESS_KEY_ID` / `RUSTFS_SECRET_ACCESS_KEY`，不得写入
+配置文件。每次 E2E 应使用唯一 `object_prefix`。

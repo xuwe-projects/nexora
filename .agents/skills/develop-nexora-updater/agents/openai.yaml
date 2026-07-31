@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexora Updater"
+  short_description: "Implement Nexora desktop updater workflows"
+  default_prompt: "Use $develop-nexora-updater to implement or review Nexora desktop updater build, publish, and runtime behavior."

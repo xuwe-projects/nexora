@@ -1,7 +1,5 @@
 //! Nexora 桌面应用的默认设置窗口。
 
-use std::collections::HashSet;
-
 use gpui::{
     App, Axis, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     StyleRefinement, Subscription, Window, WindowOptions, div, prelude::*, px, size,
@@ -19,10 +17,7 @@ use crate::{
     __private::{SettingsWindowRegistration, WindowRegistration},
     NoPath, NoQuery, Window as WindowDefinition, WindowElement, WindowInstance, WindowMetadata,
     WindowRoute, WindowRuntimeError,
-    application::{
-        SYSTEM_PRIMARY_DISPLAY, application_branding, load_shell_preferences,
-        save_shell_preferences,
-    },
+    application::persist_current_appearance_preferences,
 };
 
 #[cfg(target_os = "macos")]
@@ -30,8 +25,6 @@ const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(34.0);
 
 const SETTINGS_METADATA: WindowMetadata =
     WindowMetadata::new("settings", "设置", "/settings", Some("settings"), 0);
-const NIL_DISPLAY_UUID: &str = "00000000-0000-0000-0000-000000000000";
-
 /// 创建框架默认设置窗口的回退注册记录。
 ///
 /// 该记录只在应用没有声明 `#[derive(SettingsWindow)]` 覆盖时注入统一 Window 路由，
@@ -72,6 +65,9 @@ impl DefaultSettingsWindow {
                     SliderEvent::Change(value) | SliderEvent::Release(value) => value,
                 };
                 theme::set_font_size(font_size_from_slider(value), cx);
+                if matches!(event, SliderEvent::Release(_)) {
+                    persist_current_appearance_preferences(cx);
+                }
             });
 
         Self {
@@ -175,10 +171,9 @@ fn settings_window_options(cx: &App) -> WindowOptions {
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
     };
-    let startup_display_uuid = startup_display_uuid(cx);
     ::desktop::apply_window_display_preference(
         &mut options,
-        startup_display_uuid.as_deref(),
+        None,
         Some(size(px(860.0), px(680.0))),
         cx,
     );
@@ -198,10 +193,7 @@ where
         .with_size(theme::component_size(cx))
         .header_style(&header_style)
         .with_group_variant(GroupBoxVariant::Outline)
-        .pages([
-            appearance_setting_page(font_size_slider.clone()),
-            window_setting_page(cx),
-        ])
+        .pages([appearance_setting_page(font_size_slider.clone())])
 }
 
 fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage {
@@ -229,6 +221,7 @@ fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage
                         |value: SharedString, cx: &mut App| {
                             if let Some(preset) = ThemePreset::from_id(value.as_ref()) {
                                 theme::set_preset(preset, cx);
+                                persist_current_appearance_preferences(cx);
                             }
                         },
                     )
@@ -251,6 +244,7 @@ fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage
                         |value: SharedString, cx: &mut App| {
                             if let Some(scheme) = ColorScheme::from_id(value.as_ref()) {
                                 theme::set_color_scheme(scheme, cx);
+                                persist_current_appearance_preferences(cx);
                             }
                         },
                     )
@@ -300,6 +294,7 @@ fn font_size_setting_item(font_size_slider: Entity<SliderState>) -> SettingItem 
             |cx| theme::font_size(cx) != theme::DEFAULT_FONT_SIZE,
             move |window, cx| {
                 theme::set_font_size(theme::DEFAULT_FONT_SIZE, cx);
+                persist_current_appearance_preferences(cx);
                 slider_for_reset.update(cx, |slider, cx| {
                     slider.set_value(f32::from(theme::DEFAULT_FONT_SIZE), window, cx);
                 });
@@ -329,109 +324,13 @@ fn component_size_setting_item() -> SettingItem {
             |cx: &App| SharedString::from(theme::component_size(cx).as_str()),
             |value: SharedString, cx: &mut App| {
                 theme::set_component_size(Size::from_str(value.as_ref()), cx);
+                persist_current_appearance_preferences(cx);
             },
         )
         .default_value(SharedString::from(theme::DEFAULT_COMPONENT_SIZE.as_str())),
     )
     .description("统一调整支持尺寸语义的组件密度。")
     .keywords(["组件尺寸", "界面密度", "size", "density"])
-}
-
-fn window_setting_page(cx: &App) -> SettingPage {
-    let display_options = startup_display_options(cx);
-
-    SettingPage::new("窗口")
-        .header_style(&settings_header_style())
-        .icon(Icon::new(IconName::LayoutDashboard))
-        .description("设置主窗口启动时使用的显示器。")
-        .default_open(false)
-        .resettable(true)
-        .group(
-            SettingGroup::new()
-                .title("启动位置")
-                .item(startup_display_setting_item(display_options)),
-        )
-}
-
-fn startup_display_setting_item(display_options: Vec<(SharedString, SharedString)>) -> SettingItem {
-    SettingItem::new(
-        "默认显示器",
-        SettingField::dropdown(
-            display_options,
-            |cx: &App| {
-                SharedString::from(
-                    startup_display_uuid(cx).unwrap_or_else(|| SYSTEM_PRIMARY_DISPLAY.to_owned()),
-                )
-            },
-            |value: SharedString, cx: &mut App| {
-                persist_startup_display_uuid(Some(value.to_string()), cx);
-            },
-        )
-        .default_value(SharedString::from(SYSTEM_PRIMARY_DISPLAY)),
-    )
-    .layout(Axis::Vertical)
-    .description("用于主窗口下次启动；显示器未连接时会临时回退到系统主显示器。")
-    .keywords(["显示器", "窗口", "启动位置", "display"])
-}
-
-fn startup_display_options(cx: &App) -> Vec<(SharedString, SharedString)> {
-    let primary_display_id = cx.primary_display().map(|display| display.id());
-    let mut known_uuids = HashSet::new();
-    let mut options = vec![(
-        SharedString::from(SYSTEM_PRIMARY_DISPLAY),
-        SharedString::from("跟随系统主显示器"),
-    )];
-
-    options.extend(
-        cx.displays()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, display)| {
-                let uuid = display.uuid().ok()?.to_string();
-                if uuid == NIL_DISPLAY_UUID || !known_uuids.insert(uuid.clone()) {
-                    return None;
-                }
-
-                let bounds = display.bounds();
-                let primary_suffix = if primary_display_id == Some(display.id()) {
-                    " · 当前主显示器"
-                } else {
-                    ""
-                };
-                let label = format!(
-                    "显示器 {}（{} × {}）{}",
-                    index + 1,
-                    u32::from(bounds.size.width),
-                    u32::from(bounds.size.height),
-                    primary_suffix,
-                );
-                Some((SharedString::from(uuid), SharedString::from(label)))
-            }),
-    );
-
-    if let Some(saved_uuid) = startup_display_uuid(cx)
-        && saved_uuid != SYSTEM_PRIMARY_DISPLAY
-        && !known_uuids.contains(saved_uuid.as_str())
-    {
-        options.push((
-            SharedString::from(saved_uuid),
-            SharedString::from("上次选择的显示器（当前未连接）"),
-        ));
-    }
-
-    options
-}
-
-fn startup_display_uuid(cx: &App) -> Option<String> {
-    let branding = application_branding(cx);
-    load_shell_preferences(branding.application_name.as_str()).startup_display_uuid
-}
-
-fn persist_startup_display_uuid(display_uuid: Option<String>, cx: &mut App) {
-    let branding = application_branding(cx);
-    let mut preferences = load_shell_preferences(branding.application_name.as_str());
-    preferences.startup_display_uuid = display_uuid;
-    save_shell_preferences(branding.application_name.as_str(), &preferences);
 }
 
 fn font_size_from_slider(value: &SliderValue) -> u16 {

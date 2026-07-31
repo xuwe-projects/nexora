@@ -15,6 +15,8 @@ const USER_TABLE_SOURCE: &str = include_str!("../src/defaults/account/users/comp
 #[cfg(feature = "desktop")]
 const USER_PROVISION_DIALOG_SOURCE: &str =
     include_str!("../src/defaults/account/users/components/provision.rs");
+#[cfg(feature = "desktop")]
+const DEFAULT_SETTINGS_SOURCE: &str = include_str!("../src/defaults/settings.rs");
 
 #[cfg(feature = "desktop")]
 struct CustomUsersFeature;
@@ -65,6 +67,13 @@ fn default_settings_window_is_available_without_an_application_override() {
     assert_eq!(settings.target().kind(), RouteTargetKind::Window);
     assert_eq!(settings.target().id(), "settings");
     assert_eq!(settings.target().title(), "设置");
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_settings_no_longer_exposes_startup_display_picker() {
+    assert!(!DEFAULT_SETTINGS_SOURCE.contains("默认显示器"));
+    assert!(!DEFAULT_SETTINGS_SOURCE.contains("startup_display"));
 }
 
 #[cfg(feature = "desktop")]

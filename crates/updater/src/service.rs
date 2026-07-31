@@ -2,9 +2,9 @@
 
 use std::{
     fmt::Write as _,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,15 +15,38 @@ use std::{
 };
 
 use async_channel::{Receiver, Sender};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use directories::ProjectDirs;
 use reqwest::{Url, blocking::Client};
 use semver::Version;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::{UpdateChannel, UpdateManifest, UpdateRelease, UpdateTarget, macos};
+use crate::{
+    SignedUpdateManifest, TrustedPublicKey, UpdateChannel, UpdateRelease, UpdateTarget, macos,
+};
 
 const MAX_APP_ID_BYTES: usize = 255;
 const STALE_STAGING_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const BUNDLED_CONFIG_SCHEMA_VERSION: u32 = 1;
+const BUNDLED_CONFIG_FILE_NAME: &str = "nexora-updater.json";
+const PENDING_RECORD_SCHEMA_VERSION: u32 = 1;
+const PENDING_RECORD_FILE_NAME: &str = "pending.json";
+const INSTALLING_RECORD_FILE_NAME: &str = "installing.json";
+
+#[derive(Debug, Deserialize)]
+struct BundledUpdateConfig {
+    schema_version: u32,
+    app_id: String,
+    channel: UpdateChannel,
+    feed_url: String,
+    trusted_public_keys: Vec<String>,
+    current_version: String,
+    current_build_number: u64,
+    allow_insecure_http: bool,
+    health_timeout: String,
+}
 
 /// 启动一次更新检查所需的应用配置。
 ///
@@ -33,46 +56,166 @@ pub struct UpdateConfig {
     manifest_url: Url,
     app_id: String,
     current_version: Version,
-    current_bundle_version: u64,
+    current_build_number: u64,
     channel: UpdateChannel,
+    trusted_public_keys: Vec<TrustedPublicKey>,
+    highest_manifest_sequence: u64,
     expected_team_id: Option<String>,
     request_timeout: Duration,
+    health_timeout: Duration,
     app_bundle_path: Option<PathBuf>,
+    sidecar_path: Option<PathBuf>,
+    cache_dir_override: Option<PathBuf>,
 }
 
 impl UpdateConfig {
+    /// 从当前 macOS 应用 bundle 加载构建时写入的更新配置。
+    ///
+    /// 该方法定位当前可执行文件所属的 `.app`，读取
+    /// `Contents/Resources/nexora-updater.json`，并使用其中的当前版本、构建号、更新地址、
+    /// 通道和可信公钥创建配置。签名私钥与对象存储凭据不会出现在该文件中。
+    ///
+    /// # Errors
+    ///
+    /// 当前进程不在 `.app` 中、配置文件缺失或格式无效、配置协议版本不受支持、更新地址不符合
+    /// 传输安全策略，或可信公钥无效时返回错误。
+    pub fn from_current_bundle() -> Result<Self, UpdateError> {
+        let app_bundle = macos::current_app_bundle()?;
+        Self::from_app_bundle(app_bundle)
+    }
+
+    /// 从指定 macOS `.app` 加载构建时写入的更新配置。
+    ///
+    /// 该入口主要用于框架集成测试和显式应用启动器；正常桌面应用应使用
+    /// [`Self::from_current_bundle`]，以免把错误的安装目标交给 sidecar。
+    ///
+    /// # Errors
+    ///
+    /// bundle 配置缺失、JSON 无效、字段不满足 updater 约束或健康确认超时格式无效时返回错误。
+    pub fn from_app_bundle(app_bundle: impl AsRef<Path>) -> Result<Self, UpdateError> {
+        let app_bundle = app_bundle.as_ref();
+        let config_path = app_bundle
+            .join("Contents/Resources")
+            .join(BUNDLED_CONFIG_FILE_NAME);
+        let contents = fs::read_to_string(&config_path)?;
+        let bundled: BundledUpdateConfig = serde_json::from_str(&contents).map_err(|error| {
+            UpdateError::InvalidBundleConfig(format!("{}: {error}", config_path.display()))
+        })?;
+        if bundled.schema_version != BUNDLED_CONFIG_SCHEMA_VERSION {
+            return Err(UpdateError::InvalidBundleConfig(format!(
+                "不支持 bundle updater 配置版本 {}",
+                bundled.schema_version
+            )));
+        }
+        if bundled.trusted_public_keys.is_empty() {
+            return Err(UpdateError::MissingTrustedPublicKeys);
+        }
+        let health_timeout = parse_bundled_duration(&bundled.health_timeout)?;
+        Self::with_transport_policy(
+            &bundled.feed_url,
+            bundled.app_id,
+            &bundled.current_version,
+            bundled.current_build_number,
+            bundled.channel,
+            bundled.allow_insecure_http,
+        )?
+        .with_trusted_public_keys(&bundled.trusted_public_keys)
+        .map(|config| {
+            config
+                .with_health_timeout(health_timeout)
+                .with_app_bundle_path(app_bundle)
+        })
+    }
+
     /// 创建应用更新配置。
     ///
     /// `manifest_url` 指向当前通道的 `latest.json`；`app_id` 必须和清单一致，并且是由
     /// ASCII 字母、数字、点、连字符或下划线组成的安全路径分量；
-    /// `current_version` 使用 SemVer；`current_bundle_version` 是当前安装包构建号。
+    /// `current_version` 使用 SemVer；`current_build_number` 是当前安装包构建号。
     ///
     /// # Errors
     ///
-    /// 当清单地址不是有效 URL、应用标识不安全，或当前版本不是有效 SemVer 时返回错误。
+    /// 当清单地址不是有效 URL、应用标识不安全、HTTP 未显式允许，或当前版本不是有效 SemVer
+    /// 时返回错误。
     pub fn new(
         manifest_url: impl AsRef<str>,
         app_id: impl Into<String>,
         current_version: impl AsRef<str>,
-        current_bundle_version: u64,
+        current_build_number: u64,
         channel: UpdateChannel,
+    ) -> Result<Self, UpdateError> {
+        Self::with_transport_policy(
+            manifest_url,
+            app_id,
+            current_version,
+            current_build_number,
+            channel,
+            false,
+        )
+    }
+
+    /// 创建允许显式 HTTP 策略的应用更新配置。
+    ///
+    /// `allow_insecure_http` 只应来自构建配置或管理员覆盖；未显式允许时仅接受 HTTPS 和
+    /// loopback HTTP。
+    ///
+    /// # Errors
+    ///
+    /// 当 URL、应用标识、版本号或传输安全策略无效时返回错误。
+    pub fn with_transport_policy(
+        manifest_url: impl AsRef<str>,
+        app_id: impl Into<String>,
+        current_version: impl AsRef<str>,
+        current_build_number: u64,
+        channel: UpdateChannel,
+        allow_insecure_http: bool,
     ) -> Result<Self, UpdateError> {
         let app_id = app_id.into();
         if !valid_app_id(&app_id) {
             return Err(UpdateError::InvalidAppId);
         }
+        let manifest_url = Url::parse(manifest_url.as_ref())
+            .map_err(|error| UpdateError::InvalidUrl(error.to_string()))?;
+        validate_transport(&manifest_url, allow_insecure_http)?;
 
         Ok(Self {
-            manifest_url: Url::parse(manifest_url.as_ref())
-                .map_err(|error| UpdateError::InvalidUrl(error.to_string()))?,
+            manifest_url,
             app_id,
             current_version: Version::parse(current_version.as_ref())?,
-            current_bundle_version,
+            current_build_number,
             channel,
+            trusted_public_keys: Vec::new(),
+            highest_manifest_sequence: 0,
             expected_team_id: None,
             request_timeout: Duration::from_secs(30),
+            health_timeout: Duration::from_secs(120),
             app_bundle_path: None,
+            sidecar_path: None,
+            cache_dir_override: None,
         })
+    }
+
+    /// 设置客户端信任的 Ed25519 公钥列表。
+    ///
+    /// # Errors
+    ///
+    /// 任一 `key_id:ed25519:BASE64_PUBLIC_KEY` 字符串格式无效时返回错误。
+    pub fn with_trusted_public_keys<I, S>(mut self, keys: I) -> Result<Self, UpdateError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.trusted_public_keys = keys
+            .into_iter()
+            .map(|key| TrustedPublicKey::parse(key.as_ref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self)
+    }
+
+    /// 设置客户端已经接受过的最高清单序号，用于拒绝重放旧清单。
+    pub fn with_highest_manifest_sequence(mut self, sequence: u64) -> Self {
+        self.highest_manifest_sequence = sequence;
+        self
     }
 
     /// 要求下载后的 `.app` 必须由指定 Apple Team ID 签名。
@@ -89,12 +232,37 @@ impl UpdateConfig {
         self
     }
 
+    /// 设置 sidecar 等待新版本报告健康的超时时间。
+    ///
+    /// sidecar 在替换应用并启动新版本后，会等待同一次会话的健康确认文件；超时会触发回滚。
+    pub fn with_health_timeout(mut self, timeout: Duration) -> Self {
+        self.health_timeout = timeout;
+        self
+    }
+
     /// 显式指定当前运行中的 `.app` 路径。
     ///
     /// 正常发布环境无需设置，updater 会从当前可执行文件路径向上查找 `.app`。
     /// 该选项主要用于集成测试和非标准应用启动器。
     pub fn with_app_bundle_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.app_bundle_path = Some(path.into());
+        self
+    }
+
+    /// 显式指定独立 updater sidecar 可执行文件路径。
+    ///
+    /// 未设置时，macOS 会按当前 `.app/Contents/Helpers/<主程序名>-updater` 推导。生产应用
+    /// 应在构建时把 sidecar 放入该位置，测试或 example 可通过本方法传入临时 sidecar。
+    pub fn with_sidecar_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.sidecar_path = Some(path.into());
+        self
+    }
+
+    /// 覆盖 updater 使用的应用级缓存目录。
+    ///
+    /// 正常应用不应设置该值；该入口用于让集成测试在隔离目录中验证暂存、恢复与清理行为。
+    pub fn with_cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cache_dir_override = Some(path.into());
         self
     }
 
@@ -114,13 +282,48 @@ impl UpdateConfig {
     }
 
     /// 返回当前构建号。
-    pub const fn current_bundle_version(&self) -> u64 {
-        self.current_bundle_version
+    pub const fn current_build_number(&self) -> u64 {
+        self.current_build_number
     }
 
     /// 返回当前更新通道。
     pub const fn channel(&self) -> UpdateChannel {
         self.channel
+    }
+
+    /// 返回客户端信任的清单签名公钥。
+    pub fn trusted_public_keys(&self) -> &[TrustedPublicKey] {
+        &self.trusted_public_keys
+    }
+
+    /// 返回客户端已经接受过的最高清单序号。
+    pub const fn highest_manifest_sequence(&self) -> u64 {
+        self.highest_manifest_sequence
+    }
+
+    pub(crate) fn expected_team_id(&self) -> Option<&str> {
+        self.expected_team_id.as_deref()
+    }
+
+    pub(crate) fn sidecar_path(&self) -> Result<PathBuf, UpdateError> {
+        match &self.sidecar_path {
+            Some(path) => Ok(path.clone()),
+            None => macos::default_sidecar_path(),
+        }
+    }
+
+    pub(crate) const fn health_timeout(&self) -> Duration {
+        self.health_timeout
+    }
+
+    fn cache_dir(&self) -> Result<PathBuf, UpdateError> {
+        if let Some(path) = &self.cache_dir_override {
+            return Ok(path.clone());
+        }
+
+        ProjectDirs::from("", "", &self.app_id)
+            .map(|directories| directories.cache_dir().join("updater"))
+            .ok_or(UpdateError::CacheDirectoryUnavailable)
     }
 }
 
@@ -157,9 +360,9 @@ impl CancellationToken {
 pub enum UpdateEvent {
     /// 正在下载并解析 `latest.json`。
     Checking,
-    /// 服务端版本不高于当前 `(version, bundle_version)`。
+    /// 服务端版本不高于当前 `(version, build_number)`。
     UpToDate,
-    /// 已发现新版本，即将开始下载安装包。
+    /// 已发现新版本；仅检查会话会在这里结束，完整会话随后开始下载安装包。
     UpdateAvailable(
         /// 服务端清单中已通过应用、通道、版本和目标平台校验的版本信息。
         UpdateRelease,
@@ -212,8 +415,12 @@ impl UpdateSession {
 #[derive(Debug, Clone)]
 pub struct StagedUpdate {
     release: UpdateRelease,
+    app_id: String,
     staged_app: PathBuf,
     current_app: PathBuf,
+    sidecar_path: PathBuf,
+    health_timeout: Duration,
+    pending_record: Option<PathBuf>,
     cleanup: Arc<StagingCleanup>,
 }
 
@@ -221,12 +428,27 @@ pub struct StagedUpdate {
 struct StagingCleanup {
     staging_root: PathBuf,
     installer_started: AtomicBool,
+    retained: AtomicBool,
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PendingUpdateRecord {
+    schema_version: u32,
+    app_id: String,
+    channel: UpdateChannel,
+    version: Version,
+    build_number: u64,
+    target: String,
+    manifest: SignedUpdateManifest,
+    staging_root: PathBuf,
+    archive_path: PathBuf,
+    staged_app: PathBuf,
 }
 
 impl Drop for StagingCleanup {
     fn drop(&mut self) {
-        if self.installer_started.load(Ordering::Acquire) {
+        if self.installer_started.load(Ordering::Acquire) || self.retained.load(Ordering::Acquire) {
             return;
         }
 
@@ -252,6 +474,64 @@ impl StagedUpdate {
         &self.release
     }
 
+    /// 原子保留当前已验证更新，供用户下次手动启动应用时直接安装。
+    ///
+    /// 该操作把普通暂存目录移动到应用级用户缓存的 `pending` 区域，并原子替换待安装记录。
+    /// 成功后，即使 [`StagedUpdate`] 或应用进程被释放，缓存也不会由普通暂存清理逻辑删除。
+    ///
+    /// # Errors
+    ///
+    /// 缓存目录不可用、暂存路径越界、签名清单缺失，或原子移动和记录写入失败时返回错误。
+    pub fn preserve_for_next_launch(&mut self) -> Result<(), UpdateError> {
+        if self.pending_record.is_some() {
+            return Ok(());
+        }
+
+        let cache_dir = self
+            .cleanup
+            .staging_root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or(UpdateError::InvalidPendingPath)?
+            .to_path_buf();
+        let staging_base = cache_dir.join("staging");
+        ensure_path_within(&self.cleanup.staging_root, &staging_base)?;
+
+        let pending_base = cache_dir.join("pending");
+        fs::create_dir_all(&pending_base)?;
+        let candidate = pending_base.join(pending_candidate_name(&self.release)?);
+        let staged_app =
+            remap_staging_path(&self.staged_app, &self.cleanup.staging_root, &candidate)?;
+        let archive_path = candidate.join("update.app.zip");
+        let verified_manifest = self.release.verified_manifest()?.clone();
+        let record = PendingUpdateRecord {
+            schema_version: PENDING_RECORD_SCHEMA_VERSION,
+            app_id: self.app_id.clone(),
+            channel: verified_manifest.payload.channel,
+            version: self.release.version.clone(),
+            build_number: self.release.build_number,
+            target: self.release.artifact.target.clone(),
+            manifest: verified_manifest,
+            staging_root: relative_to_cache(&candidate, &cache_dir)?,
+            archive_path: relative_to_cache(&archive_path, &cache_dir)?,
+            staged_app: relative_to_cache(&staged_app, &cache_dir)?,
+        };
+        fs::rename(&self.cleanup.staging_root, &candidate)?;
+        let pending_record = cache_dir.join(PENDING_RECORD_FILE_NAME);
+        if let Err(error) = write_pending_record(&cache_dir, &pending_record, &record) {
+            if fs::rename(&candidate, &self.cleanup.staging_root).is_err() {
+                self.cleanup.retained.store(true, Ordering::Release);
+            }
+            return Err(error);
+        }
+
+        self.staged_app = staged_app;
+        self.pending_record = Some(pending_record);
+        self.cleanup.retained.store(true, Ordering::Release);
+        cleanup_other_pending_roots(&pending_base, &candidate);
+        Ok(())
+    }
+
     /// 启动退出后安装 helper。
     ///
     /// helper 会等待当前进程退出，把暂存 `.app` 替换到原安装位置，然后重新打开应用。
@@ -265,18 +545,59 @@ impl StagedUpdate {
             .installer_started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| UpdateError::InstallerAlreadyStarted)?;
-        let result = macos::spawn_install_helper(
-            std::process::id(),
-            &self.current_app,
-            &self.staged_app,
-            &self.cleanup.staging_root,
-        );
+        let claimed_record = match self.claim_pending_record() {
+            Ok(record) => record,
+            Err(error) => {
+                self.cleanup
+                    .installer_started
+                    .store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let result = macos::spawn_install_helper(macos::InstallHelperRequest {
+            process_id: std::process::id(),
+            app_id: &self.app_id,
+            current_app: &self.current_app,
+            staged_app: &self.staged_app,
+            staging_root: &self.cleanup.staging_root,
+            sidecar_path: &self.sidecar_path,
+            health_timeout: self.health_timeout,
+            pending_records: claimed_record
+                .as_ref()
+                .map(|(pending, installing)| (pending.as_path(), installing.as_path())),
+        });
         if result.is_err() {
+            if let Some((pending, installing)) = claimed_record {
+                _ = fs::rename(installing, pending);
+            }
             self.cleanup
                 .installer_started
                 .store(false, Ordering::Release);
         }
         result
+    }
+
+    fn claim_pending_record(&self) -> Result<Option<(PathBuf, PathBuf)>, UpdateError> {
+        let Some(pending) = &self.pending_record else {
+            return Ok(None);
+        };
+        let installing = pending.with_file_name(INSTALLING_RECORD_FILE_NAME);
+        fs::rename(pending, &installing).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                UpdateError::InstallerAlreadyStarted
+            } else {
+                UpdateError::Io(error)
+            }
+        })?;
+        Ok(Some((pending.clone(), installing)))
+    }
+
+    pub(crate) fn discard_pending(&self) {
+        if let Some(record) = &self.pending_record
+            && let Some(cache_dir) = record.parent()
+        {
+            discard_pending_cache(cache_dir);
+        }
     }
 }
 
@@ -292,6 +613,43 @@ impl Updater {
         Self { config }
     }
 
+    /// 从应用级缓存恢复一份待安装更新。
+    ///
+    /// 恢复会重新验证签名信封、应用和通道、目标平台、版本与构建号、缓存路径边界、归档
+    /// 大小和 SHA-256，以及 macOS `.app` 代码签名。无记录时返回 `Ok(None)`；记录无效时会
+    /// 安全清理专用待安装缓存并同样返回 `Ok(None)`，使调用方可以继续正常网络检查。
+    ///
+    /// # Errors
+    ///
+    /// 应用级缓存目录无法确定或无法读取时返回错误。无效待安装内容的具体验证错误会记录到
+    /// 日志并在清理后降级为 `Ok(None)`。
+    pub fn restore_pending(&self) -> Result<Option<StagedUpdate>, UpdateError> {
+        cleanup_stale_staging_roots(&self.config);
+        let cache_dir = self.config.cache_dir()?;
+        let record_path = cache_dir.join(PENDING_RECORD_FILE_NAME);
+        if !record_path.exists() {
+            if !cache_dir.join(INSTALLING_RECORD_FILE_NAME).exists() {
+                _ = fs::remove_dir_all(cache_dir.join("pending"));
+            }
+            return Ok(None);
+        }
+
+        match restore_pending_inner(&self.config, &cache_dir, &record_path) {
+            Ok(staged) => {
+                cleanup_other_pending_roots(
+                    &cache_dir.join("pending"),
+                    &staged.cleanup.staging_root,
+                );
+                Ok(Some(staged))
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "待安装更新无效，已放弃恢复");
+                discard_pending_cache(&cache_dir);
+                Ok(None)
+            }
+        }
+    }
+
     /// 在独立工作线程中检查、下载、验证并暂存更新。
     ///
     /// 返回的 [`UpdateSession`] 可直接由 GPUI Entity 持有；关闭弹窗或销毁 Entity 时调用
@@ -301,14 +659,62 @@ impl Updater {
     ///
     /// 当操作系统无法创建 updater 工作线程时返回 [`UpdateError::Io`]。
     pub fn start(&self) -> Result<UpdateSession, UpdateError> {
+        self.spawn_worker("nexora-updater", run_update)
+    }
+
+    /// 在独立工作线程中只检查当前通道是否存在可安装更新。
+    ///
+    /// 返回的会话只会读取并验证 `latest.json`，发送 [`UpdateEvent::UpToDate`] 或
+    /// [`UpdateEvent::UpdateAvailable`] 后结束，不会下载或暂存安装包。桌面 UI 应先使用该
+    /// 方法取得用户确认，再把收到的 [`UpdateRelease`] 交给 [`Self::download`]。
+    ///
+    /// # Errors
+    ///
+    /// 当操作系统无法创建 updater 检查线程时返回 [`UpdateError::Io`]。
+    pub fn check(&self) -> Result<UpdateSession, UpdateError> {
+        self.spawn_worker("nexora-update-check", run_check)
+    }
+
+    /// 在独立工作线程中下载、验证并暂存一份已经确认的更新。
+    ///
+    /// `release` 必须来自同一份 [`UpdateConfig`] 执行 [`Self::check`] 后发送的
+    /// [`UpdateEvent::UpdateAvailable`]。该阶段不会再次弹出确认 UI；完成后通过
+    /// [`UpdateEvent::ReadyToRestart`] 返回可安装的暂存更新。
+    ///
+    /// # Errors
+    ///
+    /// 当操作系统无法创建 updater 下载线程时返回 [`UpdateError::Io`]。
+    pub fn download(&self, release: UpdateRelease) -> Result<UpdateSession, UpdateError> {
         let (sender, receiver) = async_channel::unbounded();
         let cancellation = CancellationToken::default();
         let worker_cancellation = cancellation.clone();
         let config = self.config.clone();
 
         thread::Builder::new()
-            .name("nexora-updater".to_owned())
-            .spawn(move || run_update(config, worker_cancellation, sender))?;
+            .name("nexora-update-download".to_owned())
+            .spawn(move || {
+                run_download(config, release, worker_cancellation, sender);
+            })?;
+
+        Ok(UpdateSession {
+            events: receiver,
+            cancellation,
+        })
+    }
+
+    fn spawn_worker(
+        &self,
+        name: &str,
+        run: fn(UpdateConfig, CancellationToken, Sender<UpdateEvent>),
+    ) -> Result<UpdateSession, UpdateError> {
+        let (sender, receiver) = async_channel::unbounded();
+        let cancellation = CancellationToken::default();
+        let worker_cancellation = cancellation.clone();
+        let config = self.config.clone();
+
+        thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || run(config, worker_cancellation, sender))?;
 
         Ok(UpdateSession {
             events: receiver,
@@ -317,18 +723,39 @@ impl Updater {
     }
 }
 
+fn run_check(config: UpdateConfig, cancellation: CancellationToken, sender: Sender<UpdateEvent>) {
+    let result = run_check_inner(&config, &cancellation, &sender);
+    send_terminal_error(result, &sender);
+}
+
 fn run_update(config: UpdateConfig, cancellation: CancellationToken, sender: Sender<UpdateEvent>) {
     let cleanup_sender = start_staging_cleanup_worker();
     cleanup_stale_staging_roots(&config);
     let result = run_update_inner(&config, &cancellation, &sender, cleanup_sender);
-    if let Err(error) = result {
-        let event = if matches!(error, UpdateError::Cancelled) {
-            UpdateEvent::Cancelled
-        } else {
-            UpdateEvent::Failed(error.to_string())
-        };
-        _ = sender.send_blocking(event);
-    }
+    send_terminal_error(result, &sender);
+}
+
+fn run_download(
+    config: UpdateConfig,
+    release: UpdateRelease,
+    cancellation: CancellationToken,
+    sender: Sender<UpdateEvent>,
+) {
+    let cleanup_sender = start_staging_cleanup_worker();
+    cleanup_stale_staging_roots(&config);
+    let result = build_client(&config)
+        .and_then(|client| {
+            download_and_stage(
+                &client,
+                &config,
+                release,
+                &cancellation,
+                &sender,
+                cleanup_sender,
+            )
+        })
+        .and_then(|staged| send_event(&sender, UpdateEvent::ReadyToRestart(staged)));
+    send_terminal_error(result, &sender);
 }
 
 fn run_update_inner(
@@ -337,27 +764,7 @@ fn run_update_inner(
     sender: &Sender<UpdateEvent>,
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
 ) -> Result<(), UpdateError> {
-    send_event(sender, UpdateEvent::Checking)?;
-    cancellation.ensure_active()?;
-
-    let client = Client::builder()
-        .timeout(config.request_timeout)
-        .user_agent(format!(
-            "{}/{} ({})",
-            config.app_id, config.current_version, config.current_bundle_version
-        ))
-        .build()?;
-    let manifest_text = client
-        .get(config.manifest_url.clone())
-        .send()?
-        .error_for_status()?
-        .text()?;
-    cancellation.ensure_active()?;
-
-    let manifest = UpdateManifest::parse(&manifest_text)?;
-    let target = UpdateTarget::current()?;
-    let Some(release) = manifest.select_update(config, target)? else {
-        send_event(sender, UpdateEvent::UpToDate)?;
+    let Some((client, release)) = check_release(config, cancellation, sender)? else {
         return Ok(());
     };
 
@@ -371,6 +778,67 @@ fn run_update_inner(
         cleanup_sender,
     )?;
     send_event(sender, UpdateEvent::ReadyToRestart(staged))
+}
+
+fn run_check_inner(
+    config: &UpdateConfig,
+    cancellation: &CancellationToken,
+    sender: &Sender<UpdateEvent>,
+) -> Result<(), UpdateError> {
+    let Some((_, release)) = check_release(config, cancellation, sender)? else {
+        return Ok(());
+    };
+    send_event(sender, UpdateEvent::UpdateAvailable(release))
+}
+
+fn check_release(
+    config: &UpdateConfig,
+    cancellation: &CancellationToken,
+    sender: &Sender<UpdateEvent>,
+) -> Result<Option<(Client, UpdateRelease)>, UpdateError> {
+    send_event(sender, UpdateEvent::Checking)?;
+    cancellation.ensure_active()?;
+
+    let client = build_client(config)?;
+    let manifest_text = client
+        .get(config.manifest_url.clone())
+        .send()?
+        .error_for_status()?
+        .text()?;
+    cancellation.ensure_active()?;
+
+    let envelope: SignedUpdateManifest =
+        serde_json::from_str(&manifest_text).map_err(UpdateError::InvalidManifest)?;
+    let manifest = envelope.verify(config.trusted_public_keys())?;
+    let target = UpdateTarget::current()?;
+    let Some(release) = manifest.select_update(config, target)? else {
+        send_event(sender, UpdateEvent::UpToDate)?;
+        return Ok(None);
+    };
+
+    Ok(Some((client, release.with_verified_manifest(envelope))))
+}
+
+fn build_client(config: &UpdateConfig) -> Result<Client, UpdateError> {
+    Client::builder()
+        .timeout(config.request_timeout)
+        .user_agent(format!(
+            "{}/{} ({})",
+            config.app_id, config.current_version, config.current_build_number
+        ))
+        .build()
+        .map_err(UpdateError::from)
+}
+
+fn send_terminal_error(result: Result<(), UpdateError>, sender: &Sender<UpdateEvent>) {
+    if let Err(error) = result {
+        let event = if matches!(error, UpdateError::Cancelled) {
+            UpdateEvent::Cancelled
+        } else {
+            UpdateEvent::Failed(error.to_string())
+        };
+        _ = sender.send_blocking(event);
+    }
 }
 
 fn download_and_stage(
@@ -392,7 +860,7 @@ fn download_and_stage(
             .join(&release.artifact.url)
             .map_err(|error| UpdateError::InvalidUrl(error.to_string()))?;
         let mut response = client.get(artifact_url).send()?.error_for_status()?;
-        let total = response.content_length().or(release.artifact.size);
+        let total = response.content_length().or(Some(release.artifact.size));
         let mut archive = File::create(&archive_path)?;
         let mut hasher = Sha256::new();
         let mut downloaded = 0_u64;
@@ -411,8 +879,19 @@ fn download_and_stage(
             send_event(sender, UpdateEvent::Downloading { downloaded, total })?;
         }
         archive.sync_all()?;
+        if downloaded != release.artifact.size {
+            return Err(UpdateError::SizeMismatch {
+                expected: release.artifact.size,
+                actual: downloaded,
+            });
+        }
 
         send_event(sender, UpdateEvent::Verifying)?;
+        if release.artifact.kind != "macos_app_zip" {
+            return Err(UpdateError::UnsupportedArtifactKind(
+                release.artifact.kind.clone(),
+            ));
+        }
         let digest = hasher.finalize();
         let actual_sha256 = format_digest(&digest);
         if !actual_sha256.eq_ignore_ascii_case(release.artifact.sha256.trim()) {
@@ -426,20 +905,26 @@ fn download_and_stage(
         send_event(sender, UpdateEvent::Staging)?;
         macos::extract_app_archive(&archive_path, &extract_path)?;
         let staged_app = macos::find_app_bundle(&extract_path)?;
-        macos::verify_code_signature(&staged_app, config.expected_team_id.as_deref())?;
+        macos::verify_code_signature(&staged_app, config.expected_team_id())?;
         let current_app = config
             .app_bundle_path
             .clone()
             .map(Ok)
             .unwrap_or_else(macos::current_app_bundle)?;
+        let sidecar_path = config.sidecar_path()?;
 
         Ok(StagedUpdate {
             release,
+            app_id: config.app_id.clone(),
             staged_app,
             current_app,
+            sidecar_path,
+            health_timeout: config.health_timeout(),
+            pending_record: None,
             cleanup: Arc::new(StagingCleanup {
                 staging_root: staging_root.clone(),
                 installer_started: AtomicBool::new(false),
+                retained: AtomicBool::new(false),
                 cleanup_sender,
             }),
         })
@@ -462,24 +947,25 @@ fn create_staging_root(
     config: &UpdateConfig,
     release: &UpdateRelease,
 ) -> Result<PathBuf, UpdateError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|error| UpdateError::Random(error.to_string()))?;
+    let nonce = URL_SAFE_NO_PAD.encode(random);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let path = staging_base(config).join(format!(
-        "{}-{}-{}-{timestamp}",
+    let path = staging_base(config)?.join(format!(
+        "{}-{}-{}-{timestamp}-{nonce}",
         release.version,
-        release.bundle_version,
+        release.build_number,
         std::process::id()
     ));
     fs::create_dir_all(&path)?;
     Ok(path)
 }
 
-fn staging_base(config: &UpdateConfig) -> PathBuf {
-    std::env::temp_dir()
-        .join("nexora-updater")
-        .join(config.app_id())
+fn staging_base(config: &UpdateConfig) -> Result<PathBuf, UpdateError> {
+    config.cache_dir().map(|path| path.join("staging"))
 }
 
 fn start_staging_cleanup_worker() -> Option<mpsc::Sender<PathBuf>> {
@@ -525,7 +1011,9 @@ fn discard_staging_root(staging_root: PathBuf) {
 }
 
 fn cleanup_stale_staging_roots(config: &UpdateConfig) {
-    let base = staging_base(config);
+    let Ok(base) = staging_base(config) else {
+        return;
+    };
     let Ok(entries) = fs::read_dir(&base) else {
         return;
     };
@@ -555,6 +1043,239 @@ fn cleanup_stale_staging_roots(config: &UpdateConfig) {
     }
 }
 
+fn restore_pending_inner(
+    config: &UpdateConfig,
+    cache_dir: &Path,
+    record_path: &Path,
+) -> Result<StagedUpdate, UpdateError> {
+    let contents = fs::read(record_path)?;
+    let record: PendingUpdateRecord =
+        serde_json::from_slice(&contents).map_err(UpdateError::InvalidPendingRecord)?;
+    if record.schema_version != PENDING_RECORD_SCHEMA_VERSION {
+        return Err(UpdateError::InvalidPendingRecordSchema(
+            record.schema_version,
+        ));
+    }
+
+    let target = UpdateTarget::current()?;
+    if record.app_id != config.app_id()
+        || record.channel != config.channel()
+        || record.target != target.as_str()
+    {
+        return Err(UpdateError::PendingMetadataMismatch);
+    }
+    let manifest = record.manifest.verify(config.trusted_public_keys())?;
+    let Some(release) = manifest.select_update(config, target)? else {
+        return Err(UpdateError::PendingReleaseNotNewer);
+    };
+    if release.version != record.version
+        || release.build_number != record.build_number
+        || manifest.app_id != record.app_id
+        || manifest.channel != record.channel
+        || release.artifact.target != record.target
+        || !release_is_newer(config, &release)
+    {
+        return Err(UpdateError::PendingMetadataMismatch);
+    }
+    if release.artifact.kind != "macos_app_zip" {
+        return Err(UpdateError::UnsupportedArtifactKind(
+            release.artifact.kind.clone(),
+        ));
+    }
+
+    let staging_root = resolve_cached_path(cache_dir, &record.staging_root)?;
+    let pending_base = cache_dir.join("pending");
+    ensure_path_within(&staging_root, &pending_base)?;
+    let archive_path = resolve_cached_path(cache_dir, &record.archive_path)?;
+    let staged_app = resolve_cached_path(cache_dir, &record.staged_app)?;
+    ensure_path_within(&archive_path, &staging_root)?;
+    ensure_path_within(&staged_app, &staging_root)?;
+    if staged_app
+        .extension()
+        .is_none_or(|extension| extension != "app")
+    {
+        return Err(UpdateError::InvalidPendingPath);
+    }
+
+    let archive_size = fs::metadata(&archive_path)?.len();
+    if archive_size != release.artifact.size {
+        return Err(UpdateError::SizeMismatch {
+            expected: release.artifact.size,
+            actual: archive_size,
+        });
+    }
+    let actual_sha256 = sha256_file(&archive_path)?;
+    if !actual_sha256.eq_ignore_ascii_case(release.artifact.sha256.trim()) {
+        return Err(UpdateError::ChecksumMismatch {
+            expected: release.artifact.sha256.clone(),
+            actual: actual_sha256,
+        });
+    }
+
+    let discovered_app = macos::find_app_bundle(&staging_root.join("extracted"))?;
+    if fs::canonicalize(discovered_app)? != fs::canonicalize(&staged_app)? {
+        return Err(UpdateError::InvalidPendingPath);
+    }
+    macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+    let current_app = config
+        .app_bundle_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(macos::current_app_bundle)?;
+    let sidecar_path = config.sidecar_path()?;
+
+    Ok(StagedUpdate {
+        release: release.with_verified_manifest(record.manifest),
+        app_id: config.app_id.clone(),
+        staged_app,
+        current_app,
+        sidecar_path,
+        health_timeout: config.health_timeout(),
+        pending_record: Some(record_path.to_path_buf()),
+        cleanup: Arc::new(StagingCleanup {
+            staging_root,
+            installer_started: AtomicBool::new(false),
+            retained: AtomicBool::new(true),
+            cleanup_sender: None,
+        }),
+    })
+}
+
+fn release_is_newer(config: &UpdateConfig, release: &UpdateRelease) -> bool {
+    release.version > *config.current_version()
+        || (release.version == *config.current_version()
+            && release.build_number > config.current_build_number())
+}
+
+fn pending_candidate_name(release: &UpdateRelease) -> Result<String, UpdateError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|error| UpdateError::Random(error.to_string()))?;
+    Ok(format!(
+        "{}-{}-{}",
+        release.version,
+        release.build_number,
+        URL_SAFE_NO_PAD.encode(random)
+    ))
+}
+
+fn remap_staging_path(
+    path: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<PathBuf, UpdateError> {
+    path.strip_prefix(source)
+        .map(|relative| destination.join(relative))
+        .map_err(|_| UpdateError::InvalidPendingPath)
+}
+
+fn relative_to_cache(path: &Path, cache_dir: &Path) -> Result<PathBuf, UpdateError> {
+    path.strip_prefix(cache_dir)
+        .map(Path::to_path_buf)
+        .map_err(|_| UpdateError::InvalidPendingPath)
+}
+
+fn resolve_cached_path(cache_dir: &Path, relative: &Path) -> Result<PathBuf, UpdateError> {
+    validate_relative_path(relative)?;
+    let path = cache_dir.join(relative);
+    ensure_path_within(&path, cache_dir)?;
+    Ok(path)
+}
+
+fn validate_relative_path(path: &Path) -> Result<(), UpdateError> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(UpdateError::InvalidPendingPath);
+    }
+    Ok(())
+}
+
+fn ensure_path_within(path: &Path, root: &Path) -> Result<(), UpdateError> {
+    let canonical_root = fs::canonicalize(root)?;
+    let canonical_path = fs::canonicalize(path)?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(UpdateError::InvalidPendingPath);
+    }
+    Ok(())
+}
+
+fn write_pending_record(
+    cache_dir: &Path,
+    record_path: &Path,
+    record: &PendingUpdateRecord,
+) -> Result<(), UpdateError> {
+    fs::create_dir_all(cache_dir)?;
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).map_err(|error| UpdateError::Random(error.to_string()))?;
+    let temporary = cache_dir.join(format!(".pending-{}.tmp", URL_SAFE_NO_PAD.encode(random)));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        serde_json::to_writer(&mut file, record)
+            .map_err(UpdateError::InvalidPendingRecordSerialization)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        fs::rename(&temporary, record_path)?;
+        File::open(cache_dir)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn cleanup_other_pending_roots(pending_base: &Path, retained: &Path) {
+    let Ok(entries) = fs::read_dir(pending_base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == retained || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        if let Err(error) = fs::remove_dir_all(&path) {
+            tracing::warn!(path = %path.display(), error = %error, "无法清理被替换的待安装更新");
+        }
+    }
+}
+
+fn discard_pending_cache(cache_dir: &Path) {
+    for path in [
+        cache_dir.join(PENDING_RECORD_FILE_NAME),
+        cache_dir.join("pending"),
+    ] {
+        let result = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        if let Err(error) = result
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), error = %error, "无法清理无效待安装缓存");
+        }
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String, UpdateError> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format_digest(&hasher.finalize()))
+}
+
 fn valid_app_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -564,6 +1285,23 @@ fn valid_app_id(value: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'-' | b'_'))
+}
+
+fn validate_transport(url: &Url, allow_insecure_http: bool) -> Result<(), UpdateError> {
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if allow_insecure_http || is_loopback_url(url) => Ok(()),
+        "http" => Err(UpdateError::InsecureHttpDenied),
+        scheme => Err(UpdateError::UnsupportedUrlScheme(scheme.to_owned())),
+    }
+}
+
+fn is_loopback_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 fn format_digest(bytes: &[u8]) -> String {
@@ -576,9 +1314,48 @@ fn format_digest(bytes: &[u8]) -> String {
     )
 }
 
+fn parse_bundled_duration(value: &str) -> Result<Duration, UpdateError> {
+    let (number, multiplier) = [
+        ("ms", 0_u64),
+        ("s", 1),
+        ("m", 60),
+        ("h", 60 * 60),
+        ("d", 24 * 60 * 60),
+    ]
+    .into_iter()
+    .find_map(|(suffix, multiplier)| {
+        value
+            .strip_suffix(suffix)
+            .map(|number| (number, multiplier))
+    })
+    .ok_or_else(|| {
+        UpdateError::InvalidBundleConfig(format!(
+            "health_timeout `{value}` 必须使用 ms、s、m、h 或 d 单位"
+        ))
+    })?;
+    let amount = number.parse::<u64>().map_err(|_| {
+        UpdateError::InvalidBundleConfig(format!("health_timeout `{value}` 不是有效时长"))
+    })?;
+    if multiplier == 0 {
+        return Ok(Duration::from_millis(amount));
+    }
+    amount
+        .checked_mul(multiplier)
+        .map(Duration::from_secs)
+        .ok_or_else(|| {
+            UpdateError::InvalidBundleConfig(format!("health_timeout `{value}` 超出支持范围"))
+        })
+}
+
 /// 更新配置、网络传输、清单解析、校验或安装阶段可能产生的错误。
 #[derive(Debug, Error)]
 pub enum UpdateError {
+    /// 应用 bundle 中的 updater 安全配置缺失必要字段、格式无效或版本不受支持。
+    #[error("应用 bundle updater 配置无效: {0}")]
+    InvalidBundleConfig(
+        /// 面向用户的具体配置失败原因。
+        String,
+    ),
     /// 更新清单或安装包 URL 无效。
     #[error("更新地址无效: {0}")]
     InvalidUrl(
@@ -604,12 +1381,39 @@ pub enum UpdateError {
         #[source]
         serde_json::Error,
     ),
+    /// 更新清单负载无法序列化为签名字节。
+    #[error("更新清单无法序列化用于签名: {0}")]
+    InvalidManifestSerialization(
+        /// JSON 序列化失败原因。
+        String,
+    ),
     /// 更新服务器使用了客户端尚不支持的协议版本。
     #[error("不支持更新协议版本 {0}")]
     UnsupportedSchema(
         /// 服务端清单声明、但当前客户端无法处理的协议版本。
         u32,
     ),
+    /// 更新地址使用了不支持的协议。
+    #[error("更新地址协议 `{0}` 不受支持")]
+    UnsupportedUrlScheme(
+        /// URL 中的 scheme。
+        String,
+    ),
+    /// 非 loopback 明文 HTTP 未显式允许。
+    #[error("更新地址使用明文 HTTP，必须显式设置 allow_insecure_http = true")]
+    InsecureHttpDenied,
+    /// 客户端未配置任何可信 Ed25519 公钥。
+    #[error("更新清单验签失败：未配置可信公钥")]
+    MissingTrustedPublicKeys,
+    /// 下载流程缺少最初通过验签的完整清单信封，不能安全持久化。
+    #[error("更新缺少已验证的签名清单")]
+    MissingVerifiedManifest,
+    /// 公钥配置格式无效。
+    #[error("更新公钥格式无效；应为 key_id:ed25519:BASE64_PUBLIC_KEY")]
+    InvalidPublicKey,
+    /// 更新清单签名无法由任何可信公钥验证。
+    #[error("更新清单签名无效或使用了未知公钥")]
+    ManifestSignatureRejected,
     /// 清单属于其他应用。
     #[error("更新清单应用标识不匹配，期望 `{expected}`，实际 `{actual}`")]
     AppIdMismatch {
@@ -630,6 +1434,20 @@ pub enum UpdateError {
     #[error("更新清单缺少目标 `{0}` 的安装包")]
     MissingArtifact(
         /// 当前客户端需要、但清单没有提供的 Rust target triple。
+        String,
+    ),
+    /// 清单序号低于客户端已经接受的最高序号。
+    #[error("更新清单序号回放，已接受最高 `{highest}`，实际 `{actual}`")]
+    ManifestReplay {
+        /// 客户端已经接受的最高序号。
+        highest: u64,
+        /// 本次清单声明的序号。
+        actual: u64,
+    },
+    /// 指定的 Rust target triple 暂不受自动更新协议支持。
+    #[error("更新目标 `{0}` 暂不受支持")]
+    UnsupportedTarget(
+        /// 不受支持的 Rust target triple。
         String,
     ),
     /// 当前平台尚未实现原位安装。
@@ -657,6 +1475,20 @@ pub enum UpdateError {
         /// 下载内容计算得到的摘要。
         actual: String,
     },
+    /// 下载内容大小与清单声明不一致。
+    #[error("安装包大小校验失败，期望 `{expected}` 字节，实际 `{actual}` 字节")]
+    SizeMismatch {
+        /// 清单声明的字节数。
+        expected: u64,
+        /// 实际下载的字节数。
+        actual: u64,
+    },
+    /// 清单声明了当前平台不支持的更新包类型。
+    #[error("更新包类型 `{0}` 暂不支持")]
+    UnsupportedArtifactKind(
+        /// 清单中的 artifact kind。
+        String,
+    ),
     /// macOS 系统命令执行失败。
     #[error("macOS 更新命令 `{command}` 执行失败: {message}")]
     CommandFailed {
@@ -679,9 +1511,65 @@ pub enum UpdateError {
     /// 当前进程不是从 macOS `.app` 内启动，无法确定替换位置。
     #[error("当前程序不是从 macOS .app 中启动，无法执行原位更新")]
     AppBundleNotFound,
+    /// 无法找到或复制独立 updater sidecar。
+    #[error("无法准备独立 updater sidecar: {0}")]
+    SidecarUnavailable(
+        /// 面向用户的失败原因。
+        String,
+    ),
+    /// sidecar 事务替换、重启或回滚失败。
+    #[error("sidecar 安装失败: {0}")]
+    SidecarFailed(
+        /// 面向用户的失败原因。
+        String,
+    ),
+    /// 新版本未在限定时间内完成健康确认。
+    #[error("新版本健康确认超时")]
+    HealthCheckTimedOut,
+    /// 健康确认会话参数无效或与当前会话不匹配。
+    #[error("健康确认会话无效")]
+    InvalidHealthSession,
+    /// 无法生成一次性更新会话随机值。
+    #[error("无法生成更新会话随机值: {0}")]
+    Random(
+        /// 系统随机源返回的错误。
+        String,
+    ),
     /// 当前暂存更新已经启动过安装 helper。
     #[error("更新安装已经启动，请等待应用退出并完成替换")]
     InstallerAlreadyStarted,
+    /// 当前平台无法确定应用级用户缓存目录。
+    #[error("无法确定应用级更新缓存目录")]
+    CacheDirectoryUnavailable,
+    /// 待安装记录不是合法 JSON。
+    #[error("待安装更新记录无效: {0}")]
+    InvalidPendingRecord(
+        /// JSON 解析器返回的具体失败原因。
+        #[source]
+        serde_json::Error,
+    ),
+    /// 待安装记录无法序列化。
+    #[error("无法写入待安装更新记录: {0}")]
+    InvalidPendingRecordSerialization(
+        /// JSON 序列化器返回的具体失败原因。
+        #[source]
+        serde_json::Error,
+    ),
+    /// 待安装记录使用了不受支持的 schema 版本。
+    #[error("不支持待安装更新记录版本 {0}")]
+    InvalidPendingRecordSchema(
+        /// 本地记录声明的 schema 版本。
+        u32,
+    ),
+    /// 待安装记录中的路径不是缓存目录内的受控相对路径。
+    #[error("待安装更新路径越出应用缓存边界")]
+    InvalidPendingPath,
+    /// 待安装记录元数据与签名清单或当前应用配置不一致。
+    #[error("待安装更新元数据与当前应用不匹配")]
+    PendingMetadataMismatch,
+    /// 待安装版本已经不高于当前运行版本。
+    #[error("待安装更新已经不高于当前版本")]
+    PendingReleaseNotNewer,
     /// 用户主动取消了更新。
     #[error("更新已取消")]
     Cancelled,

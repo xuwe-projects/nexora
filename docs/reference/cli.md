@@ -29,7 +29,13 @@ nexora create <name> --layout single
 nexora create <name> --layout workspace
 nexora create <name> --layout workspace --features account
 nexora init [path] --layout workspace
+nexora updater keygen --app <id>
 nexora build
+nexora build --app <id>
+nexora publish
+nexora publish --app <id> --dry-run
+nexora publish --all --yes
+nexora publish --app <id> yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
 nexora version
@@ -48,3 +54,10 @@ tag；测试本地改动时可先用 `cargo install --path crates/nexora ...` �
 始终生效的架构硬约束，后者提供按任务加载的详细工作流；`init` 不会覆盖项目已有的规则或
 Skill 文件。生成的 `publish-nexora-release` Skill 负责版本升级、完整 Release Notes、处理人
 与 Issue/PR 关联、相邻版本升级指南以及 tag/Release 发布门禁。
+
+桌面自动更新使用仓库根目录 `nexora.toml` 注册 app、updater 策略和 S3 兼容发布目标。
+`nexora build` 只构建当前宿主的现有产物并写入 `artifact.json`；`nexora publish` 只发布已有
+artifact，不会隐式触发 build。发布命令按更新包和 notes、不可变 manifest、`latest.json` 的顺序
+上传到 RustFS/S3 兼容对象存储，最后通过匿名公开 URL 重新读取并验证 `latest.json`。更新清单
+使用 Ed25519 签名信封，公钥写入 app 的 `trusted_public_keys`，私钥只从安全文件或
+`signing_key_env` 指定的环境变量读取。强制更新通过 `--minimum-supported-version` 写入清单。

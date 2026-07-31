@@ -2,9 +2,15 @@
 
 use std::{
     env, fs,
+    io::{Read as _, Write as _},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -66,12 +72,335 @@ impl TestDirectory {
             .output()
             .expect("应能启动 nexora 命令")
     }
+
+    fn run_with_env(&self, arguments: &[&str], envs: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nexora"));
+        command.args(arguments).current_dir(&self.path);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        command.output().expect("应能启动 nexora 命令")
+    }
 }
 
 impl Drop for TestDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+#[derive(Default)]
+struct MockState {
+    objects: std::collections::BTreeMap<String, Vec<u8>>,
+    puts: Vec<String>,
+    replace_latest_after_manifest: Option<(String, Vec<u8>)>,
+    fail_put_suffix: Option<String>,
+}
+
+struct MockObjectStore {
+    address: std::net::SocketAddr,
+    state: Arc<Mutex<MockState>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl MockObjectStore {
+    fn new() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(MockState::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_state = Arc::clone(&state);
+        let server_stop = Arc::clone(&stop);
+        let thread = thread::spawn(move || {
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let (method, path, body) = read_http_request(&mut stream);
+                        let mut state = server_state.lock().unwrap();
+                        let (status, response_body) = match method.as_str() {
+                            "PUT" => {
+                                if state
+                                    .fail_put_suffix
+                                    .as_ref()
+                                    .is_some_and(|suffix| path.ends_with(suffix))
+                                {
+                                    state.puts.push(path);
+                                    ("500 Internal Server Error", Vec::new())
+                                } else {
+                                    state.objects.insert(path.clone(), body);
+                                    state.puts.push(path);
+                                    if state
+                                        .puts
+                                        .last()
+                                        .is_some_and(|path| path.contains("/manifests/"))
+                                        && let Some((latest_path, latest)) =
+                                            state.replace_latest_after_manifest.take()
+                                    {
+                                        state.objects.insert(latest_path, latest);
+                                    }
+                                    ("200 OK", Vec::new())
+                                }
+                            }
+                            "GET" => state
+                                .objects
+                                .get(&path)
+                                .cloned()
+                                .map_or(("404 Not Found", Vec::new()), |body| ("200 OK", body)),
+                            "HEAD" => {
+                                if state.objects.contains_key(&path) {
+                                    ("200 OK", Vec::new())
+                                } else {
+                                    ("404 Not Found", Vec::new())
+                                }
+                            }
+                            _ => ("405 Method Not Allowed", Vec::new()),
+                        };
+                        let header = format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                        stream.write_all(header.as_bytes()).unwrap();
+                        if method != "HEAD" {
+                            stream.write_all(&response_body).unwrap();
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("mock object store accept failed: {error}"),
+                }
+            }
+        });
+        Self {
+            address,
+            state,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    fn puts(&self) -> Vec<String> {
+        self.state.lock().unwrap().puts.clone()
+    }
+
+    fn object(&self, path: &str) -> Vec<u8> {
+        self.state.lock().unwrap().objects[path].clone()
+    }
+
+    fn insert(&self, path: impl Into<String>, bytes: Vec<u8>) {
+        self.state
+            .lock()
+            .unwrap()
+            .objects
+            .insert(path.into(), bytes);
+    }
+
+    fn replace_latest_after_manifest(&self, path: impl Into<String>, bytes: Vec<u8>) {
+        self.state.lock().unwrap().replace_latest_after_manifest = Some((path.into(), bytes));
+    }
+
+    fn fail_put_suffix(&self, suffix: impl Into<String>) {
+        self.state.lock().unwrap().fail_put_suffix = Some(suffix.into());
+    }
+}
+
+impl Drop for MockObjectStore {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String, Vec<u8>) {
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        let count = stream.read(&mut chunk).unwrap();
+        assert!(count > 0, "HTTP request ended before headers");
+        bytes.extend_from_slice(&chunk[..count]);
+        if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+    let mut lines = headers.lines();
+    let request_line = lines.next().unwrap();
+    let mut request = request_line.split_whitespace();
+    let method = request.next().unwrap().to_owned();
+    let path = request.next().unwrap().to_owned();
+    let content_length = lines
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+        })
+        .unwrap_or(0);
+    while bytes.len() < header_end + content_length {
+        let count = stream.read(&mut chunk).unwrap();
+        assert!(count > 0, "HTTP request body ended early");
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    (
+        method,
+        path,
+        bytes[header_end..header_end + content_length].to_vec(),
+    )
+}
+
+fn prepare_publish_app(directory: &TestDirectory, base: &str) -> [u8; 32] {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest as _, Sha256};
+
+    let release_dir = directory
+        .path()
+        .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
+    fs::create_dir_all(&release_dir).unwrap();
+    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
+    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    fs::write(release_dir.join(zip_name), b"appzip").unwrap();
+    fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
+    fs::write(
+        release_dir.join("artifact.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_id": "com.example.desktop",
+            "channel": "stable",
+            "version": "1.0.1",
+            "build_number": 12,
+            "target": "aarch64-apple-darwin",
+            "artifacts": [
+                {"kind":"macos_app_zip","file_name":zip_name,"sha256":format!("{:x}", Sha256::digest(b"appzip")),"size":6},
+                {"kind":"macos_dmg","file_name":dmg_name,"sha256":format!("{:x}", Sha256::digest(b"dmg")),"size":3}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let seed = [7_u8; 32];
+    let signing = SigningKey::from_bytes(&seed);
+    fs::create_dir_all(directory.path().join(".secrets")).unwrap();
+    fs::write(
+        directory.path().join(".secrets/update.key"),
+        format!("desktop-main:ed25519:{}\n", STANDARD.encode(seed)),
+    )
+    .unwrap();
+    let public_key = STANDARD.encode(signing.verifying_key().to_bytes());
+    fs::write(
+        directory.path().join("nexora.toml"),
+        format!(
+            r#"schema_version = 1
+
+[publish.targets.local]
+provider = "s3"
+endpoint = "{base}"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "{base}/desktop-releases"
+allow_insecure_http = true
+
+[apps.desktop]
+package = "desktop"
+app_id = "com.example.desktop"
+display_name = "Desktop"
+publish_target = "local"
+object_prefix = "e2e-test"
+
+[apps.desktop.release]
+channel = "stable"
+version = "1.0.1"
+build_number = 12
+minimum_supported_version = "0.0.0"
+signing_key_file = ".secrets/update.key"
+
+[apps.desktop.updater]
+enabled = true
+feed_url = "{base}/desktop-releases/e2e-test/desktop/stable/latest.json"
+channels = ["stable"]
+trusted_public_keys = ["desktop-main:ed25519:{public_key}"]
+signing_key_env = "FALLBACK_SIGNING_KEY"
+
+[apps.desktop.targets]
+required = ["aarch64-apple-darwin"]
+
+[apps.desktop.platforms.macos]
+signing = "ad_hoc"
+notarize = false
+"#
+        ),
+    )
+    .unwrap();
+    seed
+}
+
+fn signed_remote_manifest(seed: [u8; 32], sequence: u64) -> Vec<u8> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct Payload<'a> {
+        manifest_sequence: u64,
+        app_id: &'a str,
+        channel: &'a str,
+        version: &'a str,
+        build_number: u64,
+        minimum_supported_version: &'a str,
+        published_at: i64,
+        status: &'a str,
+        notes_url: Option<&'a str>,
+        artifacts: Vec<serde_json::Value>,
+    }
+    #[derive(Serialize)]
+    struct Signature<'a> {
+        key_id: &'a str,
+        algorithm: &'a str,
+        signature: String,
+    }
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        schema_version: u32,
+        payload: Payload<'a>,
+        signatures: Vec<Signature<'a>>,
+    }
+    let payload = Payload {
+        manifest_sequence: sequence,
+        app_id: "com.example.desktop",
+        channel: "stable",
+        version: "1.0.0",
+        build_number: 1,
+        minimum_supported_version: "0.0.0",
+        published_at: 1,
+        status: "available",
+        notes_url: None,
+        artifacts: Vec::new(),
+    };
+    let bytes = serde_json::to_vec(&payload).unwrap();
+    let signature = SigningKey::from_bytes(&seed).sign(&bytes);
+    serde_json::to_vec(&Envelope {
+        schema_version: 1,
+        payload,
+        signatures: vec![Signature {
+            key_id: "desktop-main",
+            algorithm: "ed25519",
+            signature: STANDARD.encode(signature.to_bytes()),
+        }],
+    })
+    .unwrap()
 }
 
 fn expected_single_manifest(project_name: &str) -> String {
@@ -267,9 +596,40 @@ fn help_and_version_are_available() {
     assert!(build_help.status.success());
     let build_help = String::from_utf8_lossy(&build_help.stdout);
     assert!(build_help.contains("build [OPTIONS]"));
-    assert!(build_help.contains("--mode <MODE>"));
-    assert!(build_help.contains("--targets <TARGETS>"));
-    assert!(build_help.contains("--app-id <APP_ID>"));
+    assert!(build_help.contains("--app <APP>"));
+    for removed in [
+        "--package",
+        "--app-name",
+        "--app-version",
+        "--build-number",
+        "--channel",
+        "--mode",
+        "--sign",
+        "--sign-identity",
+        "--notary-profile",
+        "--skip-notarize",
+        "--signing-key-file",
+        "--skip-dmg",
+    ] {
+        assert!(!build_help.contains(removed), "仍显示旧参数 {removed}");
+    }
+
+    let publish_help = directory.run(&["help", "publish"]);
+    assert!(publish_help.status.success());
+    let publish_help = String::from_utf8_lossy(&publish_help.stdout);
+    for expected in ["--app <APP>", "--all", "--dry-run", "--yes"] {
+        assert!(publish_help.contains(expected));
+    }
+    for removed in [
+        "--app-version",
+        "--build-number",
+        "--manifest-sequence",
+        "--channel",
+        "--signing-key-file",
+        "--minimum-supported-version",
+    ] {
+        assert!(!publish_help.contains(removed), "仍显示旧参数 {removed}");
+    }
 
     let create_help = directory.run(&["help", "create"]);
     assert!(create_help.status.success());
@@ -302,6 +662,389 @@ fn help_and_version_are_available() {
         String::from_utf8_lossy(&version_command.stdout),
         format!("nexora {}\n", env!("CARGO_PKG_VERSION"))
     );
+}
+
+#[test]
+fn publish_dry_run_signs_latest_from_existing_artifact_metadata() {
+    let directory = TestDirectory::new("publish-dry-run");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        for stream in listener.incoming().take(4) {
+            let mut stream = stream.unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        }
+    });
+    let release_dir = directory
+        .path()
+        .join("dist/desktop/stable")
+        .join("1.0.1")
+        .join("12/aarch64-apple-darwin");
+    fs::create_dir_all(&release_dir).unwrap();
+    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
+    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    fs::write(release_dir.join(zip_name), b"appzip").unwrap();
+    fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
+    use sha2::{Digest as _, Sha256};
+    let dmg_sha = format!("{:x}", Sha256::digest(b"dmg"));
+    fs::write(
+        release_dir.join("artifact.json"),
+        format!(r#"{{
+  "schema_version": 1,
+  "app_id": "com.example.desktop",
+  "channel": "stable",
+  "version": "1.0.1",
+  "build_number": 12,
+  "target": "aarch64-apple-darwin",
+  "artifacts": [
+    {{"kind":"macos_app_zip","file_name":"{zip_name}","sha256":"794f396be329ce58e99c9084550e92f52c2799a83a4ae46e6fcd6efde6b1a922","size":6}},
+    {{"kind":"macos_dmg","file_name":"{dmg_name}","sha256":"{dmg_sha}","size":3}}
+  ]
+}}
+"#),
+    )
+    .unwrap();
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::SigningKey;
+    let seed = [7_u8; 32];
+    let public_key = STANDARD.encode(SigningKey::from_bytes(&seed).verifying_key().to_bytes());
+    fs::write(
+        directory.path().join("nexora.toml"),
+        format!(
+            r#"schema_version = 1
+
+[publish.targets.local]
+provider = "s3"
+endpoint = "http://{address}"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "http://{address}/desktop-releases"
+allow_insecure_http = true
+
+[apps.desktop]
+package = "desktop"
+app_id = "com.example.desktop"
+display_name = "Desktop"
+publish_target = "local"
+object_prefix = "e2e-test"
+
+[apps.desktop.release]
+channel = "stable"
+version = "1.0.1"
+build_number = 12
+minimum_supported_version = "0.0.0"
+
+[apps.desktop.updater]
+enabled = true
+feed_url = "http://{address}/desktop-releases/e2e-test/desktop/stable/latest.json"
+channels = ["stable"]
+trusted_public_keys = ["desktop-main:ed25519:{public_key}"]
+signing_key_env = "NEXORA_TEST_SIGNING_KEY"
+
+[apps.desktop.targets]
+required = ["aarch64-apple-darwin"]
+
+[apps.desktop.platforms.macos]
+signing = "ad_hoc"
+notarize = false
+"#
+        ),
+    )
+    .unwrap();
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--dry-run"],
+        &[(
+            "NEXORA_TEST_SIGNING_KEY",
+            "desktop-main:ed25519:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+        )],
+    );
+
+    assert!(
+        output.status.success(),
+        "publish dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().unwrap();
+    let latest_path = directory.path().join("dist/desktop/stable/latest.json");
+    assert!(!latest_path.exists(), "dry-run 不应写本地 latest.json");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Manifest sequence：1（自动计算）"));
+    assert!(stdout.contains("dry-run: 已完成远端读取与全部预检"));
+}
+
+#[test]
+fn publish_uploads_zip_dmg_aliases_and_latest_in_required_order() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest as _, Sha256};
+
+    let directory = TestDirectory::new("publish-order");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    let release_dir = directory
+        .path()
+        .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
+    fs::create_dir_all(&release_dir).unwrap();
+    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
+    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    fs::write(release_dir.join(zip_name), b"appzip").unwrap();
+    fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
+    fs::write(
+        release_dir.join("artifact.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_id": "com.example.desktop",
+            "channel": "stable",
+            "version": "1.0.1",
+            "build_number": 12,
+            "target": "aarch64-apple-darwin",
+            "artifacts": [
+                {
+                    "kind": "macos_app_zip",
+                    "file_name": zip_name,
+                    "sha256": format!("{:x}", Sha256::digest(b"appzip")),
+                    "size": 6
+                },
+                {
+                    "kind": "macos_dmg",
+                    "file_name": dmg_name,
+                    "sha256": format!("{:x}", Sha256::digest(b"dmg")),
+                    "size": 3
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let seed = [7_u8; 32];
+    let signing = SigningKey::from_bytes(&seed);
+    fs::create_dir_all(directory.path().join(".secrets")).unwrap();
+    fs::write(
+        directory.path().join(".secrets/update.key"),
+        format!("desktop-main:ed25519:{}\n", STANDARD.encode(seed)),
+    )
+    .unwrap();
+    let public_key = STANDARD.encode(signing.verifying_key().to_bytes());
+    fs::write(
+        directory.path().join("nexora.toml"),
+        format!(
+            r#"schema_version = 1
+
+[publish.targets.local]
+provider = "s3"
+endpoint = "{base}"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "{base}/desktop-releases"
+allow_insecure_http = true
+
+[apps.desktop]
+package = "desktop"
+app_id = "com.example.desktop"
+display_name = "Desktop"
+publish_target = "local"
+object_prefix = "e2e-test"
+
+[apps.desktop.release]
+channel = "stable"
+version = "1.0.1"
+build_number = 12
+minimum_supported_version = "0.0.0"
+signing_key_file = ".secrets/update.key"
+
+[apps.desktop.updater]
+enabled = true
+feed_url = "{base}/desktop-releases/e2e-test/desktop/stable/latest.json"
+channels = ["stable"]
+trusted_public_keys = ["desktop-main:ed25519:{public_key}"]
+signing_key_env = "UNUSED_SIGNING_KEY"
+
+[apps.desktop.targets]
+required = ["aarch64-apple-darwin"]
+
+[apps.desktop.platforms.macos]
+signing = "ad_hoc"
+notarize = false
+"#
+        ),
+    )
+    .unwrap();
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--yes"],
+        &[
+            ("AWS_ACCESS_KEY_ID", "test-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let prefix = "/desktop-releases/e2e-test/desktop/stable";
+    assert_eq!(
+        store.puts(),
+        vec![
+            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}"),
+            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}"),
+            format!("{prefix}/manifests/1.json"),
+            format!("{prefix}/latest-aarch64.dmg"),
+            format!("{prefix}/latest.dmg"),
+            format!("{prefix}/latest.json"),
+        ]
+    );
+    let latest: serde_json::Value =
+        serde_json::from_slice(&store.object(&format!("{prefix}/latest.json"))).unwrap();
+    assert_eq!(latest["payload"]["manifest_sequence"], 1);
+    assert_eq!(latest["payload"]["artifacts"].as_array().unwrap().len(), 1);
+    assert_eq!(latest["payload"]["artifacts"][0]["kind"], "macos_app_zip");
+    assert!(
+        !serde_json::to_string(&latest["payload"]["artifacts"])
+            .unwrap()
+            .contains("dmg")
+    );
+}
+
+#[test]
+fn publish_uses_verified_remote_sequence_plus_one() {
+    let directory = TestDirectory::new("publish-next-sequence");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    let seed = prepare_publish_app(&directory, &base);
+    let latest_path = "/desktop-releases/e2e-test/desktop/stable/latest.json";
+    store.insert(latest_path, signed_remote_manifest(seed, 4));
+
+    let output = directory.run(&["publish", "--app", "desktop", "--dry-run"]);
+    assert!(
+        output.status.success(),
+        "dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Manifest sequence：5（自动计算）"));
+    assert!(store.puts().is_empty());
+}
+
+#[test]
+fn publish_rejects_unverifiable_remote_manifest() {
+    let directory = TestDirectory::new("publish-bad-remote");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    prepare_publish_app(&directory, &base);
+    let latest_path = "/desktop-releases/e2e-test/desktop/stable/latest.json";
+    store.insert(latest_path, signed_remote_manifest([8_u8; 32], 4));
+
+    let output = directory.run(&["publish", "--app", "desktop", "--dry-run"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("无法由 trusted_public_keys 验签"));
+    assert!(store.puts().is_empty());
+}
+
+#[test]
+fn publish_rejects_concurrent_sequence_change_before_mutable_uploads() {
+    let directory = TestDirectory::new("publish-concurrent");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    let seed = prepare_publish_app(&directory, &base);
+    let latest_path = "/desktop-releases/e2e-test/desktop/stable/latest.json";
+    store.replace_latest_after_manifest(latest_path, signed_remote_manifest(seed, 9));
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--yes"],
+        &[
+            ("AWS_ACCESS_KEY_ID", "test-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("发布期间"));
+    let puts = store.puts();
+    assert_eq!(
+        puts.len(),
+        3,
+        "只允许写入两个版本化产物和 sequence manifest"
+    );
+    assert!(puts[2].ends_with("/manifests/1.json"));
+    assert!(!puts.iter().any(|path| path.ends_with("/latest.json")));
+    assert!(!puts.iter().any(|path| path.ends_with("/latest.dmg")));
+}
+
+#[test]
+fn publish_rejects_existing_immutable_object_before_upload() {
+    let directory = TestDirectory::new("publish-immutable");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    prepare_publish_app(&directory, &base);
+    let existing = "/desktop-releases/e2e-test/desktop/stable/releases/1.0.1/12/aarch64-apple-darwin/desktop-1.0.1-12-aarch64.app.zip";
+    store.insert(existing, b"already-there".to_vec());
+
+    let output = directory.run(&["publish", "--app", "desktop", "--dry-run"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("immutable 对象已存在"));
+    assert!(store.puts().is_empty());
+}
+
+#[test]
+fn latest_dmg_failure_prevents_latest_json_upload() {
+    let directory = TestDirectory::new("publish-latest-dmg-failure");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    prepare_publish_app(&directory, &base);
+    store.fail_put_suffix("/latest-aarch64.dmg");
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--yes"],
+        &[
+            ("AWS_ACCESS_KEY_ID", "test-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("latest-aarch64.dmg"));
+    let puts = store.puts();
+    assert!(
+        puts.iter()
+            .any(|path| path.ends_with("/latest-aarch64.dmg"))
+    );
+    assert!(!puts.iter().any(|path| path.ends_with("/latest.json")));
+}
+
+#[test]
+fn configured_missing_signing_key_file_never_falls_back_to_environment() {
+    let directory = TestDirectory::new("publish-missing-key-file");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    let seed = prepare_publish_app(&directory, &base);
+    fs::remove_file(directory.path().join(".secrets/update.key")).unwrap();
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let fallback = format!("desktop-main:ed25519:{}", STANDARD.encode(seed));
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--dry-run"],
+        &[("FALLBACK_SIGNING_KEY", &fallback)],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("无法读取签名私钥文件"));
+    assert!(store.puts().is_empty());
+}
+
+#[test]
+fn noninteractive_publish_requires_yes_before_writes() {
+    let directory = TestDirectory::new("publish-requires-yes");
+    let output = directory.run(&["publish", "--app", "desktop"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("必须提供 `--yes`"));
 }
 
 #[test]

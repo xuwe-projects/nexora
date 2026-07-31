@@ -39,6 +39,6 @@ fn signed_out_account_menu_actions_start_with_login() {
 
 #[test]
 fn account_menu_context_is_stable() {
-    assert_eq!(account::CONTEXT, "console_account_menu");
+    assert_eq!(account::CONTEXT, "nexora_account_menu");
     actions::init();
 }

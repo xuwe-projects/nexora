@@ -17,6 +17,7 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
       { text: "Feature 与导航", link: "/desktop/features" },
       { text: "公共桌面组件", link: "/desktop/components" },
       { text: "Account", link: "/desktop/account" },
+      { text: "自动更新", link: "/desktop/updater" },
     ],
   },
   {
@@ -97,6 +98,7 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
       { text: "Features and Navigation", link: "/en/desktop/features" },
       { text: "Shared Desktop Components", link: "/en/desktop/components" },
       { text: "Account", link: "/en/desktop/account" },
+      { text: "Updater", link: "/en/desktop/updater" },
     ],
   },
   {

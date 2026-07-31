@@ -7,7 +7,7 @@ use gpui::{Action, App, KeyBinding};
 use crate::settings::{self, OpenSettings};
 
 gpui::actions!(
-    console_account_menu,
+    nexora_account_menu,
     [
         /// 打开系统浏览器并登录当前账户。
         SignInAccount,
@@ -20,7 +20,7 @@ gpui::actions!(
 ///
 /// 视图需要在已登录工作区的根元素上设置该 context，退出登录快捷键才会生效。
 /// 登录快捷键是应用级入口，不依赖焦点或该 context。
-pub const CONTEXT: &str = "console_account_menu";
+pub const CONTEXT: &str = "nexora_account_menu";
 
 /// 账户菜单中的业务动作种类。
 ///

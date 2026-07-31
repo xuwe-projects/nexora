@@ -100,6 +100,11 @@ pub mod __private {
     };
 
     #[cfg(feature = "desktop")]
+    pub use crate::application::{
+        MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences, ShellPreferences,
+        restore_appearance_preferences, restore_main_window_options,
+    };
+    #[cfg(feature = "desktop")]
     pub use crate::runtime::create_login_feature;
     #[cfg(feature = "desktop")]
     pub use crate::runtime::{create_feature, create_sidebar_slot, create_window, window_options};

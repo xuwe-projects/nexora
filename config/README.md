@@ -148,9 +148,7 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
 
 - `example.server.toml`：服务端 TOML 配置示例。
 - `server.env.example`：服务端运行时环境变量示例。
-- `desktop.toml.example`：Console 桌面应用本地运行配置样例。
-- `desktop-build.env.example`：桌面端构建、签名和更新相关环境变量示例。
-- `updater/latest.example.json`：`nexora build` 生成的更新清单形状示例，不需要手写。
+- `desktop.toml.example`：桌面应用本地运行配置样例。
 
 ## 桌面端 OIDC 认证
 
@@ -177,26 +175,22 @@ OIDC 环境变量，不使用 Provider 名称前缀；环境变量的优先级�
 
 ```bash
 OIDC_ISSUER_URL=https://id.example.com
-OIDC_CLIENT_ID=console-native-client-id
+OIDC_CLIENT_ID=nexora-native-client-id
 OIDC_SCOPES="openid profile email offline_access"
 OIDC_REDIRECT_URI=http://127.0.0.1:0/auth/callback
 API_BASE_URL=http://127.0.0.1:3000
 ```
 
-`API_BASE_URL` 必须指向服务端根地址。Console 完成 OIDC Authorization Code + PKCE 后不会立即
+`API_BASE_URL` 必须指向服务端根地址。桌面应用完成 OIDC Authorization Code + PKCE 后不会立即
 进入工作区，而是携带 access token 请求 `GET /me`。只有服务端确认 `account.users` 中已存在
 对应 `identity_id` 且用户未停用时才保存 refresh token 并进入已登录状态；未开通账号返回
 `403 account_not_registered`，Console 会保持未登录并清理旧凭据。应用启动恢复会话和自动续期
 同样重新调用 `/me`，不会仅凭本地 refresh token 绕过账号门禁。
 
-`desktop-build.env.example` 是供 shell、CI 和发布机构建桌面安装包时参考的 dotenv 风格文件，
-其中还包含签名、公证和更新发布变量。`config-rs` 的文件源不会把这种 `KEY=value` 文件当作
-TOML 读取，因此应用运行时只通过 `config/desktop.toml` 加载 OIDC 文件配置。
-
 以后新增桌面程序示例时，可以复用 `crates/oidc`，应用层只需要负责自己的
 环境变量装配、token 存储位置和 GPUI 状态接入。
 
-Console 只把 refresh token 保存到系统安全凭据库：macOS 使用 Keychain，Windows 使用
+桌面应用只把 refresh token 保存到系统安全凭据库：macOS 使用 Keychain，Windows 使用
 Credential Manager，Linux 使用 Secret Service。access token、ID Token 和用户资料只保留在
 当前进程内存中。旧版本生成的明文 `auth.toml` 会在 refresh token 成功迁移并回读校验后删除。
 
@@ -205,35 +199,31 @@ Provider 返回 `invalid_grant` 时会清除失效凭据并回到登录页，临
 
 ## 更新发布文件
 
-`nexora build` 会在 `dist/` 下生成自动更新需要的 `.app.zip`、同名 `.sha256`、
-`latest.json` 和 `notes/...md` 更新日志副本。后续 `nexora publish` 接入 OSS 后，应先上传
-安装包、校验文件和更新日志，最后上传 `latest.json`。
+桌面自动更新的项目、构建和发布配置放在仓库根目录 `nexora.toml`。该文件注册 app、构建
+target、updater 策略和 S3 兼容发布目标；应用运行时不会加载完整 `nexora.toml`。
 
-本机 macOS 可以一次构建多个 macOS 架构：
-
-```bash
-nexora build --targets macos --bundle-version 12
-```
-
-该命令会顺序构建 Apple Silicon 与 Intel macOS 产物，并把两个 `.app.zip` 写入同一个
-`latest.json.artifacts`。如果只构建当前机器架构，使用默认值或显式传入：
+生成更新签名密钥：
 
 ```bash
-nexora build --targets current
+nexora updater keygen --app desktop --private-key-file .secrets/desktop-update.key
 ```
 
-Windows、Linux 和 macOS 完整发布矩阵不应依赖单个 Docker 容器完成。推荐做法是使用 CI 或
-远程 runner 矩阵：
+构建只产生当前宿主可构建的已有产物和 `artifact.json`，不访问对象存储：
 
-- macOS runner：生成 `.dmg`、`.app.zip`、签名、公证。
-- Windows runner：生成 `.exe` 或 `.msi`，完成 Windows 签名。
-- Linux runner：生成 `.tar.gz`、`.deb`、`.rpm` 或 AppImage。
+```bash
+nexora build
+```
 
-各 runner 上传自己的产物元数据后，由发布步骤合并生成最终 `latest.json`，并确保最后上传它。
+发布只读取已有产物，签名 `latest.json`，并按不可变产物、不可变 manifest、`latest.json`
+顺序交给 S3 兼容发布适配器：
 
-仓库根目录提供了一个普通 Pipeline 版本的 `Jenkinsfile`，默认只启用 `macos-arm64` agent。
-你可以先在 Jenkins 中创建 Pipeline Job 指向该文件试跑；Windows stage 通过 `BUILD_WINDOWS`
-参数控制，等 Windows 打包能力补齐后再打开。
+```bash
+nexora publish
+```
+
+多 app workspace 在交互终端显示选择菜单；非交互 build/publish 必须传 `--app`，只有 publish
+可用 `--all` 明确发布全部 app。正式发布必须包含该 app 在 `nexora.toml` 声明的全部 required
+targets。
 
 ## 不放在这里的配置
 

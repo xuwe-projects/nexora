@@ -1,0 +1,43 @@
+schema_version = 1
+
+[publish.targets.rustfs]
+provider = "s3"
+endpoint = "http://127.0.0.1:9000"
+bucket = "nexora-updater-example"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "http://127.0.0.1:9000/nexora-updater-example"
+allow_insecure_http = true
+
+[apps.updater-macos]
+package = "nexora-updater-macos-example"
+app_id = "com.nexora.examples.updater-macos"
+display_name = "macOS 更新程序示例"
+publish_target = "rustfs"
+object_prefix = "e2e"
+
+[apps.updater-macos.release]
+channel = "stable"
+version = "1.0.1"
+build_number = 5
+minimum_supported_version = "0.0.0"
+signing_key_file = ".secrets/updater-macos.key"
+
+[apps.updater-macos.updater]
+enabled = true
+feed_url = "http://127.0.0.1:9000/nexora-updater-example/e2e/updater-macos/stable/latest.json"
+channels = ["stable"]
+trusted_public_keys = ["updater-macos-main:ed25519:REPLACE_WITH_PUBLIC_KEY"]
+signing_key_env = "NEXORA_EXAMPLE_UPDATE_SIGNING_KEY"
+check_interval = "15m"
+check_jitter = "1m"
+offline_grace_period = "24h"
+mandatory_restart_delay = "60s"
+health_timeout = "20s"
+
+[apps.updater-macos.targets]
+required = ["aarch64-apple-darwin"]
+
+[apps.updater-macos.platforms.macos]
+signing = "ad_hoc"
+notarize = false

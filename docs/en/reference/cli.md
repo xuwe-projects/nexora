@@ -29,7 +29,13 @@ nexora create <name> --layout single
 nexora create <name> --layout workspace
 nexora create <name> --layout workspace --features account
 nexora init [path] --layout workspace
+nexora updater keygen --app <id>
 nexora build
+nexora build --app <id>
+nexora publish
+nexora publish --app <id> --dry-run
+nexora publish --all --yes
+nexora publish --app <id> yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
 nexora version
@@ -51,3 +57,12 @@ file contains always-on architectural constraints, while Skills provide task-spe
 `init` preserves existing project rules and Skill files. The generated `publish-nexora-release`
 Skill covers version bumps, complete release notes, contributor and Issue/PR attribution,
 previous-to-current upgrade guides, and the tag/Release publishing gates.
+
+Desktop updates are configured by the repository-root `nexora.toml`, which registers apps, updater
+policy, and S3-compatible publish targets. `nexora build` only builds existing artifacts for the
+current host and writes `artifact.json`; `nexora publish` only publishes existing artifacts and never
+runs build implicitly. Publish uploads update files and notes, the immutable manifest, and
+`latest.json` to RustFS/S3-compatible storage, then anonymously reads and verifies `latest.json`.
+`latest.json` is an Ed25519 signed envelope. Public keys live in `trusted_public_keys`; private
+signing keys are read only from a secure file or the environment variable named by
+`signing_key_env`. Forced updates are written with `--minimum-supported-version`.

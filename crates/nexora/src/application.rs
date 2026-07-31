@@ -8,6 +8,7 @@ use std::{
     rc::Rc,
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 pub use ::desktop::ApplicationAssets;
@@ -21,12 +22,13 @@ use configuration::UserConfigStore;
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, AssetSource, Context, Entity, Global, Image, ImageFormat,
-    IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, WeakEntity,
-    Window, WindowOptions, div, img, prelude::*, px, size,
+    AnyElement, AnyView, App, AssetSource, Bounds, Context, Entity, Global, Image, ImageFormat,
+    IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, Task,
+    WeakEntity, Window, WindowBounds, WindowOptions, div, img, point, prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size as ComponentSize,
+    StyledExt as _, TitleBar,
     alert::Alert,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants as _, Toggle},
@@ -498,14 +500,273 @@ struct PreparedApplication {
     account_initial_route: RouteMatch,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+const MAIN_WINDOW_BOUNDS_SAVE_DELAY: Duration = Duration::from_millis(120);
+
+/// Shell 写入 `workspace.toml` 的用户偏好快照。
+///
+/// 该类型把主窗口 Shell、默认设置窗口和窗口生命周期观察器共享的偏好集中到同一个
+/// TOML 文档中。所有运行时修改都应通过框架安装的偏好运行时合并，避免多个窗口分别
+/// 读写同一文件时覆盖其他字段。
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
-pub(crate) struct ShellPreferences {
-    pinned_tabs: Vec<String>,
-    pub(crate) startup_display_uuid: Option<String>,
+pub struct ShellPreferences {
+    /// Shell 顶部标签栏中用户置顶的 Feature 路径，按显示顺序保存。
+    pub pinned_tabs: Vec<String>,
+    /// 外观相关偏好，包括主题预设、颜色模式、字号与组件尺寸。
+    pub appearance: ShellAppearancePreferences,
+    /// 主窗口最后一次有效的显示器和窗口边界记录。
+    pub main_window: Option<MainWindowPlacement>,
+    #[serde(skip_serializing)]
+    startup_display_uuid: Option<String>,
 }
 
-pub(crate) const SYSTEM_PRIMARY_DISPLAY: &str = "system-primary-display";
+/// Shell 持久化的外观偏好。
+///
+/// 字段使用稳定字符串保存，读取时再映射到当前程序支持的主题枚举。这样旧版本、
+/// 未来版本或手动编辑出的未知值不会导致整个偏好文件解析失败。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ShellAppearancePreferences {
+    /// 主题预设的稳定标识，例如 `nexora`。
+    pub theme_preset: String,
+    /// 颜色模式的稳定标识，例如 `system`、`light` 或 `dark`。
+    pub color_scheme: String,
+    /// 基础字号，读取时会限制在 theme crate 声明的合法范围内。
+    pub font_size: i64,
+    /// gpui-component 组件尺寸标识，例如 `medium`。
+    pub component_size: String,
+}
+
+impl Default for ShellAppearancePreferences {
+    fn default() -> Self {
+        Self {
+            theme_preset: theme::ThemePreset::default().id().to_owned(),
+            color_scheme: theme::ColorScheme::default().id().to_owned(),
+            font_size: i64::from(theme::DEFAULT_FONT_SIZE),
+            component_size: theme::DEFAULT_COMPONENT_SIZE.as_str().to_owned(),
+        }
+    }
+}
+
+impl ShellAppearancePreferences {
+    fn from_theme(cx: &App) -> Self {
+        Self {
+            theme_preset: theme::selection(cx).preset().id().to_owned(),
+            color_scheme: theme::selection(cx).color_scheme().id().to_owned(),
+            font_size: i64::from(theme::font_size(cx)),
+            component_size: theme::component_size(cx).as_str().to_owned(),
+        }
+    }
+
+    fn theme_selection(&self) -> theme::ThemeSelection {
+        let preset = theme::ThemePreset::from_id(self.theme_preset.as_str()).unwrap_or_default();
+        let color_scheme =
+            theme::ColorScheme::from_id(self.color_scheme.as_str()).unwrap_or_default();
+        theme::ThemeSelection::new(preset, color_scheme)
+    }
+
+    fn font_size(&self) -> u16 {
+        self.font_size.clamp(
+            i64::from(theme::MIN_FONT_SIZE),
+            i64::from(theme::MAX_FONT_SIZE),
+        ) as u16
+    }
+
+    fn component_size(&self) -> ComponentSize {
+        match self.component_size.as_str() {
+            "xsmall" => ComponentSize::XSmall,
+            "small" => ComponentSize::Small,
+            "medium" => ComponentSize::Medium,
+            "large" => ComponentSize::Large,
+            _ => theme::DEFAULT_COMPONENT_SIZE,
+        }
+    }
+}
+
+/// 主窗口最后一次有效位置和状态。
+///
+/// `display_uuid` 保存平台提供的稳定显示器 UUID，不保存进程内 [`gpui::DisplayId`]。
+/// 当该显示器暂时不存在时，启动流程会用主显示器生成临时可见位置，但不会只因为
+/// 自动回退改写这个 UUID。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MainWindowPlacement {
+    /// 主窗口所在显示器的稳定 UUID。
+    pub display_uuid: String,
+    /// 主窗口的窗口化、最大化或全屏状态，以及对应恢复边界。
+    pub bounds: PersistedWindowBounds,
+}
+
+/// 可序列化的主窗口边界状态。
+///
+/// 最大化和全屏变体中的坐标与尺寸表示 GPUI `WindowBounds` 保存的恢复边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum PersistedWindowBounds {
+    /// 窗口化状态及其当前边界。
+    Windowed {
+        /// 窗口左上角 X 坐标。
+        x: i32,
+        /// 窗口左上角 Y 坐标。
+        y: i32,
+        /// 窗口宽度。
+        width: i32,
+        /// 窗口高度。
+        height: i32,
+    },
+    /// 最大化状态及其恢复边界。
+    Maximized {
+        /// 恢复边界左上角 X 坐标。
+        x: i32,
+        /// 恢复边界左上角 Y 坐标。
+        y: i32,
+        /// 恢复边界宽度。
+        width: i32,
+        /// 恢复边界高度。
+        height: i32,
+    },
+    /// 全屏状态及其恢复边界。
+    Fullscreen {
+        /// 恢复边界左上角 X 坐标。
+        x: i32,
+        /// 恢复边界左上角 Y 坐标。
+        y: i32,
+        /// 恢复边界宽度。
+        width: i32,
+        /// 恢复边界高度。
+        height: i32,
+    },
+}
+
+impl PersistedWindowBounds {
+    /// 从 GPUI 原生窗口边界转换为可写入用户偏好的表示。
+    ///
+    /// 当 GPUI 返回非正尺寸的恢复边界时返回 `None`，调用方应保留上一份有效记录。
+    pub fn from_window_bounds(bounds: WindowBounds) -> Option<Self> {
+        let persisted = match bounds {
+            WindowBounds::Windowed(bounds) => Self::windowed(bounds),
+            WindowBounds::Maximized(bounds) => Self::maximized(bounds),
+            WindowBounds::Fullscreen(bounds) => Self::fullscreen(bounds),
+        };
+        persisted.is_valid().then_some(persisted)
+    }
+
+    /// 从 GPUI 窗口化边界创建可序列化状态。
+    pub fn windowed(bounds: Bounds<Pixels>) -> Self {
+        let (x, y, width, height) = rounded_bounds_parts(bounds);
+        Self::Windowed {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// 从 GPUI 最大化恢复边界创建可序列化状态。
+    pub fn maximized(bounds: Bounds<Pixels>) -> Self {
+        let (x, y, width, height) = rounded_bounds_parts(bounds);
+        Self::Maximized {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// 从 GPUI 全屏恢复边界创建可序列化状态。
+    pub fn fullscreen(bounds: Bounds<Pixels>) -> Self {
+        let (x, y, width, height) = rounded_bounds_parts(bounds);
+        Self::Fullscreen {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn is_valid(self) -> bool {
+        let (_, _, width, height) = self.parts();
+        width > 0 && height > 0
+    }
+
+    fn into_window_bounds(
+        self,
+        display_bounds: Bounds<Pixels>,
+        minimum_size: Option<Size<Pixels>>,
+    ) -> Option<WindowBounds> {
+        let bounds = sanitize_bounds(self.parts(), display_bounds, minimum_size)?;
+        Some(match self {
+            Self::Windowed { .. } => WindowBounds::Windowed(bounds),
+            Self::Maximized { .. } => WindowBounds::Maximized(bounds),
+            Self::Fullscreen { .. } => WindowBounds::Fullscreen(bounds),
+        })
+    }
+
+    fn parts(self) -> (i32, i32, i32, i32) {
+        match self {
+            Self::Windowed {
+                x,
+                y,
+                width,
+                height,
+            }
+            | Self::Maximized {
+                x,
+                y,
+                width,
+                height,
+            }
+            | Self::Fullscreen {
+                x,
+                y,
+                width,
+                height,
+            } => (x, y, width, height),
+        }
+    }
+}
+
+fn rounded_bounds_parts(bounds: Bounds<Pixels>) -> (i32, i32, i32, i32) {
+    (
+        f32::from(bounds.origin.x).round() as i32,
+        f32::from(bounds.origin.y).round() as i32,
+        f32::from(bounds.size.width).round() as i32,
+        f32::from(bounds.size.height).round() as i32,
+    )
+}
+
+fn sanitize_bounds(
+    (x, y, width, height): (i32, i32, i32, i32),
+    display_bounds: Bounds<Pixels>,
+    minimum_size: Option<Size<Pixels>>,
+) -> Option<Bounds<Pixels>> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let display_x = f32::from(display_bounds.origin.x);
+    let display_y = f32::from(display_bounds.origin.y);
+    let display_width = f32::from(display_bounds.size.width).max(1.0);
+    let display_height = f32::from(display_bounds.size.height).max(1.0);
+    let min_width = minimum_size
+        .map(|size| f32::from(size.width))
+        .unwrap_or(1.0)
+        .max(1.0);
+    let min_height = minimum_size
+        .map(|size| f32::from(size.height))
+        .unwrap_or(1.0)
+        .max(1.0);
+    let width = (width as f32).max(min_width).min(display_width);
+    let height = (height as f32).max(min_height).min(display_height);
+    let max_x = display_x + display_width - width;
+    let max_y = display_y + display_height - height;
+    let x = (x as f32).clamp(display_x, max_x.max(display_x));
+    let y = (y as f32).clamp(display_y, max_y.max(display_y));
+
+    Some(Bounds::new(
+        point(px(x), px(y)),
+        size(px(width), px(height)),
+    ))
+}
 
 impl ShellPreferences {
     fn for_local_application(application_name: &str) -> Option<UserConfigStore<Self>> {
@@ -516,13 +777,45 @@ impl ShellPreferences {
 
 pub(crate) fn load_shell_preferences(application_name: &str) -> ShellPreferences {
     ShellPreferences::for_local_application(application_name)
-        .and_then(|store| store.load_or_default().ok())
+        .and_then(|store| match store.load_or_default() {
+            Ok(preferences) => Some(preferences),
+            Err(error) => {
+                tracing::warn!(error = %error, "无法读取 Shell 用户偏好，已使用默认值");
+                None
+            }
+        })
         .unwrap_or_default()
 }
 
-pub(crate) fn save_shell_preferences(application_name: &str, preferences: &ShellPreferences) {
-    if let Some(store) = ShellPreferences::for_local_application(application_name) {
-        _ = store.save(preferences);
+pub(crate) fn shell_preferences_snapshot(cx: &App) -> ShellPreferences {
+    cx.try_global::<ShellPreferencesRuntime>()
+        .map(|runtime| runtime.snapshot.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn persist_current_appearance_preferences(cx: &mut App) {
+    let appearance = ShellAppearancePreferences::from_theme(cx);
+    update_shell_preferences(cx, |preferences| {
+        preferences.appearance = appearance;
+    });
+}
+
+pub(crate) fn update_shell_preferences(cx: &mut App, update: impl FnOnce(&mut ShellPreferences)) {
+    if cx.has_global::<ShellPreferencesRuntime>() {
+        cx.update_global::<ShellPreferencesRuntime, _>(|runtime, _cx| {
+            update(&mut runtime.snapshot);
+            runtime.persist();
+        });
+    } else {
+        let branding = application_branding(cx);
+        let mut preferences = load_shell_preferences(branding.application_name.as_str());
+        update(&mut preferences);
+        if let Some(store) =
+            ShellPreferences::for_local_application(branding.application_name.as_str())
+            && let Err(error) = store.save(&preferences)
+        {
+            tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
+        }
     }
 }
 
@@ -533,6 +826,7 @@ struct PreferencesWriter {
 
 enum PreferencesWriteCommand {
     Persist(ShellPreferences),
+    Flush(Sender<()>),
     Shutdown,
 }
 
@@ -543,13 +837,20 @@ impl PreferencesWriter {
             .name("nexora-shell-preferences".to_owned())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
-                    let PreferencesWriteCommand::Persist(mut preferences) = command else {
-                        break;
+                    let mut preferences = match command {
+                        PreferencesWriteCommand::Persist(preferences) => preferences,
+                        PreferencesWriteCommand::Flush(ack) => {
+                            _ = ack.send(());
+                            continue;
+                        }
+                        PreferencesWriteCommand::Shutdown => break,
                     };
+                    let mut flush_acks = Vec::new();
                     let mut shutdown = false;
                     while let Ok(command) = receiver.try_recv() {
                         match command {
                             PreferencesWriteCommand::Persist(latest) => preferences = latest,
+                            PreferencesWriteCommand::Flush(ack) => flush_acks.push(ack),
                             PreferencesWriteCommand::Shutdown => {
                                 shutdown = true;
                                 break;
@@ -557,7 +858,12 @@ impl PreferencesWriter {
                         }
                     }
 
-                    _ = store.save(&preferences);
+                    if let Err(error) = store.save(&preferences) {
+                        tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
+                    }
+                    for ack in flush_acks {
+                        _ = ack.send(());
+                    }
                     if shutdown {
                         break;
                     }
@@ -575,6 +881,17 @@ impl PreferencesWriter {
             .sender
             .send(PreferencesWriteCommand::Persist(preferences));
     }
+
+    fn flush(&self) {
+        let (sender, receiver) = mpsc::channel();
+        if self
+            .sender
+            .send(PreferencesWriteCommand::Flush(sender))
+            .is_ok()
+        {
+            _ = receiver.recv();
+        }
+    }
 }
 
 impl Drop for PreferencesWriter {
@@ -584,6 +901,134 @@ impl Drop for PreferencesWriter {
             _ = worker.join();
         }
     }
+}
+
+struct ShellPreferencesRuntime {
+    snapshot: ShellPreferences,
+    writer: Option<PreferencesWriter>,
+}
+
+impl ShellPreferencesRuntime {
+    fn new(snapshot: ShellPreferences, store: Option<UserConfigStore<ShellPreferences>>) -> Self {
+        let writer = store.and_then(|store| match PreferencesWriter::start(store) {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                tracing::warn!(error = %error, "无法启动 Shell 用户偏好写入器");
+                None
+            }
+        });
+
+        Self { snapshot, writer }
+    }
+
+    fn persist(&self) {
+        if let Some(writer) = self.writer.as_ref() {
+            writer.persist(self.snapshot.clone());
+        }
+    }
+
+    fn flush(&self) {
+        if let Some(writer) = self.writer.as_ref() {
+            writer.flush();
+        }
+    }
+}
+
+impl Global for ShellPreferencesRuntime {}
+
+fn install_shell_preferences_runtime(
+    preferences: ShellPreferences,
+    store: Option<UserConfigStore<ShellPreferences>>,
+    cx: &mut App,
+) {
+    let runtime = ShellPreferencesRuntime::new(preferences, store);
+    if cx.has_global::<ShellPreferencesRuntime>() {
+        *cx.global_mut::<ShellPreferencesRuntime>() = runtime;
+    } else {
+        cx.set_global(runtime);
+    }
+}
+
+/// 把偏好文件中的外观设置恢复到当前 GPUI 主题运行时。
+///
+/// 未知主题预设、颜色模式和组件尺寸会回退到默认值；字号会限制在 theme crate 声明的
+/// 安全范围内，因此损坏的外观字段不会阻止应用启动。
+pub fn restore_appearance_preferences(preferences: &ShellPreferences, cx: &mut App) {
+    theme::set_selection(preferences.appearance.theme_selection(), cx);
+    theme::set_font_size(preferences.appearance.font_size(), cx);
+    theme::set_component_size(preferences.appearance.component_size(), cx);
+}
+
+/// 把持久化的主窗口记录应用到本次启动的桌面窗口选项。
+///
+/// 返回 `true` 表示存在可用历史记录，调用方应停止再按首次启动尺寸重算窗口边界。
+/// 当记录的显示器缺失时，本函数只生成主显示器上的临时安全位置，不修改传入的偏好快照。
+pub fn restore_main_window_options(
+    options: &mut DesktopApplicationOptions,
+    preferences: &ShellPreferences,
+    cx: &App,
+) -> bool {
+    let Some(restored) = restored_main_window_bounds(
+        preferences.main_window.as_ref(),
+        options.window_min_size,
+        cx,
+    ) else {
+        return false;
+    };
+    let window_options = options
+        .window_options
+        .get_or_insert_with(WindowOptions::default);
+    window_options.display_id = restored.display_id;
+    window_options.window_bounds = Some(restored.bounds);
+    options.window_size = None;
+    options.startup_display_uuid = None;
+    true
+}
+
+struct RestoredMainWindowBounds {
+    display_id: Option<gpui::DisplayId>,
+    bounds: WindowBounds,
+}
+
+fn restored_main_window_bounds(
+    placement: Option<&MainWindowPlacement>,
+    minimum_size: Option<Size<Pixels>>,
+    cx: &App,
+) -> Option<RestoredMainWindowBounds> {
+    let placement = placement?;
+    let target_display_id = ::desktop::find_display_id_by_uuid(placement.display_uuid.as_str(), cx);
+    let display = target_display_id
+        .and_then(|display_id| cx.find_display(display_id))
+        .or_else(|| cx.primary_display())?;
+    let bounds = placement
+        .bounds
+        .into_window_bounds(display.visible_bounds(), minimum_size)?;
+
+    Some(RestoredMainWindowBounds {
+        display_id: target_display_id,
+        bounds,
+    })
+}
+
+fn capture_main_window_placement(window: &Window, cx: &App) -> Option<MainWindowPlacement> {
+    let display_uuid = window.display(cx)?.uuid().ok()?.to_string();
+    let bounds = PersistedWindowBounds::from_window_bounds(window.window_bounds())?;
+
+    Some(MainWindowPlacement {
+        display_uuid,
+        bounds,
+    })
+}
+
+fn should_update_main_window_placement(
+    current: &MainWindowPlacement,
+    preferences: &ShellPreferences,
+    cx: &App,
+) -> bool {
+    preferences.main_window.as_ref().is_none_or(|existing| {
+        existing.display_uuid == current.display_uuid
+            || ::desktop::find_display_id_by_uuid(existing.display_uuid.as_str(), cx).is_some()
+    })
 }
 
 fn prepare_application(
@@ -640,19 +1085,16 @@ where
     let preferences_store = ShellPreferences::for_local_application(application_name.as_str());
     let shell_preferences = preferences_store
         .as_ref()
-        .and_then(|store| store.load_or_default().ok())
+        .and_then(|store| match store.load_or_default() {
+            Ok(preferences) => Some(preferences),
+            Err(error) => {
+                tracing::warn!(error = %error, "无法读取 Shell 用户偏好，已使用默认值");
+                None
+            }
+        })
         .unwrap_or_default();
-    let pinned_tab_paths = shell_preferences.pinned_tabs;
-    let mut desktop_options = options.into_desktop_options();
-    match shell_preferences.startup_display_uuid.as_deref() {
-        Some(SYSTEM_PRIMARY_DISPLAY) => {
-            desktop_options.startup_display_uuid = None;
-        }
-        Some(_) => {
-            desktop_options.startup_display_uuid = shell_preferences.startup_display_uuid;
-        }
-        None => {}
-    }
+    let pinned_tab_paths = shell_preferences.pinned_tabs.clone();
+    let desktop_options = options.into_desktop_options();
     let adapter = ApplicationAdapter {
         application,
         options: desktop_options,
@@ -665,6 +1107,7 @@ where
         tab_style,
         sidebar_search,
         preferences_store,
+        shell_preferences,
         pinned_tab_paths,
         registry: Some(registry),
         initial_route: Some(initial_route),
@@ -688,6 +1131,7 @@ struct ApplicationAdapter<A> {
     tab_style: ApplicationTabStyle,
     sidebar_search: bool,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
+    shell_preferences: ShellPreferences,
     pinned_tab_paths: Vec<String>,
     registry: Option<AppRegistry>,
     initial_route: Option<RouteMatch>,
@@ -711,6 +1155,13 @@ where
 
     fn initialize(&mut self, cx: &mut App) {
         gpui_component::set_locale(self.locale.as_str());
+        install_shell_preferences_runtime(
+            self.shell_preferences.clone(),
+            self.preferences_store.clone(),
+            cx,
+        );
+        restore_appearance_preferences(&self.shell_preferences, cx);
+        restore_main_window_options(&mut self.options, &self.shell_preferences, cx);
         cx.set_global(ApplicationBranding {
             application_name: self.application_name.clone(),
             application_version: self.application_version.clone(),
@@ -769,7 +1220,6 @@ where
         let sidebar_subtitle = self.sidebar_subtitle.clone();
         let tab_style = self.tab_style;
         let sidebar_search = self.sidebar_search;
-        let preferences_store = self.preferences_store.clone();
         let pinned_tab_paths = std::mem::take(&mut self.pinned_tab_paths);
         cx.new(|cx| {
             ApplicationShell::new(
@@ -782,7 +1232,6 @@ where
                     sidebar_subtitle,
                     tab_style,
                     sidebar_search,
-                    preferences_store,
                     pinned_tab_paths,
                 },
                 window,
@@ -864,7 +1313,6 @@ struct ApplicationShellConfig {
     sidebar_subtitle: Option<String>,
     tab_style: ApplicationTabStyle,
     sidebar_search: bool,
-    preferences_store: Option<UserConfigStore<ShellPreferences>>,
     pinned_tab_paths: Vec<String>,
 }
 
@@ -886,8 +1334,7 @@ struct ApplicationShell {
     navigation_history: Vec<ShellRoute>,
     navigation_history_index: usize,
     expanded_navigation_groups: HashSet<&'static str>,
-    preferences_store: Option<UserConfigStore<ShellPreferences>>,
-    preferences_writer: Option<PreferencesWriter>,
+    main_window_persist_task: Option<Task<()>>,
     feature_instances: HashMap<String, FeatureInstance>,
     #[cfg(feature = "desktop")]
     login_feature: AnyView,
@@ -902,6 +1349,7 @@ struct ApplicationShell {
     navigation_error: Option<String>,
     #[cfg(feature = "desktop")]
     _authentication_subscription: Option<Subscription>,
+    _window_bounds_subscription: Subscription,
     _sidebar_search_subscription: Option<Subscription>,
     _release_subscription: Option<Subscription>,
 }
@@ -1060,7 +1508,6 @@ impl ApplicationShell {
             sidebar_subtitle,
             tab_style,
             sidebar_search,
-            preferences_store,
             pinned_tab_paths,
         } = config;
         let shell = cx.entity().downgrade();
@@ -1137,18 +1584,22 @@ impl ApplicationShell {
                 this.authentication_changed(window, cx);
             })
         });
+        let _window_bounds_subscription = cx.observe_window_bounds(window, |this, window, cx| {
+            this.schedule_main_window_placement_persist(window, cx);
+        });
         let _release_subscription = Some(cx.on_release_in(window, |this, window, cx| {
+            this.main_window_persist_task = None;
+            this.persist_current_main_window_placement(window, cx);
+            if let Some(runtime) = cx.try_global::<ShellPreferencesRuntime>() {
+                runtime.flush();
+            }
             clear_navigation_handler(cx);
             for (_, mut instance) in this.feature_instances.drain() {
                 instance.close(window, cx);
             }
             #[cfg(feature = "desktop")]
             this.close_business_windows(cx);
-            this.preferences_writer = None;
         }));
-        let preferences_store_for_shell = preferences_store.clone();
-        let preferences_writer =
-            preferences_store.and_then(|store| PreferencesWriter::start(store).ok());
         let sidebar_search_input = sidebar_search
             .then(|| cx.new(|cx| InputState::new(window, cx).placeholder("搜索导航")));
         let _sidebar_search_subscription = sidebar_search_input.as_ref().map(|input| {
@@ -1184,8 +1635,7 @@ impl ApplicationShell {
             navigation_history: vec![initial_route],
             navigation_history_index: 0,
             expanded_navigation_groups,
-            preferences_store: preferences_store_for_shell,
-            preferences_writer,
+            main_window_persist_task: None,
             feature_instances,
             #[cfg(feature = "desktop")]
             login_feature,
@@ -1200,6 +1650,7 @@ impl ApplicationShell {
             navigation_error,
             #[cfg(feature = "desktop")]
             _authentication_subscription,
+            _window_bounds_subscription,
             _sidebar_search_subscription,
             _release_subscription,
         }
@@ -1529,7 +1980,7 @@ impl ApplicationShell {
         self.pinned_tabs.contains(route)
     }
 
-    fn toggle_pin_route(&mut self, route: &ShellRoute) {
+    fn toggle_pin_route(&mut self, route: &ShellRoute, cx: &mut App) {
         if self.is_route_pinned(route) {
             self.pinned_tabs.retain(|pinned| pinned != route);
         } else {
@@ -1538,27 +1989,52 @@ impl ApplicationShell {
 
         self.reorder_tabs_by_pin();
         self.scroll_tab_into_view(&self.active_route);
-        self.persist_pinned_tabs();
+        self.persist_pinned_tabs(cx);
     }
 
-    fn persist_pinned_tabs(&self) {
-        let Some(writer) = self.preferences_writer.as_ref() else {
+    fn persist_pinned_tabs(&self, cx: &mut App) {
+        let pinned_tabs = self
+            .pinned_tabs
+            .iter()
+            .map(|route| route.path().to_owned())
+            .collect();
+        update_shell_preferences(cx, |preferences| {
+            preferences.pinned_tabs = pinned_tabs;
+        });
+    }
+
+    fn schedule_main_window_placement_persist(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.main_window_persist_task.is_some() {
+            return;
+        }
+
+        self.main_window_persist_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(MAIN_WINDOW_BOUNDS_SAVE_DELAY)
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.main_window_persist_task = None;
+                this.persist_current_main_window_placement(window, cx);
+            });
+        }));
+    }
+
+    fn persist_current_main_window_placement(&self, window: &mut Window, cx: &mut App) {
+        let Some(current) = capture_main_window_placement(window, cx) else {
             return;
         };
-        let startup_display_uuid = self
-            .preferences_store
-            .as_ref()
-            .and_then(|store| store.load_or_default().ok())
-            .and_then(|preferences: ShellPreferences| preferences.startup_display_uuid);
-        let preferences = ShellPreferences {
-            pinned_tabs: self
-                .pinned_tabs
-                .iter()
-                .map(|route| route.path().to_owned())
-                .collect(),
-            startup_display_uuid,
-        };
-        writer.persist(preferences);
+        let preferences = shell_preferences_snapshot(cx);
+        if !should_update_main_window_placement(&current, &preferences, cx) {
+            return;
+        }
+
+        update_shell_preferences(cx, |preferences| {
+            preferences.main_window = Some(current);
+        });
     }
 
     fn reorder_tabs_by_pin(&mut self) {
@@ -1711,7 +2187,7 @@ impl ApplicationShell {
     ) {
         let previous_active_route = self.active_route.clone();
         self.close_tab_route(route);
-        self.persist_pinned_tabs();
+        self.persist_pinned_tabs(cx);
         self.update_runtime_after_tab_change(previous_active_route, window, cx);
     }
 
@@ -2268,7 +2744,7 @@ impl ApplicationShell {
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     _ = action_shell.update(cx, |this, cx| {
-                        this.toggle_pin_route(&action_route);
+                        this.toggle_pin_route(&action_route, cx);
                         cx.notify();
                     });
                 })
@@ -2401,7 +2877,7 @@ impl ApplicationShell {
                 .on_click({
                     move |_, _, cx| {
                         _ = shell.update(cx, |this, cx| {
-                            this.toggle_pin_route(&route);
+                            this.toggle_pin_route(&route, cx);
                             cx.notify();
                         });
                     }
@@ -2633,7 +3109,7 @@ impl ApplicationShell {
                     "置顶当前标签"
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_pin_route(&active_route);
+                    this.toggle_pin_route(&active_route, cx);
                     cx.notify();
                 })),
         )
