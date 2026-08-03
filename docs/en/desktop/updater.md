@@ -14,7 +14,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.21.2 nexora --locked --force \
+  --tag v0.21.3 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 nexora doctor
 # Installs cargo-bundle/create-dmg if either is missing:
@@ -50,6 +50,10 @@ Applications install `UpdateConfig::from_current_bundle()` once with
 updater crate. Successful installation enables the shared action, default login, account menu,
 Settings, and native macOS menu entries. A failed or missing installation exposes no half-working
 entry and updater traffic never uses Account tokens or business permissions.
+
+After installation, the Sidebar Footer item, native macOS menu, and default shortcut all dispatch
+the same `CheckForUpdates` action. The shortcut is `Cmd+Shift+U` on macOS and `Ctrl+Shift+U` on
+Windows and Linux.
 
 ## Commands
 

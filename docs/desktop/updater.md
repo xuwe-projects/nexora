@@ -17,7 +17,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.21.2 nexora --locked --force \
+  --tag v0.21.3 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 ```
 
@@ -58,6 +58,10 @@ nexora build --app desktop
 `--nexora-updater-health-*` 内部参数并继续选择默认 TOML；显式配置路径和普通首个位置参数
 仍保持原有优先级。这样新版本可以完成配置初始化、创建主窗口并回报健康，而不会把健康会话
 参数误判为配置文件路径。
+
+应用成功调用 `nexora::desktop::install_updater` 后，Sidebar Footer 的“检查更新”菜单项、
+macOS 原生菜单和默认快捷键会共同分发 `CheckForUpdates` Action。快捷键在 macOS 是
+`Cmd+Shift+U`，在 Windows/Linux 是 `Ctrl+Shift+U`。
 
 打开 DMG、拖入 `/Applications` 后，从 Finder 启动一次基础版本。只有从包含 updater 配置和
 sidecar 的新 DMG 安装过的版本，后续才能应用内自更新。
