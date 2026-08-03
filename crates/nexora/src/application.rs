@@ -37,7 +37,7 @@ use gpui_component::{
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
     tab::{Tab, TabBar},
-    table::{TableEvent, TableState},
+    table::{Column, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 #[cfg(feature = "desktop")]
@@ -936,6 +936,120 @@ pub(crate) fn shell_preferences_snapshot(cx: &App) -> ShellPreferences {
         .unwrap_or_default()
 }
 
+/// 允许原生 gpui-component TableDelegate 接入 Nexora Settings 列布局持久化。
+///
+/// 动态列、分组表头或其他不能使用 [`CrudTableDelegate`] 的业务表只需暴露其现有列集合；
+/// Nexora 负责恢复列顺序与合法宽度，并在原生列拖动/缩放交互完成后合并写入 Settings。
+pub trait PersistentDataTableDelegate: TableDelegate {
+    /// 返回当前代码声明和用户恢复后的列定义。
+    fn persistent_columns(&self) -> &[Column];
+
+    /// 返回可更新的列集合。
+    fn persistent_columns_mut(&mut self) -> &mut Vec<Column>;
+}
+
+/// 为原生 gpui-component TableDelegate 创建带列布局持久化的 TableState。
+///
+/// `configure` 用于保留业务原有的 `TableState` builder 配置。后台排序仍由业务 delegate
+/// 的 `perform_sort` 契约处理；需要通用后台排序时优先使用 [`persistent_crud_table_state_with`]。
+///
+/// # Panics
+///
+/// `table_id` 为空、包含前后空白或路径分隔符时会 panic。
+pub fn persistent_data_table_state_with<D, P>(
+    table_id: impl Into<String>,
+    mut delegate: D,
+    configure: impl FnOnce(TableState<D>) -> TableState<D>,
+    window: &mut Window,
+    cx: &mut Context<P>,
+) -> Entity<TableState<D>>
+where
+    D: PersistentDataTableDelegate,
+    P: 'static,
+{
+    let table_id = table_id.into();
+    validate_table_id(table_id.as_str());
+    if let Some(saved) = shell_preferences_snapshot(cx).tables.get(&table_id) {
+        restore_persistent_columns(delegate.persistent_columns_mut(), &saved.columns);
+    }
+
+    let state = cx.new(|cx| configure(TableState::new(delegate, window, cx)));
+    let event_table_id = table_id;
+    cx.subscribe(&state, move |_, table, event, cx| {
+        if !matches!(
+            event,
+            TableEvent::ColumnWidthsChanged(_) | TableEvent::MoveColumn(_, _)
+        ) {
+            return;
+        }
+        let columns = table.update(cx, |state, cx| {
+            if let TableEvent::ColumnWidthsChanged(widths) = event {
+                for (column, width) in state
+                    .delegate_mut()
+                    .persistent_columns_mut()
+                    .iter_mut()
+                    .zip(widths.iter().copied())
+                {
+                    column.width = width.clamp(column.min_width, column.max_width);
+                }
+            }
+            let columns = table_column_preferences(state.delegate().persistent_columns());
+            cx.notify();
+            columns
+        });
+        update_shell_preferences(cx, |preferences| {
+            preferences
+                .tables
+                .entry(event_table_id.clone())
+                .or_default()
+                .columns = columns;
+        });
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason=订阅生命周期由父组件 Context 管理并随其销毁
+    .detach();
+    state
+}
+
+fn validate_table_id(table_id: &str) {
+    assert!(
+        !table_id.is_empty()
+            && table_id.trim() == table_id
+            && !table_id.contains('/')
+            && !table_id.contains('\\'),
+        "持久化 DataTable 的 table_id 必须是稳定的非空标识且不能包含路径分隔符",
+    );
+}
+
+fn restore_persistent_columns(columns: &mut Vec<Column>, saved_columns: &[TableColumnPreferences]) {
+    let mut remaining = std::mem::take(columns);
+    let mut restored = Vec::with_capacity(remaining.len());
+    for saved in saved_columns {
+        let Some(index) = remaining
+            .iter()
+            .position(|column| column.key.as_ref() == saved.key)
+        else {
+            continue;
+        };
+        let mut column = remaining.remove(index);
+        if saved.width.is_finite() && saved.width > 0.0 {
+            column.width = px(saved.width).clamp(column.min_width, column.max_width);
+        }
+        restored.push(column);
+    }
+    restored.extend(remaining);
+    *columns = restored;
+}
+
+fn table_column_preferences(columns: &[Column]) -> Vec<TableColumnPreferences> {
+    columns
+        .iter()
+        .map(|column| TableColumnPreferences {
+            key: column.key.to_string(),
+            width: f32::from(column.width),
+        })
+        .collect()
+}
+
 /// 创建一份带 Settings 恢复、列交互持久化和后台排序回调的 CRUD TableState。
 ///
 /// `table_id` 必须是应用内稳定且唯一的业务标识。函数会在 `TableState` 初始化前恢复仍然
@@ -992,13 +1106,7 @@ where
     P: 'static,
 {
     let table_id = table_id.into();
-    assert!(
-        !table_id.is_empty()
-            && table_id.trim() == table_id
-            && !table_id.contains('/')
-            && !table_id.contains('\\'),
-        "persistent_crud_table_state 的 table_id 必须是稳定的非空标识且不能包含路径分隔符",
-    );
+    validate_table_id(table_id.as_str());
     if let Some(saved) = shell_preferences_snapshot(cx).tables.get(&table_id) {
         delegate.restore_persistent_state(&CrudTableState::from(saved));
     }

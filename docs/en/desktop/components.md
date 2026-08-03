@@ -17,7 +17,7 @@ GPUI component crates directly:
 
 ```toml
 [dependencies]
-nexora = { version = "0.23.1", features = ["desktop", "derive"] }
+nexora = { version = "0.23.2", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -301,6 +301,11 @@ on every mouse pixel. Sort callbacks never reorder only the current frontend pag
 `backend_field` and direction into the HTTP query, reset to page one, and reload. Read
 `current_sort()` before the first request so restored sorting reaches the backend; retain it across
 load failures for retry.
+
+Tables with dynamic columns or grouped headers that must implement gpui-component `TableDelegate`
+directly can implement `PersistentDataTableDelegate` to expose their existing `Vec<Column>`, then
+use `persistent_data_table_state_with` for the same Settings-backed column order and width
+persistence without duplicating file I/O in the application.
 
 Selection is controlled. Row and header clicks emit `RowSelectionEvent` and
 `LoadedRowsSelectionEvent`; the caller updates its selected IDs, writes them back with

@@ -16,7 +16,7 @@ CRUD 页面、表单对话框、字段容器和层级选择器。应用仍然直
 
 ```toml
 [dependencies]
-nexora = { version = "0.23.1", features = ["desktop", "derive"] }
+nexora = { version = "0.23.2", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -385,6 +385,10 @@ let table_state = nexora::desktop::persistent_crud_table_state_with(
 DataTable 只在列宽拖动结束和列移动完成后发出保存事件，框架再通过合并写入持久化，不会按每个
 鼠标像素同步写磁盘。排序回调不会对当前前端页临时重排；业务必须把 `backend_field` 和方向映射
 到 HTTP query，回到第一页并重新请求。加载失败时不要清除排序，重试继续使用同一状态。
+
+动态列或分组表头等必须直接实现 gpui-component `TableDelegate` 的表格，实现
+`PersistentDataTableDelegate` 暴露现有 `Vec<Column>`，再通过
+`persistent_data_table_state_with` 复用同一 Settings 列顺序和宽度持久化；无需在应用复制文件 I/O。
 
 ### 受控选择
 

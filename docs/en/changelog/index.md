@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [0.23.2: native DataTable column-layout persistence](./0.23.2)
 - [0.23.1: configurable persistent DataTable construction](./0.23.1)
 - [0.23.0: Settings, DataTable persistence, and multi-channel release](./0.23.0)
 - [0.22.0: dynamic release identity and build receipts](./0.22.0)
