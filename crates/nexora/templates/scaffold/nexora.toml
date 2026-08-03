@@ -22,8 +22,8 @@ managed = true
 
 [apps.{{ project_name }}.release]
 channel = "stable"
-version = "0.1.0"
-build_number = 1
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 
 [apps.{{ project_name }}.updater]

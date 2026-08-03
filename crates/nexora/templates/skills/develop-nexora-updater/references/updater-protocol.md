@@ -35,8 +35,8 @@ object_prefix = "console"
 
 [apps.console.release]
 channel = "stable"
-version = "1.2.0"
-build_number = 12
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/console-update.key"
 
@@ -65,7 +65,9 @@ Rules:
 - `apps` table names are stable CLI app IDs. `package` must exist and be a desktop binary. `app_id` is permanent and globally unique.
 - Multiple apps may share a publish target, but `app_id`, `object_prefix` and output paths must not conflict.
 - A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
-- `release.channel`, `release.version`, `release.build_number` and `release.minimum_supported_version` are the only release identity source for build and publish. `manifest_sequence` is never configured locally.
+- `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
+- `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression is UTC `yyMMddHHmmss` and uses `max(current UTC value, previous local build number + 1)` after same-second builds or clock rollback. Unknown strings, zero and overflow are rejected.
+- Explicit version/build values remain compatible. Build freezes the resolved identity in `dist/<app>/<channel>/release.json`; publish and yank read this receipt and never recompute dynamic values. `manifest_sequence` is never configured locally.
 - Server, library, migration and unregistered packages do not participate.
 
 ## Runtime Overrides
@@ -99,7 +101,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 
 ## Versions And Channels
 
-- `version` and `build_number` come from the selected app's release configuration. Version is valid SemVer and build number is greater than zero.
+- `version` and `build_number` are resolved from the selected app's release configuration, then frozen in its release receipt. Version is valid SemVer and build number is greater than zero.
 - Clients compare `(version, build_number)`. Same SemVer may be republished only with a higher build number.
 - `stable`, `beta` and `nightly` are fixed at build time and use separate `latest.json`; runtime channel switching is not allowed.
 
@@ -107,6 +109,8 @@ If absent, use build defaults. If present but invalid, disable this check and su
 
 - `nexora build` compiles only the selected app main binary and updater sidecar, initial installer artifact, update payload, SHA-256 and `artifact.json`.
 - It does not access S3 and does not publish.
+- Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.
+- All targets in one build use that receipt. A matching incomplete retry reuses it. After every planned target artifact is complete, another explicit dynamic build creates a strictly higher build number and updates the current receipt without deleting old versioned artifacts. Corrupt/unsupported receipts fail before build and are never reconstructed from directory names.
 - Targets come from `apps.<id>.targets.required`; build processes every required target the current host can legally build.
 - Cross-OS pseudo-packaging is forbidden. Complete releases use platform runners.
 - Sidecar locations: macOS `Contents/Helpers/<app>-updater`, Windows `<app>-updater.exe`, Linux `<app>-updater`.
@@ -115,14 +119,15 @@ If absent, use build defaults. If present but invalid, disable this check and su
 
 Platform outputs:
 
-- macOS: DMG plus `ditto` `.app.zip`; `artifact.json` describes both. The updater manifest contains only `.app.zip`. First release may use ad-hoc signing and no notarization.
+- macOS: write version, build number, configured ICNS, updater settings and sidecar before signing; create both DMG and `ditto` `.app.zip` from that same signed `.app`. The ICNS is copied to Resources and written to `CFBundleIconFile` for the `.app` only. The DMG file and mounted volume keep their system-default appearance. `artifact.json` describes ZIP and DMG; the updater manifest contains only `.app.zip`.
 - Windows: optional user or machine `Setup.exe`, plus update ZIP. User scope writes LocalAppData Programs; machine scope writes Program Files with UAC. First release has no Authenticode requirement.
 - Linux: AppImage, optionally user-directory portable archive. Update AppImage itself or `tar.zst`; package-manager formats are future work.
 
 ## Publish
 
 - `nexora publish` publishes existing artifacts only and must never run build implicitly.
-- It reads `nexora.toml`, selects apps, loads all required-target `artifact.json` files, validates consistency, signs immutable manifests and uploads in order.
+- It reads `nexora.toml`, selects apps, then reads the current release receipt. It validates the receipt against app/package/channel, selected Cargo package version, current sources/configuration and required targets; it validates each `artifact.json`, file existence, size and SHA-256 before upload.
+- Dry-run performs the same receipt, artifact and remote checks without local or remote writes. An available identity must be strictly greater than the remote `(version, build_number)`. Yank uses the receipt identity.
 - Stable publish must include all required targets.
 - Upload versioned `.app.zip`, versioned DMG, notes, immutable sequence manifest, target-specific latest DMGs, optional single-target `latest.dmg`, and finally `latest.json`; then verify mutable objects and every updater URL anonymously.
 - Read and verify remote `latest.json` before publishing. HTTP 404 means sequence 1; otherwise use remote sequence plus one. Dry-run performs the same read without writes. Re-read before mutable uploads and reject concurrent sequence changes.

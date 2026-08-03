@@ -33,9 +33,26 @@ identifier when omitted.
 
 ## Configuration
 
-The repository-root `nexora.toml` is the only build and publish project configuration. Each app declares its technical `package`, user-facing `display_name`, release channel/version/build number, updater trust, required targets, and macOS signing policy.
+The repository-root `nexora.toml` is the only build and publish project configuration. Each app declares its technical `package`, user-facing `display_name`, release channel/version/build number, updater trust, required targets, and macOS signing policy. New projects use:
 
-`package` controls Cargo, the cargo-bundle source path, and technical artifact names. `display_name` controls Info.plist, the DMG volume, and the app name users see after installation. The release channel must be listed in updater channels, version must be SemVer, and build number must be greater than zero.
+```toml
+[apps.desktop.release]
+channel = "stable"
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
+minimum_supported_version = "0.0.0"
+```
+
+The supported release identity parameters are:
+
+| Parameter | Supported values | Result |
+| --- | --- | --- |
+| `release.version` | Exact `${CARGO_PKG_VERSION}` or a literal SemVer such as `"1.2.3"` | A validated SemVer |
+| `release.build_number` | Exact `${BUILD_DATETIME}` or a literal positive integer such as `42` | A positive `u64` |
+
+`package` controls Cargo, the cargo-bundle source path, and technical artifact names. `display_name` controls Info.plist, the DMG volume, and the app name users see after installation. `${CARGO_PKG_VERSION}` reads the selected app package through `cargo metadata --no-deps --format-version 1`, including packages that use `version.workspace = true`; it is not the workspace root name or Nexora CLI version. A literal SemVer remains supported.
+
+`${BUILD_DATETIME}` is the complete UTC `yyMMddHHmmss` value. A build in the same second or after clock rollback uses `max(current UTC value, previous local build number + 1)`. A literal positive integer remains supported. Expressions must occupy the entire field; unknown expressions, fragments, arbitrary environment variables, zero, and overflow are rejected.
 
 The signing key is read from `release.signing_key_file`, resolved relative to `nexora.toml`. Only an absent or empty file setting falls back to the environment variable named by `signing_key_env`. A configured missing file is an error and never falls back.
 
@@ -65,9 +82,14 @@ nexora publish
 
 A single app is selected automatically. Multiple apps use an interactive `display_name (app key / package)` menu; non-interactive use requires `--app`, while publishing every app requires explicit `--all`. A real non-interactive publish also requires `--yes`.
 
-Build never accesses object storage. It builds required host-compatible targets, the main binary and `<executable>-updater` sidecar, writes bundle configuration and Info.plist, signs the completed bundle, and creates both a technical `.app.zip` and DMG plus multi-artifact `artifact.json`. Publish never runs build and requires both ZIP and DMG for every required macOS target.
+Before building any target, build atomically freezes the resolved identity in `dist/<app>/<channel>/release.json`. The receipt contains its schema, app key, package, channel, final version/build number and their sources, signed-integer Unix creation second, and planned targets. Every target in that build shares the identity. An incomplete retry reuses a matching receipt; once all target artifacts are complete, another explicit dynamic build creates a strictly higher number without deleting old versioned artifacts. A corrupt or unsupported receipt fails before target builds and is never reconstructed from directory names.
 
-The DMG is the first-install medium; `.app.zip` is the self-update payload; `artifact.json` indexes
+Build never accesses object storage. It builds required host-compatible targets, the main binary and `<executable>-updater` sidecar, writes version, build number, the configured ICNS, updater configuration, and sidecar before signing the completed bundle. The same signed `.app` produces both the technical `.app.zip` and DMG plus multi-artifact `artifact.json`. The ICNS is used only by the `.app` through `CFBundleIconFile`; the DMG file and mounted volume keep their system-default appearance, with no separate DMG icon setting.
+
+Publish, dry-run, and yank read version/build number only from the receipt and never recompute UTC time or run build. Publish validates the receipt against the app, package, channel, current Cargo package version, configuration, and required targets, then validates each `artifact.json`, file size, and SHA-256. Dry-run performs the same local and remote checks without local or remote writes. An available release must be strictly greater than the remote `(version, build_number)`.
+
+The DMG is the first-install medium; `.app.zip` is the self-update payload; `release.json` freezes
+the local build identity; `artifact.json` indexes
 local hashes; `latest.json` is the signed remote release decision; and the sidecar independently
 re-verifies, stages, replaces, restarts, confirms health, and rolls back.
 

@@ -49,6 +49,7 @@ nexora build --app desktop
 - `.app`：本地 bundle，包含主程序、ICNS、sidecar 和 `nexora-updater.json`。
 - `.app.zip`：应用内更新负载；sidecar 下载、校验并替换当前 `.app`。
 - DMG：首次分发与安装介质；用户把显示名称对应的 `.app` 拖入 Applications。
+- `release.json`：`dist/<app>/<channel>/release.json` 中冻结的本次 release identity 与目标列表。
 - `artifact.json`：本地 build 产物索引与 SHA-256；publish 只消费它描述的既有产物。
 - `latest.json`：publish 最后上传的 Ed25519 签名清单；客户端只信任内置公钥验证通过的内容。
 - sidecar：独立进程，重新验签、下载、校验、暂存、等待主进程退出、事务替换、重启、健康
@@ -94,8 +95,8 @@ managed = true
 
 [apps.desktop.release]
 channel = "stable"
-version = "1.2.0"
-build_number = 12
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/desktop-update.key"
 
@@ -158,6 +159,9 @@ icons = [
 
 ### app、品牌与 release
 
+其中 release identity 支持的配置参数是 `release.version` 与 `release.build_number`；下表同时列出
+动态表达式和继续兼容的显式值形式。
+
 | 字段 | 必填 | 作用、来源与示例 | 默认值 | 秘密 | 配置错误行为 |
 | --- | --- | --- | --- | --- | --- |
 | `apps.<app_key>` | 是 | CLI 稳定 app key，如 `desktop`；进入对象路径 | 无 | 否 | 缺 app 或 key 不安全时失败 |
@@ -170,13 +174,20 @@ icons = [
 | `branding.icon_source` | 是 | 图标生成源 PNG | 无 | 否 | 文件不存在、格式/尺寸/透明通道无效时失败 |
 | `branding.managed` | 否 | 允许 `icons generate` 重建已有输出 | `false` | 否 | `false` 且输出已存在时拒绝覆盖；可显式 `--force` |
 | `release.channel` | 是 | 发布通道，如 `stable`；必须包含在 updater channels | 无 | 否 | 不一致时失败 |
-| `release.version` | 是 | SemVer，由发布负责人递增 | 无 | 否 | 非 SemVer 失败 |
-| `release.build_number` | 是 | 正整数构建号，版本内也应递增 | 无 | 否 | 0 失败 |
+| `release.version` | 是 | 完整字段 `${CARGO_PKG_VERSION}`，或显式 SemVer 如 `"1.2.3"` | 无 | 否 | 未知/片段表达式或非 SemVer 失败 |
+| `release.build_number` | 是 | 完整字段 `${BUILD_DATETIME}`，或显式正整数如 `42` | 无 | 否 | 未知字符串、0 或溢出失败 |
 | `release.minimum_supported_version` | 否 | 低于该版本时进入强制更新门禁 | `"0.0.0"` | 否 | 非 SemVer 失败 |
 | `release.signing_key_file` | 否 | 更新签名私钥文件，相对根目录或绝对路径 | 未配置 | **是（文件内容）** | 见下方严格优先级 |
 
+`${CARGO_PKG_VERSION}` 通过 `cargo metadata --no-deps --format-version 1` 读取所选 app 的
+`package`，因此同时支持 package 自有 `version` 和 `version.workspace = true`；它不是 workspace
+根名称或 Nexora CLI 自身版本。`${BUILD_DATETIME}` 使用 UTC `yyMMddHHmmss`，并在同秒重建或
+时钟回拨时取 `max(当前 UTC 值, 上次本地构建号 + 1)`。这两个表达式都必须占满字段，不提供
+任意环境变量插值或通用模板引擎。显式 SemVer 与正整数继续兼容。
+
 `nexora icons generate --app <key>` 只消费所选 app 的品牌路径。构建把 ICNS 复制到
-`.app/Contents/Resources` 并写入 `CFBundleIconFile`，不会修改 Cargo manifest。
+`.app/Contents/Resources` 并写入 `CFBundleIconFile`，不会修改 Cargo manifest。DMG 文件及其
+挂载卷不设置软件品牌图标，保留系统默认外观，也不增加 `dmg_icon` 一类重复配置。
 
 ### updater
 
@@ -286,8 +297,22 @@ Dialog、Progress、Button、Icon、Alert/Notification 展示进度。不要在�
 
 ## build、publish 与第一次升级验证
 
+`nexora build` 在任何 target 构建前原子写入
+`dist/<app>/<channel>/release.json`。收据记录 schema、app key、package、channel、最终
+version/build number、两项来源、创建 Unix 秒和本次 targets；同一次 build 的全部 target 共用
+该身份。构建中途失败时，只要收据仍与当前配置匹配且 target 未全部完成，重试会复用原构建号；
+全部 target 的 artifact 已完整后再次显式 build，动态构建号会严格增大，旧版本化产物不会删除。
+损坏或不支持的收据会在构建前失败，不从目录名猜测身份。
+
 `nexora build` 只构建本地 `.app`、DMG、`.app.zip`、sidecar、bundle 配置、hash 和
-`artifact.json`，不访问对象存储。`nexora publish` 只读取并校验既有 artifact，不会隐式 build。
+`artifact.json`，不访问对象存储。版本、构建号、图标、updater 配置和 sidecar 全部写入后才
+签名；ZIP 与 DMG 都来自同一个已完成资源写入并签名的 `.app`。
+
+`nexora publish`（包括 yank）只从当前 release receipt 读取 version/build number，不重新计算
+UTC 时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version、当前配置和
+required targets 一致，再逐个验证 `artifact.json` 身份、文件存在性、大小与 SHA-256。dry-run
+执行相同的本地与远端预检，但不写本地或远端；available identity 必须严格高于远端
+`(version, build_number)`。
 
 第一次发布：
 
@@ -307,8 +332,8 @@ publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则�
 <prefix>/<app>/<channel>/releases/<version>/<build>/<target>/...
 ```
 
-从旧版本升级验证时，先通过 DMG 安装版本/build 1，再递增 `release.version` 与
-`release.build_number`，重新 build、dry-run、publish。启动已安装旧版本，确认启动检查不阻塞
+从旧版本升级验证时，先通过 DMG 安装基础版本，再更新 Cargo package version（或显式
+`release.version` / `release.build_number`），重新 build、dry-run、publish。启动已安装旧版本，确认启动检查不阻塞
 登录、通知不自动下载、公共弹窗确认后才下载、sidecar 替换并重启、新版本健康确认成功、多次
 触发不并发下载、取消或网络失败不损坏旧应用。
 
