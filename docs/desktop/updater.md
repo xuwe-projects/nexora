@@ -17,7 +17,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.21.1 nexora --locked --force \
+  --tag v0.21.2 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 ```
 
@@ -53,6 +53,11 @@ nexora build --app desktop
 - `latest.json`：publish 最后上传的 Ed25519 签名清单；客户端只信任内置公钥验证通过的内容。
 - sidecar：独立进程，重新验签、下载、校验、暂存、等待主进程退出、事务替换、重启、健康
   确认并在失败时回滚。
+
+应用使用 `nexora::config::initialize(None)` 时，Nexora 会忽略 sidecar 注入的
+`--nexora-updater-health-*` 内部参数并继续选择默认 TOML；显式配置路径和普通首个位置参数
+仍保持原有优先级。这样新版本可以完成配置初始化、创建主窗口并回报健康，而不会把健康会话
+参数误判为配置文件路径。
 
 打开 DMG、拖入 `/Applications` 后，从 Finder 启动一次基础版本。只有从包含 updater 配置和
 sidecar 的新 DMG 安装过的版本，后续才能应用内自更新。

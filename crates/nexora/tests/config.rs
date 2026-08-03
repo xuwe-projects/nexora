@@ -1,6 +1,7 @@
 #![cfg(feature = "derive")]
 
 use std::{
+    ffi::OsString,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -162,6 +163,32 @@ fn settings_without_account_sections_validate_without_extra_contracts() {
 
     assert_eq!(settings.value, "custom");
     assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn updater_health_arguments_do_not_override_the_default_config_path() {
+    let arguments = [
+        OsString::from("imes"),
+        OsString::from("--nexora-updater-health-session"),
+        OsString::from("session"),
+        OsString::from("--nexora-updater-health-file"),
+        OsString::from("/tmp/session.json"),
+    ];
+
+    assert!(nexora::config::__private::config_path_from_args(arguments).is_none());
+}
+
+#[test]
+fn positional_config_path_is_preserved() {
+    let arguments = [
+        OsString::from("imes"),
+        OsString::from("config/imes.local.toml"),
+    ];
+
+    assert_eq!(
+        nexora::config::__private::config_path_from_args(arguments),
+        Some("config/imes.local.toml".into())
+    );
 }
 
 fn temporary_directory(label: &str) -> PathBuf {

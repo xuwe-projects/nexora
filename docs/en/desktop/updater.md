@@ -14,7 +14,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.21.1 nexora --locked --force \
+  --tag v0.21.2 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 nexora doctor
 # Installs cargo-bundle/create-dmg if either is missing:
@@ -66,6 +66,12 @@ Build never accesses object storage. It builds required host-compatible targets,
 The DMG is the first-install medium; `.app.zip` is the self-update payload; `artifact.json` indexes
 local hashes; `latest.json` is the signed remote release decision; and the sidecar independently
 re-verifies, stages, replaces, restarts, confirms health, and rolls back.
+
+When an application uses `nexora::config::initialize(None)`, Nexora ignores the internal
+`--nexora-updater-health-*` arguments injected by the sidecar and continues with the default TOML.
+Explicit configuration paths and ordinary first positional arguments retain their precedence. This
+lets the replacement process initialize configuration, create its first window, and report health
+instead of treating a health-session flag as a configuration filename.
 
 ## Sequence and remote objects
 
