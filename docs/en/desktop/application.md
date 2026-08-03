@@ -15,6 +15,8 @@ use nexora::{Application as _, ApplicationOptions};
 struct DesktopApplication;
 
 impl nexora::Application for DesktopApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("My App")
@@ -24,6 +26,16 @@ impl nexora::Application for DesktopApplication {
     fn initialize(&mut self, _cx: &mut App) {}
 }
 ```
+
+## User settings path and migration
+
+Nexora uses `Application::PACKAGE_NAME` as the stable directory key and stores window placement,
+appearance, pinned tabs, table state, and other preferences in
+`~/.xuwe/<cargo-package>/settings.json`. The path is built through platform directory APIs and
+`PathBuf::join`. On first upgrade, when the JSON file is absent and the legacy `workspace.toml`
+exists, Nexora reads the legacy values and atomically writes the JSON file. An existing JSON file
+always wins, and the legacy file is retained but never written again. Corrupt data or migration
+failure produces a value-safe diagnostic and falls back to default preferences for startup.
 
 ## Logo
 

@@ -16,7 +16,7 @@ CRUD 页面、表单对话框、字段容器和层级选择器。应用仍然直
 
 ```toml
 [dependencies]
-nexora = { version = "0.22.0", features = ["desktop", "derive"] }
+nexora = { version = "0.23.0", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -290,7 +290,7 @@ use nexora::desktop::{CrudTableDelegate, TableCell};
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., fixed_left))]
     id: u64,
-    #[nexora(column(title = "城市", width = 160., sortable))]
+    #[nexora(column(title = "城市", width = 160., sortable, sort_field = "city_name"))]
     name: String,
     #[nexora(column(title = "状态", width = 76., align = "center", render = Self::status_cell))]
     enabled: bool,
@@ -310,7 +310,20 @@ let delegate = CrudTableDelegate::new(rows)
     .empty_title("暂无城市")
     .empty_description("创建城市后会显示在这里。");
 
-let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
+let table_state = nexora::desktop::persistent_crud_table_state(
+    "cities.main",
+    delegate,
+    cx.listener(|this, sort, _window, cx| {
+        this.page = 1;
+        this.sort = sort;
+        this.reload(cx);
+    }),
+    window,
+    cx,
+);
+let restored_sort = table_state.read(cx).delegate().current_sort().cloned();
+// 在首次 HTTP 请求前把 restored_sort 映射为业务 query。
+let table = DataTable::new(table_state).bordered(true);
 ```
 
 ### 派生属性
@@ -324,6 +337,7 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 | `column(name = "...")` / `column(title = "...")` | 覆盖表头文案 |
 | `column(width = 120.)` / `min_width` / `max_width` | 设置列宽 |
 | `column(sortable)` / `ascending` / `descending` | 设置排序能力和默认方向 |
+| `column(sort_field = "...")` | 为后台查询声明稳定字段名；不依赖表头文案 |
 | `column(fixed_left)` | 固定在左侧 |
 | `column(resizable = false)` / `movable = false` / `selectable = false` | 转发原生列行为 |
 | `column(header_align = "left")` | 表头对齐，支持 `left`、`center`、`right` |
@@ -349,6 +363,14 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 | `action_column(column, render)` | 追加操作列 |
 | `action_text(text)` | 为最近追加的操作列设置文本导出 |
 | `empty_title(text)` / `empty_description(text)` | 空状态文案 |
+| `persistent_state()` / `restore_persistent_state(state)` | 导出或恢复列顺序、宽度与排序 |
+| `current_sort()` / `on_sort_changed(handler)` | 读取恢复后的后台排序并处理表头排序事件 |
+
+`persistent_crud_table_state` 使用业务提供的稳定、唯一 `table_id`，把所有表格状态合并保存在应用
+`settings.json`。恢复时忽略未知列和失效排序、新列按声明顺序追加、宽度按 min/max 限制。原生
+DataTable 只在列宽拖动结束和列移动完成后发出保存事件，框架再通过合并写入持久化，不会按每个
+鼠标像素同步写磁盘。排序回调不会对当前前端页临时重排；业务必须把 `backend_field` 和方向映射
+到 HTTP query，回到第一页并重新请求。加载失败时不要清除排序，重试继续使用同一状态。
 
 ### 受控选择
 

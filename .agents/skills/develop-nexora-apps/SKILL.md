@@ -68,6 +68,9 @@ impl FeatureElement for UserDetailsFeature {
   `nexora::desktop::CrudTableDelegate<T>` 接入 `gpui-component` 的 `DataTable`。字段属性只描述
   `Column` 能力、表头/正文对齐和自定义渲染；操作列通过 delegate 的 `action_column` 追加，
   复杂表格仍可直接手写原生 `TableDelegate`。
+- 需要保存列宽、列顺序或后台排序时，用稳定、唯一的业务 `table_id` 调用
+  `nexora::desktop::persistent_crud_table_state`。可排序字段用 `sort_field = "稳定后端字段"`，
+  首次请求前读取恢复后的 `current_sort()`；排序回调回到第一页并重新请求后端，不得只排序当前页。
 - CRUD DataTable 表头默认在 `TableDelegate::render_th` 中使用
   `nexora::desktop::TableHeaderCell`，让标题水平、垂直居中；需要按列语义覆盖时使用
   `.left()`、`.center()`、`.right()` 或完全自定义表头元素。
@@ -241,7 +244,8 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
-- `initialize(None)` 依次尝试进程第一个参数、当前目录及 package 清单目录祖先中的 `config/<package>.toml`；显式路径使用 `initialize(Some(path))`。
+- `Application` 必须声明 `const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME")`，框架据此把用户偏好保存到 `~/.xuwe/<package>/settings.json`。
+- `initialize(None)` 依次尝试有效的命令行 TOML 路径、标准 app bundle 中的 `Contents/Resources/config/<package>.toml`、本地 `config/<package>.toml`；显式路径使用 `initialize(Some(path))`。
 - 桌面端标记 `#[nexora(account_client)]`，服务端标记 `#[nexora(account_server)]`；不要在一个根配置中混用两端配置。
 - 应用自行创建并持有唯一 `PgPool`；`Server::new()` 不连接数据库。先取得
   `nexora::server::migrations()`，与应用迁移合并并拒绝跨来源版本冲突，再构造唯一 SQLx

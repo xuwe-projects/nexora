@@ -10,7 +10,7 @@ order: 2
 从 GitHub tag 安装正式发布版本：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.22.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.23.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 从 Nexora 仓库根目录安装当前本地源码：
@@ -33,10 +33,12 @@ nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
+nexora build --app <id> --channel beta --channel nightly
+nexora build --all-apps --all-channels
 nexora publish
-nexora publish --app <id> --dry-run
-nexora publish --all --yes
-nexora publish --app <id> yank
+nexora publish --app <id> --channel nightly --dry-run
+nexora publish --all-apps --all-channels --yes
+nexora publish --app <id> --channel beta yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
 nexora version
@@ -65,3 +67,9 @@ artifact，不会隐式触发 build。发布命令按更新包和 notes、不可
 上传到 RustFS/S3 兼容对象存储，最后通过匿名公开 URL 重新读取并验证 `latest.json`。更新清单
 使用 Ed25519 签名信封，公钥写入 app 的 `trusted_public_keys`，私钥只从安全文件或
 `signing_key_env` 指定的环境变量读取。强制更新通过 `--minimum-supported-version` 写入清单。
+
+`--app` 与 `--channel` 都可重复；`--all-apps` / `--all-channels` 分别与对应的显式选择互斥。
+旧 `publish --all` 继续作为 `--all-apps` 的别名。非交互环境未传 channel 时使用各 app 的
+`default_channel`；交互环境会先多选 app，再为每个 app 多选 channel，并默认勾选默认通道。
+所有 app/channel 会在任何构建或上传前完成只读预检，随后顺序执行。publish 与 yank 精确读取
+所选组合的 receipt 和 artifact；dry-run 输出完整组合且不写入远端。

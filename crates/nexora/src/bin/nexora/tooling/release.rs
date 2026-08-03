@@ -4,7 +4,7 @@ use super::{CliError, CliResult};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{TimeZone as _, Utc};
 use clap::{Args, Subcommand};
-use dialoguer::{Confirm, Select};
+use dialoguer::{Confirm, MultiSelect};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use hmac::{Hmac, Mac as _};
 use image::{GenericImageView as _, ImageFormat, imageops::FilterType};
@@ -23,29 +23,44 @@ use std::{
 
 const CONFIG_FILE_NAME: &str = "nexora.toml";
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;
-const RELEASE_RECEIPT_SCHEMA_VERSION: u32 = 1;
+const RELEASE_RECEIPT_SCHEMA_VERSION: u32 = 2;
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
 
-/// `nexora build` 仅保留稳定 app 选择器。
+/// `nexora build` 的 app/channel 多选参数。
 #[derive(Args, Debug, Clone)]
 pub(crate) struct BuildConfig {
-    /// `nexora.toml` 中的 app key；单 app 时可省略。
+    /// `nexora.toml` 中的 app key；可以重复传入。
+    #[arg(long, conflicts_with = "all_apps")]
+    app: Vec<String>,
+    /// 选择全部 app。
     #[arg(long)]
-    app: Option<String>,
+    all_apps: bool,
+    /// 要构建的 release channel；可以重复传入。
+    #[arg(long, conflicts_with = "all_channels")]
+    channel: Vec<String>,
+    /// 为每个选中 app 构建全部 channel。
+    #[arg(long)]
+    all_channels: bool,
 }
 
 /// `nexora publish` 的操作型参数。
 #[derive(Args, Debug, Clone)]
 pub(crate) struct PublishConfig {
-    /// `nexora.toml` 中的 app key；单 app 时可省略。
+    /// `nexora.toml` 中的 app key；可以重复传入。
+    #[arg(long, conflicts_with = "all_apps")]
+    app: Vec<String>,
+    /// 明确发布全部 app；`--all` 是兼容旧命令的别名。
+    #[arg(long = "all-apps", visible_alias = "all")]
+    all_apps: bool,
+    /// 要发布或撤回的 release channel；可以重复传入。
+    #[arg(long, conflicts_with = "all_channels")]
+    channel: Vec<String>,
+    /// 为每个选中 app 处理全部 channel。
     #[arg(long)]
-    app: Option<String>,
-    /// 明确发布全部 app。
-    #[arg(long, conflicts_with = "app")]
-    all: bool,
+    all_channels: bool,
     /// 完成全部只读预检并输出计划，但不上传。
     #[arg(long)]
     dry_run: bool,
@@ -119,13 +134,33 @@ struct BrandingConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseConfig {
-    channel: String,
-    version: String,
-    build_number: BuildNumberConfig,
-    #[serde(default = "default_minimum_supported_version")]
-    minimum_supported_version: String,
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
+    default_channel: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    build_number: Option<BuildNumberConfig>,
+    #[serde(default)]
+    minimum_supported_version: Option<String>,
     #[serde(default)]
     signing_key_file: Option<String>,
+    #[serde(default)]
+    channels: BTreeMap<String, ReleaseChannelConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseChannelConfig {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    build_number: Option<BuildNumberConfig>,
+    #[serde(default)]
+    minimum_supported_version: Option<String>,
+    #[serde(default)]
+    runtime_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -241,6 +276,10 @@ struct ResolvedReleaseConfig {
     build_number: ResolvedBuildNumber,
     build_number_source: BuildNumberSource,
     minimum_supported_version: Version,
+    runtime_config: PathBuf,
+    runtime_config_source: String,
+    runtime_config_sha256: String,
+    updater_feed: String,
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +290,10 @@ struct ValidatedRelease {
     version_source: VersionSource,
     build_number_source: BuildNumberSource,
     minimum_supported_version: Version,
+    runtime_config: PathBuf,
+    runtime_config_source: String,
+    runtime_config_sha256: String,
+    updater_feed: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -266,6 +309,9 @@ struct ReleaseReceipt {
     build_number_source: BuildNumberSource,
     created_at: i64,
     targets: Vec<String>,
+    runtime_config_source: String,
+    runtime_config_sha256: String,
+    updater_feed: String,
 }
 
 #[derive(Debug, Clone)]
@@ -423,7 +469,7 @@ impl UploadSource {
 }
 
 impl ReleaseReceipt {
-    fn validated_release(&self, minimum_supported_version: Version) -> CliResult<ValidatedRelease> {
+    fn validated_release(&self, configured: &ResolvedReleaseConfig) -> CliResult<ValidatedRelease> {
         if self.schema_version != RELEASE_RECEIPT_SCHEMA_VERSION {
             return Err(CliError::new(format!(
                 "release receipt schema_version {} 不受支持",
@@ -441,7 +487,11 @@ impl ReleaseReceipt {
             build_number: self.build_number,
             version_source: self.version_source,
             build_number_source: self.build_number_source,
-            minimum_supported_version,
+            minimum_supported_version: configured.minimum_supported_version.clone(),
+            runtime_config: configured.runtime_config.clone(),
+            runtime_config_source: configured.runtime_config_source.clone(),
+            runtime_config_sha256: configured.runtime_config_sha256.clone(),
+            updater_feed: configured.updater_feed.clone(),
         })
     }
 }
@@ -455,6 +505,10 @@ impl ResolvedReleaseConfig {
             version_source: self.version_source,
             build_number_source: self.build_number_source,
             minimum_supported_version: self.minimum_supported_version.clone(),
+            runtime_config: self.runtime_config.clone(),
+            runtime_config_source: self.runtime_config_source.clone(),
+            runtime_config_sha256: self.runtime_config_sha256.clone(),
+            updater_feed: self.updater_feed.clone(),
         }
     }
 }
@@ -496,32 +550,65 @@ struct TrustedKey {
 pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
     ensure_macos()?;
     let project = ProjectDocument::discover()?;
-    let app_key = project.select_one(config.app.as_deref(), terminal_is_interactive())?;
-    let app = &project.config.apps[&app_key];
-    let package_version = cargo_package_version(&project.root, &app.package, false)?;
-    let configured = project.resolved_release(&app_key, app, Some(package_version))?;
-    let targets = app
-        .targets
-        .required
-        .iter()
-        .filter(|target| host_can_build(target))
-        .cloned()
-        .collect::<Vec<_>>();
-    if targets.is_empty() {
-        return Err(CliError::new(format!(
-            "当前宿主不能构建 app `{app_key}` 的任何 required target"
-        )));
+    let selections = project.select_release_combinations(
+        &config.app,
+        config.all_apps,
+        &config.channel,
+        config.all_channels,
+        terminal_is_interactive(),
+    )?;
+
+    let mut preflight = Vec::new();
+    for (app_key, channel) in selections {
+        let app = &project.config.apps[&app_key];
+        project.brand_assets(&app_key, app)?;
+        let package_version = cargo_package_version(&project.root, &app.package, false)?;
+        let configured =
+            project.resolved_release(&app_key, app, &channel, Some(package_version))?;
+        let targets = app
+            .targets
+            .required
+            .iter()
+            .filter(|target| host_can_build(target))
+            .cloned()
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return Err(CliError::new(format!(
+                "当前宿主不能构建 app `{app_key}` channel `{channel}` 的任何 required target"
+            )));
+        }
+        let previous = project.preflight_build_receipt(&app_key, app, &configured, &targets)?;
+        preflight.push((app_key, configured, targets, previous));
     }
-    let receipt = project.prepare_build_receipt(&app_key, app, &configured, &targets)?;
-    let release = receipt.validated_release(configured.minimum_supported_version.clone())?;
-    let plans = project.build_plans(&app_key, &release)?;
-    if plans.is_empty() {
-        return Err(CliError::new(format!(
-            "当前宿主不能构建 app `{app_key}` 的任何 required target"
-        )));
+
+    let mut plans = Vec::new();
+    for (app_key, configured, targets, previous) in preflight {
+        let app = &project.config.apps[&app_key];
+        let receipt =
+            project.prepare_build_receipt(&app_key, app, &configured, &targets, previous)?;
+        let release = receipt.validated_release(&configured)?;
+        plans.extend(project.build_plans(&app_key, &release)?);
     }
-    for plan in &plans {
-        execute_build(plan)?;
+
+    let mut completed = Vec::new();
+    for (index, plan) in plans.iter().enumerate() {
+        if let Err(error) = execute_build(plan) {
+            return Err(CliError::new(format!(
+                "构建计划失败：{}/{}/{}；已完成 [{}]；失败项 `{}/{}/{}`；未执行 {} 项：{error}",
+                plan.app_key,
+                plan.release.channel,
+                plan.target,
+                completed.join(", "),
+                plan.app_key,
+                plan.release.channel,
+                plan.target,
+                plans.len().saturating_sub(index + 1),
+            )));
+        }
+        completed.push(format!(
+            "{}/{}/{}",
+            plan.app_key, plan.release.channel, plan.target
+        ));
     }
     Ok(())
 }
@@ -533,7 +620,13 @@ pub(super) fn run_publish_command(config: PublishConfig) -> CliResult<()> {
         return Err(CliError::new("非交互 publish 必须提供 `--yes`"));
     }
     let project = ProjectDocument::discover()?;
-    let app_keys = project.select_many(config.app.as_deref(), config.all, interactive)?;
+    let selections = project.select_release_combinations(
+        &config.app,
+        config.all_apps,
+        &config.channel,
+        config.all_channels,
+        interactive,
+    )?;
     let client = reqwest::blocking::Client::builder()
         .build()
         .map_err(|error| CliError::new(format!("无法创建 HTTP 客户端: {error}")))?;
@@ -542,9 +635,9 @@ pub(super) fn run_publish_command(config: PublishConfig) -> CliResult<()> {
     } else {
         ReleaseStatus::Available
     };
-    let plans = app_keys
+    let plans = selections
         .iter()
-        .map(|app_key| project.publish_plan(app_key, status, &client))
+        .map(|(app_key, channel)| project.publish_plan(app_key, channel, status, &client))
         .collect::<CliResult<Vec<_>>>()?;
 
     for plan in &plans {
@@ -660,7 +753,7 @@ impl ProjectDocument {
                     app.publish_target
                 )));
             }
-            let configured = self.resolved_release(app_key, app, Some(Version::new(0, 0, 0)))?;
+            let channels = self.release_channel_names(app_key, app)?;
             if app.targets.required.is_empty() {
                 return Err(CliError::new(format!(
                     "app `{app_key}` 的 targets.required 不能为空"
@@ -683,6 +776,14 @@ impl ProjectDocument {
                 )));
             }
             if app.updater.enabled {
+                if let Some(channel) = channels
+                    .iter()
+                    .find(|channel| !app.updater.channels.contains(channel))
+                {
+                    return Err(CliError::new(format!(
+                        "app `{app_key}` 的 release channel `{channel}` 不属于 updater.channels"
+                    )));
+                }
                 if app.updater.trusted_public_keys.is_empty() {
                     return Err(CliError::new(format!(
                         "app `{app_key}` 必须配置 trusted_public_keys"
@@ -705,19 +806,12 @@ impl ProjectDocument {
                     }
                 }
                 parse_trusted_keys(&app.updater.trusted_public_keys)?;
-                let target = &self.config.publish.targets[&app.publish_target];
-                let expected_feed = public_object_url(
-                    target,
-                    &object_key([
-                        app.object_prefix.as_str(),
-                        app_key,
-                        configured.channel.as_str(),
-                        "latest.json",
-                    ]),
-                );
-                if app.updater.feed_url != expected_feed {
+                let release = app.release.as_ref().ok_or_else(|| {
+                    CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
+                })?;
+                if !release.channels.is_empty() && !app.updater.feed_url.trim().is_empty() {
                     return Err(CliError::new(format!(
-                        "app `{app_key}` 的 updater.feed_url 与发布 latest.json 地址不一致；期望 `{expected_feed}`"
+                        "app `{app_key}` 使用 release.channels 时不能配置静态 updater.feed_url；请删除该字段，Nexora 会按 channel 生成"
                     )));
                 }
             }
@@ -725,28 +819,95 @@ impl ProjectDocument {
         Ok(())
     }
 
+    fn release_channel_names(&self, app_key: &str, app: &AppConfig) -> CliResult<Vec<String>> {
+        let release = app.release.as_ref().ok_or_else(|| {
+            CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
+        })?;
+        if release.channel.is_some() && !release.channels.is_empty() {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 不能同时使用旧 release.channel 和新 release.channels"
+            )));
+        }
+        if let Some(channel) = release.channel.as_deref() {
+            validate_channel_name(channel)?;
+            if release.default_channel.is_some() {
+                return Err(CliError::new(format!(
+                    "app `{app_key}` 的旧单通道配置不能同时声明 default_channel"
+                )));
+            }
+            return Ok(vec![channel.to_owned()]);
+        }
+        if release.channels.is_empty() {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 必须声明 release.channel 或 release.channels"
+            )));
+        }
+        for channel in release.channels.keys() {
+            validate_channel_name(channel)?;
+        }
+        let default_channel = release.default_channel.as_deref().ok_or_else(|| {
+            CliError::new(format!(
+                "app `{app_key}` 使用 release.channels 时必须声明 default_channel"
+            ))
+        })?;
+        if !release.channels.contains_key(default_channel) {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 的 default_channel `{default_channel}` 不存在于 release.channels"
+            )));
+        }
+        Ok(release.channels.keys().cloned().collect())
+    }
+
+    fn default_release_channel(&self, app_key: &str, app: &AppConfig) -> CliResult<String> {
+        let release = app.release.as_ref().ok_or_else(|| {
+            CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
+        })?;
+        self.release_channel_names(app_key, app)?;
+        release
+            .default_channel
+            .clone()
+            .or_else(|| release.channel.clone())
+            .ok_or_else(|| CliError::new(format!("app `{app_key}` 缺少默认 channel")))
+    }
+
     fn resolved_release(
         &self,
         app_key: &str,
         app: &AppConfig,
+        selected_channel: &str,
         package_version: Option<Version>,
     ) -> CliResult<ResolvedReleaseConfig> {
         let release = app.release.as_ref().ok_or_else(|| {
             CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
         })?;
+        let channels = self.release_channel_names(app_key, app)?;
+        if !channels.iter().any(|channel| channel == selected_channel) {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 不支持 channel `{selected_channel}`；可用值：{}",
+                channels.join(", ")
+            )));
+        }
         if app.updater.enabled
             && !app
                 .updater
                 .channels
                 .iter()
-                .any(|channel| channel == &release.channel)
+                .any(|channel| channel == selected_channel)
         {
             return Err(CliError::new(format!(
-                "app `{app_key}` 的 release.channel `{}` 不属于 updater.channels",
-                release.channel
+                "app `{app_key}` 的 release channel `{selected_channel}` 不属于 updater.channels"
             )));
         }
-        let (version, version_source) = match release.version.as_str() {
+        let channel = release.channels.get(selected_channel);
+        let version_value = channel
+            .and_then(|channel| channel.version.as_deref())
+            .or(release.version.as_deref())
+            .ok_or_else(|| {
+                CliError::new(format!(
+                    "app `{app_key}` channel `{selected_channel}` 合并后缺少 release.version"
+                ))
+            })?;
+        let (version, version_source) = match version_value {
             "${CARGO_PKG_VERSION}" => (
                 package_version
                     .map(Ok)
@@ -767,7 +928,15 @@ impl ProjectDocument {
                 VersionSource::Literal,
             ),
         };
-        let (build_number, build_number_source) = match &release.build_number {
+        let build_number_value = channel
+            .and_then(|channel| channel.build_number.as_ref())
+            .or(release.build_number.as_ref())
+            .ok_or_else(|| {
+                CliError::new(format!(
+                    "app `{app_key}` channel `{selected_channel}` 合并后缺少 release.build_number"
+                ))
+            })?;
+        let (build_number, build_number_source) = match build_number_value {
             BuildNumberConfig::Literal(0) => {
                 return Err(CliError::new(format!(
                     "app `{app_key}` 的 release.build_number 必须大于 0"
@@ -787,21 +956,86 @@ impl ProjectDocument {
                 )));
             }
         };
-        let minimum_supported_version = Version::parse(&release.minimum_supported_version)
+        let minimum_supported_version_value = channel
+            .and_then(|channel| channel.minimum_supported_version.as_deref())
+            .or(release.minimum_supported_version.as_deref())
+            .unwrap_or("0.0.0");
+        let minimum_supported_version = Version::parse(minimum_supported_version_value)
             .map_err(|error| {
                 CliError::new(format!(
                     "app `{app_key}` 的 release.minimum_supported_version `{}` 不是合法 SemVer: {error}",
-                    release.minimum_supported_version
+                    minimum_supported_version_value
                 ))
             })?;
+        let (runtime_config, runtime_config_source) = self.resolve_runtime_config(
+            app_key,
+            app,
+            selected_channel,
+            channel.and_then(|channel| channel.runtime_config.as_deref()),
+        )?;
+        let runtime_config_sha256 = sha256_file(&runtime_config)?;
+        let target = &self.config.publish.targets[&app.publish_target];
+        let updater_feed = public_object_url(
+            target,
+            &object_key([
+                app.object_prefix.as_str(),
+                app_key,
+                selected_channel,
+                "latest.json",
+            ]),
+        );
+        if release.channels.is_empty()
+            && app.updater.enabled
+            && app.updater.feed_url != updater_feed
+        {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 的 updater.feed_url 与发布 latest.json 地址不一致；期望 `{updater_feed}`"
+            )));
+        }
         Ok(ResolvedReleaseConfig {
-            channel: release.channel.clone(),
+            channel: selected_channel.to_owned(),
             version,
             version_source,
             build_number,
             build_number_source,
             minimum_supported_version,
+            runtime_config,
+            runtime_config_source,
+            runtime_config_sha256,
+            updater_feed,
         })
+    }
+
+    fn resolve_runtime_config(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        channel: &str,
+        explicit: Option<&str>,
+    ) -> CliResult<(PathBuf, String)> {
+        if let Some(value) = explicit {
+            validate_workspace_relative_path(value, "runtime_config")?;
+            let path = resolve_workspace_file(&self.root, value, "runtime_config")?;
+            return Ok((path, value.to_owned()));
+        }
+
+        let channel_relative =
+            PathBuf::from("config").join(format!("{}-{channel}.toml", app.package));
+        let base_relative = PathBuf::from("config").join(format!("{}.toml", app.package));
+        for relative in [&channel_relative, &base_relative] {
+            let value = relative.to_string_lossy().into_owned();
+            validate_workspace_relative_path(&value, "runtime_config")?;
+            if self.root.join(relative).is_file() {
+                let path = resolve_workspace_file(&self.root, &value, "runtime_config")?;
+                return Ok((path, value));
+            }
+        }
+
+        Err(CliError::new(format!(
+            "app `{app_key}` channel `{channel}` 缺少运行配置；请创建 `{}` 或 `{}`",
+            channel_relative.display(),
+            base_relative.display()
+        )))
     }
 
     fn release_receipt_path(&self, app_key: &str, channel: &str) -> PathBuf {
@@ -818,29 +1052,24 @@ impl ProjectDocument {
         app: &AppConfig,
         configured: &ResolvedReleaseConfig,
         targets: &[String],
+        previous: Option<ReleaseReceipt>,
     ) -> CliResult<ReleaseReceipt> {
         let path = self.release_receipt_path(app_key, &configured.channel);
-        let previous = path
-            .is_file()
-            .then(|| read_release_receipt(&path))
-            .transpose()?;
-        if let Some(receipt) = &previous {
-            validate_receipt_structure(receipt, &path)?;
-            if receipt_matches_configuration(receipt, app_key, app, configured, targets)
-                && (!matches!(configured.build_number, ResolvedBuildNumber::BuildDatetime)
-                    || !release_targets_complete(
-                        &self.root,
-                        app_key,
-                        app,
-                        &receipt.validated_release(configured.minimum_supported_version.clone())?,
-                    ))
-            {
-                println!(
-                    "复用 release receipt：{} / build {}",
-                    receipt.version, receipt.build_number
-                );
-                return Ok(receipt.clone());
-            }
+        if let Some(receipt) = &previous
+            && receipt_matches_configuration(receipt, app_key, app, configured, targets)
+            && (!matches!(configured.build_number, ResolvedBuildNumber::BuildDatetime)
+                || !release_targets_complete(
+                    &self.root,
+                    app_key,
+                    app,
+                    &receipt.validated_release(configured)?,
+                ))
+        {
+            println!(
+                "复用 release receipt：{} / build {}",
+                receipt.version, receipt.build_number
+            );
+            return Ok(receipt.clone());
         }
 
         let previous_build_number = previous.as_ref().map(|receipt| receipt.build_number);
@@ -861,15 +1090,44 @@ impl ProjectDocument {
             build_number_source: configured.build_number_source,
             created_at: unix_now()?,
             targets: targets.to_vec(),
+            runtime_config_source: configured.runtime_config_source.clone(),
+            runtime_config_sha256: configured.runtime_config_sha256.clone(),
+            updater_feed: configured.updater_feed.clone(),
         };
         write_release_receipt_atomic(&path, &receipt)?;
         println!("RELEASE RECEIPT: {}", path.display());
         Ok(receipt)
     }
 
-    fn release_from_receipt(&self, app_key: &str, app: &AppConfig) -> CliResult<ValidatedRelease> {
+    fn preflight_build_receipt(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        configured: &ResolvedReleaseConfig,
+        targets: &[String],
+    ) -> CliResult<Option<ReleaseReceipt>> {
+        let path = self.release_receipt_path(app_key, &configured.channel);
+        let previous = path
+            .is_file()
+            .then(|| read_release_receipt(&path))
+            .transpose()?;
+        if let Some(receipt) = &previous {
+            validate_receipt_structure(receipt, &path)?;
+            if receipt_matches_configuration(receipt, app_key, app, configured, targets) {
+                receipt.validated_release(configured)?;
+            }
+        }
+        Ok(previous)
+    }
+
+    fn release_from_receipt(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        channel: &str,
+    ) -> CliResult<ValidatedRelease> {
         let package_version = cargo_package_version(&self.root, &app.package, true)?;
-        let configured = self.resolved_release(app_key, app, Some(package_version))?;
+        let configured = self.resolved_release(app_key, app, channel, Some(package_version))?;
         let receipt_path = self.release_receipt_path(app_key, &configured.channel);
         let receipt = read_release_receipt(&receipt_path)?;
         validate_receipt_structure(&receipt, &receipt_path)?;
@@ -885,7 +1143,7 @@ impl ProjectDocument {
                 receipt_path.display()
             )));
         }
-        receipt.validated_release(configured.minimum_supported_version)
+        receipt.validated_release(&configured)
     }
 
     fn brand_assets(&self, _app_key: &str, app: &AppConfig) -> CliResult<BrandAssets> {
@@ -912,68 +1170,112 @@ impl ProjectDocument {
         Ok(assets)
     }
 
-    fn select_one(&self, app: Option<&str>, interactive: bool) -> CliResult<String> {
-        if let Some(app_key) = app {
-            if !self.config.apps.contains_key(app_key) {
-                return Err(CliError::new(format!("nexora.toml 不存在 app `{app_key}`")));
-            }
-            return Ok(app_key.to_owned());
-        }
-        if self.config.apps.len() == 1 {
-            return self
-                .config
-                .apps
-                .keys()
-                .next()
-                .cloned()
-                .ok_or_else(|| CliError::new("没有选择 app"));
-        }
-        if !interactive {
-            return Err(CliError::new(
-                "nexora.toml 配置了多个 app；非交互 build 必须提供 `--app`",
-            ));
-        }
-        self.select_many(None, false, true)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| CliError::new("没有选择 app"))
-    }
-
-    fn select_many(
+    fn select_release_combinations(
         &self,
-        app: Option<&str>,
-        all: bool,
+        requested_apps: &[String],
+        all_apps: bool,
+        requested_channels: &[String],
+        all_channels: bool,
         interactive: bool,
-    ) -> CliResult<Vec<String>> {
-        if let Some(app_key) = app {
-            if !self.config.apps.contains_key(app_key) {
-                return Err(CliError::new(format!("nexora.toml 不存在 app `{app_key}`")));
-            }
-            return Ok(vec![app_key.to_owned()]);
+    ) -> CliResult<Vec<(String, String)>> {
+        let app_keys =
+            if !requested_apps.is_empty() {
+                let mut selected = Vec::new();
+                for app_key in requested_apps {
+                    if !self.config.apps.contains_key(app_key) {
+                        return Err(CliError::new(format!("nexora.toml 不存在 app `{app_key}`")));
+                    }
+                    if !selected.contains(app_key) {
+                        selected.push(app_key.clone());
+                    }
+                }
+                selected
+            } else if all_apps || self.config.apps.len() == 1 {
+                self.config.apps.keys().cloned().collect()
+            } else if !interactive {
+                return Err(CliError::new(
+                    "nexora.toml 配置了多个 app；非交互环境必须提供 `--app` 或 `--all-apps`",
+                ));
+            } else {
+                let entries = self.config.apps.iter().collect::<Vec<_>>();
+                let mut labels = vec!["全部 app".to_owned()];
+                labels.extend(entries.iter().map(|(key, app)| {
+                    format!("{}（{} / {}）", app.display_name, key, app.package)
+                }));
+                let indexes = MultiSelect::new()
+                    .with_prompt("请选择一个、多个或全部 app")
+                    .items(&labels)
+                    .interact()
+                    .map_err(|error| CliError::new(format!("无法读取 app 选择: {error}")))?;
+                if indexes.is_empty() {
+                    return Err(CliError::new("没有选择 app"));
+                }
+                if indexes.contains(&0) {
+                    self.config.apps.keys().cloned().collect()
+                } else {
+                    indexes
+                        .into_iter()
+                        .map(|index| entries[index - 1].0.clone())
+                        .collect()
+                }
+            };
+
+        let mut combinations = Vec::new();
+        for app_key in app_keys {
+            let app = &self.config.apps[&app_key];
+            let available = self.release_channel_names(&app_key, app)?;
+            let selected_channels = if !requested_channels.is_empty() {
+                let mut selected = Vec::new();
+                for channel in requested_channels {
+                    if !available.contains(channel) {
+                        return Err(CliError::new(format!(
+                            "app `{app_key}` 不支持 channel `{channel}`；可用值：{}",
+                            available.join(", ")
+                        )));
+                    }
+                    if !selected.contains(channel) {
+                        selected.push(channel.clone());
+                    }
+                }
+                selected
+            } else if all_channels {
+                available
+            } else if interactive && available.len() > 1 {
+                let default_channel = self.default_release_channel(&app_key, app)?;
+                let mut labels = vec!["全部 channel".to_owned()];
+                labels.extend(available.iter().cloned());
+                let mut defaults = vec![false];
+                defaults.extend(available.iter().map(|channel| channel == &default_channel));
+                let indexes = MultiSelect::new()
+                    .with_prompt(format!("请选择 app `{app_key}` 的 channel"))
+                    .items(&labels)
+                    .defaults(&defaults)
+                    .interact()
+                    .map_err(|error| CliError::new(format!("无法读取 channel 选择: {error}")))?;
+                if indexes.is_empty() {
+                    return Err(CliError::new(format!("app `{app_key}` 没有选择 channel")));
+                }
+                if indexes.contains(&0) {
+                    available
+                } else {
+                    indexes
+                        .into_iter()
+                        .map(|index| labels[index].clone())
+                        .collect()
+                }
+            } else {
+                vec![self.default_release_channel(&app_key, app)?]
+            };
+            combinations.extend(
+                selected_channels
+                    .into_iter()
+                    .map(|channel| (app_key.clone(), channel)),
+            );
         }
-        if all {
-            return Ok(self.config.apps.keys().cloned().collect());
+        if combinations.is_empty() {
+            return Err(CliError::new("没有选择任何 app/channel 组合"));
         }
-        if self.config.apps.len() == 1 {
-            return Ok(self.config.apps.keys().cloned().collect());
-        }
-        if !interactive {
-            return Err(CliError::new(
-                "nexora.toml 配置了多个 app；非交互环境必须提供 `--app` 或 `--all`",
-            ));
-        }
-        let entries = self.config.apps.iter().collect::<Vec<_>>();
-        let labels = entries
-            .iter()
-            .map(|(key, app)| format!("{}（{} / {}）", app.display_name, key, app.package))
-            .collect::<Vec<_>>();
-        let index = Select::new()
-            .with_prompt("请选择 app")
-            .items(&labels)
-            .default(0)
-            .interact()
-            .map_err(|error| CliError::new(format!("无法读取 app 选择: {error}")))?;
-        Ok(vec![entries[index].0.clone()])
+        Ok(combinations)
     }
 
     fn build_plans(&self, app_key: &str, release: &ValidatedRelease) -> CliResult<Vec<BuildPlan>> {
@@ -1048,6 +1350,7 @@ impl ProjectDocument {
     fn publish_plan(
         &self,
         app_key: &str,
+        channel: &str,
         status: ReleaseStatus,
         client: &reqwest::blocking::Client,
     ) -> CliResult<PublishPlan> {
@@ -1057,7 +1360,7 @@ impl ProjectDocument {
                 "app `{app_key}` 未启用 updater，不能发布更新清单"
             )));
         }
-        let release = self.release_from_receipt(app_key, app)?;
+        let release = self.release_from_receipt(app_key, app, channel)?;
         let updater_app_id = app.updater.app_id.as_deref().unwrap_or(&app.app_id);
         let target = self.config.publish.targets[&app.publish_target].clone();
         let trusted_keys = parse_trusted_keys(&app.updater.trusted_public_keys)?;
@@ -1325,6 +1628,7 @@ fn execute_build(plan: &BuildPlan) -> CliResult<()> {
         plan.release.build_number,
     )?;
     write_bundle_icon(&plan.app_path, &plan.macos_icon)?;
+    write_bundle_runtime_config(plan)?;
     if plan.updater.is_some() {
         write_bundle_updater_config(plan)?;
         build_and_install_sidecar(plan, &executable)?;
@@ -1341,6 +1645,32 @@ fn execute_build(plan: &BuildPlan) -> CliResult<()> {
     println!("APP ZIP: {}", plan.app_zip_path.display());
     println!("DMG: {}", plan.dmg_path.display());
     println!("ARTIFACT: {}", plan.artifact_path.display());
+    Ok(())
+}
+
+fn write_bundle_runtime_config(plan: &BuildPlan) -> CliResult<()> {
+    let config_directory = plan.app_path.join("Contents/Resources").join("config");
+    fs::create_dir_all(&config_directory).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 bundle 运行配置目录 `{}`: {error}",
+            config_directory.display()
+        ))
+    })?;
+    let destination = config_directory.join(format!("{}.toml", plan.package));
+    fs::copy(&plan.release.runtime_config, &destination).map_err(|error| {
+        CliError::new(format!(
+            "无法把 runtime_config `{}` 写入 bundle `{}`: {error}",
+            plan.release.runtime_config_source,
+            destination.display()
+        ))
+    })?;
+    let bundled_hash = sha256_file(&destination)?;
+    if bundled_hash != plan.release.runtime_config_sha256 {
+        return Err(CliError::new(format!(
+            "bundle runtime_config SHA-256 与预检结果不一致：{}",
+            plan.release.runtime_config_source
+        )));
+    }
     Ok(())
 }
 
@@ -1491,7 +1821,7 @@ fn write_bundle_updater_config(plan: &BuildPlan) -> CliResult<()> {
         schema_version: 1,
         app_id: plan.updater_app_id.clone(),
         channel: plan.release.channel.clone(),
-        feed_url: updater.feed_url.clone(),
+        feed_url: plan.release.updater_feed.clone(),
         trusted_public_keys: updater.trusted_public_keys.clone(),
         current_version: plan.release.version.to_string(),
         current_build_number: plan.release.build_number,
@@ -1924,7 +2254,7 @@ fn latest_dmg_uploads(
 }
 
 fn print_publish_summary(plan: &PublishPlan, dry_run: bool) {
-    println!("应用：{}", plan.display_name);
+    println!("应用：{}（{}）", plan.display_name, plan.app_key);
     println!(
         "版本：{}（{}）",
         plan.release.version,
@@ -2339,6 +2669,7 @@ fn validate_workspace_relative_path(value: &str, label: &str) -> CliResult<()> {
     let path = Path::new(value);
     if value.trim().is_empty()
         || path.is_absolute()
+        || has_windows_prefix(value)
         || path.components().any(|component| {
             matches!(
                 component,
@@ -2353,13 +2684,23 @@ fn validate_workspace_relative_path(value: &str, label: &str) -> CliResult<()> {
     Ok(())
 }
 
+fn has_windows_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    value.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+}
+
 fn resolve_workspace_output(root: &Path, value: &str) -> CliResult<PathBuf> {
     validate_workspace_relative_path(value, "品牌资源路径")?;
     Ok(root.join(value))
 }
 
 fn resolve_workspace_file(root: &Path, value: &str, label: &str) -> CliResult<PathBuf> {
-    let path = resolve_workspace_output(root, value)?;
+    validate_workspace_relative_path(value, label)?;
+    let path = root.join(value);
     if !path.is_file() {
         return Err(CliError::new(format!("{label} 不存在：{}", path.display())));
     }
@@ -2370,7 +2711,7 @@ fn resolve_workspace_file(root: &Path, value: &str, label: &str) -> CliResult<Pa
         ))
     })?;
     let canonical_path = path.canonicalize().map_err(|error| {
-        CliError::new(format!("无法解析品牌资源 `{}`: {error}", path.display()))
+        CliError::new(format!("无法解析 {label} `{}`: {error}", path.display()))
     })?;
     if !canonical_path.starts_with(&canonical_root) {
         return Err(CliError::new(format!(
@@ -2538,6 +2879,27 @@ fn validate_receipt_structure(receipt: &ReleaseReceipt, path: &Path) -> CliResul
             path.display()
         )));
     }
+    validate_workspace_relative_path(
+        &receipt.runtime_config_source,
+        "release receipt runtime_config_source",
+    )?;
+    if receipt.runtime_config_sha256.len() != 64
+        || !receipt
+            .runtime_config_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(CliError::new(format!(
+            "release receipt `{}` runtime_config_sha256 无效",
+            path.display()
+        )));
+    }
+    url::Url::parse(&receipt.updater_feed).map_err(|error| {
+        CliError::new(format!(
+            "release receipt `{}` updater_feed 无效: {error}",
+            path.display()
+        ))
+    })?;
     let mut seen = BTreeSet::new();
     for target in &receipt.targets {
         validate_macos_target(target)?;
@@ -2569,6 +2931,9 @@ fn receipt_matches_configuration(
         && receipt.version_source == configured.version_source
         && receipt.build_number_source == configured.build_number_source
         && receipt.targets == targets
+        && receipt.runtime_config_source == configured.runtime_config_source
+        && receipt.runtime_config_sha256 == configured.runtime_config_sha256
+        && receipt.updater_feed == configured.updater_feed
         && build_number_matches
 }
 
@@ -2703,6 +3068,19 @@ fn validate_safe_component(value: &str, label: &str) -> CliResult<()> {
         || value.chars().any(char::is_control)
     {
         return Err(CliError::new(format!("{label} `{value}` 不是安全路径分量")));
+    }
+    Ok(())
+}
+
+fn validate_channel_name(value: &str) -> CliResult<()> {
+    validate_safe_component(value, "release channel")?;
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(CliError::new(format!(
+            "release channel `{value}` 只能包含 ASCII 字母、数字、点、短横线和下划线"
+        )));
     }
     Ok(())
 }
@@ -2849,10 +3227,6 @@ fn unix_now() -> CliResult<i64> {
         .map_err(|error| CliError::new(format!("系统时间早于 Unix 元年: {error}")))?
         .as_secs();
     i64::try_from(seconds).map_err(|_| CliError::new("Unix 秒超出 i64"))
-}
-
-fn default_minimum_supported_version() -> String {
-    "0.0.0".to_owned()
 }
 
 fn default_check_interval() -> String {
@@ -3175,7 +3549,28 @@ pub fn inspect_build_plans(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let configured = project.resolved_release(app_key, app, None)?;
+    let channel = project.default_release_channel(app_key, app)?;
+    inspect_build_plans_for_channel(config_path, app_key, &channel)
+}
+
+/// 为集成测试返回指定 channel 的构建计划快照，不执行任何构建命令。
+///
+/// # Errors
+///
+/// 配置无法读取、校验失败、app/channel 不存在或当前宿主没有可构建 target 时返回错误。
+#[allow(dead_code)]
+pub fn inspect_build_plans_for_channel(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+) -> CliResult<Vec<serde_json::Value>> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let configured = project.resolved_release(app_key, app, channel, None)?;
     let build_number = match configured.build_number {
         ResolvedBuildNumber::Literal(value) => value,
         ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
@@ -3199,11 +3594,55 @@ pub fn inspect_build_plans(
                 "version_source": version_source_name(plan.release.version_source),
                 "build_number_source": build_number_source_name(plan.release.build_number_source),
                 "channel": plan.release.channel,
+                "runtime_config_source": plan.release.runtime_config_source,
+                "runtime_config_sha256": plan.release.runtime_config_sha256,
+                "updater_feed": plan.release.updater_feed,
                 "signing": format!("{:?}", plan.signing),
                 "notarize": plan.notarize,
             }))
         })
         .collect()
+}
+
+/// 为集成测试把指定 channel 的运行配置与 updater 配置写入模拟 app bundle。
+///
+/// # Errors
+///
+/// 配置、app/channel、运行配置或 bundle 写入不合法时返回错误。
+#[allow(dead_code)]
+pub fn inspect_write_bundle_resources(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+) -> CliResult<PathBuf> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let configured = project.resolved_release(app_key, app, channel, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::Literal(value) => value,
+        ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
+    };
+    let release = configured.validated_release(build_number);
+    let plan = project
+        .build_plans(app_key, &release)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CliError::new("当前宿主没有可写入 bundle 的 target"))?;
+    fs::create_dir_all(plan.app_path.join("Contents/Resources")).map_err(|error| {
+        CliError::new(format!(
+            "无法创建模拟 app bundle `{}`: {error}",
+            plan.app_path.display()
+        ))
+    })?;
+    write_bundle_runtime_config(&plan)?;
+    if plan.updater.is_some() {
+        write_bundle_updater_config(&plan)?;
+    }
+    Ok(plan.app_path)
 }
 
 /// 为集成测试按真实 build 规则创建或复用 release receipt，并返回其 JSON 快照。
@@ -3225,9 +3664,17 @@ pub fn inspect_prepare_release_receipt(
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
     let package_version = cargo_package_version(&project.root, &app.package, false)?;
-    let configured = project.resolved_release(app_key, app, Some(package_version))?;
-    let receipt =
-        project.prepare_build_receipt(app_key, app, &configured, &app.targets.required)?;
+    let channel = project.default_release_channel(app_key, app)?;
+    let configured = project.resolved_release(app_key, app, &channel, Some(package_version))?;
+    let previous =
+        project.preflight_build_receipt(app_key, app, &configured, &app.targets.required)?;
+    let receipt = project.prepare_build_receipt(
+        app_key,
+        app,
+        &configured,
+        &app.targets.required,
+        previous,
+    )?;
     serde_json::to_value(receipt)
         .map_err(|error| CliError::new(format!("无法序列化 release receipt: {error}")))
 }
@@ -3243,7 +3690,40 @@ pub fn inspect_app_selection(
     app: Option<&str>,
     all: bool,
 ) -> CliResult<Vec<String>> {
-    ProjectDocument::load(config_path.as_ref().to_path_buf())?.select_many(app, all, false)
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let apps = app.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    project
+        .select_release_combinations(&apps, all, &[], false, false)
+        .map(|selected| selected.into_iter().map(|(app, _)| app).collect())
+}
+
+/// 为集成测试执行非交互 app/channel 组合选择，不运行构建或发布。
+///
+/// # Errors
+///
+/// 配置无效、参数冲突、app 或 channel 不存在时返回错误。
+#[allow(dead_code)]
+pub fn inspect_release_selection(
+    config_path: impl AsRef<Path>,
+    apps: &[&str],
+    all_apps: bool,
+    channels: &[&str],
+    all_channels: bool,
+) -> CliResult<Vec<(String, String)>> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    project.select_release_combinations(
+        &apps
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
+        all_apps,
+        &channels
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
+        all_channels,
+        false,
+    )
 }
 
 /// 为集成测试执行 publish 的本地产物完整性校验并返回产物 kind。
@@ -3262,7 +3742,28 @@ pub fn inspect_release_artifacts(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let release = project.release_from_receipt(app_key, app)?;
+    let channel = project.default_release_channel(app_key, app)?;
+    inspect_release_artifacts_for_channel(config_path, app_key, &channel)
+}
+
+/// 为集成测试校验指定 app/channel 的本地产物并返回产物 kind。
+///
+/// # Errors
+///
+/// 配置、所选 channel receipt、artifact、文件大小、摘要或 target 完整性不合法时返回错误。
+#[allow(dead_code)]
+pub fn inspect_release_artifacts_for_channel(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+) -> CliResult<Vec<String>> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let release = project.release_from_receipt(app_key, app, channel)?;
     load_release_artifacts(&project.root, app_key, app, &release).map(|artifacts| {
         artifacts
             .into_iter()
@@ -3287,7 +3788,8 @@ pub fn inspect_latest_dmg_aliases(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let release = project.release_from_receipt(app_key, app)?;
+    let channel = project.default_release_channel(app_key, app)?;
+    let release = project.release_from_receipt(app_key, app, &channel)?;
     let artifacts = load_release_artifacts(&project.root, app_key, app, &release)?;
     let prefix = object_key([
         app.object_prefix.as_str(),

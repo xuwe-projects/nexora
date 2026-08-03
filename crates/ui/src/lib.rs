@@ -50,8 +50,8 @@ pub use cascader::{
 };
 pub use crud_panel::{CrudPanel, CrudPanelToolbar};
 pub use crud_table::{
-    CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
-    RowSelectionEvent,
+    CrudTableColumnState, CrudTableDelegate, CrudTableRow, CrudTableSelection, CrudTableSort,
+    CrudTableSortDirection, CrudTableState, LoadedRowsSelectionEvent, RowSelectionEvent,
 };
 pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl};
 pub use labeled_control::{

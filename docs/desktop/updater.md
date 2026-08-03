@@ -17,7 +17,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.22.0 nexora --locked --force \
+  --tag v0.23.0 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 ```
 
@@ -94,17 +94,25 @@ icon_source = "assets/logos/desktop/logo-icon-source.png"
 managed = true
 
 [apps.desktop.release]
-channel = "stable"
+default_channel = "nightly"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/desktop-update.key"
 
+[apps.desktop.release.channels.nightly]
+runtime_config = "config/desktop-nightly.toml"
+
+[apps.desktop.release.channels.beta]
+runtime_config = "config/desktop-beta.toml"
+
+[apps.desktop.release.channels.stable]
+runtime_config = "config/desktop-stable.toml"
+
 [apps.desktop.updater]
 enabled = true
 check_on_launch = true
-feed_url = "https://downloads.example.com/desktop-releases/products/desktop/stable/latest.json"
-channels = ["stable"]
+channels = ["nightly", "beta", "stable"]
 trusted_public_keys = ["desktop-main:ed25519:BASE64_PUBLIC_KEY"]
 signing_key_env = "DESKTOP_UPDATE_SIGNING_KEY"
 check_interval = "15m"
@@ -173,17 +181,26 @@ icons = [
 | `branding.application_logo` | 是 | 应用内 PNG，通常为 128px | 无 | 否 | 文件不存在或非 PNG 时失败 |
 | `branding.icon_source` | 是 | 图标生成源 PNG | 无 | 否 | 文件不存在、格式/尺寸/透明通道无效时失败 |
 | `branding.managed` | 否 | 允许 `icons generate` 重建已有输出 | `false` | 否 | `false` 且输出已存在时拒绝覆盖；可显式 `--force` |
-| `release.channel` | 是 | 发布通道，如 `stable`；必须包含在 updater channels | 无 | 否 | 不一致时失败 |
+| `release.default_channel` | 多通道是 | 非交互默认通道；必须存在于 `release.channels` | 无 | 否 | 缺失或未知时失败 |
+| `release.channels.<channel>` | 多通道是 | 安全的 channel 路径段；可覆盖 release 默认值 | 无 | 否 | 与旧 `release.channel` 混用时失败 |
+| `release.channels.<channel>.runtime_config` | 否 | workspace 内显式运行配置；缺失时按通道约定路径回退 | 自动选择 | 否 | 显式文件缺失或越界时失败 |
+| `release.channel` | 旧单通道是 | 兼容旧配置的单一通道 | 无 | 否 | 不能与 `release.channels` 混用 |
 | `release.version` | 是 | 完整字段 `${CARGO_PKG_VERSION}`，或显式 SemVer 如 `"1.2.3"` | 无 | 否 | 未知/片段表达式或非 SemVer 失败 |
 | `release.build_number` | 是 | 完整字段 `${BUILD_DATETIME}`，或显式正整数如 `42` | 无 | 否 | 未知字符串、0 或溢出失败 |
 | `release.minimum_supported_version` | 否 | 低于该版本时进入强制更新门禁 | `"0.0.0"` | 否 | 非 SemVer 失败 |
-| `release.signing_key_file` | 否 | 更新签名私钥文件，相对根目录或绝对路径 | 未配置 | **是（文件内容）** | 见下方严格优先级 |
+| `release.signing_key_file` | 否 | workspace 内更新签名私钥文件 | 未配置 | **是（文件内容）** | 见下方严格优先级 |
 
 `${CARGO_PKG_VERSION}` 通过 `cargo metadata --no-deps --format-version 1` 读取所选 app 的
 `package`，因此同时支持 package 自有 `version` 和 `version.workspace = true`；它不是 workspace
 根名称或 Nexora CLI 自身版本。`${BUILD_DATETIME}` 使用 UTC `yyMMddHHmmss`，并在同秒重建或
 时钟回拨时取 `max(当前 UTC 值, 上次本地构建号 + 1)`。这两个表达式都必须占满字段，不提供
 任意环境变量插值或通用模板引擎。显式 SemVer 与正整数继续兼容。
+
+多通道模式先合并 release 根默认值与 channel 覆盖，再为每个 app/channel 生成独立计划。updater
+feed 自动生成为 `<public_base_url>/<object_prefix>/<app_key>/<channel>/latest.json` 并写入该
+channel 的 `nexora-updater.json`；无需手工同步 beta、nightly 或 stable URL。运行配置的相对
+源路径、SHA-256 和最终 feed 会写入 schema 2 release receipt，配置内容变化后不会误用旧收据。
+产物仍隔离在 `dist/<app>/<channel>/<version>/<build>/<target>/`。
 
 `nexora icons generate --app <key>` 只消费所选 app 的品牌路径。构建把 ICNS 复制到
 `.app/Contents/Resources` 并写入 `CFBundleIconFile`，不会修改 Cargo manifest。DMG 文件及其
@@ -199,8 +216,8 @@ icons = [
 | `enabled` | 是 | 是否为该 app 构建 updater | 无 | 否 | 缺失无法解析 |
 | `app_id` | 否 | 清单身份覆盖；通常不要配置 | 继承 app `app_id` | 否 | 格式无效失败；远端身份不匹配失败 |
 | `check_on_launch` | 否 | 首个主窗口创建后非阻塞后台检查 | `false` | 否 | 非布尔值无法解析 |
-| `feed_url` | 启用时是 | 必须等于 `<public_base_url>/<prefix>/<app>/<channel>/latest.json` | `""` | 否 | 启用后不完全匹配预期地址即失败 |
-| `channels` | 启用时是 | 客户端内置信任通道，如 `["stable"]` | `[]` | 否 | 不含 release channel 时失败 |
+| `feed_url` | 仅旧单通道 | 旧配置必须精确匹配派生 feed；多通道禁止非空静态值 | `""` | 否 | 多通道配置非空时给出迁移错误 |
+| `channels` | 启用时是 | 客户端内置信任通道，如 `["nightly", "beta", "stable"]` | `[]` | 否 | 不含任一 release channel 时失败 |
 | `trusted_public_keys` | 启用时是 | 客户端内置 Ed25519 公钥，来自 keygen 输出 | `[]` | 否 | 空、格式/Base64/长度无效时失败 |
 | `signing_key_env` | 条件必填 | 未配置私钥文件时读取的环境变量名 | `""` | 否（变量值是秘密） | 文件未配置且环境变量缺失时 publish 失败 |
 | `check_interval` | 否 | 周期检查间隔 | `"15m"` | 否 | 空值或运行时无法解析时失败 |

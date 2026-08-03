@@ -13,8 +13,8 @@ use gpui_component::{
     table::{Column, DataTable, TableDelegate as _, TableEvent, TableState},
 };
 use ui::{
-    CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
-    RowSelectionEvent, TableCell,
+    CrudTableColumnState, CrudTableDelegate, CrudTableRow, CrudTableSelection, CrudTableSort,
+    CrudTableSortDirection, CrudTableState, LoadedRowsSelectionEvent, RowSelectionEvent, TableCell,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +116,111 @@ impl CrudTableRow for DisplayIdRow {
     fn cell_text(&self, _key: &str, _cx: &App) -> String {
         self.name.clone()
     }
+}
+
+#[derive(Clone)]
+struct PersistentRow {
+    id: u64,
+}
+
+impl CrudTableRow for PersistentRow {
+    type Id = u64;
+
+    fn row_id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn columns() -> Vec<Column> {
+        vec![
+            Column::new("name", "名称")
+                .width(px(160.))
+                .min_width(px(100.))
+                .max_width(px(220.))
+                .sortable(),
+            Column::new("code", "编码").width(px(120.)).sortable(),
+            Column::new("created_at", "创建时间").width(px(180.)),
+        ]
+    }
+
+    fn backend_sort_field(key: &str) -> Option<&'static str> {
+        match key {
+            "name" => Some("display_name"),
+            "code" => Some("code"),
+            _ => None,
+        }
+    }
+
+    fn render_cell(&self, _key: &str, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
+        gpui::Empty.into_any_element()
+    }
+
+    fn cell_text(&self, _key: &str, _cx: &App) -> String {
+        String::new()
+    }
+}
+
+#[test]
+fn persistent_state_restores_known_columns_widths_and_backend_sort() {
+    let mut delegate = CrudTableDelegate::new(vec![PersistentRow { id: 1 }]);
+    delegate.restore_persistent_state(&CrudTableState {
+        columns: vec![
+            CrudTableColumnState {
+                key: "unknown".to_owned(),
+                width: 999.,
+            },
+            CrudTableColumnState {
+                key: "code".to_owned(),
+                width: 80.,
+            },
+            CrudTableColumnState {
+                key: "name".to_owned(),
+                width: 999.,
+            },
+        ],
+        sort: Some(CrudTableSort {
+            column_key: "name".to_owned(),
+            backend_field: "display_name".to_owned(),
+            direction: CrudTableSortDirection::Descending,
+        }),
+    });
+
+    assert_eq!(
+        delegate
+            .columns()
+            .iter()
+            .map(|column| column.key.as_ref())
+            .collect::<Vec<_>>(),
+        ["code", "name", "created_at"]
+    );
+    assert_eq!(f32::from(delegate.columns()[0].width), 80.);
+    assert_eq!(f32::from(delegate.columns()[1].width), 220.);
+    assert_eq!(
+        delegate.current_sort(),
+        Some(CrudTableSort {
+            column_key: "name".to_owned(),
+            backend_field: "display_name".to_owned(),
+            direction: CrudTableSortDirection::Descending,
+        })
+    );
+}
+
+#[test]
+fn invalid_persisted_sort_and_width_fall_back_to_declared_state() {
+    let mut delegate = CrudTableDelegate::new(vec![PersistentRow { id: 1 }]);
+    delegate.restore_persistent_state(&CrudTableState {
+        columns: vec![CrudTableColumnState {
+            key: "name".to_owned(),
+            width: f32::NAN,
+        }],
+        sort: Some(CrudTableSort {
+            column_key: "created_at".to_owned(),
+            backend_field: "created_at".to_owned(),
+            direction: CrudTableSortDirection::Ascending,
+        }),
+    });
+
+    assert_eq!(f32::from(delegate.columns()[0].width), 160.);
+    assert_eq!(delegate.current_sort(), None);
 }
 
 #[test]

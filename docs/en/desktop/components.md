@@ -17,7 +17,7 @@ GPUI component crates directly:
 
 ```toml
 [dependencies]
-nexora = { version = "0.22.0", features = ["desktop", "derive"] }
+nexora = { version = "0.23.0", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -216,7 +216,7 @@ use nexora::desktop::{CrudTableDelegate, TableCell};
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., fixed_left))]
     id: u64,
-    #[nexora(column(title = "City", width = 160., sortable))]
+    #[nexora(column(title = "City", width = 160., sortable, sort_field = "city_name"))]
     name: String,
     #[nexora(column(title = "Status", width = 76., align = "center", render = Self::status_cell))]
     enabled: bool,
@@ -235,7 +235,20 @@ let delegate = CrudTableDelegate::new(rows)
     )
     .empty_title("No cities");
 
-let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).bordered(true);
+let table_state = nexora::desktop::persistent_crud_table_state(
+    "cities.main",
+    delegate,
+    cx.listener(|this, sort, _window, cx| {
+        this.page = 1;
+        this.sort = sort;
+        this.reload(cx);
+    }),
+    window,
+    cx,
+);
+let restored_sort = table_state.read(cx).delegate().current_sort().cloned();
+// Map restored_sort into the first backend request before loading rows.
+let table = DataTable::new(table_state).bordered(true);
 ```
 
 ### Derive Attributes
@@ -249,6 +262,7 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 | `column(name = "...")` / `column(title = "...")` | Override the header |
 | `column(width = 120.)` / `min_width` / `max_width` | Configure width |
 | `column(sortable)` / `ascending` / `descending` | Configure sorting |
+| `column(sort_field = "...")` | Stable backend query field, independent of header text |
 | `column(fixed_left)` | Fix the column on the left |
 | `column(resizable = false)` / `movable = false` / `selectable = false` | Forward native column behavior |
 | `column(header_align = "left")` | Header alignment |
@@ -263,6 +277,15 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 `set_total`, `set_loading`, `set_loading_more`, `on_load_more`, `selection`, `set_selected_ids`,
 `selection_enabled`, `loaded_rows_checked`, `has_selectable_loaded_rows`, `action_column`,
 `action_text`, `empty_title`, and `empty_description`.
+
+`persistent_crud_table_state` takes a stable, unique business `table_id` and stores every table in
+the application's shared `settings.json`. Restore ignores unknown columns and invalid sorts, appends
+new columns in declaration order, and clamps widths to column limits. Native DataTable events are
+saved after resize or move completion and flow through the existing coalesced preference writer, not
+on every mouse pixel. Sort callbacks never reorder only the current frontend page: map
+`backend_field` and direction into the HTTP query, reset to page one, and reload. Read
+`current_sort()` before the first request so restored sorting reaches the backend; retain it across
+load failures for retry.
 
 Selection is controlled. Row and header clicks emit `RowSelectionEvent` and
 `LoadedRowsSelectionEvent`; the caller updates its selected IDs, writes them back with

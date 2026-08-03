@@ -34,16 +34,24 @@ publish_target = "internal"
 object_prefix = "console"
 
 [apps.console.release]
-channel = "stable"
+default_channel = "nightly"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/console-update.key"
 
+[apps.console.release.channels.nightly]
+runtime_config = "config/console-nightly.toml"
+
+[apps.console.release.channels.beta]
+runtime_config = "config/console-beta.toml"
+
+[apps.console.release.channels.stable]
+runtime_config = "config/console-stable.toml"
+
 [apps.console.updater]
 enabled = true
-feed_url = "http://192.168.1.20:9000/desktop-releases/console"
-channels = ["stable", "beta"]
+channels = ["nightly", "beta", "stable"]
 trusted_public_keys = ["2026-main:ed25519:BASE64_PUBLIC_KEY"]
 signing_key_env = "CONSOLE_UPDATE_SIGNING_KEY"
 check_interval = "15m"
@@ -64,7 +72,8 @@ Rules:
 
 - `apps` table names are stable CLI app IDs. `package` must exist and be a desktop binary. `app_id` is permanent and globally unique.
 - Multiple apps may share a publish target, but `app_id`, `object_prefix` and output paths must not conflict.
-- A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
+- `--app` and `--channel` are repeatable; `--all-apps` and `--all-channels` select the Cartesian plan. Non-interactive commands use each app's `default_channel`. Legacy `publish --all` aliases `--all-apps`.
+- Root release fields are channel defaults. A channel may override version, build number, minimum version, and runtime config. Multi-channel mode rejects legacy `release.channel` and a static updater `feed_url`; feeds are derived per channel.
 - `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
 - `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression is UTC `yyMMddHHmmss` and uses `max(current UTC value, previous local build number + 1)` after same-second builds or clock rollback. Unknown strings, zero and overflow are rejected.
 - Explicit version/build values remain compatible. Build freezes the resolved identity in `dist/<app>/<channel>/release.json`; publish and yank read this receipt and never recompute dynamic values. `manifest_sequence` is never configured locally.

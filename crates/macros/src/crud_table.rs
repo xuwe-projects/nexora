@@ -19,6 +19,7 @@ struct ColumnArguments {
     min_width: Option<Expr>,
     max_width: Option<Expr>,
     sort: Option<ColumnSortMode>,
+    sort_field: Option<LitStr>,
     fixed_left: bool,
     resizable: Option<bool>,
     movable: Option<bool>,
@@ -99,6 +100,13 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
         .iter()
         .map(|field| expand_render_cell_arm(field, &nexora));
     let text_arms = fields.iter().map(expand_cell_text_arm);
+    let sort_field_arms = fields.iter().filter_map(|field| {
+        field.arguments.sort.map(|_| {
+            let key = &field.key;
+            let sort_field = field.arguments.sort_field.as_ref().unwrap_or(key);
+            quote!(#key => ::std::option::Option::Some(#sort_field))
+        })
+    });
     let row_id_ident = &parsed.row_id.field_ident;
     let row_id_ty = &parsed.row_id.ty;
 
@@ -112,6 +120,13 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
 
             fn columns() -> ::std::vec::Vec<#nexora::__private::gpui_component::table::Column> {
                 ::std::vec![#(#column_definitions),*]
+            }
+
+            fn backend_sort_field(key: &str) -> ::std::option::Option<&'static str> {
+                match key {
+                    #(#sort_field_arms,)*
+                    _ => ::std::option::Option::None,
+                }
             }
 
             fn header_alignment(key: &str) -> #nexora::__private::gpui::TextAlign {
@@ -245,6 +260,17 @@ fn parse_field(field: &Field) -> Result<ParsedField> {
             row_id,
         });
     };
+    if let Some(sort_field) = &arguments.sort_field {
+        if arguments.sort.is_none() {
+            return Err(Error::new(
+                sort_field.span(),
+                "sort_field 只能用于声明 sortable、ascending 或 descending 的列",
+            ));
+        }
+        if sort_field.value().trim().is_empty() {
+            return Err(Error::new(sort_field.span(), "sort_field 不能为空"));
+        }
+    }
     let Some(field_ident) = field.ident.clone() else {
         return Err(Error::new_spanned(
             field,
@@ -350,6 +376,13 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
         set_sort(arguments, ColumnSortMode::Ascending(meta.path.span()))
     } else if meta.path.is_ident("descending") {
         set_sort(arguments, ColumnSortMode::Descending(meta.path.span()))
+    } else if meta.path.is_ident("sort_field") {
+        set_once(
+            &mut arguments.sort_field,
+            parse_string(&meta)?,
+            meta.path.span(),
+            "sort_field",
+        )
     } else if meta.path.is_ident("fixed_left") {
         arguments.fixed_left = parse_bool_or_true(&meta)?;
         Ok(())
@@ -410,7 +443,7 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
             "text",
         )
     } else {
-        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、render 和 text"))
+        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、sort_field、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、render 和 text"))
     }
 }
 

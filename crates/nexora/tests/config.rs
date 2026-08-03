@@ -191,6 +191,31 @@ fn positional_config_path_is_preserved() {
     );
 }
 
+#[test]
+fn non_toml_runtime_argument_is_not_treated_as_configuration() {
+    let arguments = [OsString::from("imes"), OsString::from("--verbose")];
+
+    assert!(nexora::config::__private::config_path_from_args(arguments).is_none());
+}
+
+#[test]
+fn standard_bundle_uses_resources_configuration_without_ancestor_scanning() {
+    let executable = PathBuf::from("/Applications/iMES.app/Contents/MacOS/imes");
+    assert_eq!(
+        nexora::config::__private::bundle_config_path_for::<PlainSettings>(&executable),
+        Some(PathBuf::from(format!(
+            "/Applications/iMES.app/Contents/Resources/config/{}.toml",
+            env!("CARGO_PKG_NAME")
+        )))
+    );
+    assert!(
+        nexora::config::__private::bundle_config_path_for::<PlainSettings>(&PathBuf::from(
+            "/tmp/Contents/MacOS/imes"
+        ))
+        .is_none()
+    );
+}
+
 fn temporary_directory(label: &str) -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -140,6 +140,10 @@ mod desktop {
 
         fn columns() -> Vec<Column>;
 
+        fn backend_sort_field(_key: &str) -> Option<&'static str> {
+            None
+        }
+
         fn header_alignment(_key: &str) -> TextAlign {
             TextAlign::Center
         }

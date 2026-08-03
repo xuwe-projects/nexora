@@ -14,7 +14,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.22.0 nexora --locked --force \
+  --tag v0.23.0 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 nexora doctor
 # Installs cargo-bundle/create-dmg if either is missing:
@@ -37,10 +37,23 @@ The repository-root `nexora.toml` is the only build and publish project configur
 
 ```toml
 [apps.desktop.release]
-channel = "stable"
+default_channel = "nightly"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
+
+[apps.desktop.release.channels.nightly]
+runtime_config = "config/desktop-nightly.toml"
+
+[apps.desktop.release.channels.beta]
+runtime_config = "config/desktop-beta.toml"
+
+[apps.desktop.release.channels.stable]
+runtime_config = "config/desktop-stable.toml"
+
+[apps.desktop.updater]
+enabled = true
+channels = ["nightly", "beta", "stable"]
 ```
 
 The supported release identity parameters are:
@@ -76,13 +89,18 @@ Windows and Linux.
 
 ```bash
 nexora build
-nexora publish --dry-run
-nexora publish
+nexora build --app desktop --channel beta --channel nightly
+nexora publish --all-apps --all-channels --dry-run
+nexora publish --app desktop --channel stable
 ```
 
-A single app is selected automatically. Multiple apps use an interactive `display_name (app key / package)` menu; non-interactive use requires `--app`, while publishing every app requires explicit `--all`. A real non-interactive publish also requires `--yes`.
+A single app is selected automatically. `--app` and `--channel` are repeatable, while
+`--all-apps` and `--all-channels` select the full Cartesian plan; legacy publish `--all` remains an
+alias for `--all-apps`. Interactive mode multi-selects apps and then channels, preselecting each
+default. Non-interactive mode uses each app's `default_channel`. A real non-interactive publish also
+requires `--yes`.
 
-Before building any target, build atomically freezes the resolved identity in `dist/<app>/<channel>/release.json`. The receipt contains its schema, app key, package, channel, final version/build number and their sources, signed-integer Unix creation second, and planned targets. Every target in that build shares the identity. An incomplete retry reuses a matching receipt; once all target artifacts are complete, another explicit dynamic build creates a strictly higher number without deleting old versioned artifacts. A corrupt or unsupported receipt fails before target builds and is never reconstructed from directory names.
+Before building any target, build atomically freezes the resolved identity in `dist/<app>/<channel>/release.json`. Schema 2 receipts contain app, package, channel, final version/build and their sources, runtime-config relative path and SHA-256, generated updater feed, creation second, and planned targets. Every target in that build shares the identity. An incomplete retry reuses only a matching receipt; configuration changes cannot reuse stale metadata. Once all target artifacts are complete, another explicit dynamic build creates a strictly higher number without deleting old versioned artifacts. A corrupt or unsupported receipt fails before target builds and is never reconstructed from directory names.
 
 Build never accesses object storage. It builds required host-compatible targets, the main binary and `<executable>-updater` sidecar, writes version, build number, the configured ICNS, updater configuration, and sidecar before signing the completed bundle. The same signed `.app` produces both the technical `.app.zip` and DMG plus multi-artifact `artifact.json`. The ICNS is used only by the `.app` through `CFBundleIconFile`; the DMG file and mounted volume keep their system-default appearance, with no separate DMG icon setting.
 
@@ -93,11 +111,13 @@ the local build identity; `artifact.json` indexes
 local hashes; `latest.json` is the signed remote release decision; and the sidecar independently
 re-verifies, stages, replaces, restarts, confirms health, and rolls back.
 
-When an application uses `nexora::config::initialize(None)`, Nexora ignores the internal
-`--nexora-updater-health-*` arguments injected by the sidecar and continues with the default TOML.
-Explicit configuration paths and ordinary first positional arguments retain their precedence. This
-lets the replacement process initialize configuration, create its first window, and report health
-instead of treating a health-session flag as a configuration filename.
+For each channel, build resolves explicit `runtime_config`, then
+`config/<package>-<channel>.toml`, then `config/<package>.toml`, and copies it to
+`Contents/Resources/config/<package>.toml` after cargo-bundle and before signing. The bundled
+`nexora-updater.json` receives the generated
+`<public_base>/<object_prefix>/<app>/<channel>/latest.json` feed. When an application uses
+`nexora::config::initialize(None)`, Nexora ignores internal updater health arguments and reads the
+bundle config before the local development fallback.
 
 ## Sequence and remote objects
 

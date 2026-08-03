@@ -21,6 +21,13 @@ pub enum ConfigurationError {
         #[from]
         toml::ser::Error,
     ),
+    /// 用户配置无法序列化或反序列化为 JSON。
+    #[error("JSON 配置处理失败: {0}")]
+    Json(
+        /// serde_json 返回的具体错误。
+        #[from]
+        serde_json::Error,
+    ),
     /// 配置文件或目录操作失败。
     #[error("配置文件操作失败: {0}")]
     Io(
@@ -39,6 +46,12 @@ pub enum ConfigurationError {
     InvalidFileName(
         /// 调用方提供、但不满足单文件名约束的路径。
         PathBuf,
+    ),
+    /// 应用包名不是单个安全路径段。
+    #[error("应用包名 `{0}` 必须是单个普通路径段")]
+    InvalidApplicationName(
+        /// 调用方提供的不安全应用包名。
+        String,
     ),
     /// 配置文件使用了当前程序尚不支持的 schema 版本。
     #[error("不支持配置 schema 版本 {actual}，当前版本为 {expected}")]
@@ -59,12 +72,16 @@ impl ConfigurationError {
         match self {
             Self::Load(error) => format!("配置加载失败: {}", safe_config_error(error, None, None)),
             Self::Serialize(_) => "配置序列化失败".to_owned(),
+            Self::Json(_) => "JSON 配置处理失败".to_owned(),
             Self::Io(error) => format!("配置文件操作失败: {error}"),
             Self::ConfigDirectoryUnavailable { application } => {
                 format!("无法确定应用 `{application}` 的系统配置目录")
             }
             Self::InvalidFileName(path) => {
                 format!("用户配置文件名 `{}` 必须是单个普通文件名", path.display())
+            }
+            Self::InvalidApplicationName(application) => {
+                format!("应用包名 `{application}` 必须是单个普通路径段")
             }
             Self::UnsupportedSchema { expected, actual } => {
                 format!("不支持配置 schema 版本 {actual}，当前版本为 {expected}")

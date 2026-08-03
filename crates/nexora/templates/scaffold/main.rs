@@ -38,6 +38,8 @@ struct DesktopApplication {
 }
 
 impl nexora::Application for DesktopApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("{{ project_name }}")
@@ -98,6 +100,8 @@ impl AssetSource for AppAssets {
 struct DesktopApplication;
 
 impl nexora::Application for DesktopApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("{{ project_name }}")

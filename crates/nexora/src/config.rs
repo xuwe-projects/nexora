@@ -2,7 +2,7 @@
 //!
 //! 应用通过 `#[derive(nexora::Settings)]` 声明根配置类型，再调用
 //! `nexora::config::initialize` 按
-//! “显式路径、首个命令行参数、包名默认路径”的优先级加载 TOML 文件；sidecar 注入的
+//! “显式路径、有效命令行参数、bundle 资源、包名本地默认路径”的优先级加载 TOML 文件；sidecar 注入的
 //! updater 健康确认参数不参与路径选择。Account 客户端与服务端配置段由派生宏分别标记，
 //! 避免在同一个 workspace 中因 Cargo feature 合并而混淆两端配置。
 
@@ -101,8 +101,9 @@ pub trait AccountServerSection {
 /// 配置文件按以下优先级选择：
 ///
 /// 1. `config_path` 显式传入的路径；
-/// 2. 当前进程第一个命令行参数（updater 健康确认参数除外）；
-/// 3. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
+/// 2. 当前进程第一个有效 TOML 路径参数（updater 健康确认参数除外）；
+/// 3. 标准 macOS app bundle 中的 `Contents/Resources/config/<T::APP_NAME>.toml`；
+/// 4. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
 ///
 /// 文件加载后，无前缀环境变量仍可覆盖同名字段；嵌套字段使用双下划线分隔，这一行为
 /// 与 [`LayeredConfigLoader`] 保持一致。
@@ -137,12 +138,21 @@ where
 {
     let config_path = config_path
         .or_else(|| __private::config_path_from_args(std::env::args_os()))
+        .or_else(bundle_config_path::<T>)
         .unwrap_or_else(default_config_path::<T>);
     let settings = LayeredConfigLoader::<T>::new()
         .with_required_file(config_path)
         .load()?;
     settings.validate()?;
     Ok(settings)
+}
+
+fn bundle_config_path<T>() -> Option<PathBuf>
+where
+    T: Settings,
+{
+    let executable = std::env::current_exe().ok()?;
+    __private::bundle_config_path_for::<T>(&executable)
 }
 
 fn default_config_path<T>() -> PathBuf
@@ -163,7 +173,10 @@ where
 /// 派生宏和可选业务模块之间共享的隐藏配置契约。
 #[doc(hidden)]
 pub mod __private {
-    use std::{ffi::OsString, path::PathBuf};
+    use std::{
+        ffi::OsString,
+        path::{Path, PathBuf},
+    };
 
     use super::{AccountClientSection, AccountServerSection, Settings};
 
@@ -178,8 +191,40 @@ pub mod __private {
         if first == "--nexora-updater-health-session" || first == "--nexora-updater-health-file" {
             None
         } else {
-            Some(PathBuf::from(first))
+            let path = PathBuf::from(first);
+            (path
+                .extension()
+                .is_some_and(|extension| extension == "toml"))
+            .then_some(path)
         }
+    }
+
+    /// 按标准 `.app/Contents/MacOS/<binary>` 结构解析 bundle 内运行配置路径。
+    ///
+    /// 该函数只检查可执行文件的固定父级，不向任意祖先扫描；非标准结构返回 `None`。
+    #[doc(hidden)]
+    pub fn bundle_config_path_for<T>(executable: &Path) -> Option<PathBuf>
+    where
+        T: Settings,
+    {
+        let macos = executable.parent()?;
+        if macos.file_name()? != "MacOS" {
+            return None;
+        }
+        let contents = macos.parent()?;
+        if contents.file_name()? != "Contents" {
+            return None;
+        }
+        let bundle = contents.parent()?;
+        if bundle.extension()? != "app" {
+            return None;
+        }
+        Some(
+            contents
+                .join("Resources")
+                .join("config")
+                .join(format!("{}.toml", T::APP_NAME)),
+        )
     }
 
     /// 表示根配置包含一个 Account 桌面客户端配置段。

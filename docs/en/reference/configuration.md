@@ -67,8 +67,18 @@ personal_access_token = "replace-through-secret-injection"
 `organization_id` selects where UserService v2 creates human users; `project_id` carries synchronized
 system roles. Inject the service-account PAT through `OIDC__PERSONAL_ACCESS_TOKEN` or a secret manager.
 
-Environment variables use `__` for nesting. An explicit path wins; otherwise Nexora finds
-`config/<package>.toml`. Inject secrets through environment variables or a secret manager.
+Environment variables use `__` for nesting. `nexora::config::initialize(None)` resolves an explicit
+`initialize(Some(path))` path first, then a valid command-line TOML path, the standard macOS bundle
+resource `Contents/Resources/config/<package>.toml`, and finally local `config/<package>.toml`.
+Updater health arguments are not treated as config paths, and bundle detection does not scan
+arbitrary ancestors. Inject secrets through environment variables or a secret manager.
+
+For channel builds, runtime config resolution is: explicit channel `runtime_config`,
+`config/<package>-<channel>.toml`, then `config/<package>.toml`. A missing explicit file never falls
+back. Paths must be safe workspace-relative files whose canonical locations remain inside the
+workspace; absolute paths, `..`, Windows prefixes, and symlink escapes are rejected. The selected
+file is copied into the stable bundle resource path before signing. Runtime config ships publicly
+inside the app bundle and must not contain database passwords, PATs, private keys, or other secrets.
 
 The Setup secret is only useful before initialization. `_sqlx_migrations` records applied versions,
 so upgrades must not depend on an `initialize_empty_database` boolean switch.
@@ -112,6 +122,25 @@ application_logo = "assets/logos/desktop/logo-icon-128.png"
 icon_source = "assets/logos/desktop/logo-icon-source.png"
 managed = true
 
+[apps.desktop.release]
+default_channel = "nightly"
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
+minimum_supported_version = "0.1.0"
+
+[apps.desktop.release.channels.nightly]
+runtime_config = "config/desktop-nightly.toml"
+
+[apps.desktop.release.channels.beta]
+runtime_config = "config/desktop-beta.toml"
+
+[apps.desktop.release.channels.stable]
+runtime_config = "config/desktop-stable.toml"
+
+[apps.desktop.updater]
+enabled = true
+channels = ["nightly", "beta", "stable"]
+
 [apps.desktop.platforms.macos]
 icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
@@ -127,3 +156,10 @@ icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-ico
 Paths must be workspace-relative and remain inside the workspace. The production packaging path in
 this phase covers macOS `.app`, DMG, and ICNS. Windows and Linux icons participate in configuration,
 scaffolding, and generation, but full installers and automatic replacement are not implemented yet.
+
+Root `release` fields are defaults for every channel; a channel can override version, build number,
+minimum supported version, and runtime config. `default_channel` must exist, and every release
+channel must belong to enabled updater channels. New `release.channels` configuration cannot be
+combined with legacy `release.channel` or a static `updater.feed_url`; legacy single-channel config
+remains compatible. Multi-channel updater feeds are derived from the publish target, public base
+URL, object prefix, app key, and channel.

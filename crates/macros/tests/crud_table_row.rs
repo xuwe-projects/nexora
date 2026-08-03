@@ -170,6 +170,10 @@ mod desktop {
 
         fn columns() -> Vec<Column>;
 
+        fn backend_sort_field(_key: &str) -> Option<&'static str> {
+            None
+        }
+
         fn header_alignment(_key: &str) -> TextAlign {
             TextAlign::Center
         }
@@ -194,7 +198,7 @@ use desktop::CrudTableRow as _;
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., min_width = 48., fixed_left))]
     id: u64,
-    #[nexora(column(title = "城市", width = 160., sortable))]
+    #[nexora(column(title = "城市", width = 160., sortable, sort_field = "display_name"))]
     name: String,
     #[nexora(column(title = "代码", width = 96., ascending, vertical_align = "top"))]
     code: String,
@@ -260,6 +264,9 @@ fn crud_table_row_derive_generates_columns_rendering_and_text_accessors() {
     assert_eq!(columns[0].min_width, __private::gpui::Pixels(48.));
     assert!(columns[0].fixed_left);
     assert_eq!(columns[1].sort, Some("default"));
+    assert_eq!(CityRow::backend_sort_field("name"), Some("display_name"));
+    assert_eq!(CityRow::backend_sort_field("code"), Some("code"));
+    assert_eq!(CityRow::backend_sort_field("status"), None);
     assert_eq!(columns[2].sort, Some("ascending"));
     assert_eq!(columns[3].sort, Some("descending"));
     assert_eq!(columns[3].align, __private::gpui::TextAlign::Right);

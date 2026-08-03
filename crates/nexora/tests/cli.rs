@@ -275,12 +275,17 @@ fn write_publish_cargo_package(directory: &TestDirectory) {
     .unwrap();
 }
 
-fn write_publish_receipt(directory: &TestDirectory) {
+fn write_publish_receipt(directory: &TestDirectory, base: &str) {
+    use sha2::{Digest as _, Sha256};
+
+    let runtime_config = b"value = \"test\"\n";
+    fs::create_dir_all(directory.path().join("config")).unwrap();
+    fs::write(directory.path().join("config/desktop.toml"), runtime_config).unwrap();
     fs::create_dir_all(directory.path().join("dist/desktop/stable")).unwrap();
     fs::write(
         directory.path().join("dist/desktop/stable/release.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "app_key": "desktop",
             "package": "desktop",
             "channel": "stable",
@@ -289,6 +294,9 @@ fn write_publish_receipt(directory: &TestDirectory) {
             "version_source": "literal",
             "build_number_source": "literal",
             "created_at": 1,
+            "runtime_config_source": "config/desktop.toml",
+            "runtime_config_sha256": format!("{:x}", Sha256::digest(runtime_config)),
+            "updater_feed": format!("{base}/desktop-releases/e2e-test/desktop/stable/latest.json"),
             "targets": ["aarch64-apple-darwin"]
         }))
         .unwrap(),
@@ -302,7 +310,7 @@ fn prepare_publish_app(directory: &TestDirectory, base: &str) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
 
     write_publish_cargo_package(directory);
-    write_publish_receipt(directory);
+    write_publish_receipt(directory, base);
     let release_dir = directory
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
@@ -663,12 +671,14 @@ fn help_and_version_are_available() {
     let build_help = String::from_utf8_lossy(&build_help.stdout);
     assert!(build_help.contains("build [OPTIONS]"));
     assert!(build_help.contains("--app <APP>"));
+    assert!(build_help.contains("--channel <CHANNEL>"));
+    assert!(build_help.contains("--all-apps"));
+    assert!(build_help.contains("--all-channels"));
     for removed in [
         "--package",
         "--app-name",
         "--app-version",
         "--build-number",
-        "--channel",
         "--mode",
         "--sign",
         "--sign-identity",
@@ -683,14 +693,21 @@ fn help_and_version_are_available() {
     let publish_help = directory.run(&["help", "publish"]);
     assert!(publish_help.status.success());
     let publish_help = String::from_utf8_lossy(&publish_help.stdout);
-    for expected in ["--app <APP>", "--all", "--dry-run", "--yes"] {
+    for expected in [
+        "--app <APP>",
+        "--all-apps",
+        "--all-channels",
+        "--channel <CHANNEL>",
+        "--all",
+        "--dry-run",
+        "--yes",
+    ] {
         assert!(publish_help.contains(expected));
     }
     for removed in [
         "--app-version",
         "--build-number",
         "--manifest-sequence",
-        "--channel",
         "--signing-key-file",
         "--minimum-supported-version",
     ] {
@@ -731,12 +748,37 @@ fn help_and_version_are_available() {
 }
 
 #[test]
+fn release_selectors_reject_mutually_exclusive_flags() {
+    let directory = TestDirectory::new("release-selector-conflicts");
+    for arguments in [
+        vec!["build", "--app", "desktop", "--all-apps"],
+        vec!["build", "--channel", "beta", "--all-channels"],
+        vec!["publish", "--app", "desktop", "--all-apps", "--dry-run"],
+        vec![
+            "publish",
+            "--channel",
+            "beta",
+            "--all-channels",
+            "--dry-run",
+        ],
+    ] {
+        let output = directory.run(&arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn publish_dry_run_signs_latest_from_existing_artifact_metadata() {
     let directory = TestDirectory::new("publish-dry-run");
     write_publish_cargo_package(&directory);
-    write_publish_receipt(&directory);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    write_publish_receipt(&directory, &format!("http://{address}"));
     let server = thread::spawn(move || {
         for stream in listener.incoming().take(4) {
             let mut stream = stream.unwrap();
@@ -868,9 +910,9 @@ fn publish_uploads_zip_dmg_aliases_and_latest_in_required_order() {
 
     let directory = TestDirectory::new("publish-order");
     write_publish_cargo_package(&directory);
-    write_publish_receipt(&directory);
     let store = MockObjectStore::new();
     let base = store.base_url();
+    write_publish_receipt(&directory, &base);
     let release_dir = directory
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
@@ -1314,6 +1356,14 @@ fn create_defaults_to_a_single_package_project() {
     let nexora_config = fs::read_to_string(project.join("nexora.toml")).unwrap();
     assert!(nexora_config.contains("version = \"${CARGO_PKG_VERSION}\""));
     assert!(nexora_config.contains("build_number = \"${BUILD_DATETIME}\""));
+    assert!(nexora_config.contains("default_channel = \"nightly\""));
+    assert!(nexora_config.contains("release.channels.beta"));
+    assert!(project.join("config/demo-app.toml").is_file());
+    assert!(
+        project
+            .join("config/example.demo-app-nightly.toml")
+            .is_file()
+    );
     assert!(!project.join("apps").exists());
     assert_generated_skills(&project);
 
@@ -1487,7 +1537,14 @@ fn create_can_generate_a_workspace_project() {
     assert!(!project.join("apps/server").exists());
     assert!(!desktop.join("src/account.rs").exists());
     assert!(!desktop.join("src/config.rs").exists());
-    assert!(!project.join("config").exists());
+    assert!(project.join("config/workspace-app.toml").is_file());
+    for channel in ["nightly", "beta", "stable"] {
+        assert!(
+            project
+                .join(format!("config/example.workspace-app-{channel}.toml"))
+                .is_file()
+        );
+    }
     assert_generated_skills(&project);
 }
 

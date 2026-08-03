@@ -12,6 +12,18 @@
 cargo run
 ```
 
+本地运行默认读取 `config/{{ project_name }}.toml`。`nexora.toml` 已声明 nightly、beta、
+stable 三个发布通道并默认使用 nightly；构建某个通道时，Nexora 优先读取
+`config/{{ project_name }}-<channel>.toml`，不存在时回退到基础配置。仓库中的
+`config/example.{{ project_name }}-*.toml` 可作为模板。运行配置会进入安装包，必须视为公开数据，
+不要写入密码、PAT、私钥或其他服务端秘密。
+
+```bash
+nexora build --app {{ project_name }} --channel nightly
+nexora build --app {{ project_name }} --channel beta --channel nightly
+nexora build --app {{ project_name }} --all-channels
+```
+
 首次构建会生成 `Cargo.lock`。应用项目应提交该文件，并在 CI 和部署中使用
 `cargo run --locked`、`cargo build --locked` 等命令保持完整依赖图稳定。
 {% if account_enabled %}

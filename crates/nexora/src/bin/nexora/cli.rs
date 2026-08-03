@@ -414,6 +414,11 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
         .render()
         .map_err(|error| format!("无法渲染 nexora.toml 模板：{error}"))?,
     );
+    let desktop_config = normalize_template_output(
+        ExampleDesktopConfigTemplate
+            .render()
+            .map_err(|error| format!("无法渲染桌面端示例配置模板：{error}"))?,
+    );
 
     match layout {
         Layout::Single => {
@@ -441,6 +446,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 "assets".to_owned(),
                 "assets/icons".to_owned(),
                 "assets/logos".to_owned(),
+                "config".to_owned(),
                 format!("assets/logos/{project_name}"),
             ];
             let mut files = vec![
@@ -449,6 +455,22 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 ("src/main.rs".to_owned(), main),
                 ("src/features.rs".to_owned(), features_module),
                 ("src/features/home.rs".to_owned(), home_feature),
+                (
+                    format!("config/{project_name}.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-nightly.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-beta.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-stable.toml"),
+                    desktop_config.clone(),
+                ),
             ];
             append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
             append_file_if_missing(target, &mut files, "README.md", readme)?;
@@ -495,6 +517,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 format!("{desktop_directory}/assets/icons"),
                 "assets".to_owned(),
                 "assets/logos".to_owned(),
+                "config".to_owned(),
                 format!("assets/logos/{project_name}"),
             ];
             let mut files = vec![
@@ -510,11 +533,27 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                     format!("{desktop_directory}/src/features/home.rs"),
                     home_feature,
                 ),
+                (
+                    format!("config/{project_name}.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-nightly.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-beta.toml"),
+                    desktop_config.clone(),
+                ),
+                (
+                    format!("config/example.{project_name}-stable.toml"),
+                    desktop_config,
+                ),
             ];
             append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
 
             if account_enabled {
-                directories.extend(["apps/server", "apps/server/src", "config"].map(str::to_owned));
+                directories.extend(["apps/server", "apps/server/src"].map(str::to_owned));
                 files.extend(render_account_workspace_templates(project_name)?);
             }
 
@@ -629,14 +668,6 @@ fn render_account_workspace_templates(project_name: &str) -> Result<Vec<(String,
                 ExampleServerConfigTemplate
                     .render()
                     .map_err(|error| format!("无法渲染服务端示例配置模板：{error}"))?,
-            ),
-        ),
-        (
-            format!("config/{project_name}.toml"),
-            normalize_template_output(
-                ExampleDesktopConfigTemplate
-                    .render()
-                    .map_err(|error| format!("无法渲染桌面端示例配置模板：{error}"))?,
             ),
         ),
     ])

@@ -4,7 +4,7 @@
 //! 主窗口创建以及 Feature Entity 的生命周期由框架统一管理。
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
@@ -18,7 +18,7 @@ use ::desktop::{
 #[cfg(feature = "desktop")]
 use actions::account::{self as account_actions, AccountActionKind, SignInAccount, SignOutAccount};
 use actions::{settings::OpenSettings, window as window_actions};
-use configuration::UserConfigStore;
+use configuration::{ConfigurationError, MigrationOutcome, UserConfigStore};
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
@@ -37,6 +37,7 @@ use gpui_component::{
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
     tab::{Tab, TabBar},
+    table::{TableEvent, TableState},
     v_flex,
 };
 #[cfg(feature = "desktop")]
@@ -45,7 +46,10 @@ use percent_encoding::percent_decode_str;
 use pinyin::ToPinyin as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use ui::{PanelHeader, SidebarRegion, layout::WorkspaceLayout};
+use ui::{
+    CrudTableDelegate, CrudTableRow, CrudTableSort, CrudTableSortDirection, CrudTableState,
+    PanelHeader, SidebarRegion, layout::WorkspaceLayout,
+};
 
 /// 应用默认品牌区域使用的 PNG Logo。
 ///
@@ -137,6 +141,7 @@ fn panel_header_actions(cx: &mut App) -> Vec<AnyElement> {
 
 #[derive(Clone)]
 pub(crate) struct ApplicationBranding {
+    pub(crate) package_name: String,
     pub(crate) application_name: String,
     pub(crate) application_version: Option<String>,
     pub(crate) logo: Option<ApplicationLogo>,
@@ -148,6 +153,7 @@ pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
     cx.try_global::<ApplicationBranding>()
         .cloned()
         .unwrap_or_else(|| ApplicationBranding {
+            package_name: "nexora".to_owned(),
             application_name: "Nexora".to_owned(),
             application_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             logo: None,
@@ -446,6 +452,8 @@ pub enum ApplicationError {
 /// struct DesktopApplication;
 ///
 /// impl nexora::Application for DesktopApplication {
+///     const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+///
 ///     fn options(&self) -> ApplicationOptions {
 ///         ApplicationOptions::new().initial_path("/")
 ///     }
@@ -455,6 +463,12 @@ pub enum ApplicationError {
 /// # Ok::<(), nexora::ApplicationError>(())
 /// ```
 pub trait Application: Sized + 'static {
+    /// 当前桌面可执行程序所属的 Cargo package name。
+    ///
+    /// 框架使用该稳定值定位 `~/.xuwe/<package>/settings.json`。实现方应直接声明
+    /// `const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");`，不要使用展示名称。
+    const PACKAGE_NAME: &'static str;
+
     /// 返回本次启动使用的应用选项。
     ///
     /// 默认实现会打开一个可直接使用的标准窗口；应用可以按值构造并返回自己的配置，
@@ -502,7 +516,7 @@ struct PreparedApplication {
 
 const MAIN_WINDOW_BOUNDS_SAVE_DELAY: Duration = Duration::from_millis(120);
 
-/// Shell 写入 `workspace.toml` 的用户偏好快照。
+/// Shell 写入 `settings.json` 的用户偏好快照。
 ///
 /// 该类型把主窗口 Shell、默认设置窗口和窗口生命周期观察器共享的偏好集中到同一个
 /// TOML 文档中。所有运行时修改都应通过框架安装的偏好运行时合并，避免多个窗口分别
@@ -516,8 +530,96 @@ pub struct ShellPreferences {
     pub appearance: ShellAppearancePreferences,
     /// 主窗口最后一次有效的显示器和窗口边界记录。
     pub main_window: Option<MainWindowPlacement>,
+    /// 以业务提供的稳定 `table_id` 为 key 保存 DataTable 布局与后台排序状态。
+    pub tables: BTreeMap<String, TablePreferences>,
     #[serde(skip_serializing)]
     startup_display_uuid: Option<String>,
+}
+
+/// 一张 DataTable 在 Settings 文件中的持久化状态。
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TablePreferences {
+    /// 按用户当前顺序保存的列 key 与宽度。
+    pub columns: Vec<TableColumnPreferences>,
+    /// 当前有效的单列后台排序；清除排序时为 `None`。
+    pub sort: Option<TableSortPreferences>,
+}
+
+/// DataTable 单列的持久化布局。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct TableColumnPreferences {
+    /// 当前代码列定义使用的稳定 key。
+    pub key: String,
+    /// 用户交互完成后的逻辑像素宽度。
+    pub width: f32,
+}
+
+/// DataTable 后台排序的持久化描述。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TableSortPreferences {
+    /// 当前代码列定义使用的稳定 key。
+    pub column_key: String,
+    /// 业务 API 使用的稳定后台字段名。
+    pub backend_field: String,
+    /// 当前排序方向。
+    pub direction: TableSortDirection,
+}
+
+/// DataTable 后台排序方向的 JSON 表示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableSortDirection {
+    /// 升序。
+    Ascending,
+    /// 降序。
+    Descending,
+}
+
+impl From<&TablePreferences> for CrudTableState {
+    fn from(value: &TablePreferences) -> Self {
+        Self {
+            columns: value
+                .columns
+                .iter()
+                .map(|column| ui::CrudTableColumnState {
+                    key: column.key.clone(),
+                    width: column.width,
+                })
+                .collect(),
+            sort: value.sort.as_ref().map(|sort| CrudTableSort {
+                column_key: sort.column_key.clone(),
+                backend_field: sort.backend_field.clone(),
+                direction: match sort.direction {
+                    TableSortDirection::Ascending => CrudTableSortDirection::Ascending,
+                    TableSortDirection::Descending => CrudTableSortDirection::Descending,
+                },
+            }),
+        }
+    }
+}
+
+impl From<CrudTableState> for TablePreferences {
+    fn from(value: CrudTableState) -> Self {
+        Self {
+            columns: value
+                .columns
+                .into_iter()
+                .map(|column| TableColumnPreferences {
+                    key: column.key,
+                    width: column.width,
+                })
+                .collect(),
+            sort: value.sort.map(|sort| TableSortPreferences {
+                column_key: sort.column_key,
+                backend_field: sort.backend_field,
+                direction: match sort.direction {
+                    CrudTableSortDirection::Ascending => TableSortDirection::Ascending,
+                    CrudTableSortDirection::Descending => TableSortDirection::Descending,
+                },
+            }),
+        }
+    }
 }
 
 /// Shell 持久化的外观偏好。
@@ -769,18 +871,59 @@ fn sanitize_bounds(
 }
 
 impl ShellPreferences {
-    fn for_local_application(application_name: &str) -> Option<UserConfigStore<Self>> {
+    fn for_application(package_name: &str) -> Result<UserConfigStore<Self>, ConfigurationError> {
+        UserConfigStore::for_xuwe_application(package_name)
+    }
+
+    fn legacy_store(application_name: &str) -> Result<UserConfigStore<Self>, ConfigurationError> {
         UserConfigStore::for_local_application("com", "Nexora", application_name, "workspace.toml")
-            .ok()
     }
 }
 
-pub(crate) fn load_shell_preferences(application_name: &str) -> ShellPreferences {
-    ShellPreferences::for_local_application(application_name)
+fn preferences_store(package_name: &str) -> Option<UserConfigStore<ShellPreferences>> {
+    match ShellPreferences::for_application(package_name) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            tracing::warn!(error = %error.safe_diagnostic(), "无法定位 Shell 用户偏好，已使用默认值");
+            None
+        }
+    }
+}
+
+fn legacy_preferences_store(application_name: &str) -> Option<UserConfigStore<ShellPreferences>> {
+    match ShellPreferences::legacy_store(application_name) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            tracing::warn!(error = %error.safe_diagnostic(), "无法定位旧 Shell 用户偏好，已跳过迁移");
+            None
+        }
+    }
+}
+
+pub(crate) fn load_shell_preferences(
+    package_name: &str,
+    application_name: &str,
+) -> ShellPreferences {
+    let store = preferences_store(package_name);
+    if let (Some(store), Some(legacy)) = (
+        store.as_ref(),
+        legacy_preferences_store(application_name).as_ref(),
+    ) {
+        match store.migrate_from(legacy) {
+            Ok(MigrationOutcome::Migrated) => {
+                tracing::info!(path = %store.path().display(), "已把旧 workspace.toml 迁移到 settings.json");
+            }
+            Ok(MigrationOutcome::CurrentFileExists | MigrationOutcome::NoSource) => {}
+            Err(error) => {
+                tracing::warn!(error = %error.safe_diagnostic(), "无法迁移旧 Shell 用户偏好，旧文件保持不变");
+            }
+        }
+    }
+    store
         .and_then(|store| match store.load_or_default() {
             Ok(preferences) => Some(preferences),
             Err(error) => {
-                tracing::warn!(error = %error, "无法读取 Shell 用户偏好，已使用默认值");
+                tracing::warn!(error = %error.safe_diagnostic(), "无法读取 Shell 用户偏好，已使用默认值");
                 None
             }
         })
@@ -791,6 +934,90 @@ pub(crate) fn shell_preferences_snapshot(cx: &App) -> ShellPreferences {
     cx.try_global::<ShellPreferencesRuntime>()
         .map(|runtime| runtime.snapshot.clone())
         .unwrap_or_default()
+}
+
+/// 创建一份带 Settings 恢复、列交互持久化和后台排序回调的 CRUD TableState。
+///
+/// `table_id` 必须是应用内稳定且唯一的业务标识。函数会在 `TableState` 初始化前恢复仍然
+/// 有效的列顺序、宽度和单列排序；列宽只在 gpui-component 发出拖动完成事件后写入，列顺序
+/// 只在拖放完成后写入。排序变化不会在前端重排当前页，而是通过 `on_sort_changed` 交给业务，
+/// 业务应回到第一页并重新请求服务端。
+///
+/// 返回 Entity 后，业务可以在首次请求前通过
+/// `state.read(cx).delegate().current_sort()` 取得已经恢复的排序参数。
+///
+/// # Panics
+///
+/// `table_id` 为空、包含前后空白或路径分隔符时会 panic。
+pub fn persistent_crud_table_state<R, P>(
+    table_id: impl Into<String>,
+    mut delegate: CrudTableDelegate<R>,
+    on_sort_changed: impl Fn(Option<CrudTableSort>, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut Context<P>,
+) -> Entity<TableState<CrudTableDelegate<R>>>
+where
+    R: CrudTableRow,
+    P: 'static,
+{
+    let table_id = table_id.into();
+    assert!(
+        !table_id.is_empty()
+            && table_id.trim() == table_id
+            && !table_id.contains('/')
+            && !table_id.contains('\\'),
+        "persistent_crud_table_state 的 table_id 必须是稳定的非空标识且不能包含路径分隔符",
+    );
+    if let Some(saved) = shell_preferences_snapshot(cx).tables.get(&table_id) {
+        delegate.restore_persistent_state(&CrudTableState::from(saved));
+    }
+
+    let sort_table_id = table_id.clone();
+    let delegate = delegate.on_sort_changed(move |sort, window, cx| {
+        let persisted_sort = sort.clone().map(|sort| TableSortPreferences {
+            column_key: sort.column_key,
+            backend_field: sort.backend_field,
+            direction: match sort.direction {
+                CrudTableSortDirection::Ascending => TableSortDirection::Ascending,
+                CrudTableSortDirection::Descending => TableSortDirection::Descending,
+            },
+        });
+        update_shell_preferences(cx, |preferences| {
+            preferences
+                .tables
+                .entry(sort_table_id.clone())
+                .or_default()
+                .sort = persisted_sort;
+        });
+        on_sort_changed(sort, window, cx);
+    });
+
+    let state = cx.new(|cx| TableState::new(delegate, window, cx));
+    let event_table_id = table_id;
+    cx.subscribe(&state, move |_, table, event, cx| {
+        if !matches!(
+            event,
+            TableEvent::ColumnWidthsChanged(_) | TableEvent::MoveColumn(_, _)
+        ) {
+            return;
+        }
+        let snapshot = table.update(cx, |state, cx| {
+            if let TableEvent::ColumnWidthsChanged(widths) = event {
+                state.delegate_mut().update_column_widths(widths);
+            }
+            let snapshot = state.delegate().persistent_state();
+            cx.notify();
+            snapshot
+        });
+        update_shell_preferences(cx, |preferences| {
+            preferences
+                .tables
+                .insert(event_table_id.clone(), snapshot.into());
+        });
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason=订阅生命周期由父组件 Context 管理并随其销毁
+    .detach();
+    state
 }
 
 pub(crate) fn persist_current_appearance_preferences(cx: &mut App) {
@@ -808,13 +1035,15 @@ pub(crate) fn update_shell_preferences(cx: &mut App, update: impl FnOnce(&mut Sh
         });
     } else {
         let branding = application_branding(cx);
-        let mut preferences = load_shell_preferences(branding.application_name.as_str());
+        let mut preferences = load_shell_preferences(
+            branding.package_name.as_str(),
+            branding.application_name.as_str(),
+        );
         update(&mut preferences);
-        if let Some(store) =
-            ShellPreferences::for_local_application(branding.application_name.as_str())
+        if let Some(store) = preferences_store(branding.package_name.as_str())
             && let Err(error) = store.save(&preferences)
         {
-            tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
+            tracing::warn!(error = %error.safe_diagnostic(), "无法保存 Shell 用户偏好");
         }
     }
 }
@@ -859,7 +1088,7 @@ impl PreferencesWriter {
                     }
 
                     if let Err(error) = store.save(&preferences) {
-                        tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
+                        tracing::warn!(error = %error.safe_diagnostic(), "无法保存 Shell 用户偏好");
                     }
                     for ack in flush_acks {
                         _ = ack.send(());
@@ -1076,19 +1305,34 @@ where
         account_initial_route,
     } = prepare_application(&options)?;
     let locale = options.locale.clone();
+    let package_name = A::PACKAGE_NAME.to_owned();
     let application_name = options.application_name.clone();
     let application_version = options.application_version.clone();
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
     let tab_style = options.tab_style;
     let sidebar_search = options.sidebar_search;
-    let preferences_store = ShellPreferences::for_local_application(application_name.as_str());
+    let preferences_store = preferences_store(package_name.as_str());
+    if let (Some(store), Some(legacy)) = (
+        preferences_store.as_ref(),
+        legacy_preferences_store(application_name.as_str()).as_ref(),
+    ) {
+        match store.migrate_from(legacy) {
+            Ok(MigrationOutcome::Migrated) => {
+                tracing::info!(path = %store.path().display(), "已把旧 workspace.toml 迁移到 settings.json");
+            }
+            Ok(MigrationOutcome::CurrentFileExists | MigrationOutcome::NoSource) => {}
+            Err(error) => {
+                tracing::warn!(error = %error.safe_diagnostic(), "无法迁移旧 Shell 用户偏好，旧文件保持不变");
+            }
+        }
+    }
     let shell_preferences = preferences_store
         .as_ref()
         .and_then(|store| match store.load_or_default() {
             Ok(preferences) => Some(preferences),
             Err(error) => {
-                tracing::warn!(error = %error, "无法读取 Shell 用户偏好，已使用默认值");
+                tracing::warn!(error = %error.safe_diagnostic(), "无法读取 Shell 用户偏好，已使用默认值");
                 None
             }
         })
@@ -1099,6 +1343,7 @@ where
         application,
         options: desktop_options,
         locale,
+        package_name,
         application_name,
         application_version,
         application_logo,
@@ -1123,6 +1368,7 @@ struct ApplicationAdapter<A> {
     application: A,
     options: DesktopApplicationOptions,
     locale: String,
+    package_name: String,
     application_name: String,
     application_version: Option<String>,
     application_logo: Option<ApplicationLogo>,
@@ -1163,6 +1409,7 @@ where
         restore_appearance_preferences(&self.shell_preferences, cx);
         restore_main_window_options(&mut self.options, &self.shell_preferences, cx);
         cx.set_global(ApplicationBranding {
+            package_name: self.package_name.clone(),
             application_name: self.application_name.clone(),
             application_version: self.application_version.clone(),
             logo: self.application_logo,

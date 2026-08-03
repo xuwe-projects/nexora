@@ -13,7 +13,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     checkbox::Checkbox,
-    table::{Column, TableDelegate, TableState},
+    table::{Column, ColumnSort, TableDelegate, TableState},
     v_flex,
 };
 
@@ -43,6 +43,14 @@ pub trait CrudTableRow: Clone + 'static {
     /// 返回值沿用 gpui-component 的 [`Column`]，因此列宽、排序、固定列和选择行为都仍然
     /// 由官方组件解释。
     fn columns() -> Vec<Column>;
+
+    /// 返回列 key 对应的稳定后台排序字段名。
+    ///
+    /// 不支持后台排序的列返回 `None`。派生宏会为声明 `sortable`、`ascending` 或
+    /// `descending` 的列生成映射；业务可以用 `sort_field = "updated_at"` 显式覆盖字段名。
+    fn backend_sort_field(_key: &str) -> Option<&'static str> {
+        None
+    }
 
     /// 返回指定列的表头水平对齐方式。
     ///
@@ -84,9 +92,48 @@ type LoadMoreHandler<R> = Rc<dyn Fn(&mut Window, &mut Context<TableState<CrudTab
 type RowSelectionHandler<R> = Rc<dyn Fn(RowSelectionEvent<R>, &mut Window, &mut App)>;
 type LoadedRowsSelectionHandler<R> = Rc<dyn Fn(LoadedRowsSelectionEvent<R>, &mut Window, &mut App)>;
 type RowSelectable<R> = Rc<dyn Fn(&R, &App) -> bool>;
+type SortChangedHandler = Rc<dyn Fn(Option<CrudTableSort>, &mut Window, &mut App)>;
 
 const SELECTION_COLUMN_KEY: &str = "__nexora_crud_table_selection";
 const SELECTION_COLUMN_WIDTH: f32 = 42.0;
+
+/// CRUD 表格交给业务请求层的单列排序方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrudTableSortDirection {
+    /// 后台字段按升序排列。
+    Ascending,
+    /// 后台字段按降序排列。
+    Descending,
+}
+
+/// CRUD 表格当前选中的后台排序描述。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrudTableSort {
+    /// DataTable 列定义使用的稳定列 key。
+    pub column_key: String,
+    /// 业务 API 使用的稳定后台字段名。
+    pub backend_field: String,
+    /// 当前单列排序方向。
+    pub direction: CrudTableSortDirection,
+}
+
+/// 一列可持久化的顺序和宽度快照。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrudTableColumnState {
+    /// DataTable 列定义使用的稳定列 key。
+    pub key: String,
+    /// 用户交互完成后的逻辑像素宽度。
+    pub width: f32,
+}
+
+/// CRUD DataTable 可跨会话恢复的布局与后台排序快照。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CrudTableState {
+    /// 按当前显示顺序保存的已知列。
+    pub columns: Vec<CrudTableColumnState>,
+    /// 当前单列后台排序；`None` 表示使用业务默认顺序。
+    pub sort: Option<CrudTableSort>,
+}
 
 struct CrudActionColumn<R: CrudTableRow> {
     column: Column,
@@ -184,6 +231,7 @@ pub struct CrudTableDelegate<R: CrudTableRow> {
     action_columns: Vec<CrudActionColumn<R>>,
     empty_title: SharedString,
     empty_description: Option<SharedString>,
+    on_sort_changed: Option<SortChangedHandler>,
 }
 
 impl<R: CrudTableRow> CrudTableDelegate<R> {
@@ -211,6 +259,7 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
             action_columns: Vec::new(),
             empty_title: SharedString::new("暂无数据"),
             empty_description: None,
+            on_sort_changed: None,
         }
     }
 
@@ -222,6 +271,100 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
     /// 返回当前所有列定义，包含追加的操作列。
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    /// 返回当前列顺序、宽度与后台排序快照。
+    pub fn persistent_state(&self) -> CrudTableState {
+        CrudTableState {
+            columns: self
+                .columns
+                .iter()
+                .map(|column| CrudTableColumnState {
+                    key: column.key.to_string(),
+                    width: f32::from(column.width),
+                })
+                .collect(),
+            sort: self.current_sort(),
+        }
+    }
+
+    /// 按恢复规则把已保存状态合并进当前代码声明的列定义。
+    ///
+    /// 已删除列会忽略，新列保持声明顺序追加；宽度会限制到当前列的最小/最大值；已失效或
+    /// 不可排序的字段不会恢复。调用方应在创建 `TableState` 前调用。
+    pub fn restore_persistent_state(&mut self, state: &CrudTableState) {
+        let mut remaining = std::mem::take(&mut self.columns);
+        let mut restored = Vec::with_capacity(remaining.len());
+        for saved in &state.columns {
+            let Some(index) = remaining
+                .iter()
+                .position(|column| column.key.as_ref() == saved.key)
+            else {
+                continue;
+            };
+            let mut column = remaining.remove(index);
+            if saved.width.is_finite() && saved.width > 0.0 {
+                column.width = px(saved.width).clamp(column.min_width, column.max_width);
+            }
+            restored.push(column);
+        }
+        restored.extend(remaining);
+        self.columns = restored;
+
+        for column in &mut self.columns {
+            if column.sort.is_some() {
+                column.sort = Some(ColumnSort::Default);
+            }
+        }
+        if let Some(sort) = &state.sort
+            && let Some(column) = self.columns.iter_mut().find(|column| {
+                column.key.as_ref() == sort.column_key
+                    && column.sort.is_some()
+                    && R::backend_sort_field(column.key.as_ref())
+                        == Some(sort.backend_field.as_str())
+            })
+        {
+            column.sort = Some(match sort.direction {
+                CrudTableSortDirection::Ascending => ColumnSort::Ascending,
+                CrudTableSortDirection::Descending => ColumnSort::Descending,
+            });
+        }
+    }
+
+    /// 把 gpui-component 在一次列宽拖动完成后报告的宽度同步回列定义。
+    pub fn update_column_widths(&mut self, widths: &[gpui::Pixels]) {
+        for (column, width) in self.columns.iter_mut().zip(widths.iter().copied()) {
+            column.width = width.clamp(column.min_width, column.max_width);
+        }
+    }
+
+    /// 安装后台排序变化回调。
+    ///
+    /// 表头点击会按降序、升序、清除排序循环调用。框架不修改当前页数据；业务应在回调中
+    /// 回到第一页并携带 `backend_field` 重新请求服务端。
+    #[must_use]
+    pub fn on_sort_changed(
+        mut self,
+        handler: impl Fn(Option<CrudTableSort>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_sort_changed = Some(Rc::new(handler));
+        self
+    }
+
+    /// 返回当前有效的后台排序选择。
+    pub fn current_sort(&self) -> Option<CrudTableSort> {
+        self.columns.iter().find_map(|column| {
+            let direction = match column.sort? {
+                ColumnSort::Ascending => CrudTableSortDirection::Ascending,
+                ColumnSort::Descending => CrudTableSortDirection::Descending,
+                ColumnSort::Default => return None,
+            };
+            Some(CrudTableSort {
+                column_key: column.key.to_string(),
+                backend_field: R::backend_sort_field(column.key.as_ref())?.to_owned(),
+                direction,
+            })
+        })
     }
 
     /// 用新数据替换当前全部行。
@@ -566,6 +709,28 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
         self.columns[col_ix].clone()
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        for (index, column) in self.columns.iter_mut().enumerate() {
+            if column.sort.is_some() {
+                column.sort = Some(if index == col_ix {
+                    sort
+                } else {
+                    ColumnSort::Default
+                });
+            }
+        }
+        let selected = self.current_sort();
+        if let Some(handler) = self.on_sort_changed.clone() {
+            handler(selected, window, cx);
+        }
     }
 
     fn render_th(

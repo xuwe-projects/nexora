@@ -14,6 +14,8 @@ use nexora::{Application as _, ApplicationOptions};
 struct DesktopApplication;
 
 impl nexora::Application for DesktopApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("My App")
@@ -23,6 +25,14 @@ impl nexora::Application for DesktopApplication {
     fn initialize(&mut self, _cx: &mut App) {}
 }
 ```
+
+## 用户设置路径与迁移
+
+Nexora 使用 `Application::PACKAGE_NAME` 作为稳定目录名，把窗口位置、尺寸、外观、置顶标签、
+表格状态等偏好统一保存到 `~/.xuwe/<cargo-package>/settings.json`。路径通过平台目录 API 与
+`PathBuf::join` 构造。首次升级时，如果新 JSON 不存在而旧 `workspace.toml` 存在，框架会读取
+旧值并原子写入新文件；新文件优先，旧文件始终保留，迁移成功后不再写旧文件。损坏或迁移失败
+只会记录不包含配置值的错误并使用默认偏好启动。
 
 ## Logo
 

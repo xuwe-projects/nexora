@@ -354,6 +354,8 @@ fn table_row(
 struct DesktopBasicApplication;
 
 impl nexora::Application for DesktopBasicApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("Nexora Desktop Basic")

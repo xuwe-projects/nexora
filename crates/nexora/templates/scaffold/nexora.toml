@@ -21,14 +21,21 @@ icon_source = "assets/logos/{{ project_name }}/logo-icon-source.png"
 managed = true
 
 [apps.{{ project_name }}.release]
-channel = "stable"
+default_channel = "nightly"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 
+[apps.{{ project_name }}.release.channels.nightly]
+
+[apps.{{ project_name }}.release.channels.beta]
+
+[apps.{{ project_name }}.release.channels.stable]
+
 [apps.{{ project_name }}.updater]
 enabled = false
 check_on_launch = false
+channels = ["nightly", "beta", "stable"]
 
 [apps.{{ project_name }}.targets]
 required = ["{{ default_target }}"]

@@ -10,7 +10,7 @@ order: 2
 Install a published GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.22.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.23.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:
@@ -33,10 +33,12 @@ nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
+nexora build --app <id> --channel beta --channel nightly
+nexora build --all-apps --all-channels
 nexora publish
-nexora publish --app <id> --dry-run
-nexora publish --all --yes
-nexora publish --app <id> yank
+nexora publish --app <id> --channel nightly --dry-run
+nexora publish --all-apps --all-channels --yes
+nexora publish --app <id> --channel beta yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
 nexora version
@@ -70,3 +72,11 @@ runs build implicitly. Publish uploads update files and notes, the immutable man
 `latest.json` is an Ed25519 signed envelope. Public keys live in `trusted_public_keys`; private
 signing keys are read only from a secure file or the environment variable named by
 `signing_key_env`. Forced updates are written with `--minimum-supported-version`.
+
+Both `--app` and `--channel` are repeatable; `--all-apps` and `--all-channels` conflict with their
+corresponding explicit selectors. Legacy `publish --all` remains an alias for `--all-apps`.
+Non-interactive commands use each app's `default_channel` when no channel is provided. Interactive
+commands multi-select apps first and channels per app, preselecting each default. Every selected
+app/channel pair completes read-only preflight before any build or upload, then executes
+sequentially. Publish and yank read the exact receipt and artifacts for each pair; dry-run prints the
+entire plan without remote writes.

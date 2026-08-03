@@ -67,8 +67,17 @@ personal_access_token = "replace-through-secret-injection"
 不同。PAT 必须属于有权管理目标 Organization/Project 的服务账号，生产环境应通过
 `OIDC__PERSONAL_ACCESS_TOKEN` 或密钥系统注入，不要提交真实值。
 
-环境变量以 `__` 表示嵌套字段。显式路径优先；未传路径时根据当前 package 名查找
-`config/<package>.toml`。敏感值应由环境变量或密钥系统注入。
+环境变量以 `__` 表示嵌套字段。`nexora::config::initialize(None)` 的读取优先级为：调用方传给
+`initialize(Some(path))` 的显式路径、有效的命令行 TOML 路径、标准 macOS app bundle 中的
+`Contents/Resources/config/<package>.toml`、本地 `config/<package>.toml`。updater 健康检查
+参数不会被误识别为配置路径，bundle 检测也不会任意向上扫描。敏感值应由环境变量或密钥系统
+注入。
+
+构建多通道安装包时，每个 channel 的运行配置按以下顺序选择：channel 显式
+`runtime_config`、`config/<package>-<channel>.toml`、`config/<package>.toml`。显式路径缺失
+不会回退。路径必须是 workspace 内的安全相对路径，canonicalize 后仍需位于 workspace；符号
+链接逃逸、绝对路径、`..` 与 Windows Prefix 都会被拒绝。选定配置会在签名前复制到稳定的
+bundle 路径。桌面运行配置会随安装包公开分发，不得包含数据库密码、PAT、私钥或其他秘密。
 
 服务端 Setup secret 只在未初始化时有效。迁移记录由 `_sqlx_migrations` 管理，不需要也不
 允许通过 `initialize_empty_database` 之类的人工布尔开关控制升级。
@@ -110,6 +119,25 @@ application_logo = "assets/logos/desktop/logo-icon-128.png"
 icon_source = "assets/logos/desktop/logo-icon-source.png"
 managed = true
 
+[apps.desktop.release]
+default_channel = "nightly"
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
+minimum_supported_version = "0.1.0"
+
+[apps.desktop.release.channels.nightly]
+runtime_config = "config/desktop-nightly.toml"
+
+[apps.desktop.release.channels.beta]
+runtime_config = "config/desktop-beta.toml"
+
+[apps.desktop.release.channels.stable]
+runtime_config = "config/desktop-stable.toml"
+
+[apps.desktop.updater]
+enabled = true
+channels = ["nightly", "beta", "stable"]
+
 [apps.desktop.platforms.macos]
 icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
@@ -124,3 +152,9 @@ icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-ico
 
 路径必须是 workspace 内的相对路径。当前生产打包链路实现 macOS `.app`、DMG 与 ICNS；
 Windows/Linux 图标已进入配置、初始化和生成模型，但尚未实现完整安装包与自动安装更新。
+
+`release` 根字段是所有 channel 的默认值，各 channel 可以覆盖 version、build number、最低
+支持版本和 runtime config。`default_channel` 必须存在，channel 必须同时属于启用的 updater
+channels。新式 `release.channels` 不能与旧 `release.channel` 或静态 `updater.feed_url` 混用；
+旧单通道配置仍按原行为兼容。多通道 updater feed 根据 publish target、public base URL、
+object prefix、app key 和 channel 自动生成。

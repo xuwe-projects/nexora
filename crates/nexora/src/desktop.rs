@@ -20,7 +20,9 @@ pub use crate::account::client::{
     login_profile, login_session, login_snapshot, observe_authentication, oidc_config, sign_out,
     start_login,
 };
-pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
+pub use crate::application::{
+    PanelHeaderAction, install_panel_header_actions, persistent_crud_table_state,
+};
 pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
     UpdateArtifact, UpdateChannel, UpdateConfig, UpdateError, UpdateEvent, UpdateManifest,
@@ -29,9 +31,10 @@ pub use ::updater::{
 };
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
-    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection, Event,
-    FieldValue, FieldValueParseError, FormDialog, FormDialogState, FormFieldDraft, FormItem,
-    FormItemControl, LabeledControl, LabeledControlBuilder, LabeledControlTarget,
-    LoadedRowsSelectionEvent, NumberFieldValue, RowSelectionEvent, SidebarRegion, TableCell,
-    TableCellVerticalAlign, TableHeaderCell,
+    CrudPanel, CrudPanelToolbar, CrudTableColumnState, CrudTableDelegate, CrudTableRow,
+    CrudTableSelection, CrudTableSort, CrudTableSortDirection, CrudTableState, Event, FieldValue,
+    FieldValueParseError, FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl,
+    LabeledControl, LabeledControlBuilder, LabeledControlTarget, LoadedRowsSelectionEvent,
+    NumberFieldValue, RowSelectionEvent, SidebarRegion, TableCell, TableCellVerticalAlign,
+    TableHeaderCell,
 };

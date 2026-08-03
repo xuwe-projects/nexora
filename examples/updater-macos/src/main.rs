@@ -89,6 +89,8 @@ struct ExampleApplication {
 }
 
 impl nexora::Application for ExampleApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("macOS 更新程序示例")

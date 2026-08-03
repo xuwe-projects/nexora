@@ -4,8 +4,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use configuration::{LayeredConfigLoader, UserConfigStore, VersionedConfiguration};
-use directories::ProjectDirs;
+use configuration::{
+    LayeredConfigLoader, MigrationOutcome, UserConfigStore, VersionedConfiguration,
+};
+use directories::{BaseDirs, ProjectDirs};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -61,6 +63,22 @@ fn local_user_store_uses_project_local_config_directory() {
         store.path(),
         project_dirs.config_local_dir().join("settings.toml")
     );
+}
+
+#[test]
+fn xuwe_user_store_uses_cargo_package_under_home_directory() {
+    let home = BaseDirs::new()
+        .expect("当前平台应当可以确定用户主目录")
+        .home_dir()
+        .to_path_buf();
+    let store = UserConfigStore::<Preferences>::for_xuwe_application("imes")
+        .expect("合法 package 应当可以创建用户设置存储");
+
+    assert_eq!(
+        store.path(),
+        home.join(".xuwe").join("imes").join("settings.json")
+    );
+    assert!(UserConfigStore::<Preferences>::for_xuwe_application("../imes").is_err());
 }
 
 #[test]
@@ -120,6 +138,56 @@ fn user_store_round_trips_toml_atomically() {
 
     assert_eq!(loaded, preferences);
     assert!(!path.with_extension("toml.tmp").exists());
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn user_store_round_trips_json_atomically() {
+    let directory = temporary_directory("json-store");
+    let path = directory.join("settings.json");
+    let store = UserConfigStore::<Preferences>::at_path(&path);
+    let preferences = Preferences {
+        schema_version: 1,
+        theme: "dark".to_owned(),
+    };
+
+    store.save(&preferences).expect("JSON 用户设置应当可以保存");
+    assert_eq!(
+        store.load_or_default().expect("JSON 用户设置应当可以读取"),
+        preferences
+    );
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"theme\": \"dark\"")
+    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn legacy_toml_migrates_once_and_is_preserved() {
+    let directory = temporary_directory("migration");
+    fs::create_dir_all(&directory).unwrap();
+    let legacy_path = directory.join("workspace.toml");
+    let current_path = directory.join("settings.json");
+    fs::write(&legacy_path, "schema_version = 1\ntheme = \"legacy\"\n").unwrap();
+    let legacy = UserConfigStore::<Preferences>::at_path(&legacy_path);
+    let current = UserConfigStore::<Preferences>::at_path(&current_path);
+
+    assert_eq!(
+        current.migrate_from(&legacy).unwrap(),
+        MigrationOutcome::Migrated
+    );
+    assert_eq!(current.load_or_default().unwrap().theme, "legacy");
+    assert!(legacy_path.is_file());
+
+    fs::write(&legacy_path, "schema_version = 1\ntheme = \"changed\"\n").unwrap();
+    assert_eq!(
+        current.migrate_from(&legacy).unwrap(),
+        MigrationOutcome::CurrentFileExists
+    );
+    assert_eq!(current.load_or_default().unwrap().theme, "legacy");
     _ = fs::remove_dir_all(directory);
 }
 

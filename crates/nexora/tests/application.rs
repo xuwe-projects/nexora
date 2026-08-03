@@ -48,13 +48,17 @@ impl AssetSource for TestAssets {
 
 struct DefaultApplication;
 
-impl nexora::Application for DefaultApplication {}
+impl nexora::Application for DefaultApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+}
 
 struct ConfiguredApplication {
     initial_path: &'static str,
 }
 
 impl nexora::Application for ConfiguredApplication {
+    const PACKAGE_NAME: &'static str = env!("CARGO_PKG_NAME");
+
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new().initial_path(self.initial_path)
     }

@@ -9,4 +9,4 @@ mod store;
 
 pub use error::ConfigurationError;
 pub use loader::LayeredConfigLoader;
-pub use store::{UserConfigStore, VersionedConfiguration};
+pub use store::{MigrationOutcome, UserConfigStore, VersionedConfiguration};

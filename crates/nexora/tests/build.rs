@@ -6,8 +6,10 @@ pub mod commands;
 
 use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_latest_dmg_aliases, inspect_prepare_release_receipt, inspect_release_artifacts,
-    inspect_signing_key, validate_display_name, write_bundle_icon, write_bundle_info,
+    inspect_build_plans_for_channel, inspect_latest_dmg_aliases, inspect_prepare_release_receipt,
+    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_selection,
+    inspect_signing_key, inspect_write_bundle_resources, validate_display_name, write_bundle_icon,
+    write_bundle_info,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -68,6 +70,12 @@ version = "9.8.7"
         .unwrap();
         for package in packages {
             write_test_package(&root, package, "version = \"1.2.3\"");
+            fs::create_dir_all(root.join("config")).unwrap();
+            fs::write(
+                root.join("config").join(format!("{package}.toml")),
+                "value = \"test\"\n",
+            )
+            .unwrap();
         }
         for app_key in apps.lines().filter_map(|line| {
             line.strip_prefix("[apps.")
@@ -191,8 +199,27 @@ icons = [
     )
 }
 
+fn multi_channel_app_config(key: &str, package: &str, display_name: &str) -> String {
+    app_config(key, package, display_name)
+        .replace(
+            &format!(
+                "[apps.{key}.release]\nchannel = \"stable\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\""
+            ),
+            &format!(
+                "[apps.{key}.release]\ndefault_channel = \"nightly\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\n\n[apps.{key}.release.channels.nightly]\n\n[apps.{key}.release.channels.beta]\nbuild_number = 8\nminimum_supported_version = \"1.0.0\"\n\n[apps.{key}.release.channels.stable]"
+            ),
+        )
+        .replace(
+            &format!(
+                "feed_url = \"http://127.0.0.1:9000/releases/e2e/{key}/stable/latest.json\"\nchannels = [\"stable\"]"
+            ),
+            "channels = [\"nightly\", \"beta\", \"stable\"]",
+        )
+}
+
 fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
     use sha2::{Digest as _, Sha256};
+    let runtime_config = fs::read(fixture.root.join("config/package-one.toml")).unwrap();
     let directory = fixture.root.join("dist/one/stable/1.2.3/7").join(target);
     fs::create_dir_all(&directory).unwrap();
     let arch = if target.starts_with("aarch64") {
@@ -238,7 +265,7 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
     fs::write(
         fixture.root.join("dist/one/stable/release.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "app_key": "one",
             "package": "package-one",
             "channel": "stable",
@@ -247,6 +274,9 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
             "version_source": "literal",
             "build_number_source": "literal",
             "created_at": 1,
+            "runtime_config_source": "config/package-one.toml",
+            "runtime_config_sha256": format!("{:x}", Sha256::digest(&runtime_config)),
+            "updater_feed": "http://127.0.0.1:9000/releases/e2e/one/stable/latest.json",
             "targets": if target.starts_with("x86_64") {
                 vec!["aarch64-apple-darwin", "x86_64-apple-darwin"]
             } else {
@@ -469,6 +499,34 @@ fn corrupt_release_receipt_fails_before_identity_is_replaced() {
 }
 
 #[test]
+fn runtime_config_change_invalidates_existing_receipt() {
+    let fixture = Fixture::new(
+        "runtime-receipt-change",
+        &app_config("one", "package-one", "应用一"),
+    );
+    let first = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    fs::write(
+        fixture.root.join("config/package-one.toml"),
+        "value = \"changed\"\n",
+    )
+    .unwrap();
+
+    let next = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    let persisted: serde_json::Value = serde_json::from_slice(
+        &fs::read(fixture.root.join("dist/one/stable/release.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        persisted["runtime_config_sha256"],
+        next["runtime_config_sha256"]
+    );
+    assert_ne!(
+        persisted["runtime_config_sha256"],
+        first["runtime_config_sha256"]
+    );
+}
+
+#[test]
 fn invalid_display_names_are_rejected() {
     for value in [
         "",
@@ -523,6 +581,213 @@ fn explicit_app_and_all_skip_guessing() {
         inspect_app_selection(fixture.config(), None, true).unwrap(),
         vec!["one", "two"]
     );
+}
+
+#[test]
+fn multi_channel_selection_uses_default_repeats_and_cartesian_all() {
+    let apps = format!(
+        "{}\n{}",
+        multi_channel_app_config("one", "package-one", "应用一"),
+        multi_channel_app_config("two", "package-two", "应用二")
+    );
+    let fixture = Fixture::new("multi-channel-selection", &apps);
+
+    assert_eq!(
+        inspect_release_selection(fixture.config(), &["one"], false, &[], false).unwrap(),
+        vec![("one".to_owned(), "nightly".to_owned())]
+    );
+    assert_eq!(
+        inspect_release_selection(
+            fixture.config(),
+            &["one"],
+            false,
+            &["beta", "nightly"],
+            false,
+        )
+        .unwrap(),
+        vec![
+            ("one".to_owned(), "beta".to_owned()),
+            ("one".to_owned(), "nightly".to_owned()),
+        ]
+    );
+    assert_eq!(
+        inspect_release_selection(fixture.config(), &[], true, &[], true).unwrap(),
+        vec![
+            ("one".to_owned(), "beta".to_owned()),
+            ("one".to_owned(), "nightly".to_owned()),
+            ("one".to_owned(), "stable".to_owned()),
+            ("two".to_owned(), "beta".to_owned()),
+            ("two".to_owned(), "nightly".to_owned()),
+            ("two".to_owned(), "stable".to_owned()),
+        ]
+    );
+    assert!(
+        inspect_release_selection(fixture.config(), &["one"], false, &["edge"], false)
+            .unwrap_err()
+            .to_string()
+            .contains("不支持 channel")
+    );
+}
+
+#[test]
+fn multi_channel_merges_overrides_and_generates_channel_feed() {
+    let fixture = Fixture::new(
+        "multi-channel-merge",
+        &multi_channel_app_config("one", "package-one", "应用一"),
+    );
+    fs::write(
+        fixture.root.join("config/package-one-beta.toml"),
+        "value = \"beta\"\n",
+    )
+    .unwrap();
+
+    let beta = inspect_build_plans_for_channel(fixture.config(), "one", "beta")
+        .unwrap()
+        .remove(0);
+    assert_eq!(beta["version"], "1.2.3");
+    assert_eq!(beta["build_number"], 8);
+    assert_eq!(beta["channel"], "beta");
+    assert_eq!(
+        beta["runtime_config_source"],
+        "config/package-one-beta.toml"
+    );
+    assert_eq!(
+        beta["updater_feed"],
+        "http://127.0.0.1:9000/releases/e2e/one/beta/latest.json"
+    );
+
+    let nightly = inspect_build_plans_for_channel(fixture.config(), "one", "nightly")
+        .unwrap()
+        .remove(0);
+    assert_eq!(nightly["build_number"], 7);
+    assert_eq!(nightly["runtime_config_source"], "config/package-one.toml");
+}
+
+#[test]
+fn bundle_resources_are_isolated_by_selected_channel() {
+    let fixture = Fixture::new(
+        "multi-channel-bundle",
+        &multi_channel_app_config("one", "package-one", "应用一"),
+    );
+    fs::write(
+        fixture.root.join("config/package-one-nightly.toml"),
+        "value = \"nightly\"\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("config/package-one-beta.toml"),
+        "value = \"beta\"\n",
+    )
+    .unwrap();
+
+    let app_path = inspect_write_bundle_resources(fixture.config(), "one", "nightly").unwrap();
+    assert_eq!(
+        fs::read_to_string(app_path.join("Contents/Resources/config/package-one.toml")).unwrap(),
+        "value = \"nightly\"\n"
+    );
+    let updater: serde_json::Value = serde_json::from_slice(
+        &fs::read(app_path.join("Contents/Resources/nexora-updater.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(updater["channel"], "nightly");
+    assert_eq!(
+        updater["feed_url"],
+        "http://127.0.0.1:9000/releases/e2e/one/nightly/latest.json"
+    );
+
+    let app_path = inspect_write_bundle_resources(fixture.config(), "one", "beta").unwrap();
+    assert_eq!(
+        fs::read_to_string(app_path.join("Contents/Resources/config/package-one.toml")).unwrap(),
+        "value = \"beta\"\n"
+    );
+    let updater: serde_json::Value = serde_json::from_slice(
+        &fs::read(app_path.join("Contents/Resources/nexora-updater.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(updater["channel"], "beta");
+}
+
+#[test]
+fn multi_channel_rejects_legacy_channel_and_static_feed() {
+    let app = multi_channel_app_config("one", "package-one", "应用一").replace(
+        "default_channel = \"nightly\"",
+        "channel = \"stable\"\ndefault_channel = \"nightly\"",
+    );
+    let fixture = Fixture::new("mixed-channel-model", &app);
+    assert!(
+        inspect_build_plans(fixture.config(), "one")
+            .unwrap_err()
+            .to_string()
+            .contains("不能同时")
+    );
+
+    let app = multi_channel_app_config("one", "package-one", "应用一").replace(
+        "channels = [\"nightly\", \"beta\", \"stable\"]",
+        "feed_url = \"https://example.com/static/latest.json\"\nchannels = [\"nightly\", \"beta\", \"stable\"]",
+    );
+    let fixture = Fixture::new("static-multi-feed", &app);
+    assert!(
+        inspect_build_plans(fixture.config(), "one")
+            .unwrap_err()
+            .to_string()
+            .contains("feed_url")
+    );
+}
+
+#[test]
+fn runtime_config_explicit_path_is_strict_and_confined_to_workspace() {
+    let base = multi_channel_app_config("one", "package-one", "应用一").replace(
+        "[apps.one.release.channels.beta]\n",
+        "[apps.one.release.channels.beta]\nruntime_config = \"config/explicit-beta.toml\"\n",
+    );
+    let fixture = Fixture::new("explicit-runtime-missing", &base);
+    assert!(
+        inspect_build_plans_for_channel(fixture.config(), "one", "beta")
+            .unwrap_err()
+            .to_string()
+            .contains("不存在")
+    );
+    fs::write(
+        fixture.root.join("config/explicit-beta.toml"),
+        "value = \"explicit\"\n",
+    )
+    .unwrap();
+    let plan = inspect_build_plans_for_channel(fixture.config(), "one", "beta")
+        .unwrap()
+        .remove(0);
+    assert_eq!(plan["runtime_config_source"], "config/explicit-beta.toml");
+
+    for unsafe_path in ["/tmp/outside.toml", "../outside.toml", "C:\\\\outside.toml"] {
+        let app = multi_channel_app_config("one", "package-one", "应用一").replace(
+            "[apps.one.release.channels.beta]\n",
+            &format!("[apps.one.release.channels.beta]\nruntime_config = {unsafe_path:?}\n"),
+        );
+        let fixture = Fixture::new("unsafe-runtime", &app);
+        assert!(inspect_build_plans_for_channel(fixture.config(), "one", "beta").is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_config_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let app = multi_channel_app_config("one", "package-one", "应用一").replace(
+        "[apps.one.release.channels.beta]\n",
+        "[apps.one.release.channels.beta]\nruntime_config = \"config/escaped.toml\"\n",
+    );
+    let fixture = Fixture::new("runtime-symlink-escape", &app);
+    let outside = env::temp_dir().join(format!(
+        "nexora-runtime-outside-{}-{}.toml",
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&outside, "value = \"outside\"\n").unwrap();
+    symlink(&outside, fixture.root.join("config/escaped.toml")).unwrap();
+
+    let error = inspect_build_plans_for_channel(fixture.config(), "one", "beta").unwrap_err();
+    assert!(error.to_string().contains("workspace 范围内"));
+    fs::remove_file(outside).unwrap();
 }
 
 #[test]
@@ -679,6 +944,22 @@ fn publish_artifact_validation_requires_zip_and_dmg() {
             .to_string()
             .contains("macos_app_zip")
     );
+}
+
+#[test]
+fn publish_artifacts_are_read_from_the_exact_selected_channel() {
+    let fixture = Fixture::new(
+        "channel-artifact-selection",
+        &multi_channel_app_config("one", "package-one", "应用一"),
+    );
+    write_artifacts(&fixture, "aarch64-apple-darwin", true, true);
+
+    assert_eq!(
+        inspect_release_artifacts_for_channel(fixture.config(), "one", "stable").unwrap(),
+        vec!["macos_app_zip", "macos_dmg"]
+    );
+    let error = inspect_release_artifacts_for_channel(fixture.config(), "one", "beta").unwrap_err();
+    assert!(error.to_string().contains("dist/one/beta/release.json"));
 }
 
 #[test]
