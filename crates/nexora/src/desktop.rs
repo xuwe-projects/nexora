@@ -25,6 +25,7 @@ pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
     UpdateArtifact, UpdateChannel, UpdateConfig, UpdateError, UpdateEvent, UpdateManifest,
     UpdateManifestSignature, UpdateRelease, UpdateSession, UpdateTarget, Updater,
+    report_health_from_env_args, run_sidecar_from_env_args,
 };
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
