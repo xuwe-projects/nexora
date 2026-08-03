@@ -2039,8 +2039,7 @@ SectionEnd
 }
 
 fn windows_file_version(version: &Version, build_number: u64) -> CliResult<String> {
-    let build = u16::try_from(build_number)
-        .map_err(|_| CliError::new("Windows file version 的 build_number 超出 u16"))?;
+    let build = build_number % (u64::from(u16::MAX) + 1);
     Ok(format!(
         "{}.{}.{}.{}",
         version.major, version.minor, version.patch, build

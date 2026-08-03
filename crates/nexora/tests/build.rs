@@ -609,6 +609,26 @@ fn windows_installer_sources_keep_nsis_boundaries() {
 }
 
 #[test]
+fn windows_file_version_accepts_large_release_build_number() {
+    let fixture = Fixture::new(
+        "windows-large-build-number",
+        &with_windows_target(
+            app_config("one", "package-one", "Application One")
+                .replace("build_number = 7", "build_number = 260803122140"),
+        ),
+    );
+    let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
+
+    assert_eq!(sources["file_version"], "1.2.3.54236");
+    assert!(
+        sources["nsis_script"]
+            .as_str()
+            .unwrap()
+            .contains("VIProductVersion \"1.2.3.54236\"")
+    );
+}
+
+#[test]
 fn invalid_display_names_are_rejected() {
     for value in [
         "",
