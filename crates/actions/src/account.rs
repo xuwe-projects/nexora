@@ -6,7 +6,7 @@ use gpui::{Action, App, KeyBinding};
 
 use crate::{
     settings::{self, OpenSettings},
-    updater::CheckForUpdates,
+    updater::{self, CheckForUpdates},
 };
 
 gpui::actions!(
@@ -119,7 +119,7 @@ pub fn menu_actions_with_updates(updater_available: bool) -> Vec<AccountActionSp
         actions.push(AccountActionSpec::new(
             AccountActionKind::Updates,
             "检查更新",
-            None,
+            Some(updater::shortcut_label()),
         ));
     }
     actions.push(AccountActionSpec::new(

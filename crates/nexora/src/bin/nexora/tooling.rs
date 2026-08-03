@@ -12,9 +12,10 @@ pub(super) use release::{BuildConfig, PublishConfig};
 
 #[allow(unused_imports)]
 pub use release::{
-    inspect_app_selection, inspect_build_plans, inspect_latest_dmg_aliases,
-    inspect_release_artifacts, inspect_signing_key, inspect_windows_installer_sources,
-    validate_display_name, write_bundle_icon, write_bundle_info,
+    inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
+    inspect_latest_dmg_aliases, inspect_prepare_release_receipt, inspect_release_artifacts,
+    inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
+    write_bundle_icon, write_bundle_info,
 };
 
 /// CLI 命令解析与执行流程共用的结果类型。

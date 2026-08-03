@@ -5,9 +5,10 @@
 pub mod commands;
 
 use commands::{
-    inspect_app_selection, inspect_build_plans, inspect_latest_dmg_aliases,
-    inspect_release_artifacts, inspect_signing_key, inspect_windows_installer_sources,
-    validate_display_name, write_bundle_icon, write_bundle_info,
+    inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
+    inspect_latest_dmg_aliases, inspect_prepare_release_receipt, inspect_release_artifacts,
+    inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
+    write_bundle_icon, write_bundle_info,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -48,6 +49,27 @@ allow_insecure_http = true
             ),
         )
         .unwrap();
+        let packages = apps
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("package = \"")
+                    .and_then(|value| value.strip_suffix('"'))
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            root.join("Cargo.toml"),
+            r#"[workspace]
+resolver = "3"
+members = ["packages/*"]
+
+[workspace.package]
+version = "9.8.7"
+"#,
+        )
+        .unwrap();
+        for package in packages {
+            write_test_package(&root, package, "version = \"1.2.3\"");
+        }
         for app_key in apps.lines().filter_map(|line| {
             line.strip_prefix("[apps.")
                 .and_then(|line| line.strip_suffix(']'))
@@ -61,6 +83,19 @@ allow_insecure_http = true
     fn config(&self) -> PathBuf {
         self.root.join("nexora.toml")
     }
+}
+
+fn write_test_package(root: &Path, package: &str, version: &str) {
+    let directory = root.join("packages").join(package);
+    fs::create_dir_all(directory.join("src")).unwrap();
+    fs::write(
+        directory.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{package}\"\n{version}\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(directory.join("src/lib.rs"), "").unwrap();
 }
 
 fn write_brand_assets(root: &Path, app_key: &str) {
@@ -201,6 +236,79 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
         .unwrap(),
     )
     .unwrap();
+    fs::write(
+        fixture.root.join("dist/one/stable/release.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_key": "one",
+            "package": "package-one",
+            "channel": "stable",
+            "version": "1.2.3",
+            "build_number": 7,
+            "version_source": "literal",
+            "build_number_source": "literal",
+            "created_at": 1,
+            "targets": if target.starts_with("x86_64") {
+                vec!["aarch64-apple-darwin", "x86_64-apple-darwin"]
+            } else {
+                vec!["aarch64-apple-darwin"]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_complete_artifacts_for_identity(
+    fixture: &Fixture,
+    target: &str,
+    version: &str,
+    build_number: u64,
+) {
+    use sha2::{Digest as _, Sha256};
+    let directory = fixture
+        .root
+        .join("dist/one/stable")
+        .join(version)
+        .join(build_number.to_string())
+        .join(target);
+    fs::create_dir_all(&directory).unwrap();
+    let arch = if target.starts_with("aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let zip_name = format!("package-one-{version}-{build_number}-{arch}.app.zip");
+    let dmg_name = format!("package-one-{version}-{build_number}-{arch}.dmg");
+    fs::write(directory.join(&zip_name), b"zip").unwrap();
+    fs::write(directory.join(&dmg_name), b"dmg").unwrap();
+    fs::write(
+        directory.join("artifact.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_id": "com.example.one",
+            "channel": "stable",
+            "version": version,
+            "build_number": build_number,
+            "target": target,
+            "artifacts": [
+                {
+                    "kind": "macos_app_zip",
+                    "file_name": zip_name,
+                    "sha256": format!("{:x}", Sha256::digest(b"zip")),
+                    "size": 3
+                },
+                {
+                    "kind": "macos_dmg",
+                    "file_name": dmg_name,
+                    "sha256": format!("{:x}", Sha256::digest(b"dmg")),
+                    "size": 3
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn write_windows_artifacts(fixture: &Fixture, include_setup: bool, include_zip: bool) {
@@ -243,6 +351,23 @@ fn write_windows_artifacts(fixture: &Fixture, include_setup: bool, include_zip: 
             "build_number": 7,
             "target": target,
             "artifacts": entries
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("dist/one/stable/release.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_key": "one",
+            "package": "package-one",
+            "channel": "stable",
+            "version": "1.2.3",
+            "build_number": 7,
+            "version_source": "literal",
+            "build_number_source": "literal",
+            "created_at": 1,
+            "targets": [target]
         }))
         .unwrap(),
     )
@@ -315,31 +440,142 @@ fn technical_artifact_names_include_package_version_build_and_arch() {
 }
 
 #[test]
+fn cargo_package_version_expression_uses_selected_package() {
+    let apps = format!(
+        "{}\n{}",
+        app_config("one", "package-one", "应用一")
+            .replace("version = \"1.2.3\"", "version = \"${CARGO_PKG_VERSION}\""),
+        app_config("two", "package-two", "应用二")
+            .replace("version = \"1.2.3\"", "version = \"${CARGO_PKG_VERSION}\"")
+    );
+    let fixture = Fixture::new("selected-package-version", &apps);
+    write_test_package(&fixture.root, "package-two", "version = \"2.3.4\"");
+
+    let plan = inspect_build_plans(fixture.config(), "two")
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(plan["version"], "2.3.4");
+    assert_eq!(plan["version_source"], "cargo_pkg_version");
+}
+
+#[test]
+fn cargo_package_version_expression_supports_workspace_version() {
+    let app = app_config("one", "package-one", "应用一")
+        .replace("version = \"1.2.3\"", "version = \"${CARGO_PKG_VERSION}\"");
+    let fixture = Fixture::new("workspace-package-version", &app);
+    write_test_package(&fixture.root, "package-one", "version.workspace = true");
+
+    let plan = inspect_build_plans(fixture.config(), "one")
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(plan["version"], "9.8.7");
+    assert_ne!(plan["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn unknown_release_expressions_are_rejected() {
+    for invalid in [
+        app_config("one", "package-one", "应用一")
+            .replace("version = \"1.2.3\"", "version = \"${CARGO_VERSION}\""),
+        app_config("one", "package-one", "应用一").replace(
+            "version = \"1.2.3\"",
+            "version = \"1.${CARGO_PKG_VERSION}\"",
+        ),
+        app_config("one", "package-one", "应用一")
+            .replace("build_number = 7", "build_number = \"${UNKNOWN}\""),
+    ] {
+        let fixture = Fixture::new("unknown-expression", &invalid);
+        assert!(inspect_build_plans(fixture.config(), "one").is_err());
+    }
+}
+
+#[test]
+fn build_datetime_is_twelve_digit_utc_and_strictly_increasing() {
+    let current = inspect_build_datetime_number(1_785_765_975, None).unwrap();
+    assert_eq!(current, 260_803_140_615);
+    assert_eq!(current.to_string().len(), 12);
+    assert_eq!(
+        inspect_build_datetime_number(1_785_765_975, Some(current)).unwrap(),
+        current + 1
+    );
+    assert_eq!(
+        inspect_build_datetime_number(1_785_765_974, Some(current + 10)).unwrap(),
+        current + 11
+    );
+    assert!(inspect_build_datetime_number(1_785_765_975, Some(u64::MAX)).is_err());
+}
+
+#[test]
+fn dynamic_receipt_is_reused_until_all_targets_are_complete() {
+    let app = app_config("one", "package-one", "应用一")
+        .replace("version = \"1.2.3\"", "version = \"${CARGO_PKG_VERSION}\"")
+        .replace("build_number = 7", "build_number = \"${BUILD_DATETIME}\"")
+        .replace(
+            "required = [\"aarch64-apple-darwin\"]",
+            "required = [\"aarch64-apple-darwin\", \"x86_64-apple-darwin\"]",
+        );
+    let fixture = Fixture::new("dynamic-receipt", &app);
+
+    let first = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    let retry = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    assert_eq!(first["build_number"], retry["build_number"]);
+    assert_eq!(
+        first["targets"],
+        serde_json::json!(["aarch64-apple-darwin", "x86_64-apple-darwin"])
+    );
+
+    let build_number = first["build_number"].as_u64().unwrap();
+    write_complete_artifacts_for_identity(&fixture, "aarch64-apple-darwin", "1.2.3", build_number);
+    let partial_retry = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    assert_eq!(first["build_number"], partial_retry["build_number"]);
+
+    write_complete_artifacts_for_identity(&fixture, "x86_64-apple-darwin", "1.2.3", build_number);
+    let next = inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    assert!(next["build_number"].as_u64().unwrap() > build_number);
+    assert_eq!(next["version_source"], "cargo_pkg_version");
+    assert_eq!(next["build_number_source"], "build_datetime");
+}
+
+#[test]
+fn corrupt_release_receipt_fails_before_identity_is_replaced() {
+    let app = app_config("one", "package-one", "应用一")
+        .replace("build_number = 7", "build_number = \"${BUILD_DATETIME}\"");
+    let fixture = Fixture::new("corrupt-receipt", &app);
+    fs::create_dir_all(fixture.root.join("dist/one/stable")).unwrap();
+    let receipt = fixture.root.join("dist/one/stable/release.json");
+    fs::write(&receipt, "{broken").unwrap();
+
+    let error = inspect_prepare_release_receipt(fixture.config(), "one").unwrap_err();
+
+    assert!(error.to_string().contains("release receipt"));
+    assert_eq!(fs::read_to_string(receipt).unwrap(), "{broken");
+}
+
+#[test]
 fn windows_build_plan_uses_setup_and_update_zip_without_msi() {
     let fixture = Fixture::new(
         "windows-plan",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
     let plans = inspect_build_plans(fixture.config(), "one").unwrap();
-    if cfg!(target_os = "windows") {
-        let plan = &plans[0];
-        assert_eq!(plan["platform"], "Windows");
-        assert!(
-            plan["app_zip_path"]
-                .as_str()
-                .unwrap()
-                .ends_with("package-one-1.2.3-7-x86_64.windows.zip")
-        );
-        assert!(
-            plan["setup_path"]
-                .as_str()
-                .unwrap()
-                .ends_with("package-one-1.2.3-7-x86_64.setup.exe")
-        );
-        assert!(plan.get("msi_path").is_none());
-    } else {
-        assert!(plans.is_empty());
-    }
+    let plan = &plans[0];
+
+    assert_eq!(plan["platform"], "Windows");
+    assert!(
+        plan["app_zip_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("package-one-1.2.3-7-x86_64.windows.zip")
+    );
+    assert!(
+        plan["setup_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("package-one-1.2.3-7-x86_64.setup.exe")
+    );
+    assert!(plan.get("msi_path").is_none());
 }
 
 #[test]

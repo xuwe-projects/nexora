@@ -2,7 +2,7 @@
 
 use super::{CliError, CliResult};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::Utc;
+use chrono::{TimeZone as _, Utc};
 use clap::{Args, Subcommand};
 use dialoguer::{Confirm, Select};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
     io::{IsTerminal as _, Write as _},
     path::{Component, Path, PathBuf},
     process::Command,
@@ -22,6 +23,7 @@ use std::{
 
 const CONFIG_FILE_NAME: &str = "nexora.toml";
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;
+const RELEASE_RECEIPT_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
@@ -119,11 +121,18 @@ struct BrandingConfig {
 struct ReleaseConfig {
     channel: String,
     version: String,
-    build_number: u64,
+    build_number: BuildNumberConfig,
     #[serde(default = "default_minimum_supported_version")]
     minimum_supported_version: String,
     #[serde(default)]
     signing_key_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum BuildNumberConfig {
+    Literal(u64),
+    Expression(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,12 +262,59 @@ struct ProjectDocument {
     config: ProjectConfig,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum VersionSource {
+    CargoPkgVersion,
+    Literal,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BuildNumberSource {
+    BuildDatetime,
+    Literal,
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedBuildNumber {
+    BuildDatetime,
+    Literal(u64),
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedReleaseConfig {
+    channel: String,
+    version: Version,
+    version_source: VersionSource,
+    build_number: ResolvedBuildNumber,
+    build_number_source: BuildNumberSource,
+    minimum_supported_version: Version,
+}
+
 #[derive(Debug, Clone)]
 struct ValidatedRelease {
     channel: String,
     version: Version,
     build_number: u64,
+    version_source: VersionSource,
+    build_number_source: BuildNumberSource,
     minimum_supported_version: Version,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ReleaseReceipt {
+    schema_version: u32,
+    app_key: String,
+    package: String,
+    channel: String,
+    version: String,
+    build_number: u64,
+    version_source: VersionSource,
+    build_number_source: BuildNumberSource,
+    created_at: i64,
+    targets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -438,6 +494,43 @@ impl UploadSource {
     }
 }
 
+impl ReleaseReceipt {
+    fn validated_release(&self, minimum_supported_version: Version) -> CliResult<ValidatedRelease> {
+        if self.schema_version != RELEASE_RECEIPT_SCHEMA_VERSION {
+            return Err(CliError::new(format!(
+                "release receipt schema_version {} 不受支持",
+                self.schema_version
+            )));
+        }
+        let version = Version::parse(&self.version)
+            .map_err(|error| CliError::new(format!("release receipt version 非法: {error}")))?;
+        if self.build_number == 0 {
+            return Err(CliError::new("release receipt build_number 必须大于 0"));
+        }
+        Ok(ValidatedRelease {
+            channel: self.channel.clone(),
+            version,
+            build_number: self.build_number,
+            version_source: self.version_source,
+            build_number_source: self.build_number_source,
+            minimum_supported_version,
+        })
+    }
+}
+
+impl ResolvedReleaseConfig {
+    fn validated_release(&self, build_number: u64) -> ValidatedRelease {
+        ValidatedRelease {
+            channel: self.channel.clone(),
+            version: self.version.clone(),
+            build_number,
+            version_source: self.version_source,
+            build_number_source: self.build_number_source,
+            minimum_supported_version: self.minimum_supported_version.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct PublishPlan {
     app_key: String,
@@ -476,13 +569,29 @@ pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
     ensure_supported_build_host()?;
     let project = ProjectDocument::discover()?;
     let app_key = project.select_one(config.app.as_deref(), terminal_is_interactive())?;
-    let plans = project.build_plans(&app_key, false)?;
+    let app = &project.config.apps[&app_key];
+    let package_version = cargo_package_version(&project.root, &app.package, false)?;
+    let configured = project.resolved_release(&app_key, app, Some(package_version))?;
+    let targets = app
+        .targets
+        .required
+        .iter()
+        .filter(|target| host_can_build(target))
+        .cloned()
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Err(CliError::new(format!(
+            "当前宿主不能构建 app `{app_key}` 的任何 required target"
+        )));
+    }
+    let receipt = project.prepare_build_receipt(&app_key, app, &configured, &targets)?;
+    let release = receipt.validated_release(configured.minimum_supported_version.clone())?;
+    let plans = project.build_plans(&app_key, &release, false)?;
     if plans.is_empty() {
         return Err(CliError::new(format!(
             "当前宿主不能构建 app `{app_key}` 的任何 required target"
         )));
     }
-    validate_cargo_package(&project.root, &plans[0].package)?;
     for plan in &plans {
         execute_build(plan)?;
     }
@@ -623,7 +732,7 @@ impl ProjectDocument {
                     app.publish_target
                 )));
             }
-            self.validated_release(app_key, app)?;
+            let configured = self.resolved_release(app_key, app, Some(Version::new(0, 0, 0)))?;
             if app.targets.required.is_empty() {
                 return Err(CliError::new(format!(
                     "app `{app_key}` 的 targets.required 不能为空"
@@ -674,7 +783,7 @@ impl ProjectDocument {
                     &object_key([
                         app.object_prefix.as_str(),
                         app_key,
-                        self.validated_release(app_key, app)?.channel.as_str(),
+                        configured.channel.as_str(),
                         "latest.json",
                     ]),
                 );
@@ -688,7 +797,12 @@ impl ProjectDocument {
         Ok(())
     }
 
-    fn validated_release(&self, app_key: &str, app: &AppConfig) -> CliResult<ValidatedRelease> {
+    fn resolved_release(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        package_version: Option<Version>,
+    ) -> CliResult<ResolvedReleaseConfig> {
         let release = app.release.as_ref().ok_or_else(|| {
             CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
         })?;
@@ -704,17 +818,47 @@ impl ProjectDocument {
                 release.channel
             )));
         }
-        let version = Version::parse(&release.version).map_err(|error| {
-            CliError::new(format!(
-                "app `{app_key}` 的 release.version `{}` 不是合法 SemVer: {error}",
-                release.version
-            ))
-        })?;
-        if release.build_number == 0 {
-            return Err(CliError::new(format!(
-                "app `{app_key}` 的 release.build_number 必须大于 0"
-            )));
-        }
+        let (version, version_source) = match release.version.as_str() {
+            "${CARGO_PKG_VERSION}" => (
+                package_version
+                    .map(Ok)
+                    .unwrap_or_else(|| cargo_package_version(&self.root, &app.package, false))?,
+                VersionSource::CargoPkgVersion,
+            ),
+            value if value.contains("${") => {
+                return Err(CliError::new(format!(
+                    "app `{app_key}` 的 release.version 包含不支持的表达式 `{value}`；只支持完整字段值 `${{CARGO_PKG_VERSION}}`"
+                )));
+            }
+            value => (
+                Version::parse(value).map_err(|error| {
+                    CliError::new(format!(
+                        "app `{app_key}` 的 release.version `{value}` 不是合法 SemVer: {error}"
+                    ))
+                })?,
+                VersionSource::Literal,
+            ),
+        };
+        let (build_number, build_number_source) = match &release.build_number {
+            BuildNumberConfig::Literal(0) => {
+                return Err(CliError::new(format!(
+                    "app `{app_key}` 的 release.build_number 必须大于 0"
+                )));
+            }
+            BuildNumberConfig::Literal(value) => (
+                ResolvedBuildNumber::Literal(*value),
+                BuildNumberSource::Literal,
+            ),
+            BuildNumberConfig::Expression(value) if value == "${BUILD_DATETIME}" => (
+                ResolvedBuildNumber::BuildDatetime,
+                BuildNumberSource::BuildDatetime,
+            ),
+            BuildNumberConfig::Expression(value) => {
+                return Err(CliError::new(format!(
+                    "app `{app_key}` 的 release.build_number 字符串 `{value}` 不受支持；只支持正整数或完整字段值 `${{BUILD_DATETIME}}`"
+                )));
+            }
+        };
         let minimum_supported_version = Version::parse(&release.minimum_supported_version)
             .map_err(|error| {
                 CliError::new(format!(
@@ -722,12 +866,98 @@ impl ProjectDocument {
                     release.minimum_supported_version
                 ))
             })?;
-        Ok(ValidatedRelease {
+        Ok(ResolvedReleaseConfig {
             channel: release.channel.clone(),
             version,
-            build_number: release.build_number,
+            version_source,
+            build_number,
+            build_number_source,
             minimum_supported_version,
         })
+    }
+
+    fn release_receipt_path(&self, app_key: &str, channel: &str) -> PathBuf {
+        self.root
+            .join(DIST_DIRECTORY)
+            .join(app_key)
+            .join(channel)
+            .join("release.json")
+    }
+
+    fn prepare_build_receipt(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        configured: &ResolvedReleaseConfig,
+        targets: &[String],
+    ) -> CliResult<ReleaseReceipt> {
+        let path = self.release_receipt_path(app_key, &configured.channel);
+        let previous = path
+            .is_file()
+            .then(|| read_release_receipt(&path))
+            .transpose()?;
+        if let Some(receipt) = &previous {
+            validate_receipt_structure(receipt, &path)?;
+            if receipt_matches_configuration(receipt, app_key, app, configured, targets)
+                && (!matches!(configured.build_number, ResolvedBuildNumber::BuildDatetime)
+                    || !release_targets_complete(
+                        &self.root,
+                        app_key,
+                        app,
+                        &receipt.validated_release(configured.minimum_supported_version.clone())?,
+                    ))
+            {
+                println!(
+                    "复用 release receipt：{} / build {}",
+                    receipt.version, receipt.build_number
+                );
+                return Ok(receipt.clone());
+            }
+        }
+
+        let previous_build_number = previous.as_ref().map(|receipt| receipt.build_number);
+        let build_number = match configured.build_number {
+            ResolvedBuildNumber::Literal(value) => value,
+            ResolvedBuildNumber::BuildDatetime => {
+                build_datetime_number(Utc::now(), previous_build_number)?
+            }
+        };
+        let receipt = ReleaseReceipt {
+            schema_version: RELEASE_RECEIPT_SCHEMA_VERSION,
+            app_key: app_key.to_owned(),
+            package: app.package.clone(),
+            channel: configured.channel.clone(),
+            version: configured.version.to_string(),
+            build_number,
+            version_source: configured.version_source,
+            build_number_source: configured.build_number_source,
+            created_at: unix_now()?,
+            targets: targets.to_vec(),
+        };
+        write_release_receipt_atomic(&path, &receipt)?;
+        println!("RELEASE RECEIPT: {}", path.display());
+        Ok(receipt)
+    }
+
+    fn release_from_receipt(&self, app_key: &str, app: &AppConfig) -> CliResult<ValidatedRelease> {
+        let package_version = cargo_package_version(&self.root, &app.package, true)?;
+        let configured = self.resolved_release(app_key, app, Some(package_version))?;
+        let receipt_path = self.release_receipt_path(app_key, &configured.channel);
+        let receipt = read_release_receipt(&receipt_path)?;
+        validate_receipt_structure(&receipt, &receipt_path)?;
+        if !receipt_matches_configuration(
+            &receipt,
+            app_key,
+            app,
+            &configured,
+            &app.targets.required,
+        ) {
+            return Err(CliError::new(format!(
+                "`{}` 与当前 app/package/channel/version/source/build_number/targets 配置不一致",
+                receipt_path.display()
+            )));
+        }
+        receipt.validated_release(configured.minimum_supported_version)
     }
 
     fn brand_assets(&self, _app_key: &str, app: &AppConfig) -> CliResult<BrandAssets> {
@@ -824,9 +1054,13 @@ impl ProjectDocument {
         Ok(vec![entries[index].0.clone()])
     }
 
-    fn build_plans(&self, app_key: &str, include_all_targets: bool) -> CliResult<Vec<BuildPlan>> {
+    fn build_plans(
+        &self,
+        app_key: &str,
+        release: &ValidatedRelease,
+        include_all_targets: bool,
+    ) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
-        let release = self.validated_release(app_key, app)?;
         let brand_assets = self.brand_assets(app_key, app)?;
         let publish_target = &self.config.publish.targets[&app.publish_target];
         app.targets
@@ -925,7 +1159,7 @@ impl ProjectDocument {
                 "app `{app_key}` 未启用 updater，不能发布更新清单"
             )));
         }
-        let release = self.validated_release(app_key, app)?;
+        let release = self.release_from_receipt(app_key, app)?;
         let updater_app_id = app.updater.app_id.as_deref().unwrap_or(&app.app_id);
         let target = self.config.publish.targets[&app.publish_target].clone();
         let trusted_keys = parse_trusted_keys(&app.updater.trusted_public_keys)?;
@@ -943,6 +1177,18 @@ impl ProjectDocument {
         {
             return Err(CliError::new(format!(
                 "远端 latest.json 的 app_id/channel 与 app `{app_key}` 配置不一致"
+            )));
+        }
+        if matches!(status, ReleaseStatus::Available)
+            && remote.as_ref().is_some_and(|payload| {
+                payload.version > release.version
+                    || (payload.version == release.version
+                        && payload.build_number >= release.build_number)
+            })
+        {
+            return Err(CliError::new(format!(
+                "待发布 identity ({}, {}) 必须严格高于远端 latest.json",
+                release.version, release.build_number
             )));
         }
         let observed_sequence = remote.as_ref().map(|manifest| manifest.manifest_sequence);
@@ -2363,8 +2609,16 @@ fn latest_dmg_uploads(
 
 fn print_publish_summary(plan: &PublishPlan, dry_run: bool) {
     println!("应用：{}", plan.display_name);
-    println!("版本：{}", plan.release.version);
-    println!("Build：{}", plan.release.build_number);
+    println!(
+        "版本：{}（{}）",
+        plan.release.version,
+        version_source_name(plan.release.version_source)
+    );
+    println!(
+        "Build：{}（{}）",
+        plan.release.build_number,
+        build_number_source_name(plan.release.build_number_source)
+    );
     println!("Manifest sequence：{}（自动计算）", plan.sequence);
     println!("Channel：{}", plan.release.channel);
     println!("Targets：{}", plan.required_targets.join(", "));
@@ -2376,6 +2630,20 @@ fn print_publish_summary(plan: &PublishPlan, dry_run: bool) {
     println!("  {}", plan.latest.key);
     if dry_run {
         println!("模式：dry-run");
+    }
+}
+
+fn version_source_name(source: VersionSource) -> &'static str {
+    match source {
+        VersionSource::CargoPkgVersion => "cargo_pkg_version",
+        VersionSource::Literal => "literal",
+    }
+}
+
+fn build_number_source_name(source: BuildNumberSource) -> &'static str {
+    match source {
+        BuildNumberSource::BuildDatetime => "build_datetime",
+        BuildNumberSource::Literal => "literal",
     }
 }
 
@@ -2872,10 +3140,26 @@ fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {
     validate_safe_component(&target.bucket, "bucket")
 }
 
-fn validate_cargo_package(root: &Path, package: &str) -> CliResult<()> {
-    let output = Command::new("cargo")
+#[derive(Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoPackage>,
+}
+
+#[derive(Deserialize)]
+struct CargoPackage {
+    name: String,
+    version: Version,
+}
+
+fn cargo_package_version(root: &Path, package: &str, locked: bool) -> CliResult<Version> {
+    let mut command = Command::new("cargo");
+    command
         .current_dir(root)
-        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .args(["metadata", "--no-deps", "--format-version", "1"]);
+    if locked {
+        command.arg("--locked");
+    }
+    let output = command
         .output()
         .map_err(|error| CliError::new(format!("无法执行 cargo metadata: {error}")))?;
     if !output.status.success() {
@@ -2884,17 +3168,197 @@ fn validate_cargo_package(root: &Path, package: &str) -> CliResult<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)
         .map_err(|error| CliError::new(format!("无法解析 cargo metadata: {error}")))?;
-    let exists = metadata["packages"]
-        .as_array()
-        .is_some_and(|packages| packages.iter().any(|item| item["name"] == package));
-    if !exists {
+    metadata
+        .packages
+        .into_iter()
+        .find(|item| item.name == package)
+        .map(|item| item.version)
+        .ok_or_else(|| CliError::new(format!("Cargo workspace 中不存在 package `{package}`")))
+}
+
+fn read_release_receipt(path: &Path) -> CliResult<ReleaseReceipt> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        CliError::new(format!(
+            "无法读取 release receipt `{}`: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_str(&contents).map_err(|error| {
+        CliError::new(format!(
+            "无法解析 release receipt `{}`: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn validate_receipt_structure(receipt: &ReleaseReceipt, path: &Path) -> CliResult<()> {
+    if receipt.schema_version != RELEASE_RECEIPT_SCHEMA_VERSION {
         return Err(CliError::new(format!(
-            "Cargo workspace 中不存在 package `{package}`"
+            "release receipt `{}` schema_version {} 不受支持",
+            path.display(),
+            receipt.schema_version
         )));
     }
+    validate_safe_component(&receipt.app_key, "release receipt app_key")?;
+    validate_safe_component(&receipt.package, "release receipt package")?;
+    validate_safe_component(&receipt.channel, "release receipt channel")?;
+    Version::parse(&receipt.version).map_err(|error| {
+        CliError::new(format!(
+            "release receipt `{}` version 非法: {error}",
+            path.display()
+        ))
+    })?;
+    if receipt.build_number == 0 {
+        return Err(CliError::new(format!(
+            "release receipt `{}` build_number 必须大于 0",
+            path.display()
+        )));
+    }
+    if receipt.targets.is_empty() {
+        return Err(CliError::new(format!(
+            "release receipt `{}` targets 不能为空",
+            path.display()
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    for target in &receipt.targets {
+        validate_required_target(target)?;
+        if !seen.insert(target) {
+            return Err(CliError::new(format!(
+                "release receipt `{}` 重复声明 target `{target}`",
+                path.display()
+            )));
+        }
+    }
     Ok(())
+}
+
+fn receipt_matches_configuration(
+    receipt: &ReleaseReceipt,
+    app_key: &str,
+    app: &AppConfig,
+    configured: &ResolvedReleaseConfig,
+    targets: &[String],
+) -> bool {
+    let build_number_matches = match configured.build_number {
+        ResolvedBuildNumber::BuildDatetime => true,
+        ResolvedBuildNumber::Literal(value) => receipt.build_number == value,
+    };
+    receipt.app_key == app_key
+        && receipt.package == app.package
+        && receipt.channel == configured.channel
+        && receipt.version == configured.version.to_string()
+        && receipt.version_source == configured.version_source
+        && receipt.build_number_source == configured.build_number_source
+        && receipt.targets == targets
+        && build_number_matches
+}
+
+fn release_targets_complete(
+    root: &Path,
+    app_key: &str,
+    app: &AppConfig,
+    release: &ValidatedRelease,
+) -> bool {
+    load_release_artifacts(root, app_key, app, release).is_ok()
+}
+
+fn write_release_receipt_atomic(path: &Path, receipt: &ReleaseReceipt) -> CliResult<()> {
+    create_parent(path)?;
+    let mut contents = serde_json::to_vec_pretty(receipt)
+        .map_err(|error| CliError::new(format!("无法生成 release receipt: {error}")))?;
+    contents.push(b'\n');
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| CliError::new(format!("系统时间早于 Unix 元年: {error}")))?
+        .as_nanos();
+    let temporary = path.with_extension(format!("json.{}-{suffix}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| {
+                CliError::new(format!(
+                    "无法创建 release receipt 临时文件 `{}`: {error}",
+                    temporary.display()
+                ))
+            })?;
+        file.write_all(&contents).map_err(|error| {
+            CliError::new(format!(
+                "无法写入 release receipt 临时文件 `{}`: {error}",
+                temporary.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            CliError::new(format!(
+                "无法同步 release receipt 临时文件 `{}`: {error}",
+                temporary.display()
+            ))
+        })?;
+        fs::rename(&temporary, path).map_err(|error| {
+            CliError::new(format!(
+                "无法原子写入 release receipt `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        if cfg!(target_os = "windows") {
+            return Ok(());
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| CliError::new("release receipt 路径缺少父目录"))?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                CliError::new(format!(
+                    "无法同步 release receipt 目录 `{}`: {error}",
+                    parent.display()
+                ))
+            })
+    })();
+    if result.is_err() && temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn build_datetime_number(
+    now: chrono::DateTime<Utc>,
+    previous_build_number: Option<u64>,
+) -> CliResult<u64> {
+    let current = now
+        .format("%y%m%d%H%M%S")
+        .to_string()
+        .parse::<u64>()
+        .map_err(|error| CliError::new(format!("无法生成 UTC build number: {error}")))?;
+    let next = previous_build_number
+        .map(|value| {
+            value
+                .checked_add(1)
+                .ok_or_else(|| CliError::new("本地 build number 已达到 u64 上限"))
+        })
+        .transpose()?;
+    Ok(next.map_or(current, |value| current.max(value)))
+}
+
+/// 按指定 Unix 秒生成与 build 相同的 UTC 构建号，供集成测试验证时间与单调性规则。
+///
+/// # Errors
+///
+/// Unix 秒超出 Chrono 范围，或上一个本地构建号已达到 `u64` 上限时返回错误。
+#[allow(dead_code)]
+pub fn inspect_build_datetime_number(
+    unix_seconds: i64,
+    previous_build_number: Option<u64>,
+) -> CliResult<u64> {
+    let now = Utc
+        .timestamp_opt(unix_seconds, 0)
+        .single()
+        .ok_or_else(|| CliError::new("Unix 秒超出 UTC 时间范围"))?;
+    build_datetime_number(now, previous_build_number)
 }
 
 /// 校验用户可见的 macOS bundle 名称是否能安全作为文件名。
@@ -3447,8 +3911,19 @@ pub fn inspect_build_plans(
     app_key: &str,
 ) -> CliResult<Vec<serde_json::Value>> {
     let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let configured = project.resolved_release(app_key, app, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::Literal(value) => value,
+        ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
+    };
+    let release = configured.validated_release(build_number);
     project
-        .build_plans(app_key, true)?
+        .build_plans(app_key, &release, true)?
         .into_iter()
         .map(|plan| {
             Ok(serde_json::json!({
@@ -3464,6 +3939,8 @@ pub fn inspect_build_plans(
                 "platform": format!("{:?}", plan.platform),
                 "version": plan.release.version,
                 "build_number": plan.release.build_number,
+                "version_source": version_source_name(plan.release.version_source),
+                "build_number_source": build_number_source_name(plan.release.build_number_source),
                 "channel": plan.release.channel,
                 "signing": format!("{:?}", plan.signing),
                 "notarize": plan.notarize,
@@ -3474,6 +3951,32 @@ pub fn inspect_build_plans(
 
 fn inspect_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// 为集成测试按真实 build 规则创建或复用 release receipt，并返回其 JSON 快照。
+///
+/// 该入口会原子写入 `dist/<app>/<channel>/release.json`，但不会执行任何 target 构建命令。
+///
+/// # Errors
+///
+/// 配置、Cargo package、现有收据或原子写入不合法时返回错误。
+#[allow(dead_code)]
+pub fn inspect_prepare_release_receipt(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let package_version = cargo_package_version(&project.root, &app.package, false)?;
+    let configured = project.resolved_release(app_key, app, Some(package_version))?;
+    let receipt =
+        project.prepare_build_receipt(app_key, app, &configured, &app.targets.required)?;
+    serde_json::to_value(receipt)
+        .map_err(|error| CliError::new(format!("无法序列化 release receipt: {error}")))
 }
 
 /// 为集成测试执行与 build/publish 相同的 app 选择规则，不触发交互菜单。
@@ -3506,7 +4009,7 @@ pub fn inspect_release_artifacts(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let release = project.validated_release(app_key, app)?;
+    let release = project.release_from_receipt(app_key, app)?;
     load_release_artifacts(&project.root, app_key, app, &release).map(|artifacts| {
         artifacts
             .into_iter()
@@ -3531,7 +4034,7 @@ pub fn inspect_latest_dmg_aliases(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let release = project.validated_release(app_key, app)?;
+    let release = project.release_from_receipt(app_key, app)?;
     let artifacts = load_release_artifacts(&project.root, app_key, app, &release)?;
     let prefix = object_key([
         app.object_prefix.as_str(),
@@ -3575,7 +4078,12 @@ pub fn inspect_windows_installer_sources(
         .apps
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
-    let release = project.validated_release(app_key, app)?;
+    let configured = project.resolved_release(app_key, app, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::Literal(value) => value,
+        ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
+    };
+    let release = configured.validated_release(build_number);
     let brand_assets = project.brand_assets(app_key, app)?;
     let publish_target = &project.config.publish.targets[&app.publish_target];
     let target = app

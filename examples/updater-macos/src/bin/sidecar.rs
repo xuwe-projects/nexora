@@ -1,5 +1,5 @@
 fn main() -> std::process::ExitCode {
-    match updater::run_sidecar_from_env_args() {
+    match nexora::desktop::run_sidecar_from_env_args() {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => {
             eprintln!("updater-macos-sidecar: 缺少 --nexora-updater-sidecar apply 参数");

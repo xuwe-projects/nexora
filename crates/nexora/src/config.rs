@@ -2,9 +2,9 @@
 //!
 //! 应用通过 `#[derive(nexora::Settings)]` 声明根配置类型，再调用
 //! `nexora::config::initialize` 按
-//! “显式路径、首个命令行参数、包名默认路径”的优先级加载 TOML 文件。Account 客户端
-//! 与服务端配置段由派生宏分别标记，避免在同一个 workspace 中因 Cargo feature 合并而
-//! 混淆两端配置。
+//! “显式路径、首个命令行参数、包名默认路径”的优先级加载 TOML 文件；sidecar 注入的
+//! updater 健康确认参数不参与路径选择。Account 客户端与服务端配置段由派生宏分别标记，
+//! 避免在同一个 workspace 中因 Cargo feature 合并而混淆两端配置。
 
 use std::path::{Path, PathBuf};
 
@@ -101,7 +101,7 @@ pub trait AccountServerSection {
 /// 配置文件按以下优先级选择：
 ///
 /// 1. `config_path` 显式传入的路径；
-/// 2. 当前进程第一个命令行参数；
+/// 2. 当前进程第一个命令行参数（updater 健康确认参数除外）；
 /// 3. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
 ///
 /// 文件加载后，无前缀环境变量仍可覆盖同名字段；嵌套字段使用双下划线分隔，这一行为
@@ -136,7 +136,7 @@ where
     T: Settings,
 {
     let config_path = config_path
-        .or_else(|| std::env::args_os().nth(1).map(PathBuf::from))
+        .or_else(|| __private::config_path_from_args(std::env::args_os()))
         .unwrap_or_else(default_config_path::<T>);
     let settings = LayeredConfigLoader::<T>::new()
         .with_required_file(config_path)
@@ -163,7 +163,24 @@ where
 /// 派生宏和可选业务模块之间共享的隐藏配置契约。
 #[doc(hidden)]
 pub mod __private {
+    use std::{ffi::OsString, path::PathBuf};
+
     use super::{AccountClientSection, AccountServerSection, Settings};
+
+    /// 从完整进程参数中提取可选配置文件路径，并忽略 updater 健康确认参数。
+    ///
+    /// 该函数仅供 Nexora 配置加载器和集成测试共享；sidecar 使用
+    /// `--nexora-updater-health-session` 启动新版本时必须继续使用应用默认配置，而不能把内部
+    /// 参数误判为 TOML 路径。
+    #[doc(hidden)]
+    pub fn config_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
+        let first = args.into_iter().nth(1)?;
+        if first == "--nexora-updater-health-session" || first == "--nexora-updater-health-file" {
+            None
+        } else {
+            Some(PathBuf::from(first))
+        }
+    }
 
     /// 表示根配置包含一个 Account 桌面客户端配置段。
     pub trait ProvidesAccountClientSettings: Settings {

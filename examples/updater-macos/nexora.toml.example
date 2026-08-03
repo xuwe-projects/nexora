@@ -23,8 +23,8 @@ managed = true
 
 [apps.updater-macos.release]
 channel = "stable"
-version = "1.0.1"
-build_number = 5
+version = "${CARGO_PKG_VERSION}"
+build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/updater-macos.key"
 

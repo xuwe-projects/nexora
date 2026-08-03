@@ -1,6 +1,9 @@
 //! Nexora 桌面 Shell 的公共 updater 安装与入口协调。
 
-use actions::{updater::CheckForUpdates, window as window_actions};
+use actions::{
+    updater::{self as updater_actions, CheckForUpdates},
+    window as window_actions,
+};
 use gpui::{App, ElementId, Global, Window};
 use gpui_component::{IconName, button::Button};
 use thiserror::Error;
@@ -26,8 +29,8 @@ pub enum UpdaterInstallError {
 
 /// 在 Nexora 桌面运行时安装一份 app 级 updater 配置。
 ///
-/// 安装成功后会注册全局 [`CheckForUpdates`] Action，并启用 macOS 原生菜单入口。该函数
-/// 不发起网络请求；启动后台检查会在主窗口创建后由 Shell 根据配置单独触发。
+/// 安装成功后会注册全局 [`CheckForUpdates`] Action、默认快捷键，并启用 macOS 原生菜单
+/// 入口。该函数不发起网络请求；启动后台检查会在主窗口创建后由 Shell 根据配置单独触发。
 ///
 /// # Errors
 ///
@@ -38,10 +41,13 @@ pub fn install_updater(config: UpdateConfig, cx: &mut App) -> Result<(), Updater
         return Err(UpdaterInstallError::AlreadyInstalled);
     }
     cx.set_global(InstalledUpdater { config });
+    updater_actions::bind_keys(cx);
     cx.on_action(|_: &CheckForUpdates, cx| {
         if let Some(window) = cx.active_window() {
-            _ = window.update(cx, |_, window, cx| {
-                _ = check_for_updates(window, cx);
+            cx.defer(move |cx| {
+                _ = window.update(cx, |_, window, cx| {
+                    _ = check_for_updates(window, cx);
+                });
             });
         }
     });
