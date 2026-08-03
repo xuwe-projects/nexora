@@ -16,7 +16,7 @@ CRUD 页面、表单对话框、字段容器和层级选择器。应用仍然直
 
 ```toml
 [dependencies]
-nexora = { version = "0.23.0", features = ["desktop", "derive"] }
+nexora = { version = "0.23.1", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -324,6 +324,20 @@ let table_state = nexora::desktop::persistent_crud_table_state(
 let restored_sort = table_state.read(cx).delegate().current_sort().cloned();
 // 在首次 HTTP 请求前把 restored_sort 映射为业务 query。
 let table = DataTable::new(table_state).bordered(true);
+```
+
+如果页面需要保留原有 `TableState` 选择、移动或排序开关，使用
+`persistent_crud_table_state_with` 的 `configure` 回调继续调用 gpui-component builder：
+
+```rust
+let table_state = nexora::desktop::persistent_crud_table_state_with(
+    "cities.main",
+    delegate,
+    on_sort_changed,
+    |state| state.row_selectable(false).col_selectable(false),
+    window,
+    cx,
+);
 ```
 
 ### 派生属性

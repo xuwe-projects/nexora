@@ -951,8 +951,39 @@ pub(crate) fn shell_preferences_snapshot(cx: &App) -> ShellPreferences {
 /// `table_id` 为空、包含前后空白或路径分隔符时会 panic。
 pub fn persistent_crud_table_state<R, P>(
     table_id: impl Into<String>,
+    delegate: CrudTableDelegate<R>,
+    on_sort_changed: impl Fn(Option<CrudTableSort>, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut Context<P>,
+) -> Entity<TableState<CrudTableDelegate<R>>>
+where
+    R: CrudTableRow,
+    P: 'static,
+{
+    persistent_crud_table_state_with(
+        table_id,
+        delegate,
+        on_sort_changed,
+        |state| state,
+        window,
+        cx,
+    )
+}
+
+/// 创建一份可继续配置 gpui-component TableState 构建选项的持久化 CRUD 表格状态。
+///
+/// `configure` 在恢复列布局和排序之后、Entity 创建时执行，可用于保留业务原有的
+/// `row_selectable`、`col_selectable`、`sortable` 等 TableState 选项。持久化语义与
+/// [`persistent_crud_table_state`] 完全一致。
+///
+/// # Panics
+///
+/// `table_id` 为空、包含前后空白或路径分隔符时会 panic。
+pub fn persistent_crud_table_state_with<R, P>(
+    table_id: impl Into<String>,
     mut delegate: CrudTableDelegate<R>,
     on_sort_changed: impl Fn(Option<CrudTableSort>, &mut Window, &mut App) + 'static,
+    configure: impl FnOnce(TableState<CrudTableDelegate<R>>) -> TableState<CrudTableDelegate<R>>,
     window: &mut Window,
     cx: &mut Context<P>,
 ) -> Entity<TableState<CrudTableDelegate<R>>>
@@ -992,7 +1023,7 @@ where
         on_sort_changed(sort, window, cx);
     });
 
-    let state = cx.new(|cx| TableState::new(delegate, window, cx));
+    let state = cx.new(|cx| configure(TableState::new(delegate, window, cx)));
     let event_table_id = table_id;
     cx.subscribe(&state, move |_, table, event, cx| {
         if !matches!(

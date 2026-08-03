@@ -17,7 +17,7 @@ GPUI component crates directly:
 
 ```toml
 [dependencies]
-nexora = { version = "0.23.0", features = ["desktop", "derive"] }
+nexora = { version = "0.23.1", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -249,6 +249,21 @@ let table_state = nexora::desktop::persistent_crud_table_state(
 let restored_sort = table_state.read(cx).delegate().current_sort().cloned();
 // Map restored_sort into the first backend request before loading rows.
 let table = DataTable::new(table_state).bordered(true);
+```
+
+When a page must preserve its existing `TableState` selection, movement, or sorting flags, use
+the `configure` callback of `persistent_crud_table_state_with` and keep using the gpui-component
+builder API:
+
+```rust
+let table_state = nexora::desktop::persistent_crud_table_state_with(
+    "cities.main",
+    delegate,
+    on_sort_changed,
+    |state| state.row_selectable(false).col_selectable(false),
+    window,
+    cx,
+);
 ```
 
 ### Derive Attributes

@@ -22,6 +22,7 @@ pub use crate::account::client::{
 };
 pub use crate::application::{
     PanelHeaderAction, install_panel_header_actions, persistent_crud_table_state,
+    persistent_crud_table_state_with,
 };
 pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
