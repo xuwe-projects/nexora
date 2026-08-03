@@ -8,7 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
-- [0.23.0: Windows NSIS installer and update ZIP](./0.23.0)
+- [0.24.0: Windows NSIS installer and update ZIP](./0.24.0)
 - [0.22.0: dynamic release identity and build receipts](./0.22.0)
 - [0.21.3: check-for-updates entry and shortcut fix](./0.21.3)
 - [0.21.2: updater health-launch configuration compatibility](./0.21.2)
