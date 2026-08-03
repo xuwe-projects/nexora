@@ -19,6 +19,21 @@ fn application_menus_expose_quit_and_window_commands() {
     );
 }
 
+#[test]
+fn application_menu_only_exposes_updates_when_enabled() {
+    let without_updates = window::application_menus_with_updates("Nexora Console", false);
+    let with_updates = window::application_menus_with_updates("Nexora Console", true);
+
+    assert_eq!(
+        action_names(&without_updates[0]),
+        vec!["Quit Nexora Console"]
+    );
+    assert_eq!(
+        action_names(&with_updates[0]),
+        vec!["检查更新…", "Quit Nexora Console"]
+    );
+}
+
 fn action_names(menu: &Menu) -> Vec<&str> {
     menu.items
         .iter()

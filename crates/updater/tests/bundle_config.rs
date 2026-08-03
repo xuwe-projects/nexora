@@ -39,7 +39,9 @@ fn loads_safe_updater_configuration_from_app_bundle() {
             "current_version": "1.0.0",
             "current_build_number": 2,
             "allow_insecure_http": true,
-            "health_timeout": "20s"
+            "health_timeout": "20s",
+            "expected_team_id": "TEAM123456",
+            "check_on_launch": true
         }),
     );
 
@@ -50,6 +52,8 @@ fn loads_safe_updater_configuration_from_app_bundle() {
     assert_eq!(config.current_build_number(), 2);
     assert_eq!(config.channel(), UpdateChannel::Stable);
     assert_eq!(config.trusted_public_keys().len(), 1);
+    assert_eq!(config.expected_team_id(), Some("TEAM123456"));
+    assert!(config.check_on_launch());
 
     fs::remove_dir_all(bundle).unwrap();
 }

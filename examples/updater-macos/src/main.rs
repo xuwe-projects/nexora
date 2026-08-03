@@ -1,12 +1,13 @@
-use gpui::{Context, IntoElement, Window, div, prelude::*, px};
+use gpui::{App, Context, IntoElement, Window, div, prelude::*, px};
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex,
-    notification::Notification,
-    v_flex,
+    h_flex, v_flex,
 };
-use nexora::{Application as _, ApplicationOptions, FeatureElement, NavigationContextExt as _};
+use nexora::{
+    Application as _, ApplicationLogo, ApplicationOptions, FeatureElement,
+    NavigationContextExt as _, desktop,
+};
 
 #[derive(Default, nexora::Feature)]
 #[nexora(
@@ -16,38 +17,13 @@ use nexora::{Application as _, ApplicationOptions, FeatureElement, NavigationCon
     icon = "rotate-ccw",
     order = 0
 )]
-struct UpdaterFeature {
-    update_config: Option<Result<updater::UpdateConfig, String>>,
-}
+struct UpdaterFeature;
 
 impl FeatureElement for UpdaterFeature {
-    fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if option_env!("NEXORA_EXAMPLE_HEALTH_FAILURE") != Some("before-health") {
-            window.defer(cx, |_, _| {
-                _ = updater::report_health_from_env_args();
-            });
-        }
-        self.update_config =
-            Some(updater::UpdateConfig::from_current_bundle().map_err(|error| error.to_string()));
-        if let Some(Ok(config)) = self.update_config.clone() {
-            updater::start_update_check_on_launch(config, window, cx);
-        }
-    }
-
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let size = theme::component_size(cx);
-        let release = self.update_config.as_ref().map_or_else(
-            || "更新配置尚未加载".to_owned(),
-            |config| match config {
-                Ok(config) => format!(
-                    "{} / build {}",
-                    config.current_version(),
-                    config.current_build_number()
-                ),
-                Err(_) => "更新配置不可用".to_owned(),
-            },
-        );
-        let update_config = self.update_config.clone();
+        let update_button = desktop::check_for_updates_button("updater-example-check", cx)
+            .map(|button| button.primary().with_size(size));
         v_flex()
             .size_full()
             .p_6()
@@ -58,7 +34,7 @@ impl FeatureElement for UpdaterFeature {
                     .font_semibold()
                     .child("macOS 更新程序示例"),
             )
-            .child(format!("当前运行版本：{release}"))
+            .child(format!("Cargo 版本：{}", env!("CARGO_PKG_VERSION")))
             .child(format!(
                 "故障注入：{}",
                 option_env!("NEXORA_EXAMPLE_HEALTH_FAILURE").unwrap_or("off")
@@ -75,27 +51,7 @@ impl FeatureElement for UpdaterFeature {
                                 _ = cx.navigate("/second-window");
                             }),
                     )
-                    .child(
-                        Button::new("updater-example-check")
-                            .primary()
-                            .icon(IconName::CircleCheck)
-                            .label("检查更新")
-                            .with_size(size)
-                            .on_click(move |_, window, cx| match update_config.clone() {
-                                Some(Ok(config)) => {
-                                    updater::open_update_dialog(config, window, cx);
-                                }
-                                Some(Err(error)) => window.push_notification(
-                                    Notification::error(error).title("更新配置错误"),
-                                    cx,
-                                ),
-                                None => window.push_notification(
-                                    Notification::error("更新配置尚未加载")
-                                        .title("暂时无法检查更新"),
-                                    cx,
-                                ),
-                            }),
-                    ),
+                    .children(update_button),
             )
             .child(
                 div()
@@ -128,18 +84,31 @@ impl nexora::WindowElement for SecondWindow {
     }
 }
 
-struct ExampleApplication;
+struct ExampleApplication {
+    updater: desktop::UpdateConfig,
+}
 
 impl nexora::Application for ExampleApplication {
     fn options(&self) -> ApplicationOptions {
         ApplicationOptions::new()
             .application_name("macOS 更新程序示例")
+            .application_logo(ApplicationLogo::png(include_bytes!(
+                "../assets/logos/updater-macos/logo-icon-128.png"
+            )))
             .initial_path("/")
             .window_size(960.0, 640.0)
+    }
+
+    fn initialize(&mut self, cx: &mut App) {
+        desktop::install_updater(self.updater.clone(), cx)
+            .expect("example 只能安装一份 updater 配置");
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ExampleApplication.run()?;
+    let updater = desktop::UpdateConfig::from_current_bundle()?.with_health_report_on_launch(
+        option_env!("NEXORA_EXAMPLE_HEALTH_FAILURE") != Some("before-health"),
+    );
+    ExampleApplication { updater }.run()?;
     Ok(())
 }

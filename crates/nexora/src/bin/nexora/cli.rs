@@ -101,6 +101,14 @@ struct DesktopManifestTemplate<'a> {
 struct MainTemplate<'a> {
     project_name: &'a str,
     account_enabled: bool,
+    logo_path: &'a str,
+}
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/nexora.toml", escape = "none")]
+struct NexoraConfigTemplate<'a> {
+    project_name: &'a str,
+    default_target: &'a str,
 }
 
 #[derive(askama::Template)]
@@ -235,6 +243,9 @@ enum NexoraCommand {
     /// 管理桌面自动更新密钥和本地工具。
     Updater(tooling::UpdaterConfig),
 
+    /// 生成 app 级桌面品牌图标。
+    Icons(tooling::IconsConfig),
+
     /// 检查 workspace 是否符合 Nexora 工程规范。
     Lint(tooling::LintConfig),
 
@@ -287,6 +298,9 @@ pub(super) fn run() -> Result<(), String> {
         }
         Some(NexoraCommand::Updater(config)) => {
             tooling::run_updater_command(config).map_err(|error| error.to_string())
+        }
+        Some(NexoraCommand::Icons(config)) => {
+            tooling::run_icons_command(config).map_err(|error| error.to_string())
         }
         Some(NexoraCommand::Lint(config)) => {
             tooling::run_lint_command(config).map_err(|error| error.to_string())
@@ -363,14 +377,6 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
     if account_enabled && project_name.eq_ignore_ascii_case("server") {
         return Err("`server` 是 Account workspace 的保留包名，请使用其他项目名称".to_owned());
     }
-    let main = normalize_template_output(
-        MainTemplate {
-            project_name,
-            account_enabled,
-        }
-        .render()
-        .map_err(|error| format!("无法渲染 main.rs 模板：{error}"))?,
-    );
     let features_module = normalize_template_output(
         FeaturesTemplate
             .render()
@@ -400,9 +406,27 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
             .map_err(|error| format!("无法渲染 .gitignore 模板：{error}"))?,
     );
     let nexora_source = nexora_dependency_source();
+    let nexora_config = normalize_template_output(
+        NexoraConfigTemplate {
+            project_name,
+            default_target: default_desktop_target(),
+        }
+        .render()
+        .map_err(|error| format!("无法渲染 nexora.toml 模板：{error}"))?,
+    );
 
     match layout {
         Layout::Single => {
+            let logo_path = format!("../assets/logos/{project_name}/logo-icon-128.png");
+            let main = normalize_template_output(
+                MainTemplate {
+                    project_name,
+                    account_enabled,
+                    logo_path: &logo_path,
+                }
+                .render()
+                .map_err(|error| format!("无法渲染 main.rs 模板：{error}"))?,
+            );
             let manifest = normalize_template_output(
                 SingleManifestTemplate {
                     project_name,
@@ -417,6 +441,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 "assets".to_owned(),
                 "assets/icons".to_owned(),
                 "assets/logos".to_owned(),
+                format!("assets/logos/{project_name}"),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
@@ -425,13 +450,24 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 ("src/features.rs".to_owned(), features_module),
                 ("src/features/home.rs".to_owned(), home_feature),
             ];
+            append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
             append_file_if_missing(target, &mut files, "README.md", readme)?;
             append_file_if_missing(target, &mut files, "AGENTS.md", agents)?;
             append_agent_skills(&mut directories, &mut files)?;
-            let binary_files = logo_asset_files("");
+            let binary_files = logo_asset_files(target, project_name)?;
             write_scaffold(target, &directories, &files, &binary_files)
         }
         Layout::Workspace => {
+            let logo_path = format!("../../../assets/logos/{project_name}/logo-icon-128.png");
+            let main = normalize_template_output(
+                MainTemplate {
+                    project_name,
+                    account_enabled,
+                    logo_path: &logo_path,
+                }
+                .render()
+                .map_err(|error| format!("无法渲染 main.rs 模板：{error}"))?,
+            );
             let manifest = normalize_template_output(
                 WorkspaceManifestTemplate {
                     project_name,
@@ -457,7 +493,9 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 format!("{desktop_directory}/src/features"),
                 format!("{desktop_directory}/assets"),
                 format!("{desktop_directory}/assets/icons"),
-                format!("{desktop_directory}/assets/logos"),
+                "assets".to_owned(),
+                "assets/logos".to_owned(),
+                format!("assets/logos/{project_name}"),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
@@ -473,6 +511,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                     home_feature,
                 ),
             ];
+            append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
 
             if account_enabled {
                 directories.extend(["apps/server", "apps/server/src", "config"].map(str::to_owned));
@@ -482,22 +521,27 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
             append_file_if_missing(target, &mut files, "README.md", readme)?;
             append_file_if_missing(target, &mut files, "AGENTS.md", agents)?;
             append_agent_skills(&mut directories, &mut files)?;
-            let binary_files = logo_asset_files(desktop_directory.as_str());
+            let binary_files = logo_asset_files(target, project_name)?;
             write_scaffold(target, &directories, &files, &binary_files)
         }
     }
 }
 
-fn logo_asset_files(package_directory: &str) -> Vec<(String, &'static [u8])> {
-    let prefix = if package_directory.is_empty() {
-        "assets/logos".to_owned()
-    } else {
-        format!("{package_directory}/assets/logos")
-    };
-    LOGO_ASSETS
+fn logo_asset_files(target: &Path, app_key: &str) -> Result<Vec<(String, &'static [u8])>, String> {
+    let prefix = format!("assets/logos/{app_key}");
+    Ok(LOGO_ASSETS
         .iter()
         .map(|(name, contents)| (format!("{prefix}/{name}"), *contents))
-        .collect()
+        .filter(|(path, _)| !target.join(path).is_file())
+        .collect())
+}
+
+fn default_desktop_target() -> &'static str {
+    match (env::consts::OS, env::consts::ARCH) {
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", _) => "aarch64-apple-darwin",
+        _ => "aarch64-apple-darwin",
+    }
 }
 
 fn append_agent_skills(

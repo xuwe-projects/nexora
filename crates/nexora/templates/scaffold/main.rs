@@ -43,7 +43,7 @@ impl nexora::Application for DesktopApplication {
             .application_name("{{ project_name }}")
             .application_version(env!("CARGO_PKG_VERSION"))
             .application_logo(ApplicationLogo::png(include_bytes!(
-                "../assets/logos/logo-icon-128.png"
+                "{{ logo_path }}"
             )))
             .application_assets(AppAssets)
             .initial_path("/")
@@ -103,7 +103,7 @@ impl nexora::Application for DesktopApplication {
             .application_name("{{ project_name }}")
             .application_version(env!("CARGO_PKG_VERSION"))
             .application_logo(ApplicationLogo::png(include_bytes!(
-                "../assets/logos/logo-icon-128.png"
+                "{{ logo_path }}"
             )))
             .application_assets(AppAssets)
             .initial_path("/")

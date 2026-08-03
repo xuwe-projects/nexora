@@ -6,7 +6,8 @@ pub mod commands;
 
 use commands::{
     inspect_app_selection, inspect_build_plans, inspect_latest_dmg_aliases,
-    inspect_release_artifacts, inspect_signing_key, validate_display_name, write_bundle_info,
+    inspect_release_artifacts, inspect_signing_key, validate_display_name, write_bundle_icon,
+    write_bundle_info,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -47,11 +48,40 @@ allow_insecure_http = true
             ),
         )
         .unwrap();
+        for app_key in apps.lines().filter_map(|line| {
+            line.strip_prefix("[apps.")
+                .and_then(|line| line.strip_suffix(']'))
+                .filter(|line| !line.contains('.'))
+        }) {
+            write_brand_assets(&root, app_key);
+        }
         Self { root }
     }
 
     fn config(&self) -> PathBuf {
         self.root.join("nexora.toml")
+    }
+}
+
+fn write_brand_assets(root: &Path, app_key: &str) {
+    let directory = root.join("assets/logos").join(app_key);
+    fs::create_dir_all(&directory).unwrap();
+    let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/scaffold/assets/logos");
+    for name in [
+        "logo-icon-16.png",
+        "logo-icon-24.png",
+        "logo-icon-32.png",
+        "logo-icon-48.png",
+        "logo-icon-64.png",
+        "logo-icon-128.png",
+        "logo-icon-256.png",
+        "logo-icon-512.png",
+        "logo-icon-1024.png",
+        "logo-icon-source.png",
+        "logo-icon.icns",
+        "logo-icon.ico",
+    ] {
+        fs::copy(template.join(name), directory.join(name)).unwrap();
     }
 }
 
@@ -77,6 +107,11 @@ display_name = "{display_name}"
 publish_target = "rustfs"
 object_prefix = "e2e"
 
+[apps.{key}.branding]
+application_logo = "assets/logos/{key}/logo-icon-128.png"
+icon_source = "assets/logos/{key}/logo-icon-source.png"
+managed = true
+
 [apps.{key}.release]
 channel = "stable"
 version = "1.2.3"
@@ -99,8 +134,25 @@ health_timeout = "20s"
 required = ["aarch64-apple-darwin"]
 
 [apps.{key}.platforms.macos]
+icon = "assets/logos/{key}/logo-icon.icns"
 signing = "ad_hoc"
 notarize = false
+
+[apps.{key}.platforms.windows]
+icon = "assets/logos/{key}/logo-icon.ico"
+
+[apps.{key}.platforms.linux]
+icons = [
+    "assets/logos/{key}/logo-icon-16.png",
+    "assets/logos/{key}/logo-icon-24.png",
+    "assets/logos/{key}/logo-icon-32.png",
+    "assets/logos/{key}/logo-icon-48.png",
+    "assets/logos/{key}/logo-icon-64.png",
+    "assets/logos/{key}/logo-icon-128.png",
+    "assets/logos/{key}/logo-icon-256.png",
+    "assets/logos/{key}/logo-icon-512.png",
+    "assets/logos/{key}/logo-icon-1024.png",
+]
 "#
     )
 }
@@ -325,6 +377,43 @@ fn info_plist_contains_identity_display_name_version_and_build() {
     for expected in ["com.example.one", "macOS 更新程序示例", "1.2.3", "7"] {
         assert!(plist.contains(expected));
     }
+}
+
+#[test]
+fn macos_bundle_installs_configured_icns_and_updates_info_plist() {
+    let fixture = Fixture::new("bundle-icon", &app_config("one", "package-one", "应用一"));
+    let app = fixture.root.join("Package.app");
+    let contents = app.join("Contents");
+    fs::create_dir_all(&contents).unwrap();
+    fs::write(
+        contents.join("Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleIconFile</key><string>old.icns</string></dict></plist>"#,
+    )
+    .unwrap();
+    let icon = fixture.root.join("assets/logos/one/logo-icon.icns");
+
+    write_bundle_icon(&app, &icon).unwrap();
+
+    assert_eq!(
+        fs::read(contents.join("Resources/logo-icon.icns")).unwrap(),
+        fs::read(icon).unwrap()
+    );
+    assert!(
+        fs::read_to_string(contents.join("Info.plist"))
+            .unwrap()
+            .contains("logo-icon.icns")
+    );
+}
+
+#[test]
+fn missing_selected_app_icon_fails_before_building() {
+    let fixture = Fixture::new("missing-icon", &app_config("one", "package-one", "应用一"));
+    fs::remove_file(fixture.root.join("assets/logos/one/logo-icon.icns")).unwrap();
+
+    let error = inspect_build_plans(fixture.config(), "one").unwrap_err();
+
+    assert!(error.to_string().contains("macOS ICNS 不存在"));
 }
 
 #[test]

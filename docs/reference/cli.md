@@ -10,7 +10,7 @@ order: 2
 从 GitHub tag 安装正式发布版本：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.20.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.21.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 从 Nexora 仓库根目录安装当前本地源码：
@@ -29,6 +29,7 @@ nexora create <name> --layout single
 nexora create <name> --layout workspace
 nexora create <name> --layout workspace --features account
 nexora init [path] --layout workspace
+nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
@@ -56,6 +57,9 @@ Skill 文件。生成的 `publish-nexora-release` Skill 负责版本升级、完
 与 Issue/PR 关联、相邻版本升级指南以及 tag/Release 发布门禁。
 
 桌面自动更新使用仓库根目录 `nexora.toml` 注册 app、updater 策略和 S3 兼容发布目标。
+同一 app 记录也声明 `assets/logos/<app_key>/` 下的应用内 Logo、图标源文件以及各平台图标；
+`nexora icons generate --app <id>` 只根据所选 app 的源 PNG 重新生成标准 PNG、ICNS 和 ICO。
+手工管理的品牌资源需要显式 `--force` 才允许覆盖。
 `nexora build` 只构建当前宿主的现有产物并写入 `artifact.json`；`nexora publish` 只发布已有
 artifact，不会隐式触发 build。发布命令按更新包和 notes、不可变 manifest、`latest.json` 的顺序
 上传到 RustFS/S3 兼容对象存储，最后通过匿名公开 URL 重新读取并验证 `latest.json`。更新清单

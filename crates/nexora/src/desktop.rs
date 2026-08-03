@@ -3,6 +3,12 @@
 //! 应用通过本模块安装认证协调器、读取登录状态并调用用户、角色和权限 API，不需要了解
 //! Account 客户端的内部模块层级。
 
+pub(crate) mod updater;
+
+pub use self::updater::{
+    UpdaterInstallError, check_for_updates, check_for_updates_button, install_updater,
+    updater_available,
+};
 pub use crate::account::client::OidcSettings as AccountOidcSettings;
 pub use crate::account::client::{
     AccountAuthenticationError, AccountAuthenticationScope, AccountAuthenticator, AccountClient,
@@ -15,6 +21,11 @@ pub use crate::account::client::{
     start_login,
 };
 pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
+pub use ::updater::{
+    CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
+    UpdateArtifact, UpdateChannel, UpdateConfig, UpdateError, UpdateEvent, UpdateManifest,
+    UpdateManifestSignature, UpdateRelease, UpdateSession, UpdateTarget, Updater,
+};
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
     CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection, Event,

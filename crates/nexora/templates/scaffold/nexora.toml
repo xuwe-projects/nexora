@@ -1,0 +1,55 @@
+schema_version = 1
+
+[publish.targets.default]
+provider = "s3"
+endpoint = "https://example.invalid"
+bucket = "desktop-releases"
+region = "us-east-1"
+force_path_style = true
+public_base_url = "https://example.invalid/desktop-releases"
+
+[apps.{{ project_name }}]
+package = "{{ project_name }}"
+app_id = "com.example.{{ project_name }}"
+display_name = "{{ project_name }}"
+publish_target = "default"
+object_prefix = "desktop"
+
+[apps.{{ project_name }}.branding]
+application_logo = "assets/logos/{{ project_name }}/logo-icon-128.png"
+icon_source = "assets/logos/{{ project_name }}/logo-icon-source.png"
+managed = true
+
+[apps.{{ project_name }}.release]
+channel = "stable"
+version = "0.1.0"
+build_number = 1
+minimum_supported_version = "0.0.0"
+
+[apps.{{ project_name }}.updater]
+enabled = false
+check_on_launch = false
+
+[apps.{{ project_name }}.targets]
+required = ["{{ default_target }}"]
+
+[apps.{{ project_name }}.platforms.macos]
+icon = "assets/logos/{{ project_name }}/logo-icon.icns"
+signing = "ad_hoc"
+notarize = false
+
+[apps.{{ project_name }}.platforms.windows]
+icon = "assets/logos/{{ project_name }}/logo-icon.ico"
+
+[apps.{{ project_name }}.platforms.linux]
+icons = [
+    "assets/logos/{{ project_name }}/logo-icon-16.png",
+    "assets/logos/{{ project_name }}/logo-icon-24.png",
+    "assets/logos/{{ project_name }}/logo-icon-32.png",
+    "assets/logos/{{ project_name }}/logo-icon-48.png",
+    "assets/logos/{{ project_name }}/logo-icon-64.png",
+    "assets/logos/{{ project_name }}/logo-icon-128.png",
+    "assets/logos/{{ project_name }}/logo-icon-256.png",
+    "assets/logos/{{ project_name }}/logo-icon-512.png",
+    "assets/logos/{{ project_name }}/logo-icon-1024.png",
+]

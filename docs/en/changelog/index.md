@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [0.21.0: Multi-app branding and public desktop updater integration](./0.21.0)
 - [0.20.0: Sidebar navigation search and desktop API transport safety](./0.20.0)
 - [0.19.0: Remove Account avatar capability](./0.19.0)
 - [0.18.0: CRUD table selection and form-field components](./0.18.0)

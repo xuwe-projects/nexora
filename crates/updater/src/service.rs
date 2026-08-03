@@ -46,6 +46,10 @@ struct BundledUpdateConfig {
     current_build_number: u64,
     allow_insecure_http: bool,
     health_timeout: String,
+    #[serde(default)]
+    expected_team_id: Option<String>,
+    #[serde(default)]
+    check_on_launch: bool,
 }
 
 /// 启动一次更新检查所需的应用配置。
@@ -66,6 +70,8 @@ pub struct UpdateConfig {
     app_bundle_path: Option<PathBuf>,
     sidecar_path: Option<PathBuf>,
     cache_dir_override: Option<PathBuf>,
+    check_on_launch: bool,
+    health_report_on_launch: bool,
 }
 
 impl UpdateConfig {
@@ -121,9 +127,15 @@ impl UpdateConfig {
         )?
         .with_trusted_public_keys(&bundled.trusted_public_keys)
         .map(|config| {
-            config
+            let config = config
                 .with_health_timeout(health_timeout)
                 .with_app_bundle_path(app_bundle)
+                .with_check_on_launch(bundled.check_on_launch);
+            if let Some(team_id) = bundled.expected_team_id {
+                config.with_expected_team_id(team_id)
+            } else {
+                config
+            }
         })
     }
 
@@ -192,6 +204,8 @@ impl UpdateConfig {
             app_bundle_path: None,
             sidecar_path: None,
             cache_dir_override: None,
+            check_on_launch: false,
+            health_report_on_launch: true,
         })
     }
 
@@ -223,6 +237,14 @@ impl UpdateConfig {
     /// 未设置时仍会执行 `codesign --verify --deep --strict`，但不会限制具体签名团队。
     pub fn with_expected_team_id(mut self, team_id: impl Into<String>) -> Self {
         self.expected_team_id = Some(team_id.into());
+        self
+    }
+
+    /// 设置应用启动后是否在后台静默检查一次更新。
+    ///
+    /// 该开关只控制检查，不会自动下载；发现新版本后仍需由用户确认。
+    pub const fn with_check_on_launch(mut self, enabled: bool) -> Self {
+        self.check_on_launch = enabled;
         self
     }
 
@@ -291,6 +313,24 @@ impl UpdateConfig {
         self.channel
     }
 
+    /// 返回应用启动后是否应后台检查更新。
+    pub const fn check_on_launch(&self) -> bool {
+        self.check_on_launch
+    }
+
+    /// 设置主窗口创建后是否报告一次 sidecar 健康状态。
+    ///
+    /// 生产应用应保持默认值 `true`；该开关仅用于 updater 集成样例和故障回滚测试。
+    pub const fn with_health_report_on_launch(mut self, enabled: bool) -> Self {
+        self.health_report_on_launch = enabled;
+        self
+    }
+
+    /// 返回主窗口创建后是否应报告 sidecar 健康状态。
+    pub const fn health_report_on_launch(&self) -> bool {
+        self.health_report_on_launch
+    }
+
     /// 返回客户端信任的清单签名公钥。
     pub fn trusted_public_keys(&self) -> &[TrustedPublicKey] {
         &self.trusted_public_keys
@@ -301,7 +341,10 @@ impl UpdateConfig {
         self.highest_manifest_sequence
     }
 
-    pub(crate) fn expected_team_id(&self) -> Option<&str> {
+    /// 返回 macOS 更新包必须匹配的预期 Apple Team ID。
+    ///
+    /// `None` 表示仍执行系统签名校验，但不额外限制具体开发团队。
+    pub fn expected_team_id(&self) -> Option<&str> {
         self.expected_team_id.as_deref()
     }
 

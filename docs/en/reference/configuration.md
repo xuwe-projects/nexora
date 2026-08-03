@@ -94,3 +94,36 @@ over HTTP must explicitly enable `allow_insecure_http`. Publish credentials come
 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `RUSTFS_ACCESS_KEY_ID` /
 `RUSTFS_SECRET_ACCESS_KEY` and must not be written to configuration files. Each E2E run should use a
 unique `object_prefix`.
+
+Each desktop app declares its stable app key, bundle identifier, branding, and platform icons in the
+same app registration. Both single-package and workspace layouts resolve resources from the workspace
+root and do not read or mutate `[package.metadata.bundle]`:
+
+```toml
+[apps.desktop]
+package = "desktop"
+app_id = "com.example.desktop"
+display_name = "Desktop Example"
+publish_target = "rustfs"
+object_prefix = "products"
+
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
+[apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
+signing = "ad_hoc"
+notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
+```
+
+Paths must be workspace-relative and remain inside the workspace. The production packaging path in
+this phase covers macOS `.app`, DMG, and ICNS. Windows and Linux icons participate in configuration,
+scaffolding, and generation, but full installers and automatic replacement are not implemented yet.

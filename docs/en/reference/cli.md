@@ -10,7 +10,7 @@ order: 2
 Install a published GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.20.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.21.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:
@@ -29,6 +29,7 @@ nexora create <name> --layout single
 nexora create <name> --layout workspace
 nexora create <name> --layout workspace --features account
 nexora init [path] --layout workspace
+nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
@@ -59,7 +60,10 @@ Skill covers version bumps, complete release notes, contributor and Issue/PR att
 previous-to-current upgrade guides, and the tag/Release publishing gates.
 
 Desktop updates are configured by the repository-root `nexora.toml`, which registers apps, updater
-policy, and S3-compatible publish targets. `nexora build` only builds existing artifacts for the
+policy, branding resources, platform icons, and S3-compatible publish targets. Each app owns an
+`assets/logos/<app_key>/` directory. `nexora icons generate --app <id>` regenerates only that app's
+standard PNG, ICNS, and ICO files from its configured source PNG; manually managed resources require
+an explicit `--force` before they can be replaced. `nexora build` only builds existing artifacts for the
 current host and writes `artifact.json`; `nexora publish` only publishes existing artifacts and never
 runs build implicitly. Publish uploads update files and notes, the immutable manifest, and
 `latest.json` to RustFS/S3-compatible storage, then anonymously reads and verifies `latest.json`.

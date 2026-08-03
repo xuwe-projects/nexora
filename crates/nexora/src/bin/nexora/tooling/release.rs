@@ -7,13 +7,14 @@ use clap::{Args, Subcommand};
 use dialoguer::{Confirm, Select};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use hmac::{Hmac, Mac as _};
+use image::{GenericImageView as _, ImageFormat, imageops::FilterType};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::IsTerminal as _,
+    io::{IsTerminal as _, Write as _},
     path::{Component, Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -97,10 +98,20 @@ struct AppConfig {
     display_name: String,
     publish_target: String,
     object_prefix: String,
+    branding: BrandingConfig,
     release: Option<ReleaseConfig>,
     updater: UpdaterConfigFile,
     targets: TargetConfig,
     platforms: PlatformConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrandingConfig {
+    application_logo: String,
+    icon_source: String,
+    #[serde(default)]
+    managed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,9 +130,17 @@ struct ReleaseConfig {
 #[serde(deny_unknown_fields)]
 struct UpdaterConfigFile {
     enabled: bool,
+    #[serde(default)]
+    app_id: Option<String>,
+    #[serde(default)]
+    check_on_launch: bool,
+    #[serde(default)]
     feed_url: String,
+    #[serde(default)]
     channels: Vec<String>,
+    #[serde(default)]
     trusted_public_keys: Vec<String>,
+    #[serde(default)]
     signing_key_env: String,
     #[serde(default = "default_check_interval")]
     check_interval: String,
@@ -145,13 +164,30 @@ struct TargetConfig {
 #[serde(deny_unknown_fields)]
 struct PlatformConfig {
     macos: MacOsConfig,
+    windows: WindowsConfig,
+    linux: LinuxConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MacOsConfig {
+    icon: String,
     signing: SigningMode,
     notarize: bool,
+    #[serde(default)]
+    expected_team_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowsConfig {
+    icon: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinuxConfig {
+    icons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -182,13 +218,16 @@ struct BuildPlan {
     app_key: String,
     package: String,
     app_id: String,
+    updater_app_id: String,
     display_name: String,
     release: ValidatedRelease,
     target: String,
     signing: SigningMode,
     notarize: bool,
+    expected_team_id: Option<String>,
     allow_insecure_http: bool,
-    updater: UpdaterConfigFile,
+    updater: Option<UpdaterConfigFile>,
+    macos_icon: PathBuf,
     app_path: PathBuf,
     app_zip_path: PathBuf,
     dmg_path: PathBuf,
@@ -208,6 +247,15 @@ struct BundledUpdaterConfig {
     current_build_number: u64,
     allow_insecure_http: bool,
     health_timeout: String,
+    expected_team_id: Option<String>,
+    check_on_launch: bool,
+}
+
+#[derive(Debug, Clone)]
+struct BrandAssets {
+    application_logo: PathBuf,
+    icon_source: PathBuf,
+    macos_icon: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -477,8 +525,20 @@ impl ProjectDocument {
             validate_app_id(&app.app_id)?;
             validate_display_name(&app.display_name)?;
             validate_safe_component(&app.object_prefix, "object_prefix")?;
-            if !app.updater.enabled {
-                return Err(CliError::new(format!("app `{app_key}` 未启用 updater")));
+            validate_workspace_relative_path(&app.branding.application_logo, "application_logo")?;
+            validate_workspace_relative_path(&app.branding.icon_source, "icon_source")?;
+            validate_workspace_relative_path(&app.platforms.macos.icon, "macOS icon")?;
+            validate_workspace_relative_path(&app.platforms.windows.icon, "Windows icon")?;
+            if app.platforms.linux.icons.is_empty() {
+                return Err(CliError::new(format!(
+                    "app `{app_key}` 的 platforms.linux.icons 不能为空"
+                )));
+            }
+            for icon in &app.platforms.linux.icons {
+                validate_workspace_relative_path(icon, "Linux icon")?;
+            }
+            if let Some(updater_app_id) = app.updater.app_id.as_deref() {
+                validate_app_id(updater_app_id)?;
             }
             if !self
                 .config
@@ -513,42 +573,44 @@ impl ProjectDocument {
                     "app `{app_key}` 启用 macOS notarize 时 signing 必须是 developer_id"
                 )));
             }
-            if app.updater.trusted_public_keys.is_empty() {
-                return Err(CliError::new(format!(
-                    "app `{app_key}` 必须配置 trusted_public_keys"
-                )));
-            }
-            for (label, value) in [
-                ("check_interval", &app.updater.check_interval),
-                ("check_jitter", &app.updater.check_jitter),
-                ("offline_grace_period", &app.updater.offline_grace_period),
-                (
-                    "mandatory_restart_delay",
-                    &app.updater.mandatory_restart_delay,
-                ),
-                ("health_timeout", &app.updater.health_timeout),
-            ] {
-                if value.trim().is_empty() {
+            if app.updater.enabled {
+                if app.updater.trusted_public_keys.is_empty() {
                     return Err(CliError::new(format!(
-                        "app `{app_key}` 的 updater.{label} 不能为空"
+                        "app `{app_key}` 必须配置 trusted_public_keys"
                     )));
                 }
-            }
-            parse_trusted_keys(&app.updater.trusted_public_keys)?;
-            let target = &self.config.publish.targets[&app.publish_target];
-            let expected_feed = public_object_url(
-                target,
-                &object_key([
-                    app.object_prefix.as_str(),
-                    app_key,
-                    self.validated_release(app_key, app)?.channel.as_str(),
-                    "latest.json",
-                ]),
-            );
-            if app.updater.feed_url != expected_feed {
-                return Err(CliError::new(format!(
-                    "app `{app_key}` 的 updater.feed_url 与发布 latest.json 地址不一致；期望 `{expected_feed}`"
-                )));
+                for (label, value) in [
+                    ("check_interval", &app.updater.check_interval),
+                    ("check_jitter", &app.updater.check_jitter),
+                    ("offline_grace_period", &app.updater.offline_grace_period),
+                    (
+                        "mandatory_restart_delay",
+                        &app.updater.mandatory_restart_delay,
+                    ),
+                    ("health_timeout", &app.updater.health_timeout),
+                ] {
+                    if value.trim().is_empty() {
+                        return Err(CliError::new(format!(
+                            "app `{app_key}` 的 updater.{label} 不能为空"
+                        )));
+                    }
+                }
+                parse_trusted_keys(&app.updater.trusted_public_keys)?;
+                let target = &self.config.publish.targets[&app.publish_target];
+                let expected_feed = public_object_url(
+                    target,
+                    &object_key([
+                        app.object_prefix.as_str(),
+                        app_key,
+                        self.validated_release(app_key, app)?.channel.as_str(),
+                        "latest.json",
+                    ]),
+                );
+                if app.updater.feed_url != expected_feed {
+                    return Err(CliError::new(format!(
+                        "app `{app_key}` 的 updater.feed_url 与发布 latest.json 地址不一致；期望 `{expected_feed}`"
+                    )));
+                }
             }
         }
         Ok(())
@@ -558,11 +620,12 @@ impl ProjectDocument {
         let release = app.release.as_ref().ok_or_else(|| {
             CliError::new(format!("app `{app_key}` 缺少 [apps.{app_key}.release]"))
         })?;
-        if !app
-            .updater
-            .channels
-            .iter()
-            .any(|channel| channel == &release.channel)
+        if app.updater.enabled
+            && !app
+                .updater
+                .channels
+                .iter()
+                .any(|channel| channel == &release.channel)
         {
             return Err(CliError::new(format!(
                 "app `{app_key}` 的 release.channel `{}` 不属于 updater.channels",
@@ -593,6 +656,30 @@ impl ProjectDocument {
             build_number: release.build_number,
             minimum_supported_version,
         })
+    }
+
+    fn brand_assets(&self, _app_key: &str, app: &AppConfig) -> CliResult<BrandAssets> {
+        let assets = BrandAssets {
+            application_logo: resolve_workspace_file(
+                &self.root,
+                &app.branding.application_logo,
+                "应用内 Logo",
+            )?,
+            icon_source: resolve_workspace_file(
+                &self.root,
+                &app.branding.icon_source,
+                "图标源文件",
+            )?,
+            macos_icon: resolve_workspace_file(
+                &self.root,
+                &app.platforms.macos.icon,
+                "macOS ICNS",
+            )?,
+        };
+        validate_png(&assets.application_logo, None, "应用内 Logo")?;
+        validate_png(&assets.icon_source, None, "图标源文件")?;
+        validate_icns(&assets.macos_icon)?;
+        Ok(assets)
     }
 
     fn select_one(&self, app: Option<&str>, interactive: bool) -> CliResult<String> {
@@ -662,6 +749,7 @@ impl ProjectDocument {
     fn build_plans(&self, app_key: &str) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
         let release = self.validated_release(app_key, app)?;
+        let brand_assets = self.brand_assets(app_key, app)?;
         let publish_target = &self.config.publish.targets[&app.publish_target];
         app.targets
             .required
@@ -686,13 +774,20 @@ impl ProjectDocument {
                     app_key: app_key.to_owned(),
                     package: app.package.clone(),
                     app_id: app.app_id.clone(),
+                    updater_app_id: app
+                        .updater
+                        .app_id
+                        .clone()
+                        .unwrap_or_else(|| app.app_id.clone()),
                     display_name: app.display_name.clone(),
                     release: release.clone(),
                     target: target.clone(),
                     signing: app.platforms.macos.signing,
                     notarize: app.platforms.macos.notarize,
+                    expected_team_id: app.platforms.macos.expected_team_id.clone(),
                     allow_insecure_http: publish_target.allow_insecure_http,
-                    updater: app.updater.clone(),
+                    updater: app.updater.enabled.then(|| app.updater.clone()),
+                    macos_icon: brand_assets.macos_icon.clone(),
                     app_path: self
                         .root
                         .join("target")
@@ -728,7 +823,13 @@ impl ProjectDocument {
         client: &reqwest::blocking::Client,
     ) -> CliResult<PublishPlan> {
         let app = &self.config.apps[app_key];
+        if !app.updater.enabled {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 未启用 updater，不能发布更新清单"
+            )));
+        }
         let release = self.validated_release(app_key, app)?;
+        let updater_app_id = app.updater.app_id.as_deref().unwrap_or(&app.app_id);
         let target = self.config.publish.targets[&app.publish_target].clone();
         let trusted_keys = parse_trusted_keys(&app.updater.trusted_public_keys)?;
         let (signing_key_id, signing_key) = read_signing_key(self, app_key, app, &trusted_keys)?;
@@ -741,7 +842,7 @@ impl ProjectDocument {
         let latest_url = public_object_url(&target, &latest_key);
         let remote = read_remote_manifest(client, &latest_url, &trusted_keys)?;
         if let Some(payload) = &remote
-            && (payload.app_id != app.app_id || payload.channel != release.channel)
+            && (payload.app_id != updater_app_id || payload.channel != release.channel)
         {
             return Err(CliError::new(format!(
                 "远端 latest.json 的 app_id/channel 与 app `{app_key}` 配置不一致"
@@ -833,7 +934,7 @@ impl ProjectDocument {
             }
             let payload = ManifestPayload {
                 manifest_sequence: sequence,
-                app_id: app.app_id.clone(),
+                app_id: updater_app_id.to_owned(),
                 channel: release.channel.clone(),
                 version: release.version.clone(),
                 build_number: release.build_number,
@@ -864,7 +965,7 @@ impl ProjectDocument {
 
         let payload = ManifestPayload {
             manifest_sequence: sequence,
-            app_id: app.app_id.clone(),
+            app_id: updater_app_id.to_owned(),
             channel: release.channel.clone(),
             version: release.version.clone(),
             build_number: release.build_number,
@@ -982,8 +1083,11 @@ fn execute_build(plan: &BuildPlan) -> CliResult<()> {
         &plan.release.version.to_string(),
         plan.release.build_number,
     )?;
-    write_bundle_updater_config(plan)?;
-    build_and_install_sidecar(plan, &executable)?;
+    write_bundle_icon(&plan.app_path, &plan.macos_icon)?;
+    if plan.updater.is_some() {
+        write_bundle_updater_config(plan)?;
+        build_and_install_sidecar(plan, &executable)?;
+    }
     sign_app(plan)?;
     create_update_zip(plan)?;
     create_dmg(plan)?;
@@ -1135,24 +1239,61 @@ pub fn write_bundle_info(
 }
 
 fn write_bundle_updater_config(plan: &BuildPlan) -> CliResult<()> {
+    let updater = plan
+        .updater
+        .as_ref()
+        .ok_or_else(|| CliError::new("当前构建计划未启用 updater"))?;
     let resources = plan.app_path.join("Contents/Resources");
     fs::create_dir_all(&resources)
         .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", resources.display())))?;
     let config = BundledUpdaterConfig {
         schema_version: 1,
-        app_id: plan.app_id.clone(),
+        app_id: plan.updater_app_id.clone(),
         channel: plan.release.channel.clone(),
-        feed_url: plan.updater.feed_url.clone(),
-        trusted_public_keys: plan.updater.trusted_public_keys.clone(),
+        feed_url: updater.feed_url.clone(),
+        trusted_public_keys: updater.trusted_public_keys.clone(),
         current_version: plan.release.version.to_string(),
         current_build_number: plan.release.build_number,
         allow_insecure_http: plan.allow_insecure_http,
-        health_timeout: plan.updater.health_timeout.clone(),
+        health_timeout: updater.health_timeout.clone(),
+        expected_team_id: plan.expected_team_id.clone(),
+        check_on_launch: updater.check_on_launch,
     };
     let contents = serde_json::to_vec_pretty(&config)
         .map_err(|error| CliError::new(format!("无法生成 updater bundle 配置: {error}")))?;
     fs::write(resources.join("nexora-updater.json"), contents)
         .map_err(|error| CliError::new(format!("无法写入 updater bundle 配置: {error}")))
+}
+
+/// 把配置选择的 ICNS 安装到 macOS bundle 并更新 `CFBundleIconFile`。
+///
+/// # Errors
+///
+/// ICNS 格式无效、bundle 资源目录不可写、文件名不安全或 `plutil` 更新失败时返回错误。
+pub fn write_bundle_icon(app_path: &Path, icon_path: &Path) -> CliResult<()> {
+    validate_icns(icon_path)?;
+    let resources = app_path.join("Contents/Resources");
+    fs::create_dir_all(&resources)
+        .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", resources.display())))?;
+    let file_name = icon_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| CliError::new("macOS icon 文件名不是有效 UTF-8"))?;
+    validate_safe_component(file_name, "macOS icon 文件名")?;
+    let destination = resources.join(file_name);
+    fs::copy(icon_path, &destination).map_err(|error| {
+        CliError::new(format!(
+            "无法把 macOS icon `{}` 安装到 bundle: {error}",
+            icon_path.display()
+        ))
+    })?;
+    let info_plist = app_path.join("Contents/Info.plist");
+    run_status(
+        "plutil bundle icon",
+        Command::new("plutil")
+            .args(["-replace", "CFBundleIconFile", "-string", file_name])
+            .arg(info_plist),
+    )
 }
 
 fn sign_app(plan: &BuildPlan) -> CliResult<()> {
@@ -1336,7 +1477,7 @@ fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
     .collect::<CliResult<Vec<_>>>()?;
     let manifest = ArtifactManifest {
         schema_version: ARTIFACT_SCHEMA_VERSION,
-        app_id: plan.app_id.clone(),
+        app_id: plan.updater_app_id.clone(),
         channel: plan.release.channel.clone(),
         version: plan.release.version.to_string(),
         build_number: plan.release.build_number,
@@ -1765,6 +1906,272 @@ fn read_signing_key(
         ));
     }
     Ok(((*key_id).to_owned(), signing_key))
+}
+
+pub(super) fn run_icons_generate(app_key: &str, force: bool) -> CliResult<()> {
+    const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
+
+    let project = ProjectDocument::discover()?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("nexora.toml 不存在 app `{app_key}`")))?;
+    let source = resolve_workspace_file(&project.root, &app.branding.icon_source, "图标源文件")?;
+    let source_image = image::open(&source).map_err(|error| {
+        CliError::new(format!(
+            "无法解码图标源文件 `{}`: {error}",
+            source.display()
+        ))
+    })?;
+    let (width, height) = source_image.dimensions();
+    if width != height || width < 1024 {
+        return Err(CliError::new(format!(
+            "图标源文件必须是至少 1024×1024 的正方形 PNG，当前为 {width}×{height}"
+        )));
+    }
+    if !source_image.color().has_alpha() {
+        return Err(CliError::new("图标源文件必须包含透明通道"));
+    }
+    validate_png(&source, Some((width, height)), "图标源文件")?;
+
+    let source_directory = source
+        .parent()
+        .ok_or_else(|| CliError::new("图标源文件缺少父目录"))?;
+    let mut png_outputs = PNG_SIZES
+        .into_iter()
+        .map(|size| (source_directory.join(format!("logo-icon-{size}.png")), size))
+        .collect::<BTreeMap<_, _>>();
+    for configured in
+        std::iter::once(&app.branding.application_logo).chain(app.platforms.linux.icons.iter())
+    {
+        let output = resolve_workspace_output(&project.root, configured)?;
+        let size = png_size_from_path(&output)?;
+        png_outputs.insert(output, size);
+    }
+    let macos_icon = resolve_workspace_output(&project.root, &app.platforms.macos.icon)?;
+    let windows_icon = resolve_workspace_output(&project.root, &app.platforms.windows.icon)?;
+    let outputs = png_outputs
+        .keys()
+        .chain([&macos_icon, &windows_icon])
+        .collect::<Vec<_>>();
+    if !app.branding.managed && !force && outputs.iter().any(|path| path.exists()) {
+        return Err(CliError::new(
+            "品牌配置标记为手工资源；如确认覆盖，请重新执行并增加 `--force`",
+        ));
+    }
+
+    for (path, size) in &png_outputs {
+        create_parent(path)?;
+        source_image
+            .resize_exact(*size, *size, FilterType::Lanczos3)
+            .save_with_format(path, ImageFormat::Png)
+            .map_err(|error| {
+                CliError::new(format!("无法生成 PNG `{}`: {error}", path.display()))
+            })?;
+    }
+    create_parent(&macos_icon)?;
+    create_parent(&windows_icon)?;
+    write_icns(&macos_icon, source_directory)?;
+    write_ico(&windows_icon, source_directory)?;
+    validate_icns(&macos_icon)?;
+    validate_ico(&windows_icon)?;
+    println!(
+        "已为 app `{app_key}` 生成品牌图标：{}",
+        source_directory.display()
+    );
+    Ok(())
+}
+
+fn png_size_from_path(path: &Path) -> CliResult<u32> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| CliError::new(format!("PNG 路径无效：{}", path.display())))?;
+    let size = name
+        .strip_prefix("logo-icon-")
+        .and_then(|value| value.strip_suffix(".png"))
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| {
+            CliError::new(format!(
+                "受管 PNG 必须使用 `logo-icon-<尺寸>.png` 命名：{}",
+                path.display()
+            ))
+        })?;
+    if !matches!(size, 16 | 24 | 32 | 48 | 64 | 128 | 256 | 512 | 1024) {
+        return Err(CliError::new(format!("不支持的标准图标尺寸：{size}")));
+    }
+    Ok(size)
+}
+
+fn write_icns(path: &Path, png_directory: &Path) -> CliResult<()> {
+    let entries = [
+        ("icp4", 16_u32),
+        ("icp5", 32),
+        ("icp6", 64),
+        ("ic07", 128),
+        ("ic08", 256),
+        ("ic09", 512),
+        ("ic10", 1024),
+    ];
+    let mut chunks = Vec::new();
+    for (kind, size) in entries {
+        let png = fs::read(png_directory.join(format!("logo-icon-{size}.png")))
+            .map_err(|error| CliError::new(format!("无法读取 ICNS 输入 PNG: {error}")))?;
+        let chunk_size =
+            u32::try_from(png.len() + 8).map_err(|_| CliError::new("ICNS chunk 过大"))?;
+        chunks.extend_from_slice(kind.as_bytes());
+        chunks.extend_from_slice(&chunk_size.to_be_bytes());
+        chunks.extend_from_slice(&png);
+    }
+    let file_size = u32::try_from(chunks.len() + 8).map_err(|_| CliError::new("ICNS 文件过大"))?;
+    let mut output = Vec::with_capacity(chunks.len() + 8);
+    output.extend_from_slice(b"icns");
+    output.extend_from_slice(&file_size.to_be_bytes());
+    output.extend_from_slice(&chunks);
+    fs::write(path, output)
+        .map_err(|error| CliError::new(format!("无法写入 ICNS `{}`: {error}", path.display())))
+}
+
+fn write_ico(path: &Path, png_directory: &Path) -> CliResult<()> {
+    let sizes = [16_u32, 24, 32, 48, 64, 128, 256];
+    let images = sizes
+        .into_iter()
+        .map(|size| {
+            fs::read(png_directory.join(format!("logo-icon-{size}.png")))
+                .map(|bytes| (size, bytes))
+                .map_err(|error| CliError::new(format!("无法读取 ICO 输入 PNG: {error}")))
+        })
+        .collect::<CliResult<Vec<_>>>()?;
+    let count = u16::try_from(images.len()).map_err(|_| CliError::new("ICO 图像数量过多"))?;
+    let directory_size = 6_usize + images.len() * 16;
+    let mut offset = u32::try_from(directory_size).map_err(|_| CliError::new("ICO 目录过大"))?;
+    let mut output = Vec::new();
+    output.extend_from_slice(&0_u16.to_le_bytes());
+    output.extend_from_slice(&1_u16.to_le_bytes());
+    output.extend_from_slice(&count.to_le_bytes());
+    for (size, bytes) in &images {
+        output.push(if *size == 256 { 0 } else { *size as u8 });
+        output.push(if *size == 256 { 0 } else { *size as u8 });
+        output.extend_from_slice(&[0, 0]);
+        output.extend_from_slice(&1_u16.to_le_bytes());
+        output.extend_from_slice(&32_u16.to_le_bytes());
+        let byte_len = u32::try_from(bytes.len()).map_err(|_| CliError::new("ICO PNG 过大"))?;
+        output.extend_from_slice(&byte_len.to_le_bytes());
+        output.extend_from_slice(&offset.to_le_bytes());
+        offset = offset
+            .checked_add(byte_len)
+            .ok_or_else(|| CliError::new("ICO 文件过大"))?;
+    }
+    for (_, bytes) in images {
+        output.write_all(&bytes).map_err(|error| {
+            CliError::new(format!("无法组装 ICO `{}`: {error}", path.display()))
+        })?;
+    }
+    fs::write(path, output)
+        .map_err(|error| CliError::new(format!("无法写入 ICO `{}`: {error}", path.display())))
+}
+
+fn validate_workspace_relative_path(value: &str, label: &str) -> CliResult<()> {
+    let path = Path::new(value);
+    if value.trim().is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::new(format!(
+            "{label} 必须是 workspace 内的相对路径：`{value}`"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_workspace_output(root: &Path, value: &str) -> CliResult<PathBuf> {
+    validate_workspace_relative_path(value, "品牌资源路径")?;
+    Ok(root.join(value))
+}
+
+fn resolve_workspace_file(root: &Path, value: &str, label: &str) -> CliResult<PathBuf> {
+    let path = resolve_workspace_output(root, value)?;
+    if !path.is_file() {
+        return Err(CliError::new(format!("{label} 不存在：{}", path.display())));
+    }
+    let canonical_root = root.canonicalize().map_err(|error| {
+        CliError::new(format!(
+            "无法解析 workspace 根目录 `{}`: {error}",
+            root.display()
+        ))
+    })?;
+    let canonical_path = path.canonicalize().map_err(|error| {
+        CliError::new(format!("无法解析品牌资源 `{}`: {error}", path.display()))
+    })?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(CliError::new(format!(
+            "{label} 必须位于 workspace 范围内：{}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+fn validate_png(
+    path: &Path,
+    expected_dimensions: Option<(u32, u32)>,
+    label: &str,
+) -> CliResult<()> {
+    let reader = image::ImageReader::open(path)
+        .map_err(|error| CliError::new(format!("无法读取 {label} `{}`: {error}", path.display())))?
+        .with_guessed_format()
+        .map_err(|error| {
+            CliError::new(format!("无法识别 {label} `{}`: {error}", path.display()))
+        })?;
+    if reader.format() != Some(ImageFormat::Png) {
+        return Err(CliError::new(format!(
+            "{label} 必须是 PNG：{}",
+            path.display()
+        )));
+    }
+    let image = reader.decode().map_err(|error| {
+        CliError::new(format!("无法解码 {label} `{}`: {error}", path.display()))
+    })?;
+    if let Some(expected) = expected_dimensions
+        && image.dimensions() != expected
+    {
+        return Err(CliError::new(format!(
+            "{label} 尺寸不正确：期望 {}×{}，实际 {}×{}",
+            expected.0,
+            expected.1,
+            image.width(),
+            image.height()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_icns(path: &Path) -> CliResult<()> {
+    let bytes = fs::read(path)
+        .map_err(|error| CliError::new(format!("无法读取 ICNS `{}`: {error}", path.display())))?;
+    let declared = bytes
+        .get(4..8)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_be_bytes);
+    if !bytes.starts_with(b"icns") || declared != u32::try_from(bytes.len()).ok() {
+        return Err(CliError::new(format!("ICNS 格式无效：{}", path.display())));
+    }
+    Ok(())
+}
+
+fn validate_ico(path: &Path) -> CliResult<()> {
+    let bytes = fs::read(path)
+        .map_err(|error| CliError::new(format!("无法读取 ICO `{}`: {error}", path.display())))?;
+    if bytes.len() < 6 || bytes[0..4] != [0, 0, 1, 0] || bytes[4..6] == [0, 0] {
+        return Err(CliError::new(format!("ICO 格式无效：{}", path.display())));
+    }
+    Ok(())
 }
 
 fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {

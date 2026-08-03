@@ -320,6 +320,11 @@ display_name = "Desktop"
 publish_target = "local"
 object_prefix = "e2e-test"
 
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
 [apps.desktop.release]
 channel = "stable"
 version = "1.0.1"
@@ -338,8 +343,15 @@ signing_key_env = "FALLBACK_SIGNING_KEY"
 required = ["aarch64-apple-darwin"]
 
 [apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
 notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = ["assets/logos/desktop/logo-icon-128.png"]
 "#
         ),
     )
@@ -428,7 +440,7 @@ fn expected_desktop_manifest(project_name: &str, account_enabled: bool) -> Strin
         .replace("{{ project_name }}", project_name)
 }
 
-fn expected_main(project_name: &str, account_enabled: bool) -> String {
+fn expected_main(project_name: &str, account_enabled: bool, workspace: bool) -> String {
     const START: &str = "{%- if account_enabled -%}\n";
     const ELSE: &str = "\n{%- else -%}\n";
     const END: &str = "\n{%- endif -%}";
@@ -447,7 +459,14 @@ fn expected_main(project_name: &str, account_enabled: bool) -> String {
     } else {
         disabled.to_owned()
     };
-    rendered.replace("{{ project_name }}", project_name)
+    let logo_path = if workspace {
+        format!("../../../assets/logos/{project_name}/logo-icon-128.png")
+    } else {
+        format!("../assets/logos/{project_name}/logo-icon-128.png")
+    };
+    rendered
+        .replace("{{ project_name }}", project_name)
+        .replace("{{ logo_path }}", &logo_path)
 }
 
 fn render_account_condition(template: &str, account_enabled: bool) -> String {
@@ -735,6 +754,11 @@ display_name = "Desktop"
 publish_target = "local"
 object_prefix = "e2e-test"
 
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
 [apps.desktop.release]
 channel = "stable"
 version = "1.0.1"
@@ -752,8 +776,15 @@ signing_key_env = "NEXORA_TEST_SIGNING_KEY"
 required = ["aarch64-apple-darwin"]
 
 [apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
 notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = ["assets/logos/desktop/logo-icon-128.png"]
 "#
         ),
     )
@@ -854,6 +885,11 @@ display_name = "Desktop"
 publish_target = "local"
 object_prefix = "e2e-test"
 
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
 [apps.desktop.release]
 channel = "stable"
 version = "1.0.1"
@@ -872,8 +908,15 @@ signing_key_env = "UNUSED_SIGNING_KEY"
 required = ["aarch64-apple-darwin"]
 
 [apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
 notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = ["assets/logos/desktop/logo-icon-128.png"]
 "#
         ),
     )
@@ -1105,7 +1148,7 @@ fn create_defaults_to_a_single_package_project() {
         askama_source(GITIGNORE_TEMPLATE)
     );
     let main = fs::read_to_string(project.join("src/main.rs")).unwrap();
-    assert_eq!(main, expected_main("demo-app", false));
+    assert_eq!(main, expected_main("demo-app", false, false));
     assert!(main.contains("#[derive(RustEmbed)]"));
     assert!(main.contains(".application_assets(AppAssets)"));
     assert!(project.join("assets/icons").is_dir());
@@ -1132,6 +1175,118 @@ fn create_defaults_to_a_single_package_project() {
     assert!(main.contains("impl nexora::Application for DesktopApplication"));
     assert!(main.contains("DesktopApplication.run()"));
     assert!(HOME_FEATURE_TEMPLATE.contains("impl FeatureElement for HomeFeature"));
+    for name in [
+        "logo-icon-16.png",
+        "logo-icon-24.png",
+        "logo-icon-32.png",
+        "logo-icon-48.png",
+        "logo-icon-64.png",
+        "logo-icon-128.png",
+        "logo-icon-256.png",
+        "logo-icon-512.png",
+        "logo-icon-1024.png",
+        "logo-icon-source.png",
+        "logo-icon.icns",
+        "logo-icon.ico",
+    ] {
+        assert!(project.join("assets/logos/demo-app").join(name).is_file());
+    }
+}
+
+#[test]
+fn icons_generate_is_app_scoped_and_deterministic() {
+    use sha2::{Digest as _, Sha256};
+
+    let directory = TestDirectory::new("icons-generate");
+    let create = directory.run(&["create", "icons-app"]);
+    assert!(create.status.success());
+    let project = directory.path().join("icons-app");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_nexora"))
+            .args(["icons", "generate", "--app", "icons-app"])
+            .current_dir(&project)
+            .output()
+            .unwrap()
+    };
+
+    let first = run();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let assets = project.join("assets/logos/icons-app");
+    let digest = |name: &str| format!("{:x}", Sha256::digest(fs::read(assets.join(name)).unwrap()));
+    let before = [
+        digest("logo-icon-128.png"),
+        digest("logo-icon.icns"),
+        digest("logo-icon.ico"),
+    ];
+    let second = run();
+    assert!(second.status.success());
+    let after = [
+        digest("logo-icon-128.png"),
+        digest("logo-icon.icns"),
+        digest("logo-icon.ico"),
+    ];
+    assert_eq!(before, after);
+}
+
+#[test]
+fn icons_generate_protects_manual_resources_and_validates_source_size() {
+    let directory = TestDirectory::new("icons-validation");
+    let create = directory.run(&["create", "manual-icons"]);
+    assert!(create.status.success());
+    let project = directory.path().join("manual-icons");
+    let config_path = project.join("nexora.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("managed = true", "managed = false");
+    fs::write(&config_path, config).unwrap();
+    let run = |extra: &[&str]| {
+        let mut args = vec!["icons", "generate", "--app", "manual-icons"];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_nexora"))
+            .args(args)
+            .current_dir(&project)
+            .output()
+            .unwrap()
+    };
+
+    let protected = run(&[]);
+    assert!(!protected.status.success());
+    assert!(String::from_utf8_lossy(&protected.stderr).contains("手工资源"));
+
+    fs::copy(
+        project.join("assets/logos/manual-icons/logo-icon-128.png"),
+        project.join("assets/logos/manual-icons/logo-icon-source.png"),
+    )
+    .unwrap();
+    let invalid = run(&["--force"]);
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("至少 1024×1024"));
+}
+
+#[test]
+fn init_preserves_existing_app_brand_resource() {
+    let directory = TestDirectory::new("init-brand-preserve");
+    let project = directory.path().join("brand-app");
+    let assets = project.join("assets/logos/brand-app");
+    fs::create_dir_all(&assets).unwrap();
+    fs::write(assets.join("logo-icon-source.png"), b"user-brand").unwrap();
+
+    let output = directory.run(&["init", "brand-app"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(assets.join("logo-icon-source.png")).unwrap(),
+        b"user-brand"
+    );
+    assert!(assets.join("logo-icon.icns").is_file());
 }
 
 #[test]
@@ -1164,7 +1319,7 @@ fn create_can_generate_a_workspace_project() {
     );
     assert_eq!(
         fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
-        expected_main("workspace-app", false)
+        expected_main("workspace-app", false, true)
     );
     let desktop_main = fs::read_to_string(desktop.join("src/main.rs")).unwrap();
     assert!(desktop_main.contains("#[derive(RustEmbed)]"));
@@ -1220,7 +1375,7 @@ fn init_single_preserves_existing_content() {
     assert_portable_nexora_dependency(&project.join("Cargo.toml"));
     assert_eq!(
         fs::read_to_string(project.join("src/main.rs")).unwrap(),
-        expected_main("existing-app", false)
+        expected_main("existing-app", false, false)
     );
     assert_generated_skills(&project);
 }
@@ -1254,7 +1409,7 @@ fn init_can_generate_a_workspace_and_preserve_existing_content() {
     );
     assert_eq!(
         fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
-        expected_main("existing-workspace", false)
+        expected_main("existing-workspace", false, true)
     );
     assert_generated_skills(&project);
 }
@@ -1294,7 +1449,7 @@ fn workspace_account_feature_generates_a_composable_server() {
     );
     assert_eq!(
         fs::read_to_string(desktop.join("src/main.rs")).unwrap(),
-        expected_main("fullstack-app", true)
+        expected_main("fullstack-app", true, true)
     );
     assert!(!desktop.join("src/account.rs").exists());
     assert_eq!(
@@ -1389,7 +1544,7 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(desktop_main.contains("nexora::desktop::client_config(&settings, &settings.api)"));
     assert!(desktop_main.contains("AccountAuthenticator::new"));
     assert!(desktop_main.contains(".application_version(env!(\"CARGO_PKG_VERSION\"))"));
-    assert!(desktop_main.contains("../assets/logos/logo-icon-128.png"));
+    assert!(desktop_main.contains("../../../assets/logos/fullstack-app/logo-icon-128.png"));
     assert!(desktop_main.contains("#[derive(RustEmbed)]"));
     assert!(desktop_main.contains(".application_assets(AppAssets)"));
     assert!(!desktop_main.contains("account_enabled"));
@@ -1420,8 +1575,16 @@ fn workspace_account_feature_generates_a_composable_server() {
         "logo-icon.icns",
         "logo-icon.ico",
     ] {
-        assert!(desktop.join("assets/logos").join(logo).is_file());
+        assert!(
+            project
+                .join("assets/logos/fullstack-app")
+                .join(logo)
+                .is_file()
+        );
     }
+    let nexora_config = fs::read_to_string(project.join("nexora.toml")).unwrap();
+    assert!(nexora_config.contains("[apps.fullstack-app.branding]"));
+    assert!(nexora_config.contains("assets/logos/fullstack-app/logo-icon.icns"));
     assert!(desktop.join("assets/icons").is_dir());
     let desktop_config_source = fs::read_to_string(desktop.join("src/config.rs")).unwrap();
     assert!(desktop_config_source.contains("pub(crate) api:"));

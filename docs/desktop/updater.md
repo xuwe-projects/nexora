@@ -25,6 +25,11 @@ display_name = "示例桌面应用"
 publish_target = "rustfs"
 object_prefix = "products"
 
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
 [apps.desktop.release]
 channel = "stable"
 version = "1.2.0"
@@ -34,6 +39,7 @@ signing_key_file = ".secrets/desktop-update.key"
 
 [apps.desktop.updater]
 enabled = true
+check_on_launch = true
 feed_url = "http://127.0.0.1:9000/desktop-releases/products/desktop/stable/latest.json"
 channels = ["stable"]
 trusted_public_keys = ["desktop-main:ed25519:BASE64_PUBLIC_KEY"]
@@ -48,11 +54,26 @@ health_timeout = "20s"
 required = ["aarch64-apple-darwin"]
 
 [apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
 signing = "ad_hoc"
 notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = [
+  "assets/logos/desktop/logo-icon-16.png",
+  "assets/logos/desktop/logo-icon-128.png",
+  "assets/logos/desktop/logo-icon-512.png",
+]
 ```
 
 `package` 是 Cargo、cargo-bundle 原始路径和技术产物名；`display_name` 是 Info.plist、DMG 卷与安装后 `.app` 的用户可见名称。release channel 必须属于 updater channels，version 必须是 SemVer，build number 必须大于零。
+
+品牌资源统一位于 workspace 根目录 `assets/logos/<app_key>/`。构建只消费所选 app 的配置，
+将 ICNS 复制到 `.app/Contents/Resources` 并写入 `CFBundleIconFile`，不会修改用户 Cargo manifest。
+可用 `nexora icons generate --app desktop` 从已配置的源 PNG 重建标准资源。
 
 私钥优先读取相对于 `nexora.toml` 的 `release.signing_key_file`。未配置或为空时才读取 `signing_key_env` 指向的环境变量；明确配置但文件不存在时直接失败，不回退。
 
@@ -86,6 +107,12 @@ build 不访问对象存储，按 required targets 构建主程序和 `<executab
 
 ## 启动检查与用户确认
 
-主窗口创建完成后，应用静默读取并验证 `latest.json`。没有新版本或启动检查失败时不打断用户；发现可选更新后才打开窗口级确认框，并提供“立即更新”“后台下载”和“稍后”。只有用户选择前两项后才会下载更新包；后台下载完成后会再次弹出重启确认。低于 `minimum_supported_version` 的强制更新不提供“稍后”或关闭入口。
+应用显式调用 `nexora::desktop::install_updater` 后，Shell 才注册公共 `CheckForUpdates` Action，
+并在默认登录页、账户菜单、设置和 macOS 原生应用菜单中显示入口。未安装 updater 时不显示入口，
+也不会启动网络任务。自定义登录页可使用公共 Action 或 `check_for_updates_button`，Shell 不修改其布局。
+
+当 `check_on_launch = true` 时，主窗口创建完成后应用在后台读取并验证 `latest.json`。没有新版本或
+网络失败时不打断用户；发现更新时只显示非模态通知。用户打开公共弹窗并确认“下载并安装”后才会
+下载更新包。低于 `minimum_supported_version` 的强制更新不提供“稍后”或关闭入口。
 
 用户主动点击“检查更新”时会立即显示检查进度；后续确认、下载、校验、暂存和重启流程与启动检查一致。同一进程只保留一个更新协调器，避免启动检查和手动检查并发下载同一版本。

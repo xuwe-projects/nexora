@@ -207,8 +207,10 @@ impl UpdateCoordinator {
                 self.cancellation = None;
                 if self.manual_check {
                     window.close_dialog(cx);
+                    open_update_prompt(cx.entity(), release, window, cx);
+                } else {
+                    push_update_notification(cx.entity(), release, window, cx);
                 }
-                open_update_prompt(cx.entity(), release, window, cx);
             }
             UpdateEvent::Failed(message) => {
                 self.cancellation = None;
@@ -376,6 +378,34 @@ impl UpdateCoordinator {
             .as_ref()
             .is_some_and(|release| release.mandatory)
     }
+}
+
+fn push_update_notification(
+    coordinator: Entity<UpdateCoordinator>,
+    release: UpdateRelease,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let version = format!("v{} ({})", release.version, release.build_number);
+    window.push_notification(
+        Notification::info(format!("{version} 已可用"))
+            .title("发现应用更新")
+            .action(move |_notification, _, cx| {
+                let coordinator = coordinator.clone();
+                let release = release.clone();
+                let notification = cx.entity().downgrade();
+                Button::new("background-update-review")
+                    .label("查看更新")
+                    .primary()
+                    .on_click(move |_, window, cx| {
+                        _ = notification.update(cx, |notification, cx| {
+                            notification.dismiss(window, cx);
+                        });
+                        open_update_prompt(coordinator.clone(), release.clone(), window, cx);
+                    })
+            }),
+        cx,
+    );
 }
 
 impl Drop for UpdateCoordinator {

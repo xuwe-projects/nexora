@@ -13,7 +13,8 @@ pub(super) use release::{BuildConfig, PublishConfig};
 #[allow(unused_imports)]
 pub use release::{
     inspect_app_selection, inspect_build_plans, inspect_latest_dmg_aliases,
-    inspect_release_artifacts, inspect_signing_key, validate_display_name, write_bundle_info,
+    inspect_release_artifacts, inspect_signing_key, validate_display_name, write_bundle_icon,
+    write_bundle_info,
 };
 
 /// CLI 命令解析与执行流程共用的结果类型。
@@ -74,6 +75,26 @@ pub(super) struct UpdaterConfig {
     command: UpdaterCommand,
 }
 
+#[derive(Args, Debug, Clone)]
+pub(super) struct IconsConfig {
+    /// 要执行的图标资源命令。
+    #[command(subcommand)]
+    command: IconsCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum IconsCommand {
+    /// 从 app 注册的源 PNG 生成标准 PNG、ICNS 和 ICO。
+    Generate {
+        /// nexora.toml 中的稳定 app key。
+        #[arg(long)]
+        app: String,
+        /// 确认覆盖标记为手工维护的品牌资源。
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 #[derive(Debug, Clone, Subcommand)]
 enum UpdaterCommand {
     /// 生成 Ed25519 更新签名密钥。
@@ -109,6 +130,12 @@ pub(super) fn run_updater_command(config: UpdaterConfig) -> CliResult<()> {
             key_id,
             private_key_file,
         } => release::run_updater_keygen(&app, key_id, private_key_file),
+    }
+}
+
+pub(super) fn run_icons_command(config: IconsConfig) -> CliResult<()> {
+    match config.command {
+        IconsCommand::Generate { app, force } => release::run_icons_generate(&app, force),
     }
 }
 

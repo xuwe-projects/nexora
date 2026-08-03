@@ -4,7 +4,10 @@
 
 use gpui::{Action, App, KeyBinding};
 
-use crate::settings::{self, OpenSettings};
+use crate::{
+    settings::{self, OpenSettings},
+    updater::CheckForUpdates,
+};
 
 gpui::actions!(
     nexora_account_menu,
@@ -32,6 +35,9 @@ pub enum AccountActionKind {
 
     /// 打开设置页或账户设置入口。
     Settings,
+
+    /// 检查应用更新；该动作不属于账户权限。
+    Updates,
 
     /// 退出当前登录状态。
     SignOut,
@@ -89,6 +95,7 @@ impl AccountActionSpec {
         match self.kind {
             AccountActionKind::SignIn => Box::new(SignInAccount),
             AccountActionKind::Settings => Box::new(OpenSettings),
+            AccountActionKind::Updates => Box::new(CheckForUpdates),
             AccountActionKind::SignOut => Box::new(SignOutAccount),
         }
     }
@@ -96,16 +103,31 @@ impl AccountActionSpec {
 
 /// 返回账户菜单默认动作列表。
 ///
-/// 当前账户名称由账户栏本身展示；菜单只暴露已经实现的设置和退出操作。
+/// 当前账户名称由账户栏本身展示；兼容入口不假设 updater 已安装，只返回设置和退出操作。
 pub fn menu_actions() -> Vec<AccountActionSpec> {
-    vec![
-        AccountActionSpec::new(
-            AccountActionKind::Settings,
-            "设置",
-            Some(settings::shortcut_label()),
-        ),
-        AccountActionSpec::new(AccountActionKind::SignOut, "退出登录", Some("Cmd+Shift+Q")),
-    ]
+    menu_actions_with_updates(false)
+}
+
+/// 返回已登录账户菜单动作，并按 app 级 updater 安装状态加入更新入口。
+pub fn menu_actions_with_updates(updater_available: bool) -> Vec<AccountActionSpec> {
+    let mut actions = vec![AccountActionSpec::new(
+        AccountActionKind::Settings,
+        "设置",
+        Some(settings::shortcut_label()),
+    )];
+    if updater_available {
+        actions.push(AccountActionSpec::new(
+            AccountActionKind::Updates,
+            "检查更新",
+            None,
+        ));
+    }
+    actions.push(AccountActionSpec::new(
+        AccountActionKind::SignOut,
+        "退出登录",
+        Some("Cmd+Shift+Q"),
+    ));
+    actions
 }
 
 /// 返回未登录时账户菜单默认动作列表。

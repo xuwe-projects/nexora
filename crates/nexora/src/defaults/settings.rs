@@ -5,7 +5,8 @@ use gpui::{
     StyleRefinement, Subscription, Window, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, Size, TitleBar,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size, TitleBar,
+    button::Button,
     group_box::GroupBoxVariant,
     h_flex,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
@@ -42,8 +43,8 @@ pub(crate) const fn default_settings_window_registration() -> SettingsWindowRegi
 
 /// Nexora 桌面应用自带的设置窗口。
 ///
-/// 默认窗口只承载所有桌面应用都具备的运行时外观能力，不包含更新服务、changelog、
-/// Console 置顶标签或其他具体产品配置。
+/// 默认窗口始终承载运行时外观能力；应用显式安装 updater 后会追加公共更新入口。它不包含
+/// changelog、Console 置顶标签或其他具体产品配置。
 struct DefaultSettingsWindow {
     font_size_slider: Entity<SliderState>,
     _font_size_subscription: Subscription,
@@ -188,12 +189,41 @@ where
     T: 'static,
 {
     let header_style = settings_header_style();
+    let mut pages = vec![appearance_setting_page(font_size_slider.clone())];
+    if crate::desktop::updater_available(cx) {
+        pages.push(update_setting_page());
+    }
 
     Settings::new("nexora-default-settings")
         .with_size(theme::component_size(cx))
         .header_style(&header_style)
         .with_group_variant(GroupBoxVariant::Outline)
-        .pages([appearance_setting_page(font_size_slider.clone())])
+        .pages(pages)
+}
+
+fn update_setting_page() -> SettingPage {
+    SettingPage::new("应用更新")
+        .header_style(&settings_header_style())
+        .icon(Icon::new(IconName::CircleCheck))
+        .description("检查并安装由当前应用发布通道提供的签名更新。")
+        .group(
+            SettingGroup::new().title("更新").item(
+                SettingItem::new(
+                    "检查更新",
+                    SettingField::render(|options, _window, cx| {
+                        Button::new("settings-check-updates")
+                            .icon(IconName::CircleCheck)
+                            .label("检查更新")
+                            .disabled(options.disabled)
+                            .with_size(theme::component_size(cx))
+                            .on_click(|_, window, cx| {
+                                _ = crate::desktop::check_for_updates(window, cx);
+                            })
+                    }),
+                )
+                .description("仅在确认发现新版本后下载；后台检查不会自动下载安装包。"),
+            ),
+        )
 }
 
 fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage {

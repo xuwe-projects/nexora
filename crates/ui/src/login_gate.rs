@@ -38,6 +38,7 @@ pub struct LoginGate {
     busy_label: SharedString,
     on_login: ClickHandler,
     on_settings: ClickHandler,
+    on_check_updates: Option<ClickHandler>,
     privacy_url: SharedString,
     help_url: SharedString,
     title_bar: bool,
@@ -67,6 +68,7 @@ impl LoginGate {
             busy_label: "正在连接认证服务...".into(),
             on_login: Rc::new(on_login),
             on_settings: Rc::new(on_settings),
+            on_check_updates: None,
             privacy_url: "https://github.com/xuwe-projects/nexora".into(),
             help_url: "https://github.com/xuwe-projects/nexora/issues".into(),
             title_bar: true,
@@ -124,6 +126,18 @@ impl LoginGate {
         self
     }
 
+    /// 在登录页右上角增加“检查更新”入口。
+    ///
+    /// 未调用时不渲染该按钮，适合没有安装 updater 的应用；Nexora 默认登录页只会在公共
+    /// updater 已成功安装后设置此回调。
+    pub fn on_check_updates(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_check_updates = Some(Rc::new(handler));
+        self
+    }
+
     /// 设置登录门禁是否自行渲染透明窗口标题栏。
     ///
     /// 独立使用 `LoginGate` 时应保持默认值 `true`；当外层框架已经统一提供 TitleBar 时，
@@ -151,6 +165,7 @@ impl RenderOnce for LoginGate {
         };
         let on_login = self.on_login.clone();
         let on_settings = self.on_settings.clone();
+        let on_check_updates = self.on_check_updates.clone();
 
         div()
             .relative()
@@ -176,15 +191,31 @@ impl RenderOnce for LoginGate {
                     ),
             )
             .child(
-                Button::new("login-settings")
+                h_flex()
                     .absolute()
                     .right(px(34.0))
                     .top(px(38.0))
-                    .ghost()
-                    .small()
-                    .icon(IconName::Settings2)
-                    .label("设置")
-                    .on_click(move |event, window, cx| on_settings(event, window, cx)),
+                    .gap_2()
+                    .when_some(on_check_updates, |buttons, handler| {
+                        buttons.child(
+                            Button::new("login-check-updates")
+                                .ghost()
+                                .small()
+                                .icon(IconName::CircleCheck)
+                                .label("检查更新")
+                                .on_click(move |event, window, cx| handler(event, window, cx)),
+                        )
+                    })
+                    .child(
+                        Button::new("login-settings")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Settings2)
+                            .label("设置")
+                            .on_click(move |event, window, cx| {
+                                on_settings(event, window, cx);
+                            }),
+                    ),
             )
             .child(
                 div()

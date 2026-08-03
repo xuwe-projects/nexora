@@ -49,6 +49,11 @@ impl Render for DefaultLoginFeature {
         .status(status)
         .login_label(format!("使用 {} 账户登录", branding.application_name))
         .when_some(branding.logo, |gate, logo| gate.logo(logo.image()))
+        .when(crate::desktop::updater_available(cx), |gate| {
+            gate.on_check_updates(|_, window, cx| {
+                _ = crate::desktop::check_for_updates(window, cx);
+            })
+        })
         .title_bar(false)
     }
 }

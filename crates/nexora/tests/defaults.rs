@@ -17,6 +17,8 @@ const USER_PROVISION_DIALOG_SOURCE: &str =
     include_str!("../src/defaults/account/users/components/provision.rs");
 #[cfg(feature = "desktop")]
 const DEFAULT_SETTINGS_SOURCE: &str = include_str!("../src/defaults/settings.rs");
+#[cfg(feature = "desktop")]
+const DEFAULT_LOGIN_SOURCE: &str = include_str!("../src/defaults/login.rs");
 
 #[cfg(feature = "desktop")]
 struct CustomUsersFeature;
@@ -90,6 +92,14 @@ fn default_login_feature_creates_a_render_entity(cx: &mut gpui::TestAppContext) 
             registry.create_login_feature(window, cx)
         })
         .expect("测试窗口应允许创建默认登录页 Entity");
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_login_only_connects_update_button_through_installed_updater() {
+    assert!(DEFAULT_LOGIN_SOURCE.contains("crate::desktop::updater_available(cx)"));
+    assert!(DEFAULT_LOGIN_SOURCE.contains("gate.on_check_updates"));
+    assert!(DEFAULT_LOGIN_SOURCE.contains("crate::desktop::check_for_updates(window, cx)"));
 }
 
 #[cfg(feature = "desktop")]

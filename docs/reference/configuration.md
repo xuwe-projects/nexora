@@ -93,3 +93,34 @@ allow_insecure_http = true
 HTTP 时必须显式开启 `allow_insecure_http`。发布凭据来自 `AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY` 或 `RUSTFS_ACCESS_KEY_ID` / `RUSTFS_SECRET_ACCESS_KEY`，不得写入
 配置文件。每次 E2E 应使用唯一 `object_prefix`。
+
+每个桌面 app 必须在同一注册记录中声明稳定 app key、bundle identifier 和品牌资源。single 与
+workspace 项目都从 workspace 根目录解析资源，不读取或修改 `[package.metadata.bundle]`：
+
+```toml
+[apps.desktop]
+package = "desktop"
+app_id = "com.example.desktop"
+display_name = "示例桌面应用"
+publish_target = "rustfs"
+object_prefix = "products"
+
+[apps.desktop.branding]
+application_logo = "assets/logos/desktop/logo-icon-128.png"
+icon_source = "assets/logos/desktop/logo-icon-source.png"
+managed = true
+
+[apps.desktop.platforms.macos]
+icon = "assets/logos/desktop/logo-icon.icns"
+signing = "ad_hoc"
+notarize = false
+
+[apps.desktop.platforms.windows]
+icon = "assets/logos/desktop/logo-icon.ico"
+
+[apps.desktop.platforms.linux]
+icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
+```
+
+路径必须是 workspace 内的相对路径。当前生产打包链路实现 macOS `.app`、DMG 与 ICNS；
+Windows/Linux 图标已进入配置、初始化和生成模型，但尚未实现完整安装包与自动安装更新。

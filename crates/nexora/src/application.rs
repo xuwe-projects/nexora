@@ -1221,7 +1221,7 @@ where
         let tab_style = self.tab_style;
         let sidebar_search = self.sidebar_search;
         let pinned_tab_paths = std::mem::take(&mut self.pinned_tab_paths);
-        cx.new(|cx| {
+        let root = cx.new(|cx| {
             ApplicationShell::new(
                 registry,
                 initial_route,
@@ -1237,7 +1237,9 @@ where
                 window,
                 cx,
             )
-        })
+        });
+        crate::desktop::updater::start_installed_updater(window, cx);
+        root
     }
 }
 
@@ -2615,7 +2617,8 @@ impl ApplicationShell {
             .map(|profile| profile.user.display_name.clone())
             .unwrap_or_else(|| "当前账户".to_owned());
         let avatar = Avatar::new().name(display_name.clone()).small();
-        let menu_items = account_actions::menu_actions();
+        let menu_items =
+            account_actions::menu_actions_with_updates(crate::desktop::updater_available(cx));
         let action_context = cx.focus_handle();
 
         SidebarRegion::new("nexora-default-account-footer")
@@ -2651,6 +2654,7 @@ impl ApplicationShell {
                                 crate::account::client::sign_out(cx);
                             }),
                             AccountActionKind::Settings => menu_item.action(item.to_action()),
+                            AccountActionKind::Updates => menu_item.action(item.to_action()),
                         };
                         menu.item(menu_item)
                     },
@@ -3177,6 +3181,7 @@ fn account_icon(kind: AccountActionKind) -> IconName {
     match kind {
         AccountActionKind::SignIn => IconName::CircleUser,
         AccountActionKind::Settings => IconName::Settings2,
+        AccountActionKind::Updates => IconName::CircleCheck,
         AccountActionKind::SignOut => IconName::CircleX,
     }
 }
