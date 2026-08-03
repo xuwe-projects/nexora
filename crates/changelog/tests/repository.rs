@@ -19,8 +19,8 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
-    assert!(entry.markdown().contains("CheckForUpdates"));
-    assert!(entry.markdown().contains("Cmd+Shift+U"));
+    assert!(entry.markdown().contains("CARGO_PKG_VERSION"));
+    assert!(entry.markdown().contains("BUILD_DATETIME"));
 }
 
 #[test]
@@ -54,6 +54,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.21.3",
             "0.21.2",
             "0.21.1",
             "0.21.0",
