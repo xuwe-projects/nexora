@@ -41,6 +41,8 @@ fn loads_safe_updater_configuration_from_app_bundle() {
             "allow_insecure_http": true,
             "health_timeout": "20s",
             "expected_team_id": "TEAM123456",
+            "expected_windows_signer_thumbprint": "00112233445566778899aabbccddeeff00112233",
+            "expected_windows_publisher": "Nexora Test Publisher",
             "check_on_launch": true
         }),
     );
@@ -53,8 +55,42 @@ fn loads_safe_updater_configuration_from_app_bundle() {
     assert_eq!(config.channel(), UpdateChannel::Stable);
     assert_eq!(config.trusted_public_keys().len(), 1);
     assert_eq!(config.expected_team_id(), Some("TEAM123456"));
+    assert_eq!(
+        config.windows_signature().unwrap().signer_thumbprint,
+        "00112233445566778899AABBCCDDEEFF00112233"
+    );
+    assert_eq!(
+        config.windows_signature().unwrap().publisher,
+        "Nexora Test Publisher"
+    );
     assert!(config.check_on_launch());
 
+    fs::remove_dir_all(bundle).unwrap();
+}
+
+#[test]
+fn rejects_partial_windows_signature_configuration() {
+    let bundle = write_bundle_config(
+        "partial-windows-signature",
+        serde_json::json!({
+            "schema_version": 1,
+            "app_id": "com.example.desktop",
+            "channel": "stable",
+            "feed_url": "https://updates.example.com/latest.json",
+            "trusted_public_keys": [
+                "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+            ],
+            "current_version": "1.0.0",
+            "current_build_number": 2,
+            "allow_insecure_http": false,
+            "health_timeout": "20s",
+            "expected_windows_signer_thumbprint": "00112233445566778899AABBCCDDEEFF00112233"
+        }),
+    );
+
+    let error = UpdateConfig::from_app_bundle(&bundle).unwrap_err();
+
+    assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
     fs::remove_dir_all(bundle).unwrap();
 }
 

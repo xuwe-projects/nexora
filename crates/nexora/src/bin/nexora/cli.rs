@@ -201,7 +201,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum NexoraCommand {
-    /// 构建、签名并打包 macOS 桌面应用。
+    /// 构建、签名并打包桌面应用。
     Build(Box<tooling::BuildConfig>),
 
     /// 发布已有桌面更新产物。

@@ -6,8 +6,8 @@ pub mod commands;
 
 use commands::{
     inspect_app_selection, inspect_build_plans, inspect_latest_dmg_aliases,
-    inspect_release_artifacts, inspect_signing_key, validate_display_name, write_bundle_icon,
-    write_bundle_info,
+    inspect_release_artifacts, inspect_signing_key, inspect_windows_installer_sources,
+    validate_display_name, write_bundle_icon, write_bundle_info,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -203,6 +203,73 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
     .unwrap();
 }
 
+fn write_windows_artifacts(fixture: &Fixture, include_setup: bool, include_zip: bool) {
+    use sha2::{Digest as _, Sha256};
+    let target = "x86_64-pc-windows-msvc";
+    let directory = fixture.root.join("dist/one/stable/1.2.3/7").join(target);
+    fs::create_dir_all(&directory).unwrap();
+    let mut entries = Vec::new();
+    for (include, kind, name, bytes) in [
+        (
+            include_setup,
+            "windows_setup_exe",
+            "package-one-1.2.3-7-x86_64.setup.exe".to_owned(),
+            b"setup".as_slice(),
+        ),
+        (
+            include_zip,
+            "windows_update_zip",
+            "package-one-1.2.3-7-x86_64.windows.zip".to_owned(),
+            b"zip".as_slice(),
+        ),
+    ] {
+        if include {
+            fs::write(directory.join(&name), bytes).unwrap();
+            entries.push(serde_json::json!({
+                "kind": kind,
+                "file_name": name,
+                "sha256": format!("{:x}", Sha256::digest(bytes)),
+                "size": bytes.len()
+            }));
+        }
+    }
+    fs::write(
+        directory.join("artifact.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_id": "com.example.one",
+            "channel": "stable",
+            "version": "1.2.3",
+            "build_number": 7,
+            "target": target,
+            "artifacts": entries
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn with_windows_target(config: String) -> String {
+    config
+        .replace(
+            "required = [\"aarch64-apple-darwin\"]",
+            "required = [\"x86_64-pc-windows-msvc\"]",
+        )
+        .replace(
+            "icon = \"assets/logos/one/logo-icon.ico\"",
+            r#"icon = "assets/logos/one/logo-icon.ico"
+installer = "nsis"
+install_scope = "user"
+publisher = "Nexora Test Publisher"
+signing = "authenticode"
+signing_thumbprint = "00112233445566778899AABBCCDDEEFF00112233"
+timestamp_url = "http://timestamp.example.test"
+desktop_shortcut_default = false
+launch_after_install_default = true
+minimum_windows_build = 19045"#,
+        )
+}
+
 #[test]
 fn package_and_display_name_are_separate() {
     let fixture = Fixture::new(
@@ -244,6 +311,64 @@ fn technical_artifact_names_include_package_version_build_and_arch() {
             .as_str()
             .unwrap()
             .ends_with("technical-package-1.2.3-7-aarch64.dmg")
+    );
+}
+
+#[test]
+fn windows_build_plan_uses_setup_and_update_zip_without_msi() {
+    let fixture = Fixture::new(
+        "windows-plan",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    let plans = inspect_build_plans(fixture.config(), "one").unwrap();
+    if cfg!(target_os = "windows") {
+        let plan = &plans[0];
+        assert_eq!(plan["platform"], "Windows");
+        assert!(
+            plan["app_zip_path"]
+                .as_str()
+                .unwrap()
+                .ends_with("package-one-1.2.3-7-x86_64.windows.zip")
+        );
+        assert!(
+            plan["setup_path"]
+                .as_str()
+                .unwrap()
+                .ends_with("package-one-1.2.3-7-x86_64.setup.exe")
+        );
+        assert!(plan.get("msi_path").is_none());
+    } else {
+        assert!(plans.is_empty());
+    }
+}
+
+#[test]
+fn windows_installer_sources_keep_nsis_boundaries() {
+    let fixture = Fixture::new(
+        "windows-installer-source",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
+    let script = sources["nsis_script"].as_str().unwrap();
+    let updater_config = &sources["updater_config"];
+
+    assert_eq!(sources["file_version"], "1.2.3.7");
+    assert!(script.contains("RequestExecutionLevel user"));
+    assert!(script.contains("$LOCALAPPDATA\\Programs\\com.example.one"));
+    assert!(script.contains("WriteRegStr SHCTX"));
+    assert!(script.contains("ReadRegDWORD $1"));
+    assert!(script.contains("package-one-updater.exe"));
+    assert!(script.contains("nexora-updater.json"));
+    assert!(!script.contains(".windows.zip"));
+    assert!(!script.contains("MsiPackage"));
+    assert!(!script.contains("WixToolset"));
+    assert_eq!(
+        updater_config["expected_windows_signer_thumbprint"],
+        "00112233445566778899AABBCCDDEEFF00112233"
+    );
+    assert_eq!(
+        updater_config["expected_windows_publisher"],
+        "Nexora Test Publisher"
     );
 }
 
@@ -457,6 +582,27 @@ fn publish_artifact_validation_requires_zip_and_dmg() {
             .unwrap_err()
             .to_string()
             .contains("macos_app_zip")
+    );
+}
+
+#[test]
+fn publish_artifact_validation_accepts_windows_setup_and_update_zip() {
+    let fixture = Fixture::new(
+        "windows-artifact-validation",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    write_windows_artifacts(&fixture, true, true);
+    assert_eq!(
+        inspect_release_artifacts(fixture.config(), "one").unwrap(),
+        vec!["windows_setup_exe", "windows_update_zip"]
+    );
+
+    write_windows_artifacts(&fixture, true, false);
+    assert!(
+        inspect_release_artifacts(fixture.config(), "one")
+            .unwrap_err()
+            .to_string()
+            .contains("windows_update_zip")
     );
 }
 

@@ -49,7 +49,20 @@ struct BundledUpdateConfig {
     #[serde(default)]
     expected_team_id: Option<String>,
     #[serde(default)]
+    expected_windows_signer_thumbprint: Option<String>,
+    #[serde(default)]
+    expected_windows_publisher: Option<String>,
+    #[serde(default)]
     check_on_launch: bool,
+}
+
+/// Windows Authenticode 签名验证所需的发布者约束。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsSignatureConfig {
+    /// 期望的签名证书 SHA-1 thumbprint，使用十六进制字符串表示。
+    pub signer_thumbprint: String,
+    /// 期望的签名证书发布者名称，用于避免仅校验证书链而信任错误主体。
+    pub publisher: String,
 }
 
 /// 启动一次更新检查所需的应用配置。
@@ -65,6 +78,7 @@ pub struct UpdateConfig {
     trusted_public_keys: Vec<TrustedPublicKey>,
     highest_manifest_sequence: u64,
     expected_team_id: Option<String>,
+    windows_signature: Option<WindowsSignatureConfig>,
     request_timeout: Duration,
     health_timeout: Duration,
     app_bundle_path: Option<PathBuf>,
@@ -126,16 +140,20 @@ impl UpdateConfig {
             bundled.allow_insecure_http,
         )?
         .with_trusted_public_keys(&bundled.trusted_public_keys)
-        .map(|config| {
+        .and_then(|config| {
             let config = config
                 .with_health_timeout(health_timeout)
                 .with_app_bundle_path(app_bundle)
                 .with_check_on_launch(bundled.check_on_launch);
-            if let Some(team_id) = bundled.expected_team_id {
+            let config = if let Some(team_id) = bundled.expected_team_id {
                 config.with_expected_team_id(team_id)
             } else {
                 config
-            }
+            };
+            config.with_optional_windows_signature(
+                bundled.expected_windows_signer_thumbprint,
+                bundled.expected_windows_publisher,
+            )
         })
     }
 
@@ -199,6 +217,7 @@ impl UpdateConfig {
             trusted_public_keys: Vec::new(),
             highest_manifest_sequence: 0,
             expected_team_id: None,
+            windows_signature: None,
             request_timeout: Duration::from_secs(30),
             health_timeout: Duration::from_secs(120),
             app_bundle_path: None,
@@ -238,6 +257,49 @@ impl UpdateConfig {
     pub fn with_expected_team_id(mut self, team_id: impl Into<String>) -> Self {
         self.expected_team_id = Some(team_id.into());
         self
+    }
+
+    /// 设置 Windows Authenticode 签名验证要求。
+    ///
+    /// `signer_thumbprint` 必须是签名证书的 SHA-1 指纹；`publisher` 必须与证书主体发布者一致。
+    /// Windows 更新 ZIP staging 时会使用这些值约束主 EXE 和 updater EXE 的签名身份。
+    ///
+    /// # Errors
+    ///
+    /// 当 thumbprint 不是 40 位十六进制 SHA-1 指纹，或 publisher 为空时返回错误。
+    pub fn with_windows_signature(
+        mut self,
+        signer_thumbprint: impl AsRef<str>,
+        publisher: impl Into<String>,
+    ) -> Result<Self, UpdateError> {
+        let publisher = publisher.into();
+        if publisher.trim().is_empty() {
+            return Err(UpdateError::InvalidBundleConfig(
+                "expected_windows_publisher 不能为空".to_owned(),
+            ));
+        }
+        self.windows_signature = Some(WindowsSignatureConfig {
+            signer_thumbprint: normalize_windows_thumbprint(signer_thumbprint.as_ref())?,
+            publisher,
+        });
+        Ok(self)
+    }
+
+    fn with_optional_windows_signature(
+        self,
+        signer_thumbprint: Option<String>,
+        publisher: Option<String>,
+    ) -> Result<Self, UpdateError> {
+        match (signer_thumbprint, publisher) {
+            (Some(thumbprint), Some(publisher)) => {
+                self.with_windows_signature(thumbprint, publisher)
+            }
+            (None, None) => Ok(self),
+            _ => Err(UpdateError::InvalidBundleConfig(
+                "expected_windows_signer_thumbprint 与 expected_windows_publisher 必须同时配置"
+                    .to_owned(),
+            )),
+        }
     }
 
     /// 设置应用启动后是否在后台静默检查一次更新。
@@ -348,10 +410,15 @@ impl UpdateConfig {
         self.expected_team_id.as_deref()
     }
 
+    /// 返回 Windows 更新包必须匹配的 Authenticode 签名身份。
+    pub fn windows_signature(&self) -> Option<&WindowsSignatureConfig> {
+        self.windows_signature.as_ref()
+    }
+
     pub(crate) fn sidecar_path(&self) -> Result<PathBuf, UpdateError> {
         match &self.sidecar_path {
             Some(path) => Ok(path.clone()),
-            None => macos::default_sidecar_path(),
+            None => default_sidecar_path(),
         }
     }
 
@@ -475,6 +542,17 @@ struct StagingCleanup {
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
 }
 
+struct InstallHelperRequest<'a> {
+    process_id: u32,
+    app_id: &'a str,
+    current_app: &'a Path,
+    staged_app: &'a Path,
+    staging_root: &'a Path,
+    sidecar_path: &'a Path,
+    health_timeout: Duration,
+    pending_records: Option<(&'a Path, &'a Path)>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct PendingUpdateRecord {
     schema_version: u32,
@@ -545,7 +623,7 @@ impl StagedUpdate {
         let candidate = pending_base.join(pending_candidate_name(&self.release)?);
         let staged_app =
             remap_staging_path(&self.staged_app, &self.cleanup.staging_root, &candidate)?;
-        let archive_path = candidate.join("update.app.zip");
+        let archive_path = candidate.join(artifact_archive_file_name(&self.release.artifact.kind)?);
         let verified_manifest = self.release.verified_manifest()?.clone();
         let record = PendingUpdateRecord {
             schema_version: PENDING_RECORD_SCHEMA_VERSION,
@@ -597,7 +675,7 @@ impl StagedUpdate {
                 return Err(error);
             }
         };
-        let result = macos::spawn_install_helper(macos::InstallHelperRequest {
+        let result = spawn_install_helper(InstallHelperRequest {
             process_id: std::process::id(),
             app_id: &self.app_id,
             current_app: &self.current_app,
@@ -893,7 +971,7 @@ fn download_and_stage(
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
 ) -> Result<StagedUpdate, UpdateError> {
     let staging_root = create_staging_root(config, &release)?;
-    let archive_path = staging_root.join("update.app.zip");
+    let archive_path = staging_root.join(artifact_archive_file_name(&release.artifact.kind)?);
     let extract_path = staging_root.join("extracted");
     fs::create_dir_all(&extract_path)?;
 
@@ -930,7 +1008,7 @@ fn download_and_stage(
         }
 
         send_event(sender, UpdateEvent::Verifying)?;
-        if release.artifact.kind != "macos_app_zip" {
+        if !supported_artifact_kind(&release.artifact.kind) {
             return Err(UpdateError::UnsupportedArtifactKind(
                 release.artifact.kind.clone(),
             ));
@@ -946,15 +1024,48 @@ fn download_and_stage(
 
         cancellation.ensure_active()?;
         send_event(sender, UpdateEvent::Staging)?;
-        macos::extract_app_archive(&archive_path, &extract_path)?;
-        let staged_app = macos::find_app_bundle(&extract_path)?;
-        macos::verify_code_signature(&staged_app, config.expected_team_id())?;
-        let current_app = config
-            .app_bundle_path
-            .clone()
-            .map(Ok)
-            .unwrap_or_else(macos::current_app_bundle)?;
-        let sidecar_path = config.sidecar_path()?;
+        let (staged_app, current_app, sidecar_path) = match release.artifact.kind.as_str() {
+            "macos_app_zip" => {
+                macos::extract_app_archive(&archive_path, &extract_path)?;
+                let staged_app = macos::find_app_bundle(&extract_path)?;
+                macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+                let current_app = config
+                    .app_bundle_path
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(macos::current_app_bundle)?;
+                let sidecar_path = config.sidecar_path()?;
+                (staged_app, current_app, sidecar_path)
+            }
+            "windows_update_zip" | "windows_zip" => {
+                let main_exe = crate::windows::current_main_exe_name()?;
+                let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
+                crate::windows::extract_windows_update_zip(
+                    &archive_path,
+                    &extract_path,
+                    &main_exe,
+                    &updater_exe,
+                )?;
+                crate::windows::verify_staged_update_signatures(
+                    &extract_path,
+                    &main_exe,
+                    &updater_exe,
+                    config.windows_signature(),
+                )?;
+                let current_app = config
+                    .app_bundle_path
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(crate::windows::current_install_dir)?;
+                let sidecar_path = extract_path.join(updater_exe);
+                (extract_path.clone(), current_app, sidecar_path)
+            }
+            _ => {
+                return Err(UpdateError::UnsupportedArtifactKind(
+                    release.artifact.kind.clone(),
+                ));
+            }
+        };
 
         Ok(StagedUpdate {
             release,
@@ -984,6 +1095,50 @@ fn send_event(sender: &Sender<UpdateEvent>, event: UpdateEvent) -> Result<(), Up
     sender
         .send_blocking(event)
         .map_err(|_| UpdateError::EventReceiverClosed)
+}
+
+fn supported_artifact_kind(kind: &str) -> bool {
+    matches!(kind, "macos_app_zip" | "windows_update_zip" | "windows_zip")
+}
+
+fn artifact_archive_file_name(kind: &str) -> Result<&'static str, UpdateError> {
+    match kind {
+        "macos_app_zip" => Ok("update.app.zip"),
+        "windows_update_zip" | "windows_zip" => Ok("update.windows.zip"),
+        other => Err(UpdateError::UnsupportedArtifactKind(other.to_owned())),
+    }
+}
+
+fn default_sidecar_path() -> Result<PathBuf, UpdateError> {
+    if cfg!(target_os = "windows") {
+        return crate::windows::default_sidecar_path();
+    }
+    macos::default_sidecar_path()
+}
+
+fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<(), UpdateError> {
+    if cfg!(target_os = "windows") {
+        return crate::windows::spawn_install_helper(crate::windows::InstallHelperRequest {
+            process_id: request.process_id,
+            app_id: request.app_id,
+            current_app: request.current_app,
+            staged_app: request.staged_app,
+            staging_root: request.staging_root,
+            sidecar_path: request.sidecar_path,
+            health_timeout: request.health_timeout,
+            pending_records: request.pending_records,
+        });
+    }
+    macos::spawn_install_helper(macos::InstallHelperRequest {
+        process_id: request.process_id,
+        app_id: request.app_id,
+        current_app: request.current_app,
+        staged_app: request.staged_app,
+        staging_root: request.staging_root,
+        sidecar_path: request.sidecar_path,
+        health_timeout: request.health_timeout,
+        pending_records: request.pending_records,
+    })
 }
 
 fn create_staging_root(
@@ -1120,7 +1275,7 @@ fn restore_pending_inner(
     {
         return Err(UpdateError::PendingMetadataMismatch);
     }
-    if release.artifact.kind != "macos_app_zip" {
+    if !supported_artifact_kind(&release.artifact.kind) {
         return Err(UpdateError::UnsupportedArtifactKind(
             release.artifact.kind.clone(),
         ));
@@ -1133,13 +1288,6 @@ fn restore_pending_inner(
     let staged_app = resolve_cached_path(cache_dir, &record.staged_app)?;
     ensure_path_within(&archive_path, &staging_root)?;
     ensure_path_within(&staged_app, &staging_root)?;
-    if staged_app
-        .extension()
-        .is_none_or(|extension| extension != "app")
-    {
-        return Err(UpdateError::InvalidPendingPath);
-    }
-
     let archive_size = fs::metadata(&archive_path)?.len();
     if archive_size != release.artifact.size {
         return Err(UpdateError::SizeMismatch {
@@ -1155,17 +1303,58 @@ fn restore_pending_inner(
         });
     }
 
-    let discovered_app = macos::find_app_bundle(&staging_root.join("extracted"))?;
-    if fs::canonicalize(discovered_app)? != fs::canonicalize(&staged_app)? {
-        return Err(UpdateError::InvalidPendingPath);
-    }
-    macos::verify_code_signature(&staged_app, config.expected_team_id())?;
-    let current_app = config
-        .app_bundle_path
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(macos::current_app_bundle)?;
-    let sidecar_path = config.sidecar_path()?;
+    let (current_app, sidecar_path) = match release.artifact.kind.as_str() {
+        "macos_app_zip" => {
+            if staged_app
+                .extension()
+                .is_none_or(|extension| extension != "app")
+            {
+                return Err(UpdateError::InvalidPendingPath);
+            }
+            let discovered_app = macos::find_app_bundle(&staging_root.join("extracted"))?;
+            if fs::canonicalize(discovered_app)? != fs::canonicalize(&staged_app)? {
+                return Err(UpdateError::InvalidPendingPath);
+            }
+            macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+            let current_app = config
+                .app_bundle_path
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(macos::current_app_bundle)?;
+            let sidecar_path = config.sidecar_path()?;
+            (current_app, sidecar_path)
+        }
+        "windows_update_zip" | "windows_zip" => {
+            if !staged_app.is_dir() {
+                return Err(UpdateError::InvalidPendingPath);
+            }
+            let main_exe = crate::windows::current_main_exe_name()?;
+            let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
+            for required in [&main_exe, &updater_exe, "nexora-updater.json"] {
+                if !staged_app.join(required).is_file() {
+                    return Err(UpdateError::InvalidPendingPath);
+                }
+            }
+            crate::windows::verify_staged_update_signatures(
+                &staged_app,
+                &main_exe,
+                &updater_exe,
+                config.windows_signature(),
+            )?;
+            let current_app = config
+                .app_bundle_path
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(crate::windows::current_install_dir)?;
+            let sidecar_path = staged_app.join(updater_exe);
+            (current_app, sidecar_path)
+        }
+        _ => {
+            return Err(UpdateError::UnsupportedArtifactKind(
+                release.artifact.kind.clone(),
+            ));
+        }
+    };
 
     Ok(StagedUpdate {
         release: release.with_verified_manifest(record.manifest),
@@ -1317,6 +1506,25 @@ fn sha256_file(path: &Path) -> Result<String, UpdateError> {
         hasher.update(&buffer[..read]);
     }
     Ok(format_digest(&hasher.finalize()))
+}
+
+fn normalize_windows_thumbprint(value: &str) -> Result<String, UpdateError> {
+    let normalized = value
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if normalized.len() == 40
+        && normalized
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        Ok(normalized)
+    } else {
+        Err(UpdateError::InvalidBundleConfig(
+            "expected_windows_signer_thumbprint 必须是 SHA-1 证书指纹".to_owned(),
+        ))
+    }
 }
 
 fn valid_app_id(value: &str) -> bool {
@@ -1496,6 +1704,12 @@ pub enum UpdateError {
     /// 当前平台尚未实现原位安装。
     #[error("当前平台暂不支持自动安装更新")]
     UnsupportedPlatform,
+    /// Windows update ZIP 格式、路径或必需文件不合法。
+    #[error("Windows update ZIP 无效: {0}")]
+    InvalidWindowsZipArchive(
+        /// 面向用户和日志的稳定诊断信息。
+        String,
+    ),
     /// HTTP 请求或响应读取失败。
     #[error("更新网络请求失败: {0}")]
     Http(
@@ -1530,6 +1744,12 @@ pub enum UpdateError {
     #[error("更新包类型 `{0}` 暂不支持")]
     UnsupportedArtifactKind(
         /// 清单中的 artifact kind。
+        String,
+    ),
+    /// Windows ZIP 条目路径存在越界或 NTFS 特殊语义风险。
+    #[error("Windows 更新包条目路径不安全: {0}")]
+    InvalidWindowsZipEntry(
+        /// ZIP 中声明的原始条目路径。
         String,
     ),
     /// macOS 系统命令执行失败。

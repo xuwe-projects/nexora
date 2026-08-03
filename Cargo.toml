@@ -20,26 +20,26 @@ members = [
 ]
 
 [workspace.package]
-version = "0.21.0"
+version = "0.23.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xuwe-projects/nexora"
 homepage = "https://github.com/xuwe-projects/nexora"
 
 [workspace.dependencies]
-account = { version = "0.21.0", path = "modules/account", default-features = false }
+account = { version = "0.23.0", path = "modules/account", default-features = false }
 actions = { path = "crates/actions" }
 api = { path = "crates/api" }
 changelog = { path = "crates/changelog" }
-configuration = { version = "0.21.0", path = "crates/configuration" }
-contracts = { version = "0.21.0", path = "crates/contracts" }
-desktop = { version = "0.21.0", path = "crates/desktop" }
+configuration = { version = "0.23.0", path = "crates/configuration" }
+contracts = { version = "0.23.0", path = "crates/contracts" }
+desktop = { version = "0.23.0", path = "crates/desktop" }
 kernel = { path = "crates/kernel" }
 logging = { path = "crates/logging" }
-macros = { package = "nexora-macros", version = "0.21.0", path = "crates/macros" }
-migrate = { version = "0.21.0", path = "crates/migrate", default-features = false }
-nexora = { version = "0.21.0", path = "crates/nexora" }
-oidc = { version = "0.21.0", path = "crates/oidc" }
+macros = { package = "nexora-macros", version = "0.23.0", path = "crates/macros" }
+migrate = { version = "0.23.0", path = "crates/migrate", default-features = false }
+nexora = { version = "0.23.0", path = "crates/nexora" }
+oidc = { version = "0.23.0", path = "crates/oidc" }
 theme = { path = "crates/theme" }
 ui = { path = "crates/ui" }
 updater = { path = "crates/updater" }
@@ -71,6 +71,7 @@ url = { version = "2", default-features = false, features = ["serde", "std"] }
 uuid = { version = "1.23.5", default-features = false, features = ["serde", "v7"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 # 服务端异步、HTTP 与 PostgreSQL
 async-trait = { version = "0.1.89", default-features = false }
@@ -118,6 +119,7 @@ gpui-component = { version = "0.5.2", git = "https://github.com/longbridge/gpui-
 gpui-component-assets = { version = "0.5.1", git = "https://github.com/longbridge/gpui-component", rev = "031555662e99a1b5a549990b47f246d475b8288a" }
 raw-window-handle = { version = "0.6", default-features = false }
 windows = { version = "0.61.3", default-features = false }
+windows-sys = { version = "0.61.2", default-features = false }
 
 [replace]
 # gpui-component 0315556 仍以未固定的 Zed git source 声明依赖。根工作区将其

@@ -4,7 +4,7 @@ use std::{env, ffi::OsString, fs, path::PathBuf, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
-use crate::{UpdateError, macos};
+use crate::{UpdateError, macos, windows};
 
 /// 如果当前进程由 `--nexora-updater-sidecar apply` 启动，则执行 sidecar 安装流程。
 ///
@@ -29,14 +29,7 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
     }
 
     let command = SidecarApplyCommand::parse(&args[position + 2..])?;
-    let result = macos::apply_staged_update(
-        command.parent_pid,
-        &command.current_app,
-        &command.staged_app,
-        &command.staging_root,
-        &command.health_session,
-        Duration::from_secs(command.health_timeout_seconds),
-    );
+    let result = apply_staged_update(&command);
     finalize_pending_record(&command, result.is_ok());
     result?;
     Ok(true)
@@ -50,6 +43,27 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
 /// # Errors
 ///
 /// 当健康确认文件路径不可写，或会话标识格式无效时返回错误。
+fn apply_staged_update(command: &SidecarApplyCommand) -> Result<(), UpdateError> {
+    if cfg!(target_os = "windows") {
+        return windows::apply_staged_update(
+            command.parent_pid,
+            &command.current_app,
+            &command.staged_app,
+            &command.staging_root,
+            &command.health_session,
+            Duration::from_secs(command.health_timeout_seconds),
+        );
+    }
+    macos::apply_staged_update(
+        command.parent_pid,
+        &command.current_app,
+        &command.staged_app,
+        &command.staging_root,
+        &command.health_session,
+        Duration::from_secs(command.health_timeout_seconds),
+    )
+}
+
 pub fn report_health_from_env_args() -> Result<bool, UpdateError> {
     let args = env::args_os().collect::<Vec<_>>();
     let Some(session) = value_after(&args, "--nexora-updater-health-session") else {

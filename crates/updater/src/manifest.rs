@@ -108,7 +108,7 @@ pub struct UpdateArtifact {
     pub sha256: String,
     /// 服务端已知的负载字节数，用于进度展示和下载后校验。
     pub size: u64,
-    /// 负载格式，例如 `macos_app_zip`、`windows_zip`、`linux_appimage` 或 `portable_tar_zst`。
+    /// 负载格式，例如 `macos_app_zip`、`windows_update_zip`、`linux_appimage` 或 `portable_tar_zst`。
     pub kind: String,
 }
 

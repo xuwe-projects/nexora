@@ -182,6 +182,26 @@ struct MacOsConfig {
 #[serde(deny_unknown_fields)]
 struct WindowsConfig {
     icon: String,
+    #[serde(default)]
+    installer: WindowsInstaller,
+    #[serde(default)]
+    install_scope: WindowsInstallScope,
+    #[serde(default)]
+    publisher: Option<String>,
+    #[serde(default)]
+    signing: WindowsSigningMode,
+    #[serde(default)]
+    signing_thumbprint: Option<String>,
+    #[serde(default)]
+    timestamp_url: Option<String>,
+    #[serde(default)]
+    expected_publisher: Option<String>,
+    #[serde(default)]
+    desktop_shortcut_default: bool,
+    #[serde(default = "default_launch_after_install")]
+    launch_after_install_default: bool,
+    #[serde(default)]
+    minimum_windows_build: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +216,35 @@ enum SigningMode {
     DeveloperId,
     AdHoc,
     None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum WindowsInstaller {
+    #[default]
+    Nsis,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum WindowsInstallScope {
+    #[default]
+    User,
+    Machine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum WindowsSigningMode {
+    #[default]
+    None,
+    Authenticode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildTargetPlatform {
+    MacOs,
+    Windows,
 }
 
 #[derive(Debug)]
@@ -222,18 +271,35 @@ struct BuildPlan {
     display_name: String,
     release: ValidatedRelease,
     target: String,
+    platform: BuildTargetPlatform,
     signing: SigningMode,
     notarize: bool,
     expected_team_id: Option<String>,
     allow_insecure_http: bool,
     updater: Option<UpdaterConfigFile>,
     macos_icon: PathBuf,
+    windows_icon: PathBuf,
+    windows: Option<WindowsBuildOptions>,
     app_path: PathBuf,
     app_zip_path: PathBuf,
     dmg_path: PathBuf,
+    setup_path: PathBuf,
     artifact_path: PathBuf,
     notes_source: PathBuf,
     notes_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct WindowsBuildOptions {
+    install_scope: WindowsInstallScope,
+    publisher: String,
+    signing: WindowsSigningMode,
+    signing_thumbprint: Option<String>,
+    timestamp_url: Option<String>,
+    expected_publisher: Option<String>,
+    desktop_shortcut_default: bool,
+    launch_after_install_default: bool,
+    minimum_windows_build: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,6 +314,8 @@ struct BundledUpdaterConfig {
     allow_insecure_http: bool,
     health_timeout: String,
     expected_team_id: Option<String>,
+    expected_windows_signer_thumbprint: Option<String>,
+    expected_windows_publisher: Option<String>,
     check_on_launch: bool,
 }
 
@@ -256,6 +324,7 @@ struct BrandAssets {
     application_logo: PathBuf,
     icon_source: PathBuf,
     macos_icon: PathBuf,
+    windows_icon: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -284,6 +353,9 @@ struct ArtifactEntry {
 enum ArtifactKind {
     MacosAppZip,
     MacosDmg,
+    WindowsSetupExe,
+    #[serde(rename = "windows_update_zip")]
+    WindowsZip,
 }
 
 #[derive(Debug, Clone)]
@@ -401,10 +473,10 @@ struct TrustedKey {
 
 /// 执行零参数配置驱动的桌面构建。
 pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
-    ensure_macos()?;
+    ensure_supported_build_host()?;
     let project = ProjectDocument::discover()?;
     let app_key = project.select_one(config.app.as_deref(), terminal_is_interactive())?;
-    let plans = project.build_plans(&app_key)?;
+    let plans = project.build_plans(&app_key, false)?;
     if plans.is_empty() {
         return Err(CliError::new(format!(
             "当前宿主不能构建 app `{app_key}` 的任何 required target"
@@ -559,7 +631,7 @@ impl ProjectDocument {
             }
             let mut seen = BTreeSet::new();
             for target in &app.targets.required {
-                validate_macos_target(target)?;
+                validate_required_target(target)?;
                 if !seen.insert(target) {
                     return Err(CliError::new(format!(
                         "app `{app_key}` 重复声明 required target `{target}`"
@@ -675,10 +747,16 @@ impl ProjectDocument {
                 &app.platforms.macos.icon,
                 "macOS ICNS",
             )?,
+            windows_icon: resolve_workspace_file(
+                &self.root,
+                &app.platforms.windows.icon,
+                "Windows ICO",
+            )?,
         };
         validate_png(&assets.application_logo, None, "应用内 Logo")?;
         validate_png(&assets.icon_source, None, "图标源文件")?;
         validate_icns(&assets.macos_icon)?;
+        validate_ico(&assets.windows_icon)?;
         Ok(assets)
     }
 
@@ -746,7 +824,7 @@ impl ProjectDocument {
         Ok(vec![entries[index].0.clone()])
     }
 
-    fn build_plans(&self, app_key: &str) -> CliResult<Vec<BuildPlan>> {
+    fn build_plans(&self, app_key: &str, include_all_targets: bool) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
         let release = self.validated_release(app_key, app)?;
         let brand_assets = self.brand_assets(app_key, app)?;
@@ -754,9 +832,10 @@ impl ProjectDocument {
         app.targets
             .required
             .iter()
-            .filter(|target| host_can_build(target))
+            .filter(|target| include_all_targets || host_can_build(target))
             .map(|target| {
                 let arch = target_arch_alias(target)?;
+                let platform = target_platform(target)?;
                 let release_dir = self
                     .root
                     .join(DIST_DIRECTORY)
@@ -782,20 +861,38 @@ impl ProjectDocument {
                     display_name: app.display_name.clone(),
                     release: release.clone(),
                     target: target.clone(),
+                    platform,
                     signing: app.platforms.macos.signing,
                     notarize: app.platforms.macos.notarize,
                     expected_team_id: app.platforms.macos.expected_team_id.clone(),
                     allow_insecure_http: publish_target.allow_insecure_http,
                     updater: app.updater.enabled.then(|| app.updater.clone()),
                     macos_icon: brand_assets.macos_icon.clone(),
-                    app_path: self
-                        .root
-                        .join("target")
-                        .join(target)
-                        .join("release/bundle/osx")
-                        .join(format!("{}.app", app.package)),
-                    app_zip_path: release_dir.join(format!("{technical_stem}.app.zip")),
+                    windows_icon: brand_assets.windows_icon.clone(),
+                    windows: (platform == BuildTargetPlatform::Windows)
+                        .then(|| windows_build_options(&app.platforms.windows))
+                        .transpose()?,
+                    app_path: match platform {
+                        BuildTargetPlatform::MacOs => self
+                            .root
+                            .join("target")
+                            .join(target)
+                            .join("release/bundle/osx")
+                            .join(format!("{}.app", app.package)),
+                        BuildTargetPlatform::Windows => {
+                            windows_binary_path(&self.root, target, &app.package)
+                        }
+                    },
+                    app_zip_path: match platform {
+                        BuildTargetPlatform::MacOs => {
+                            release_dir.join(format!("{technical_stem}.app.zip"))
+                        }
+                        BuildTargetPlatform::Windows => {
+                            release_dir.join(format!("{technical_stem}.windows.zip"))
+                        }
+                    },
                     dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
+                    setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
                     artifact_path: release_dir.join("artifact.json"),
                     notes_source: self
                         .root
@@ -866,7 +963,12 @@ impl ProjectDocument {
                 release.version.to_string().as_str(),
                 release.build_number.to_string().as_str(),
             ]);
-            for kind in [ArtifactKind::MacosAppZip, ArtifactKind::MacosDmg] {
+            for kind in [
+                ArtifactKind::MacosAppZip,
+                ArtifactKind::MacosDmg,
+                ArtifactKind::WindowsSetupExe,
+                ArtifactKind::WindowsZip,
+            ] {
                 for artifact in local_artifacts.iter().filter(|item| item.kind == kind) {
                     let key = object_key([
                         release_prefix.as_str(),
@@ -881,13 +983,13 @@ impl ProjectDocument {
                         cache_control: IMMUTABLE_CACHE,
                         immutable: true,
                     });
-                    if kind == ArtifactKind::MacosAppZip {
+                    if let Some(manifest_kind) = updater_manifest_artifact_kind(kind) {
                         manifest_artifacts.push(ManifestArtifact {
                             target: artifact.target.clone(),
                             url: url.clone(),
                             sha256: artifact.sha256.clone(),
                             size: artifact.size,
-                            kind: "macos_app_zip".to_owned(),
+                            kind: manifest_kind.to_owned(),
                         });
                         verify_urls.push(Verification {
                             url,
@@ -1067,6 +1169,13 @@ fn finalize_publish_plan(
 }
 
 fn execute_build(plan: &BuildPlan) -> CliResult<()> {
+    match plan.platform {
+        BuildTargetPlatform::MacOs => execute_macos_build(plan),
+        BuildTargetPlatform::Windows => execute_windows_build(plan),
+    }
+}
+
+fn execute_macos_build(plan: &BuildPlan) -> CliResult<()> {
     println!("构建：{}（{}）", plan.display_name, plan.app_key);
     println!(
         "版本：{} / build {} / {}",
@@ -1099,6 +1208,40 @@ fn execute_build(plan: &BuildPlan) -> CliResult<()> {
     println!("APP: {}", plan.app_path.display());
     println!("APP ZIP: {}", plan.app_zip_path.display());
     println!("DMG: {}", plan.dmg_path.display());
+    println!("ARTIFACT: {}", plan.artifact_path.display());
+    Ok(())
+}
+
+fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
+    println!("build: {} ({})", plan.display_name, plan.app_key);
+    ensure_windows_build_dependencies(plan)?;
+    let resource = compile_windows_icon_resource(plan)?;
+    build_windows_binary(plan, &plan.package, &resource)?;
+    let updater_path = if plan.updater.is_some() {
+        let sidecar = format!("{}-updater", plan.package);
+        build_windows_binary(plan, &sidecar, &resource)?;
+        Some(windows_binary_path(
+            &plan.project_root,
+            &plan.target,
+            &sidecar,
+        ))
+    } else {
+        None
+    };
+    sign_windows_file(plan, &plan.app_path)?;
+    if let Some(path) = updater_path.as_ref() {
+        sign_windows_file(plan, path)?;
+    }
+    let staging = stage_windows_update_payload(plan, updater_path.as_deref())?;
+    create_windows_update_zip(plan, &staging)?;
+    let script = write_windows_nsis_script(plan, &staging)?;
+    build_windows_setup(plan, &script)?;
+    sign_windows_file(plan, &plan.setup_path)?;
+    copy_release_notes(plan)?;
+    write_artifact_manifest(plan)?;
+    println!("EXE: {}", plan.app_path.display());
+    println!("WINDOWS ZIP: {}", plan.app_zip_path.display());
+    println!("SETUP: {}", plan.setup_path.display());
     println!("ARTIFACT: {}", plan.artifact_path.display());
     Ok(())
 }
@@ -1221,6 +1364,19 @@ pub fn write_bundle_info(
             info_plist.display()
         )));
     }
+    if !command_exists("plutil") {
+        let build_number = build_number.to_string();
+        return write_plist_strings(
+            &info_plist,
+            &[
+                ("CFBundleIdentifier", app_id),
+                ("CFBundleDisplayName", display_name),
+                ("CFBundleName", display_name),
+                ("CFBundleShortVersionString", version),
+                ("CFBundleVersion", &build_number),
+            ],
+        );
+    }
     for (key, value) in [
         ("CFBundleIdentifier", app_id.to_owned()),
         ("CFBundleDisplayName", display_name.to_owned()),
@@ -1239,14 +1395,19 @@ pub fn write_bundle_info(
 }
 
 fn write_bundle_updater_config(plan: &BuildPlan) -> CliResult<()> {
+    let resources = plan.app_path.join("Contents/Resources");
+    fs::create_dir_all(&resources)
+        .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", resources.display())))?;
+    write_updater_config_to_path(plan, &resources.join("nexora-updater.json"))
+}
+
+fn bundled_updater_config(plan: &BuildPlan) -> CliResult<BundledUpdaterConfig> {
     let updater = plan
         .updater
         .as_ref()
         .ok_or_else(|| CliError::new("当前构建计划未启用 updater"))?;
-    let resources = plan.app_path.join("Contents/Resources");
-    fs::create_dir_all(&resources)
-        .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", resources.display())))?;
-    let config = BundledUpdaterConfig {
+    let windows = plan.windows.as_ref();
+    Ok(BundledUpdaterConfig {
         schema_version: 1,
         app_id: plan.updater_app_id.clone(),
         channel: plan.release.channel.clone(),
@@ -1257,12 +1418,475 @@ fn write_bundle_updater_config(plan: &BuildPlan) -> CliResult<()> {
         allow_insecure_http: plan.allow_insecure_http,
         health_timeout: updater.health_timeout.clone(),
         expected_team_id: plan.expected_team_id.clone(),
+        expected_windows_signer_thumbprint: windows
+            .and_then(|options| options.signing_thumbprint.clone())
+            .or_else(|| {
+                windows
+                    .filter(|options| options.signing == WindowsSigningMode::Authenticode)
+                    .and_then(|_| {
+                        env::var("WINDOWS_SIGN_CERTIFICATE_SHA1")
+                            .ok()
+                            .filter(|value| !value.trim().is_empty())
+                    })
+            }),
+        expected_windows_publisher: windows.and_then(|options| {
+            options
+                .expected_publisher
+                .clone()
+                .or_else(|| Some(options.publisher.clone()))
+        }),
         check_on_launch: updater.check_on_launch,
-    };
+    })
+}
+
+fn write_updater_config_to_path(plan: &BuildPlan, path: &Path) -> CliResult<()> {
+    let config = bundled_updater_config(plan)?;
     let contents = serde_json::to_vec_pretty(&config)
         .map_err(|error| CliError::new(format!("无法生成 updater bundle 配置: {error}")))?;
-    fs::write(resources.join("nexora-updater.json"), contents)
+    fs::write(path, contents)
         .map_err(|error| CliError::new(format!("无法写入 updater bundle 配置: {error}")))
+}
+
+fn ensure_windows_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
+    if env::consts::OS != "windows" {
+        return Err(CliError::new("当前宿主不能构建 Windows required targets"));
+    }
+    require_command("cargo")?;
+    require_command("rustup")?;
+    run_status(
+        "rustup target add",
+        Command::new("rustup")
+            .current_dir(&plan.project_root)
+            .args(["target", "add", &plan.target]),
+    )?;
+    require_command("rc")?;
+    let _ = makensis_command()?;
+    if plan
+        .windows
+        .as_ref()
+        .is_some_and(|options| options.signing == WindowsSigningMode::Authenticode)
+    {
+        require_command("signtool")?;
+    }
+    Ok(())
+}
+
+fn windows_work_dir(plan: &BuildPlan) -> PathBuf {
+    plan.project_root
+        .join(".runtime")
+        .join("windows-build")
+        .join(&plan.app_key)
+        .join(&plan.target)
+}
+
+fn compile_windows_icon_resource(plan: &BuildPlan) -> CliResult<PathBuf> {
+    validate_ico(&plan.windows_icon)?;
+    let work_dir = windows_work_dir(plan);
+    fs::create_dir_all(&work_dir)
+        .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", work_dir.display())))?;
+    let rc_path = work_dir.join("nexora-icon.rc");
+    let res_path = work_dir.join("nexora-icon.res");
+    let contents = format!(
+        "1 ICON \"{}\"\r\n",
+        escape_rc_string(&plan.windows_icon.to_string_lossy())
+    );
+    fs::write(&rc_path, contents).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 Windows resource `{}`: {error}",
+            rc_path.display()
+        ))
+    })?;
+    run_status(
+        "rc Windows resources",
+        Command::new("rc")
+            .arg("/nologo")
+            .arg(format!("/fo{}", res_path.display()))
+            .arg(&rc_path),
+    )?;
+    Ok(res_path)
+}
+
+fn build_windows_binary(plan: &BuildPlan, binary: &str, resource: &Path) -> CliResult<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&plan.project_root)
+        .args(["build", "--release", "--package", &plan.package])
+        .args(["--bin", binary, "--target", &plan.target])
+        .env("RUSTFLAGS", windows_resource_rustflags(resource));
+    run_status("cargo build Windows binary", &mut command)
+}
+
+fn windows_resource_rustflags(resource: &Path) -> String {
+    let value = format!("-C link-arg={}", resource.display());
+    match env::var("RUSTFLAGS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(existing) => format!("{existing} {value}"),
+        None => value,
+    }
+}
+
+fn sign_windows_file(plan: &BuildPlan, path: &Path) -> CliResult<()> {
+    let options = windows_options(plan)?;
+    if options.signing != WindowsSigningMode::Authenticode {
+        return Ok(());
+    }
+    let thumbprint = resolve_windows_signing_thumbprint(options)?;
+    let timestamp_url = options
+        .timestamp_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| CliError::new("Windows Authenticode 签名需要 timestamp_url"))?;
+    run_status(
+        "signtool sign",
+        Command::new("signtool")
+            .args(["sign", "/fd", "SHA256", "/s", "My", "/sha1"])
+            .arg(&thumbprint)
+            .args(["/tr", timestamp_url, "/td", "SHA256"])
+            .arg(path),
+    )?;
+    run_status(
+        "signtool verify",
+        Command::new("signtool").args(["verify", "/pa"]).arg(path),
+    )
+}
+
+fn resolve_windows_signing_thumbprint(options: &WindowsBuildOptions) -> CliResult<String> {
+    options
+        .signing_thumbprint
+        .clone()
+        .or_else(|| {
+            env::var("WINDOWS_SIGN_CERTIFICATE_SHA1")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            CliError::new(
+                "Windows Authenticode 签名需要 platforms.windows.signing_thumbprint 或 WINDOWS_SIGN_CERTIFICATE_SHA1",
+            )
+        })
+}
+
+fn stage_windows_update_payload(
+    plan: &BuildPlan,
+    updater_path: Option<&Path>,
+) -> CliResult<PathBuf> {
+    let staging = windows_work_dir(plan).join("payload");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|error| {
+            CliError::new(format!(
+                "无法清理 Windows payload staging `{}`: {error}",
+                staging.display()
+            ))
+        })?;
+    }
+    fs::create_dir_all(&staging).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 Windows payload staging `{}`: {error}",
+            staging.display()
+        ))
+    })?;
+    fs::copy(
+        &plan.app_path,
+        staging.join(safe_file_name(&plan.app_path)?),
+    )
+    .map_err(|error| {
+        CliError::new(format!(
+            "无法复制 Windows 主程序 `{}`: {error}",
+            plan.app_path.display()
+        ))
+    })?;
+    if let Some(updater_path) = updater_path {
+        fs::copy(updater_path, staging.join(safe_file_name(updater_path)?)).map_err(|error| {
+            CliError::new(format!(
+                "无法复制 Windows updater `{}`: {error}",
+                updater_path.display()
+            ))
+        })?;
+        write_updater_config_to_path(plan, &staging.join("nexora-updater.json"))?;
+    }
+    Ok(staging)
+}
+
+fn create_windows_update_zip(plan: &BuildPlan, staging: &Path) -> CliResult<()> {
+    create_parent(&plan.app_zip_path)?;
+    remove_existing_file(&plan.app_zip_path)?;
+    let script_path = windows_work_dir(plan).join("create-update-zip.ps1");
+    let script = r#"
+param(
+  [Parameter(Mandatory=$true)][string]$source,
+  [Parameter(Mandatory=$true)][string]$destination
+)
+$items = Get-ChildItem -LiteralPath $source -Force
+Compress-Archive -LiteralPath $items.FullName -DestinationPath $destination -Force
+"#;
+    fs::write(&script_path, script).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 Windows ZIP 脚本 `{}`: {error}",
+            script_path.display()
+        ))
+    })?;
+    run_status(
+        "Compress-Archive Windows update ZIP",
+        Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script_path)
+            .arg(staging)
+            .arg(&plan.app_zip_path),
+    )
+}
+
+struct WindowsInstallerSources {
+    nsis_script: String,
+    updater_config: Option<BundledUpdaterConfig>,
+    file_version: String,
+}
+
+fn write_windows_nsis_script(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
+    let sources = windows_installer_sources(plan, staging)?;
+    let script_path = windows_work_dir(plan).join("setup.nsi");
+    let mut contents = vec![0xEF, 0xBB, 0xBF];
+    contents.extend_from_slice(sources.nsis_script.as_bytes());
+    fs::write(&script_path, contents).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 NSIS 脚本 `{}`: {error}",
+            script_path.display()
+        ))
+    })?;
+    Ok(script_path)
+}
+
+fn build_windows_setup(plan: &BuildPlan, script: &Path) -> CliResult<()> {
+    create_parent(&plan.setup_path)?;
+    remove_existing_file(&plan.setup_path)?;
+    let makensis = makensis_command()?;
+    run_status(
+        "makensis Windows Setup.exe",
+        Command::new(makensis).arg("/V2").arg(script),
+    )
+}
+
+fn windows_installer_sources(
+    plan: &BuildPlan,
+    staging: &Path,
+) -> CliResult<WindowsInstallerSources> {
+    let options = windows_options(plan)?;
+    let install_dir = match options.install_scope {
+        WindowsInstallScope::User => format!("$LOCALAPPDATA\\Programs\\{}", plan.app_id),
+        WindowsInstallScope::Machine => format!("$PROGRAMFILES64\\{}", plan.app_id),
+    };
+    let request_level = match options.install_scope {
+        WindowsInstallScope::User => "user",
+        WindowsInstallScope::Machine => "admin",
+    };
+    let default_desktop_shortcut = if options.desktop_shortcut_default {
+        "1"
+    } else {
+        "0"
+    };
+    let default_launch = if options.launch_after_install_default {
+        "1"
+    } else {
+        "0"
+    };
+    let file_version = windows_file_version(&plan.release.version, plan.release.build_number)?;
+    let source = nsis_path(staging);
+    let out_file = nsis_path(&plan.setup_path);
+    let display_name = nsis_string(&plan.display_name);
+    let publisher = nsis_string(&options.publisher);
+    let app_id = nsis_string(&plan.app_id);
+    let package = nsis_string(&plan.package);
+    let main_exe = nsis_string(&safe_file_name(&plan.app_path)?);
+    let minimum_build = options.minimum_windows_build;
+    let script = format!(
+        r#"!include "MUI2.nsh"
+!include "LogicLib.nsh"
+
+Unicode true
+Name "{display_name}"
+OutFile "{out_file}"
+InstallDir "{install_dir}"
+RequestExecutionLevel {request_level}
+SetCompressor /SOLID lzma
+SetCompressorDictSize 32
+
+VIProductVersion "{file_version}"
+VIAddVersionKey /LANG=1033 "ProductName" "{display_name}"
+VIAddVersionKey /LANG=1033 "CompanyName" "{publisher}"
+VIAddVersionKey /LANG=1033 "FileDescription" "{display_name} Setup"
+VIAddVersionKey /LANG=1033 "FileVersion" "{file_version}"
+
+Var CreateDesktopShortcut
+Var LaunchAfterInstall
+
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "SimpChinese"
+
+Function .onInit
+  StrCpy $CreateDesktopShortcut {default_desktop_shortcut}
+  StrCpy $LaunchAfterInstall {default_launch}
+  ReadRegDWORD $1 SHCTX "Software\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
+  ${{If}} $1 < {minimum_build}
+    MessageBox MB_ICONSTOP "{display_name} 需要 Windows build {minimum_build} 或更高版本。"
+    Abort
+  ${{EndIf}}
+  ReadRegDWORD $1 SHCTX "Software\{app_id}" "BuildNumber"
+  ${{If}} $1 > {build_number}
+    MessageBox MB_ICONSTOP "已安装更新版本，Setup 不会执行降级安装。"
+    Abort
+  ${{EndIf}}
+FunctionEnd
+
+Section "Install"
+  SetShellVarContext current
+  SetOutPath "$INSTDIR"
+  File /r "{source}\*.*"
+  WriteRegStr SHCTX "Software\{app_id}" "InstallDir" "$INSTDIR"
+  WriteRegStr SHCTX "Software\{app_id}" "DisplayName" "{display_name}"
+  WriteRegDWORD SHCTX "Software\{app_id}" "BuildNumber" {build_number}
+  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "DisplayName" "{display_name}"
+  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "Publisher" "{publisher}"
+  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "DisplayVersion" "{version}"
+  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "InstallLocation" "$INSTDIR"
+  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "UninstallString" "$INSTDIR\Uninstall.exe"
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\{display_name}"
+  CreateShortcut "$SMPROGRAMS\{display_name}\{display_name}.lnk" "$INSTDIR\{main_exe}"
+  ${{If}} $CreateDesktopShortcut == 1
+    CreateShortcut "$DESKTOP\{display_name}.lnk" "$INSTDIR\{main_exe}"
+  ${{EndIf}}
+  ${{If}} $LaunchAfterInstall == 1
+    ExecShell "" "$INSTDIR\{main_exe}"
+  ${{EndIf}}
+SectionEnd
+
+Section "Uninstall"
+  Delete "$INSTDIR\{main_exe}"
+  Delete "$INSTDIR\{package}-updater.exe"
+  Delete "$INSTDIR\nexora-updater.json"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir /r "$SMPROGRAMS\{display_name}"
+  Delete "$DESKTOP\{display_name}.lnk"
+  DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}"
+  DeleteRegKey SHCTX "Software\{app_id}"
+  RMDir "$INSTDIR"
+SectionEnd
+"#,
+        build_number = plan.release.build_number,
+        version = plan.release.version,
+    );
+    Ok(WindowsInstallerSources {
+        nsis_script: script,
+        updater_config: plan
+            .updater
+            .as_ref()
+            .map(|_| bundled_updater_config(plan))
+            .transpose()?,
+        file_version,
+    })
+}
+
+fn windows_file_version(version: &Version, build_number: u64) -> CliResult<String> {
+    let build = u16::try_from(build_number)
+        .map_err(|_| CliError::new("Windows file version 的 build_number 超出 u16"))?;
+    Ok(format!(
+        "{}.{}.{}.{}",
+        version.major, version.minor, version.patch, build
+    ))
+}
+
+fn windows_options(plan: &BuildPlan) -> CliResult<&WindowsBuildOptions> {
+    plan.windows
+        .as_ref()
+        .ok_or_else(|| CliError::new("当前构建计划不是 Windows target"))
+}
+
+fn windows_build_options(config: &WindowsConfig) -> CliResult<WindowsBuildOptions> {
+    if config.installer != WindowsInstaller::Nsis {
+        return Err(CliError::new("Windows 当前只支持 NSIS Setup.exe"));
+    }
+    let publisher = config
+        .publisher
+        .clone()
+        .ok_or_else(|| CliError::new("Windows Setup.exe 需要 platforms.windows.publisher"))?;
+    Ok(WindowsBuildOptions {
+        install_scope: config.install_scope,
+        publisher,
+        signing: config.signing,
+        signing_thumbprint: config.signing_thumbprint.clone(),
+        timestamp_url: config.timestamp_url.clone(),
+        expected_publisher: config.expected_publisher.clone(),
+        desktop_shortcut_default: config.desktop_shortcut_default,
+        launch_after_install_default: config.launch_after_install_default,
+        minimum_windows_build: config.minimum_windows_build.unwrap_or(19045),
+    })
+}
+
+fn windows_binary_path(root: &Path, target: &str, package: &str) -> PathBuf {
+    cargo_target_root(root)
+        .join(target)
+        .join("release")
+        .join(format!("{package}.exe"))
+}
+
+fn cargo_target_root(root: &Path) -> PathBuf {
+    env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"))
+}
+
+fn is_windows_target(target: &str) -> bool {
+    target == "x86_64-pc-windows-msvc"
+}
+
+fn target_platform(target: &str) -> CliResult<BuildTargetPlatform> {
+    if target.ends_with("-apple-darwin") {
+        Ok(BuildTargetPlatform::MacOs)
+    } else if is_windows_target(target) {
+        Ok(BuildTargetPlatform::Windows)
+    } else {
+        Err(CliError::new(format!(
+            "当前只支持 macOS 与 Windows required target，收到 `{target}`"
+        )))
+    }
+}
+
+fn escape_rc_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn nsis_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "$\"")
+}
+
+fn nsis_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "$\"")
+}
+
+fn makensis_command() -> CliResult<PathBuf> {
+    if command_exists("makensis") {
+        return Ok(PathBuf::from("makensis"));
+    }
+    let candidates = [
+        PathBuf::from(r"C:\Program Files (x86)\NSIS\makensis.exe"),
+        PathBuf::from(r"C:\Program Files\NSIS\makensis.exe"),
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(r"Programs\NSIS\makensis.exe"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| CliError::new("缺少命令 `makensis`，请安装 NSIS 3 Unicode"))
 }
 
 /// 把配置选择的 ICNS 安装到 macOS bundle 并更新 `CFBundleIconFile`。
@@ -1288,12 +1912,54 @@ pub fn write_bundle_icon(app_path: &Path, icon_path: &Path) -> CliResult<()> {
         ))
     })?;
     let info_plist = app_path.join("Contents/Info.plist");
+    if !command_exists("plutil") {
+        return write_plist_strings(&info_plist, &[("CFBundleIconFile", file_name)]);
+    }
     run_status(
         "plutil bundle icon",
         Command::new("plutil")
             .args(["-replace", "CFBundleIconFile", "-string", file_name])
             .arg(info_plist),
     )
+}
+
+fn write_plist_strings(info_plist: &Path, values: &[(&str, &str)]) -> CliResult<()> {
+    let mut contents = fs::read_to_string(info_plist)
+        .map_err(|error| CliError::new(format!("无法读取 `{}`: {error}", info_plist.display())))?;
+    for (key, value) in values {
+        contents = replace_plist_string(&contents, key, value);
+    }
+    fs::write(info_plist, contents)
+        .map_err(|error| CliError::new(format!("无法写入 `{}`: {error}", info_plist.display())))
+}
+
+fn replace_plist_string(contents: &str, key: &str, value: &str) -> String {
+    let marker = format!("<key>{key}</key>");
+    let Some(key_start) = contents.find(&marker) else {
+        return contents.to_owned();
+    };
+    let search_start = key_start + marker.len();
+    let Some(relative_string_start) = contents[search_start..].find("<string>") else {
+        return contents.to_owned();
+    };
+    let string_start = search_start + relative_string_start;
+    let value_start = string_start + "<string>".len();
+    let Some(relative_string_end) = contents[value_start..].find("</string>") else {
+        return contents.to_owned();
+    };
+    let string_end = value_start + relative_string_end;
+    let mut updated = String::with_capacity(contents.len() + value.len());
+    updated.push_str(&contents[..value_start]);
+    updated.push_str(&escape_xml_text(value));
+    updated.push_str(&contents[string_end..]);
+    updated
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn sign_app(plan: &BuildPlan) -> CliResult<()> {
@@ -1468,13 +2134,16 @@ fn copy_release_notes(plan: &BuildPlan) -> CliResult<()> {
 }
 
 fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
-    let artifacts = [
-        (ArtifactKind::MacosAppZip, &plan.app_zip_path),
-        (ArtifactKind::MacosDmg, &plan.dmg_path),
-    ]
-    .into_iter()
-    .map(|(kind, path)| artifact_entry(kind, path))
-    .collect::<CliResult<Vec<_>>>()?;
+    let artifacts = match plan.platform {
+        BuildTargetPlatform::MacOs => vec![
+            artifact_entry(ArtifactKind::MacosAppZip, &plan.app_zip_path)?,
+            artifact_entry(ArtifactKind::MacosDmg, &plan.dmg_path)?,
+        ],
+        BuildTargetPlatform::Windows => vec![
+            artifact_entry(ArtifactKind::WindowsSetupExe, &plan.setup_path)?,
+            artifact_entry(ArtifactKind::WindowsZip, &plan.app_zip_path)?,
+        ],
+    };
     let manifest = ArtifactManifest {
         schema_version: ARTIFACT_SCHEMA_VERSION,
         app_id: plan.updater_app_id.clone(),
@@ -1539,26 +2208,37 @@ fn load_release_artifacts(
             .iter()
             .map(|artifact| artifact.kind)
             .collect::<BTreeSet<_>>();
-        for required in [ArtifactKind::MacosAppZip, ArtifactKind::MacosDmg] {
+        let required_kinds = required_artifact_kinds(target)?;
+        for required in &required_kinds {
             if !kinds.contains(&required) {
                 return Err(CliError::new(format!(
                     "`{}` 缺少 {}",
                     path.display(),
-                    artifact_kind_name(required)
+                    artifact_kind_name(*required)
                 )));
             }
         }
-        if manifest.artifacts.len() != 2 {
+        if manifest.artifacts.len() != required_kinds.len() {
             return Err(CliError::new(format!(
-                "`{}` 必须且只能描述 macos_app_zip 与 macos_dmg 两个产物",
-                path.display()
+                "`{}` 必须且只能描述当前 target 需要的 {} 个产物",
+                path.display(),
+                required_kinds.len()
             )));
         }
         for artifact in manifest.artifacts {
+            if !required_kinds.contains(&artifact.kind) {
+                return Err(CliError::new(format!(
+                    "`{}` 包含 target `{target}` 不支持的 {} 产物",
+                    path.display(),
+                    artifact_kind_name(artifact.kind)
+                )));
+            }
             validate_file_name(&artifact.file_name)?;
             let expected_suffix = match artifact.kind {
                 ArtifactKind::MacosAppZip => ".app.zip",
                 ArtifactKind::MacosDmg => ".dmg",
+                ArtifactKind::WindowsSetupExe => ".setup.exe",
+                ArtifactKind::WindowsZip => ".windows.zip",
             };
             if !artifact.file_name.ends_with(expected_suffix) {
                 return Err(CliError::new(format!(
@@ -1668,16 +2348,15 @@ fn latest_dmg_uploads(
         })
         .collect::<CliResult<Vec<_>>>()?;
     if single_target {
-        let dmg = dmgs
-            .first()
-            .ok_or_else(|| CliError::new("单 target 发布缺少 DMG"))?;
-        uploads.push(Upload {
-            key: object_key([channel_prefix, "latest.dmg"]),
-            source: UploadSource::File(dmg.path.clone()),
-            content_type: "application/x-apple-diskimage",
-            cache_control: MUTABLE_CACHE,
-            immutable: false,
-        });
+        if let Some(dmg) = dmgs.first() {
+            uploads.push(Upload {
+                key: object_key([channel_prefix, "latest.dmg"]),
+                source: UploadSource::File(dmg.path.clone()),
+                content_type: "application/x-apple-diskimage",
+                cache_control: MUTABLE_CACHE,
+                immutable: false,
+            });
+        }
     }
     Ok(uploads)
 }
@@ -2276,22 +2955,43 @@ fn validate_file_name(value: &str) -> CliResult<()> {
     Ok(())
 }
 
-fn validate_macos_target(target: &str) -> CliResult<()> {
+fn validate_required_target(target: &str) -> CliResult<()> {
+    target_platform(target)?;
     target_arch_alias(target).map(|_| ())
+}
+
+fn required_artifact_kinds(target: &str) -> CliResult<Vec<ArtifactKind>> {
+    match target_platform(target)? {
+        BuildTargetPlatform::MacOs => Ok(vec![ArtifactKind::MacosAppZip, ArtifactKind::MacosDmg]),
+        BuildTargetPlatform::Windows => Ok(vec![
+            ArtifactKind::WindowsSetupExe,
+            ArtifactKind::WindowsZip,
+        ]),
+    }
+}
+
+fn updater_manifest_artifact_kind(kind: ArtifactKind) -> Option<&'static str> {
+    match kind {
+        ArtifactKind::MacosAppZip => Some("macos_app_zip"),
+        ArtifactKind::WindowsZip => Some("windows_update_zip"),
+        ArtifactKind::MacosDmg | ArtifactKind::WindowsSetupExe => None,
+    }
 }
 
 fn target_arch_alias(target: &str) -> CliResult<&'static str> {
     match target {
         "aarch64-apple-darwin" => Ok("aarch64"),
         "x86_64-apple-darwin" => Ok("x86_64"),
+        "x86_64-pc-windows-msvc" => Ok("x86_64"),
         other => Err(CliError::new(format!(
-            "当前只支持 macOS required target，收到 `{other}`"
+            "当前只支持 macOS 与 Windows required target，收到 `{other}`"
         ))),
     }
 }
 
 fn host_can_build(target: &str) -> bool {
-    env::consts::OS == "macos" && target.ends_with("-apple-darwin")
+    (env::consts::OS == "macos" && target.ends_with("-apple-darwin"))
+        || (env::consts::OS == "windows" && is_windows_target(target))
 }
 
 fn terminal_is_interactive() -> bool {
@@ -2303,6 +3003,14 @@ fn ensure_macos() -> CliResult<()> {
         return Err(CliError::new("当前宿主不能构建 macOS required targets"));
     }
     Ok(())
+}
+
+fn ensure_supported_build_host() -> CliResult<()> {
+    if matches!(env::consts::OS, "macos" | "windows") {
+        Ok(())
+    } else {
+        Err(CliError::new("当前宿主不能构建桌面 required targets"))
+    }
 }
 
 fn ensure_app_exists(path: &Path, package: &str) -> CliResult<()> {
@@ -2319,6 +3027,8 @@ fn artifact_kind_name(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::MacosAppZip => "macos_app_zip",
         ArtifactKind::MacosDmg => "macos_dmg",
+        ArtifactKind::WindowsSetupExe => "windows_setup_exe",
+        ArtifactKind::WindowsZip => "windows_update_zip",
     }
 }
 
@@ -2326,6 +3036,8 @@ fn artifact_content_type(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::MacosAppZip => "application/zip",
         ArtifactKind::MacosDmg => "application/x-apple-diskimage",
+        ArtifactKind::WindowsSetupExe => "application/vnd.microsoft.portable-executable",
+        ArtifactKind::WindowsZip => "application/zip",
     }
 }
 
@@ -2419,26 +3131,40 @@ fn default_health_timeout() -> String {
     "2m".to_owned()
 }
 
+fn default_launch_after_install() -> bool {
+    true
+}
+
 pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
-    ensure_macos()?;
-    for command in ["cargo", "rustup", "ditto", "plutil", "codesign"] {
-        require_command(command)?;
-    }
-    for (command, install) in [
-        ("cargo-bundle", vec!["cargo", "install", "cargo-bundle"]),
-        ("create-dmg", vec!["brew", "install", "create-dmg"]),
-    ] {
-        if command_exists(command) {
-            continue;
+    if env::consts::OS == "macos" {
+        ensure_macos()?;
+        for command in ["cargo", "rustup", "ditto", "plutil", "codesign"] {
+            require_command(command)?;
         }
-        if !fix {
-            return Err(CliError::new(format!("缺少 `{command}`")));
+        for (command, install) in [
+            ("cargo-bundle", vec!["cargo", "install", "cargo-bundle"]),
+            ("create-dmg", vec!["brew", "install", "create-dmg"]),
+        ] {
+            if command_exists(command) {
+                continue;
+            }
+            if !fix {
+                return Err(CliError::new(format!("缺少 `{command}`")));
+            }
+            let mut process = Command::new(install[0]);
+            process.args(&install[1..]);
+            run_status(&format!("install {command}"), &mut process)?;
         }
-        let mut process = Command::new(install[0]);
-        process.args(&install[1..]);
-        run_status(&format!("install {command}"), &mut process)?;
+        println!("doctor: macOS 构建依赖可用");
+    } else if env::consts::OS == "windows" {
+        for command in ["cargo", "rustup", "rc"] {
+            require_command(command)?;
+        }
+        let _ = makensis_command()?;
+        println!("doctor: Windows 构建依赖可用");
+    } else {
+        return Err(CliError::new("当前宿主暂不支持桌面发布构建"));
     }
-    println!("doctor: macOS 构建依赖可用");
     Ok(())
 }
 
@@ -2481,10 +3207,17 @@ fn require_command(command: &str) -> CliResult<()> {
 }
 
 fn command_exists(command: &str) -> bool {
-    Command::new("sh")
-        .args(["-c", "command -v -- \"$1\" >/dev/null 2>&1", "sh", command])
-        .status()
-        .is_ok_and(|status| status.success())
+    if env::consts::OS == "windows" {
+        Command::new("where.exe")
+            .arg(command)
+            .status()
+            .is_ok_and(|status| status.success())
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v -- \"$1\" >/dev/null 2>&1", "sh", command])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
 }
 
 fn run_status(name: &str, command: &mut Command) -> CliResult<()> {
@@ -2715,18 +3448,20 @@ pub fn inspect_build_plans(
 ) -> CliResult<Vec<serde_json::Value>> {
     let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
     project
-        .build_plans(app_key)?
+        .build_plans(app_key, true)?
         .into_iter()
         .map(|plan| {
             Ok(serde_json::json!({
                 "app_key": plan.app_key,
                 "package": plan.package,
                 "display_name": plan.display_name,
-                "app_path": plan.app_path,
-                "app_zip_path": plan.app_zip_path,
-                "dmg_path": plan.dmg_path,
-                "artifact_path": plan.artifact_path,
+                "app_path": inspect_path(&plan.app_path),
+                "app_zip_path": inspect_path(&plan.app_zip_path),
+                "dmg_path": inspect_path(&plan.dmg_path),
+                "setup_path": inspect_path(&plan.setup_path),
+                "artifact_path": inspect_path(&plan.artifact_path),
                 "target": plan.target,
+                "platform": format!("{:?}", plan.platform),
                 "version": plan.release.version,
                 "build_number": plan.release.build_number,
                 "channel": plan.release.channel,
@@ -2735,6 +3470,10 @@ pub fn inspect_build_plans(
             }))
         })
         .collect()
+}
+
+fn inspect_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// 为集成测试执行与 build/publish 相同的 app 选择规则，不触发交互菜单。
@@ -2818,4 +3557,90 @@ pub fn inspect_signing_key(config_path: impl AsRef<Path>, app_key: &str) -> CliR
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
     let trusted = parse_trusted_keys(&app.updater.trusted_public_keys)?;
     read_signing_key(&project, app_key, app, &trusted).map(|(key_id, _)| key_id)
+}
+
+/// 为集成测试返回 Windows 安装器源文件快照，不执行 NSIS 或签名命令。
+///
+/// # Errors
+///
+/// 配置无效、app 不存在、没有 Windows target 或 Windows 打包配置不完整时返回错误。
+#[allow(dead_code)]
+pub fn inspect_windows_installer_sources(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let release = project.validated_release(app_key, app)?;
+    let brand_assets = project.brand_assets(app_key, app)?;
+    let publish_target = &project.config.publish.targets[&app.publish_target];
+    let target = app
+        .targets
+        .required
+        .iter()
+        .find(|target| is_windows_target(target))
+        .ok_or_else(|| CliError::new(format!("app `{app_key}` 没有 Windows target")))?
+        .clone();
+    let arch = target_arch_alias(&target)?;
+    let release_dir = project
+        .root
+        .join(DIST_DIRECTORY)
+        .join(app_key)
+        .join(&release.channel)
+        .join(release.version.to_string())
+        .join(release.build_number.to_string())
+        .join(&target);
+    let technical_stem = format!(
+        "{}-{}-{}-{arch}",
+        app.package, release.version, release.build_number
+    );
+    let plan = BuildPlan {
+        project_root: project.root.clone(),
+        app_key: app_key.to_owned(),
+        package: app.package.clone(),
+        app_id: app.app_id.clone(),
+        updater_app_id: app
+            .updater
+            .app_id
+            .clone()
+            .unwrap_or_else(|| app.app_id.clone()),
+        display_name: app.display_name.clone(),
+        release,
+        target: target.clone(),
+        platform: BuildTargetPlatform::Windows,
+        signing: app.platforms.macos.signing,
+        notarize: app.platforms.macos.notarize,
+        expected_team_id: None,
+        allow_insecure_http: publish_target.allow_insecure_http,
+        updater: app.updater.enabled.then(|| app.updater.clone()),
+        macos_icon: brand_assets.macos_icon,
+        windows_icon: brand_assets.windows_icon,
+        windows: Some(windows_build_options(&app.platforms.windows)?),
+        app_path: windows_binary_path(&project.root, &target, &app.package),
+        app_zip_path: release_dir.join(format!("{technical_stem}.windows.zip")),
+        dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
+        setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
+        artifact_path: release_dir.join("artifact.json"),
+        notes_source: project
+            .root
+            .join("docs/changelog/components")
+            .join(app_key)
+            .join("zh-CN.md"),
+        notes_path: project
+            .root
+            .join(DIST_DIRECTORY)
+            .join(app_key)
+            .join("notes.md"),
+    };
+    let staging = windows_work_dir(&plan).join("payload");
+    let sources = windows_installer_sources(&plan, &staging)?;
+    Ok(serde_json::json!({
+        "file_version": sources.file_version,
+        "nsis_script": sources.nsis_script,
+        "updater_config": sources.updater_config,
+    }))
 }

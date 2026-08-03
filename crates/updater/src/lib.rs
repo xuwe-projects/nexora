@@ -8,6 +8,7 @@ mod macos;
 mod manifest;
 mod service;
 mod sidecar;
+mod windows;
 
 pub use dialog::{open_update_dialog, start_update_check_on_launch};
 pub use manifest::{
@@ -15,6 +16,8 @@ pub use manifest::{
     UpdateManifest, UpdateManifestSignature, UpdateRelease, UpdateTarget,
 };
 pub use service::{
-    CancellationToken, StagedUpdate, UpdateConfig, UpdateError, UpdateEvent, UpdateSession, Updater,
+    CancellationToken, StagedUpdate, UpdateConfig, UpdateError, UpdateEvent, UpdateSession,
+    Updater, WindowsSignatureConfig,
 };
 pub use sidecar::{report_health_from_env_args, run_sidecar_from_env_args};
+pub use windows::{extract_windows_update_zip, validate_windows_zip_entry_path};
