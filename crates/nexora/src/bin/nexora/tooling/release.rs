@@ -4584,7 +4584,9 @@ pub fn inspect_windows_installer_sources(
     let configured = project.resolved_release(app_key, app, &channel, None)?;
     let build_number = match configured.build_number {
         ResolvedBuildNumber::Literal(value) => value,
-        ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
+        ResolvedBuildNumber::BuildDatetime => {
+            build_datetime_number(Local::now().fixed_offset(), None)?
+        }
     };
     let release = configured.validated_release(build_number);
     let brand_assets = project.brand_assets(app_key, app)?;
