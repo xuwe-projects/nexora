@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 fn main() -> std::process::ExitCode {
     match updater::run_sidecar_from_env_args() {
         Ok(true) => std::process::ExitCode::SUCCESS,

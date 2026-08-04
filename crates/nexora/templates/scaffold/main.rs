@@ -1,4 +1,6 @@
 {%- if account_enabled -%}
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod config;
 mod features;
 
@@ -64,6 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 {%- else -%}
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod features;
 
 use std::borrow::Cow;

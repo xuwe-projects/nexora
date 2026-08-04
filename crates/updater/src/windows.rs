@@ -140,16 +140,12 @@ pub(crate) fn verify_staged_update_signatures(
     updater_exe_name: &str,
     signature: Option<&WindowsSignatureConfig>,
 ) -> Result<(), UpdateError> {
-    let signature = signature.ok_or_else(|| {
-        UpdateError::InvalidBundleConfig(
-            "Windows 更新必须配置 expected_windows_signer_thumbprint 与 expected_windows_publisher"
-                .to_owned(),
-        )
-    })?;
     for name in [main_exe_name, updater_exe_name] {
         let path = root.join(name);
-        verify_pe_x86_64(&path)?;
-        verify_authenticode_signature(&path, signature)?;
+        verify_pe_current_arch(&path)?;
+        if let Some(signature) = signature {
+            verify_authenticode_signature(&path, signature)?;
+        }
     }
     Ok(())
 }
@@ -268,6 +264,16 @@ pub(crate) fn current_install_dir() -> Result<PathBuf, UpdateError> {
         .ok_or_else(|| UpdateError::SidecarFailed("当前 EXE 路径缺少安装目录".to_owned()))
 }
 
+pub(crate) fn cache_dir_for_install(
+    install_dir: &Path,
+    app_id: &str,
+) -> Result<PathBuf, UpdateError> {
+    let install_parent = install_dir
+        .parent()
+        .ok_or(UpdateError::CacheDirectoryUnavailable)?;
+    Ok(install_parent.join(".nexora-updater").join(app_id))
+}
+
 pub(crate) fn current_main_exe_name() -> Result<String, UpdateError> {
     current_main_exe_name_from_path(&std::env::current_exe()?)
 }
@@ -290,7 +296,7 @@ fn current_main_exe_name_from_path(path: &Path) -> Result<String, UpdateError> {
     Ok(name)
 }
 
-fn verify_pe_x86_64(path: &Path) -> Result<(), UpdateError> {
+fn verify_pe_current_arch(path: &Path) -> Result<(), UpdateError> {
     let bytes = fs::read(path)?;
     if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
         return Err(UpdateError::InvalidWindowsZipArchive(format!(
@@ -319,10 +325,17 @@ fn verify_pe_x86_64(path: &Path) -> Result<(), UpdateError> {
         bytes[optional_magic_offset],
         bytes[optional_magic_offset + 1],
     ]);
-    if machine != 0x8664 || optional_magic != 0x20b {
+    let (expected_machine, expected_arch) = if cfg!(target_arch = "x86_64") {
+        (0x8664, "x86_64")
+    } else if cfg!(target_arch = "aarch64") {
+        (0xaa64, "aarch64")
+    } else {
+        return Err(UpdateError::UnsupportedPlatform);
+    };
+    if machine != expected_machine || optional_magic != 0x20b {
         return Err(UpdateError::InvalidWindowsZipArchive(format!(
-            "`{}` 不是 x86_64 PE32+ 文件",
-            path.display()
+            "`{}` 不是当前进程所需的 {expected_arch} PE32+ 文件",
+            path.display(),
         )));
     }
     Ok(())
@@ -639,10 +652,27 @@ pub(crate) fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<
             request.sidecar_path.display()
         )));
     }
+    preflight_install_layout(
+        request.current_app,
+        request.staged_app,
+        request.staging_root,
+    )?;
 
     let sidecar_runtime = copy_sidecar_to_temp(request.app_id, request.sidecar_path)?;
+    install_helper_command(&sidecar_runtime, request)?.spawn()?;
+    Ok(())
+}
+
+pub(crate) fn install_helper_command(
+    sidecar_runtime: &Path,
+    request: InstallHelperRequest<'_>,
+) -> Result<Command, UpdateError> {
+    let sidecar_working_dir = sidecar_runtime
+        .parent()
+        .ok_or_else(|| UpdateError::SidecarUnavailable("临时 sidecar 路径缺少父目录".to_owned()))?;
     let mut command = Command::new(sidecar_runtime);
     command
+        .current_dir(sidecar_working_dir)
         .arg("--nexora-updater-sidecar")
         .arg("apply")
         .arg("--app-id")
@@ -667,8 +697,7 @@ pub(crate) fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<
             .arg("--installing-record")
             .arg(installing_record);
     }
-    command.spawn()?;
-    Ok(())
+    Ok(command)
 }
 
 pub(crate) fn apply_staged_update(
@@ -684,49 +713,108 @@ pub(crate) fn apply_staged_update(
     ensure_same_volume(current_app, staged_app)?;
     ensure_same_volume(current_app, staging_root)?;
 
+    let app_name = current_app
+        .file_name()
+        .ok_or_else(|| UpdateError::SidecarFailed("当前安装目录缺少名称".to_owned()))?;
     let backup_root = staging_root.join("backup");
     let failed_root = staging_root.join("failed");
     let health_file = staging_root.join("health").join("session.json");
-    let backup_app = backup_root.join("current");
-    let failed_app = failed_root.join("current");
+    let backup_app = backup_root.join(app_name);
+    let failed_app = failed_root.join(app_name);
 
-    fs::create_dir_all(&backup_root)?;
-    fs::create_dir_all(&failed_root)?;
+    let result = apply_staged_update_inner(
+        current_app,
+        staged_app,
+        &backup_root,
+        &backup_app,
+        &health_file,
+        health_session,
+        health_timeout,
+    );
+    if let Err(error) = result {
+        let recovery =
+            restore_previous_version(current_app, &backup_app, &failed_root, &failed_app);
+        if recovery.is_ok() && !backup_app.exists() {
+            _ = retry_remove_dir_all(staging_root);
+        }
+        return match recovery {
+            Ok(()) => Err(error),
+            Err(recovery_error) => Err(UpdateError::SidecarFailed(format!(
+                "更新安装失败，且无法恢复旧版本: {recovery_error}"
+            ))),
+        };
+    }
+
+    _ = retry_remove_dir_all(&backup_root);
+    _ = retry_remove_dir_all(staging_root);
+    Ok(())
+}
+
+fn apply_staged_update_inner(
+    current_app: &Path,
+    staged_app: &Path,
+    backup_root: &Path,
+    backup_app: &Path,
+    health_file: &Path,
+    health_session: &str,
+    health_timeout: Duration,
+) -> Result<(), UpdateError> {
+    fs::create_dir_all(backup_root)?;
     if let Some(parent) = health_file.parent() {
         fs::create_dir_all(parent)?;
     }
-
     if backup_app.exists() {
-        retry_remove_dir_all(&backup_app)?;
+        retry_remove_dir_all(backup_app)?;
     }
-    retry_rename(current_app, &backup_app).map_err(|error| {
+    retry_rename(current_app, backup_app).map_err(|error| {
         UpdateError::SidecarFailed(format!(
             "无法备份旧版本 `{}`: {error}",
             current_app.display()
         ))
     })?;
-    if let Err(error) = retry_rename(staged_app, current_app) {
-        restore_backup(current_app, &backup_app)?;
-        return Err(UpdateError::SidecarFailed(format!(
+    retry_rename(staged_app, current_app).map_err(|error| {
+        UpdateError::SidecarFailed(format!(
             "无法替换新版本 `{}`: {error}",
             current_app.display()
-        )));
-    }
+        ))
+    })?;
 
-    let launched = launch_app(current_app, health_session, &health_file);
-    let healthy =
-        launched.and_then(|()| wait_for_health(&health_file, health_session, health_timeout));
-    if let Err(error) = healthy {
-        if current_app.exists() {
-            let _ = retry_rename(current_app, &failed_app);
-        }
-        restore_backup(current_app, &backup_app)?;
-        _ = launch_app(current_app, "", Path::new(""));
+    let mut child = launch_app(current_app, health_session, health_file)?;
+    if let Err(error) = wait_for_health(health_file, health_session, health_timeout) {
+        _ = child.kill();
+        _ = child.wait();
         return Err(error);
     }
+    Ok(())
+}
 
-    _ = retry_remove_dir_all(&backup_root);
-    _ = retry_remove_dir_all(staging_root);
+fn restore_previous_version(
+    current_app: &Path,
+    backup_app: &Path,
+    failed_root: &Path,
+    failed_app: &Path,
+) -> Result<(), UpdateError> {
+    if backup_app.exists() {
+        if current_app.exists() {
+            let retained_failed_version = fs::create_dir_all(failed_root)
+                .and_then(|()| {
+                    if failed_app.exists() {
+                        retry_remove_dir_all(failed_app)?;
+                    }
+                    retry_rename(current_app, failed_app)
+                })
+                .is_ok();
+            if !retained_failed_version {
+                retry_remove_dir_all(current_app)?;
+            }
+        }
+        restore_backup(current_app, backup_app)?;
+    }
+    if !current_app.is_dir() {
+        return Err(UpdateError::SidecarFailed(
+            "旧版本安装目录不可用".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -735,6 +823,40 @@ fn ensure_windows() -> Result<(), UpdateError> {
         return Ok(());
     }
     Err(UpdateError::UnsupportedPlatform)
+}
+
+pub(crate) fn prepare_cache_dir(cache_dir: &Path) -> Result<(), UpdateError> {
+    fs::create_dir_all(cache_dir)?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::{ffi::OsStr, os::windows::ffi::OsStrExt as _};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_HIDDEN, GetFileAttributesW, INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+        };
+
+        let hidden_root = cache_dir.parent().unwrap_or(cache_dir);
+        let path = OsStr::new(hidden_root)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+        if attributes == INVALID_FILE_ATTRIBUTES {
+            tracing::warn!(
+                path = %hidden_root.display(),
+                error = %io::Error::last_os_error(),
+                "无法读取 Windows 更新事务目录属性"
+            );
+        } else if attributes & FILE_ATTRIBUTE_HIDDEN == 0
+            && unsafe { SetFileAttributesW(path.as_ptr(), attributes | FILE_ATTRIBUTE_HIDDEN) } == 0
+        {
+            tracing::warn!(
+                path = %hidden_root.display(),
+                error = %io::Error::last_os_error(),
+                "无法隐藏 Windows 更新事务目录"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn copy_sidecar_to_temp(app_id: &str, sidecar_path: &Path) -> Result<PathBuf, UpdateError> {
@@ -768,6 +890,63 @@ fn copy_sidecar_to_temp(app_id: &str, sidecar_path: &Path) -> Result<PathBuf, Up
     Ok(runtime_path)
 }
 
+pub(crate) fn preflight_install_layout(
+    current_app: &Path,
+    staged_app: &Path,
+    staging_root: &Path,
+) -> Result<(), UpdateError> {
+    let current_app = fs::canonicalize(current_app)
+        .map_err(|error| UpdateError::SidecarFailed(format!("无法读取当前安装目录: {error}")))?;
+    let staged_app = fs::canonicalize(staged_app)
+        .map_err(|error| UpdateError::SidecarFailed(format!("无法读取暂存更新: {error}")))?;
+    let staging_root = fs::canonicalize(staging_root)
+        .map_err(|error| UpdateError::SidecarFailed(format!("无法读取更新事务目录: {error}")))?;
+    ensure_same_volume(&current_app, &staged_app)?;
+    ensure_same_volume(&current_app, &staging_root)?;
+    if !staged_app.starts_with(&staging_root)
+        || staging_root.starts_with(&current_app)
+        || current_app.starts_with(&staging_root)
+    {
+        return Err(UpdateError::SidecarFailed(
+            "Windows 更新事务目录与安装目录边界无效".to_owned(),
+        ));
+    }
+    find_primary_exe(&current_app)?;
+    find_primary_exe(&staged_app)?;
+
+    let install_parent = current_app
+        .parent()
+        .ok_or_else(|| UpdateError::SidecarFailed("安装目录缺少父目录".to_owned()))?;
+    verify_directory_rename_permission(install_parent)
+}
+
+fn verify_directory_rename_permission(parent: &Path) -> Result<(), UpdateError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|error| UpdateError::Random(error.to_string()))?;
+    let nonce = random.iter().fold(String::new(), |mut output, byte| {
+        use std::fmt::Write as _;
+        write!(output, "{byte:02x}").expect("写入 String 不会失败");
+        output
+    });
+    let source = parent.join(format!(".nexora-update-preflight-{nonce}"));
+    let destination = parent.join(format!(".nexora-update-preflight-{nonce}-renamed"));
+    let result = (|| {
+        fs::create_dir(&source)?;
+        fs::rename(&source, &destination)?;
+        fs::remove_dir(&destination)?;
+        Ok::<_, io::Error>(())
+    })();
+    if result.is_err() {
+        _ = fs::remove_dir(&source);
+        _ = fs::remove_dir(&destination);
+    }
+    result.map_err(|error| {
+        UpdateError::SidecarFailed(format!(
+            "安装目录不可写，无法安全替换应用；请重新选择当前用户可写的安装路径: {error}"
+        ))
+    })
+}
+
 fn wait_for_process_exit(process_id: u32, timeout: Duration) -> Result<(), UpdateError> {
     let started = Instant::now();
     while started.elapsed() < timeout {
@@ -782,7 +961,7 @@ fn wait_for_process_exit(process_id: u32, timeout: Duration) -> Result<(), Updat
     )))
 }
 
-fn process_is_running(process_id: u32) -> bool {
+pub(crate) fn process_is_running(process_id: u32) -> bool {
     if !cfg!(target_os = "windows") {
         return false;
     }
@@ -794,6 +973,11 @@ fn process_is_running(process_id: u32) -> bool {
                 && String::from_utf8_lossy(&output.stdout).contains(&process_id.to_string())
         })
         .unwrap_or(false)
+}
+
+pub(crate) fn relaunch_app(install_dir: &Path) -> Result<(), UpdateError> {
+    drop(launch_app(install_dir, "", Path::new(""))?);
+    Ok(())
 }
 
 fn restore_backup(current_app: &Path, backup_app: &Path) -> Result<(), UpdateError> {
@@ -812,9 +996,10 @@ fn launch_app(
     install_dir: &Path,
     health_session: &str,
     health_file: &Path,
-) -> Result<(), UpdateError> {
+) -> Result<std::process::Child, UpdateError> {
     let executable = find_primary_exe(install_dir)?;
     let mut command = Command::new(executable);
+    command.current_dir(install_dir);
     if !health_session.is_empty() {
         command
             .arg("--nexora-updater-health-session")
@@ -822,8 +1007,7 @@ fn launch_app(
             .arg("--nexora-updater-health-file")
             .arg(health_file);
     }
-    command.spawn()?;
-    Ok(())
+    Ok(command.spawn()?)
 }
 
 fn find_primary_exe(install_dir: &Path) -> Result<PathBuf, UpdateError> {
@@ -880,6 +1064,42 @@ fn ensure_same_volume(left: &Path, right: &Path) -> Result<(), UpdateError> {
     Err(UpdateError::SidecarFailed(
         "Windows staging、backup 与安装目录必须位于同一卷".to_owned(),
     ))
+}
+
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<(), UpdateError> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::{ffi::OsStr, os::windows::ffi::OsStrExt as _};
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        let source = OsStr::new(source)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let destination = OsStr::new(destination)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let replaced = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if replaced == 0 {
+            return Err(UpdateError::Io(io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(source, destination)?;
+        Ok(())
+    }
 }
 
 fn retry_rename(source: &Path, destination: &Path) -> std::io::Result<()> {

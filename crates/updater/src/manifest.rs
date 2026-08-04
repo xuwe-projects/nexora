@@ -43,6 +43,8 @@ pub enum UpdateTarget {
     MacOsX86_64,
     /// 64 位 Windows MSVC，对应 Rust target `x86_64-pc-windows-msvc`。
     WindowsX86_64,
+    /// ARM64 Windows MSVC，对应 Rust target `aarch64-pc-windows-msvc`。
+    WindowsAarch64,
     /// 64 位 Linux GNU，对应 Rust target `x86_64-unknown-linux-gnu`。
     LinuxX86_64,
 }
@@ -64,6 +66,9 @@ impl UpdateTarget {
         if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
             return Ok(Self::WindowsX86_64);
         }
+        if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+            return Ok(Self::WindowsAarch64);
+        }
         if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             return Ok(Self::LinuxX86_64);
         }
@@ -81,6 +86,7 @@ impl UpdateTarget {
             "aarch64-apple-darwin" => Ok(Self::MacOsAarch64),
             "x86_64-apple-darwin" => Ok(Self::MacOsX86_64),
             "x86_64-pc-windows-msvc" => Ok(Self::WindowsX86_64),
+            "aarch64-pc-windows-msvc" => Ok(Self::WindowsAarch64),
             "x86_64-unknown-linux-gnu" => Ok(Self::LinuxX86_64),
             other => Err(UpdateError::UnsupportedTarget(other.to_owned())),
         }
@@ -92,6 +98,7 @@ impl UpdateTarget {
             Self::MacOsAarch64 => "aarch64-apple-darwin",
             Self::MacOsX86_64 => "x86_64-apple-darwin",
             Self::WindowsX86_64 => "x86_64-pc-windows-msvc",
+            Self::WindowsAarch64 => "aarch64-pc-windows-msvc",
             Self::LinuxX86_64 => "x86_64-unknown-linux-gnu",
         }
     }

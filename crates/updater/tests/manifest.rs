@@ -10,6 +10,13 @@ fn signing_key() -> SigningKey {
     SigningKey::from_bytes(&[7_u8; 32])
 }
 
+#[test]
+fn windows_arm64_target_round_trips() {
+    let target = UpdateTarget::from_triple("aarch64-pc-windows-msvc").unwrap();
+    assert_eq!(target, UpdateTarget::WindowsAarch64);
+    assert_eq!(target.as_str(), "aarch64-pc-windows-msvc");
+}
+
 fn trusted_key(key_id: &str, signing_key: &SigningKey) -> String {
     format!(
         "{key_id}:ed25519:{}",

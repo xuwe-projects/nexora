@@ -52,9 +52,6 @@ offline_grace_period = "24h"
 mandatory_restart_delay = "15m"
 health_timeout = "2m"
 
-[apps.console.targets]
-required = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
-
 [apps.console.platforms.macos]
 signing = "ad_hoc"
 notarize = false
@@ -88,6 +85,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 - Ed25519 manifest signatures are mandatory and cannot be disabled. SHA-256 only protects payload integrity.
 - The updater validates the manifest independently and must not trust main-process URL, hash, `app_id`, target or version arguments.
 - Reject archive entries with absolute paths, `..`, symlink escape, cross-device staging, insufficient space or wrong permissions.
+- On Windows, keep staging, pending payloads, backup, health state and install results under the hidden sibling root `<install-parent>/.nexora-updater/<app_id>`. Preflight same-volume and directory-rename permission before the main process exits; never require elevation to compensate for a cross-volume design.
 
 ## Keys And Signed Manifest
 
@@ -111,7 +109,8 @@ If absent, use build defaults. If present but invalid, disable this check and su
 - It does not access S3 and does not publish.
 - Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.
 - All targets in one build use that receipt. A matching incomplete retry reuses it. After every planned target artifact is complete, another explicit dynamic build creates a strictly higher build number and updates the current receipt without deleting old versioned artifacts. Corrupt/unsupported receipts fail before build and are never reconstructed from directory names.
-- Targets come from `apps.<id>.targets.required`; build processes every required target the current host can legally build.
+- Build defaults to the exact host target from `rustc -vV`. Repeated `--target` arguments explicitly override it. `apps.<id>.targets.required` remains an optional legacy compatibility source and is not required in new projects.
+- Build never runs `rustup target add`; a missing target fails with the exact command the developer must run.
 - Cross-OS pseudo-packaging is forbidden. Complete releases use platform runners.
 - Sidecar locations: macOS `Contents/Helpers/<app>-updater`, Windows `<app>-updater.exe`, Linux `<app>-updater`.
 - Sidecar embeds `app_id`, protocol, trusted public keys and main-program identity. Before applying, it copies itself to a random temp directory.
@@ -120,16 +119,16 @@ If absent, use build defaults. If present but invalid, disable this check and su
 Platform outputs:
 
 - macOS: write version, build number, configured ICNS, updater settings and sidecar before signing; create both DMG and `ditto` `.app.zip` from that same signed `.app`. The ICNS is copied to Resources and written to `CFBundleIconFile` for the `.app` only. The DMG file and mounted volume keep their system-default appearance. `artifact.json` describes ZIP and DMG; the updater manifest contains only `.app.zip`.
-- Windows: optional user or machine `Setup.exe`, plus update ZIP. User scope writes LocalAppData Programs; machine scope writes Program Files with UAC. First release has no Authenticode requirement.
+- Windows x86_64/ARM64: a Simplified Chinese WiX MSI, a Burn `Setup.exe` that reuses the MSI UI, and an update ZIP. User scope defaults to LocalAppData Programs without UAC while preserving the install-directory chooser; machine scope is rejected until elevation and updater permissions have an explicit design. The UI exposes desktop shortcut, Start menu shortcut, and launch-after-finish checkboxes. Main and sidecar executables use the Windows GUI subsystem. `signing = "none"` still enforces Ed25519, artifact size/SHA-256, ZIP safety and PE architecture checks but skips Authenticode; Authenticode-only TOML fields conflict with that mode. `signing = "authenticode"` signs all Windows artifacts and requires the updater to verify both staged EXEs with Windows trust, certificate thumbprint and publisher. The bundled thumbprint and publisher must be both absent or both present. The Rust ZIP writer must encode archive entry names with `/`; do not use PowerShell `Compress-Archive` or serialize native Windows `Path` separators into the update protocol. User-initiated removal disables MSI rollback only after `InstallInitialize` so a stale cross-volume `Config.Msi` ACL cannot break cleanup; major-upgrade removal retains rollback. The current pinned GPUI floor is Windows 10 1703/build 15063.
 - Linux: AppImage, optionally user-directory portable archive. Update AppImage itself or `tar.zst`; package-manager formats are future work.
 
 ## Publish
 
 - `nexora publish` publishes existing artifacts only and must never run build implicitly.
-- It reads `nexora.toml`, selects apps, then reads the current release receipt. It validates the receipt against app/package/channel, selected Cargo package version, current sources/configuration and required targets; it validates each `artifact.json`, file existence, size and SHA-256 before upload.
+- It reads `nexora.toml`, selects apps, then reads the current release receipt. It validates the receipt against app/package/channel, selected Cargo package version and current sources/configuration; the receipt itself freezes the release targets. It validates each target's `artifact.json`, file existence, size and SHA-256 before upload.
 - Dry-run performs the same receipt, artifact and remote checks without local or remote writes. An available identity must be strictly greater than the remote `(version, build_number)`. Yank uses the receipt identity.
-- Stable publish must include all required targets.
-- Upload versioned `.app.zip` and DMG files with standard `<artifact>.sha256` sidecars, notes, immutable sequence manifest, target-specific latest DMGs, optional single-target `latest.dmg`, and finally `latest.json`; then verify mutable objects, checksum sidecars and every updater URL anonymously. Publish derives checksum sidecars from the revalidated artifact digests so builds created before local sidecars were restored remain publishable.
+- Stable publish must include every target frozen in the release receipt.
+- Upload versioned `.app.zip`, DMG, Windows Setup EXE, MSI and update ZIP files with standard `<artifact>.sha256` sidecars, notes, immutable sequence manifest, target-specific latest installers, optional single-target `latest.dmg` / `latest.exe` / `latest.msi`, and finally `latest.json`; then verify mutable objects, checksum sidecars and every updater URL anonymously. Publish derives checksum sidecars from the revalidated artifact digests so builds created before local sidecars were restored remain publishable.
 - Read and verify remote `latest.json` before publishing. HTTP 404 means sequence 1; otherwise use remote sequence plus one. Dry-run performs the same read without writes. Re-read before mutable uploads and reject concurrent sequence changes.
 - Use layout:
 
@@ -155,6 +154,8 @@ Versioned objects should be long cached; `latest.json` should be no-cache or sho
 6. Updater keeps old version, performs transactional switch, starts new program and passes one-time session.
 7. New program reports health after initialization and first main window creation.
 8. On launch failure, crash or health timeout, restore backup, restart old version and record the reason.
+
+On Windows, publishing `pending.json` must use a synced temporary file plus an atomic replace that can overwrite an existing destination. Directory durability is best-effort after that commit and must never turn a committed record into an error that moves its payload back to staging. A failed transaction records a bounded, user-safe result before restarting the restored version; the next launch consumes that result through the shared notification UI.
 
 Only one update session per app may run. Never rerun first-install installers during self-update.
 

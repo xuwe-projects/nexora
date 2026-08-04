@@ -95,7 +95,14 @@ impl UpdateCoordinator {
         if let Err(error) = thread::Builder::new()
             .name("nexora-update-restore".to_owned())
             .spawn(move || {
-                _ = sender.send_blocking(updater.restore_pending());
+                let install_failure = match updater.take_install_failure() {
+                    Ok(failure) => failure,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "无法读取上次 Windows 更新安装结果");
+                        None
+                    }
+                };
+                _ = sender.send_blocking((install_failure, updater.restore_pending()));
             })
         {
             tracing::warn!(error = %error, "无法启动待安装更新恢复线程");
@@ -105,27 +112,37 @@ impl UpdateCoordinator {
         }
 
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let Ok(result) = receiver.recv().await else {
+            let Ok((install_failure, result)) = receiver.recv().await else {
                 return;
             };
-            _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(Some(staged)) => match staged.prepare_restart() {
-                    Ok(()) => cx.quit(),
-                    Err(error) => {
-                        tracing::warn!(error = %error, "无法启动已恢复更新的 sidecar");
-                        staged.discard_pending();
+            _ = this.update_in(cx, |this, window, cx| {
+                if let Some(message) = install_failure {
+                    window
+                        .push_notification(Notification::error(message).title("上次更新失败"), cx);
+                }
+                match result {
+                    Ok(Some(staged)) => match staged.prepare_restart() {
+                        Ok(()) => cx.quit(),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "无法启动已恢复更新的 sidecar");
+                            let message = error.to_string();
+                            window.push_notification(
+                                Notification::error(message.clone()).title("更新安装失败"),
+                                cx,
+                            );
+                            this.status = UpdateDialogStatus::Failed(message);
+                            cx.notify();
+                        }
+                    },
+                    Ok(None) => {
                         this.status = UpdateDialogStatus::Idle;
                         this.start_check(false, window, cx);
                     }
-                },
-                Ok(None) => {
-                    this.status = UpdateDialogStatus::Idle;
-                    this.start_check(false, window, cx);
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, "恢复待安装更新失败");
-                    this.status = UpdateDialogStatus::Idle;
-                    this.start_check(false, window, cx);
+                    Err(error) => {
+                        tracing::warn!(error = %error, "恢复待安装更新失败");
+                        this.status = UpdateDialogStatus::Idle;
+                        this.start_check(false, window, cx);
+                    }
                 }
             });
         }));

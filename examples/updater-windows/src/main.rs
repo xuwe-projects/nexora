@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use gpui::{App, Context, IntoElement, Window, div, prelude::*, px};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
@@ -85,7 +87,7 @@ impl nexora::WindowElement for SecondWindow {
 }
 
 struct ExampleApplication {
-    updater: desktop::UpdateConfig,
+    updater: Option<desktop::UpdateConfig>,
 }
 
 impl nexora::Application for ExampleApplication {
@@ -100,15 +102,18 @@ impl nexora::Application for ExampleApplication {
     }
 
     fn initialize(&mut self, cx: &mut App) {
-        desktop::install_updater(self.updater.clone(), cx)
-            .expect("example 只能安装一份 updater 配置");
+        if let Some(updater) = self.updater.clone() {
+            desktop::install_updater(updater, cx).expect("example 只能安装一份 updater 配置");
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let updater = desktop::UpdateConfig::from_current_bundle()?.with_health_report_on_launch(
-        option_env!("NEXORA_EXAMPLE_HEALTH_FAILURE") != Some("before-health"),
-    );
+    let updater = desktop::UpdateConfig::from_current_bundle_if_present()?.map(|updater| {
+        updater.with_health_report_on_launch(
+            option_env!("NEXORA_EXAMPLE_HEALTH_FAILURE") != Some("before-health"),
+        )
+    });
     ExampleApplication { updater }.run()?;
     Ok(())
 }

@@ -1,53 +1,79 @@
 # Windows 更新程序示例
 
-这个独立 workspace 用来验证 Nexora 的 Windows x86_64 首次安装和自动更新链路。首次安装产物是 NSIS 3 Unicode 生成的版本化 `setup.exe`，应用内自动更新只下载并应用 `windows.zip`，不会下载或运行 setup，也不会生成 MSI。
+这个独立 workspace 用来验证 Nexora 的 Windows x86_64/ARM64 首次安装和自动更新链路。首次安装同时生成 WiX MSI 和安装型 `setup.exe`；Setup EXE 使用 Burn 包装 MSI，并直接显示同一套简体中文 MSI 向导。应用内自动更新仍只下载并应用 `windows.zip`，不会重新运行首次安装程序。
 
-示例使用 `assets/logos/updater-windows/` 下的品牌资源，并通过 `nexora::desktop::install_updater` 安装公共 updater。应用页面不复制更新配置、弹窗或状态机；检查更新入口来自 `nexora::desktop`。
+安装向导包含安装目录、安装选项、确认、进度和完成页面。安装选项可勾选桌面快捷方式与开始菜单快捷方式；完成页可勾选立即运行应用。当前只支持不提权的当前用户安装，默认目录为 `%LOCALAPPDATA%\Programs\<app_id>`。
 
 ## 一次性准备
 
 ```powershell
 Copy-Item nexora.toml.example nexora.toml
+rustup target add ((rustc -vV | Select-String '^host: ').Line.Substring(6))
+cargo install cargo-wix --git https://github.com/volks73/cargo-wix `
+  --rev 9a8ed9486637e1fb839f209730eda6c95fd12d88 --locked --force
+dotnet tool install --global wix --version 5.0.2
+nexora doctor --fix
 nexora updater keygen --app updater-windows `
   --private-key-file .secrets/updater-windows.key
 ```
 
-把命令输出的公钥写入 `trusted_public_keys`。`.secrets/` 已被 Git 忽略；私钥只由 `nexora publish` 本地读取，不会进入应用 bundle。
+把 keygen 输出的公钥写入 `trusted_public_keys`。`.secrets/` 已被 Git 忽略；私钥只由 `nexora publish` 本地读取，不会进入应用安装包。
 
-Windows 实机构建还需要：
+还需要安装 Windows 10/11 SDK 的 Desktop C++ 工具。Nexora 会从 Windows Kits 标准目录自动定位 `rc.exe`、`fxc.exe` 和 `signtool.exe`，不要求手工修改 PATH。WiX 5.0.2 是当前验证版本；WiX 4 缺少本实现所用的新 BootstrapperApplications 扩展名，WiX 6+ 另有 OSMF 条款，应由使用方自行审查后决定是否升级。
 
-- NSIS 3 Unicode，并确保 `makensis.exe` 在 `PATH` 中。
-- Windows SDK，并确保 `rc.exe`、`signtool.exe` 在 `PATH` 中。
-- 如启用 `signing = "authenticode"`，当前用户证书存储中需要可用于签名的证书，并配置 `signing_thumbprint` 或环境变量 `WINDOWS_SIGN_CERTIFICATE_SHA1`。
-- 与证书匹配的 `publisher`、`expected_publisher` 和 RFC 3161 `timestamp_url`。
+如启用 `signing = "authenticode"`，当前用户证书存储中还需要可用于签名的证书，并配置 `signing_thumbprint` 或环境变量 `WINDOWS_SIGN_CERTIFICATE_SHA1`，同时配置匹配的 `publisher`、`expected_publisher` 和 RFC 3161 `timestamp_url`。
+
+## Windows 签名策略
+
+当前实际示例使用 `signing = "none"`，无需购买 Authenticode 证书。该模式仍会验证 Ed25519
+签名的 `latest.json`、manifest sequence、artifact size/SHA-256、ZIP 路径安全和两个 EXE 的 PE
+架构，只跳过 Windows 证书身份验证。不要在该模式残留 `signing_thumbprint`、
+`expected_publisher` 或 `timestamp_url`，否则构建会立即指出冲突字段；全局存在的
+`WINDOWS_SIGN_CERTIFICATE_SHA1` 不会让该模式自动开启签名。
+
+面向公众发布时建议切换到 `signing = "authenticode"`。构建会签署主程序、updater、MSI 和
+Setup EXE；应用内更新还会对 ZIP 中两个 EXE 执行 `WinVerifyTrust`，并严格匹配证书 thumbprint
+与 publisher。只配置其中一项、EXE 未签名或证书身份不匹配都会拒绝更新。Nexora 的 Ed25519
+公私钥只签署更新 manifest，不能替代 Windows 代码签名证书。
+
+## target 选择
+
+普通构建不需要 `[apps.updater-windows.targets]`。省略后，Nexora 使用 `rustc -vV` 返回的 host target：Intel/AMD Windows 为 `x86_64-pc-windows-msvc`，Windows on ARM 为 `aarch64-pc-windows-msvc`。
+
+只有需要明确覆盖时才传：
+
+```powershell
+nexora build --app updater-windows --target aarch64-pc-windows-msvc
+```
+
+旧配置中的 `targets.required` 仍可读取，但不再是普通项目的必填项。Nexora 不会在 build 中联网执行 `rustup target add`；缺失时会返回应执行的准确命令。
 
 ## 构建与发布
 
-每次发布只修改 `nexora.toml` 的版本与 build：
-
-```toml
-[apps.updater-windows.release]
-version = "1.0.1"
-build_number = 2
-```
-
-然后运行：
-
 ```powershell
 nexora icons generate --app updater-windows
+nexora doctor
 nexora build --app updater-windows
+nexora build --app updater-windows --channel beta
 nexora publish --app updater-windows --dry-run
 nexora publish --app updater-windows
 ```
 
-`build` 只在本地生成版本化 setup EXE、`windows.zip`、release notes 和 `artifact.json`，不访问 S3。`publish` 只校验并发布已有产物，不隐式构建。`manifest_sequence` 不写入配置，由 publish 验签远端 `latest.json` 后自动取远端 sequence 加一，首次发布为 1。
+示例同时声明 `stable` 与 `beta`。在真实终端里省略 `--channel` 时，`nexora build` 会显示
+channel 多选菜单并默认勾选 `stable`；CI 或脚本应显式传 `--channel stable`、`--channel beta`
+或 `--all-channels`，避免依赖非交互默认值。
+
+`build` 只在本地生成版本化 MSI、Setup EXE、`windows.zip`、release notes、SHA-256 旁车文件和 `artifact.json`，不访问 S3。Windows 更新 ZIP 由 Rust 直接写入，归档条目统一使用 `/`，不会把本机的 `\\` 路径分隔符带入更新协议。`publish` 只校验并发布已有产物，不隐式构建。MSI/Setup 用于首次安装，更新清单只引用 `windows.zip`。
 
 ## 真实验收
 
-- `signtool verify /pa` 通过主 EXE、updater EXE 和 setup EXE。
-- 产物目录没有 `.msi`，`artifact.json` 只包含 `windows_setup_exe` 与 `windows_update_zip`。
-- 首次安装入口是版本化 setup EXE；应用内更新只下载 `windows.zip`。
-- 安装目录、Apps & Features、开始菜单快捷方式和可选桌面快捷方式使用示例 ICO。
-- 自更新后保留 `%LOCALAPPDATA%\Programs\com.nexora.examples.updater-windows\` 安装目录、显示名称和品牌图标。
-- 设置 `NEXORA_EXAMPLE_HEALTH_FAILURE=before-health` 构建新版本后，安装应在健康超时前回滚到旧版本。
-- 从 Apps & Features 卸载时删除安装文件、快捷方式和注册表项，但不删除用户业务数据、配置和日志。
+- 分别启动 `.msi` 与 `.setup.exe`，两者都显示简体中文安装步骤。
+- 安装选项页可以切换“创建桌面快捷方式”和“创建开始菜单快捷方式”。
+- 完成页可以切换“安装完成后运行应用”，点击“完成”后行为与 checkbox 一致。
+- 安装目录默认位于 `%LOCALAPPDATA%\Programs\com.nexora.examples.updater-windows`，也可以在安装目录页改到用户选择的位置。
+- 主应用和 updater sidecar 都是 Windows GUI subsystem，正常启动和更新时不创建命令行窗口。
+- Apps & Features、开始菜单和可选桌面快捷方式使用示例名称与 ICO。
+- `artifact.json` 同时包含 `windows_msi`、`windows_setup_exe` 与 `windows_update_zip`；更新清单只包含 ZIP。
+- 启用签名时，`signtool verify /pa` 通过主 EXE、updater EXE、MSI 和 Setup EXE。
+- 不启用签名时，完整更新流程仍能通过，且不会显示必须配置 Authenticode 身份的错误。
+- 从 Apps & Features 卸载时删除安装文件、安装器创建的快捷方式和注册表项，但不删除用户业务数据、配置和日志；自定义到其他磁盘时也不得因卷根目录 `Config.Msi` ACL 弹出 1926。

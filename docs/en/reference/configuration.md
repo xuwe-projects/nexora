@@ -119,11 +119,26 @@ notarize = false
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
+installer = "wix"
+install_scope = "user"
+publisher = "Example Publisher"
+signing = "none"
+start_menu_shortcut_default = true
+launch_after_install_default = true
+minimum_windows_build = 15063
 
 [apps.desktop.platforms.linux]
 icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
 ```
 
-Paths must be workspace-relative and remain inside the workspace. The production packaging path in
-this phase covers macOS `.app`, DMG, and ICNS. Windows and Linux icons participate in configuration,
-scaffolding, and generation, but full installers and automatic replacement are not implemented yet.
+Paths must be workspace-relative and remain inside the workspace. `targets.required` is optional;
+build defaults to the host from `rustc -vV`, while `nexora build --target <triple>` overrides it.
+The production packaging path covers macOS `.app`/DMG and Windows x86_64/ARM64 Simplified Chinese
+WiX MSI, Burn Setup EXE, and update ZIP artifacts.
+
+Windows `publisher` remains required installer metadata in every signing mode. `signing = "none"`
+retains Ed25519 manifest verification, artifact SHA-256, ZIP safety, and PE architecture checks, but
+must not include `signing_thumbprint`, `expected_publisher`, or `timestamp_url`. With
+`signing = "authenticode"`, configure a certificate thumbprint (or
+`WINDOWS_SIGN_CERTIFICATE_SHA1`) and an RFC 3161 `timestamp_url`. `expected_publisher` defaults to
+`publisher`; the updater verifies both the main executable and sidecar certificate identities.

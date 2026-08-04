@@ -1,11 +1,12 @@
 # 桌面自动更新
 
-Nexora 使用 Ed25519 签名的 `latest.json`、匿名下载的 `.app.zip` 和独立 sidecar 完成应用内
-更新；DMG 只用于首次安装。S3/RustFS 凭据与更新签名私钥只存在于开发者发布环境，不能写入
-客户端、bundle、日志或仓库。
+Nexora 使用 Ed25519 签名的 `latest.json`、平台更新 ZIP 和独立 sidecar 完成应用内更新；macOS
+DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更新签名私钥只存在于开发者
+发布环境，不能写入客户端、bundle、日志或仓库。
 
-当前生产链路只实现 macOS 打包和自动安装。Windows/Linux 图标字段属于统一 app 注册，但当前
-不会生成对应安装包，也不会执行自动安装。
+当前生产链路实现 macOS 与 Windows x86_64/ARM64。Windows 首次构建同时生成简体中文 WiX MSI
+和 Burn Setup EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随当前锁定 GPUI，
+即 Windows 10 1703（build 15063）。
 
 ## 开发环境第一次准备
 
@@ -21,7 +22,7 @@ cargo install --git https://github.com/xuwe-projects/nexora \
   --no-default-features --features cli --bin nexora
 ```
 
-`nexora doctor` 只检查当前 macOS 工具链；缺少工具时返回失败。`nexora doctor --fix` 会尝试用
+`nexora doctor` 按当前宿主检查工具链；缺少工具时返回失败。在 macOS 上，`nexora doctor --fix` 会尝试用
 Cargo 安装 `cargo-bundle`、用 Homebrew 安装 `create-dmg`。Xcode Command Line Tools、Rust 与
 Homebrew 本身应由开发者先安装：
 
@@ -29,6 +30,20 @@ Homebrew 本身应由开发者先安装：
 nexora doctor
 nexora doctor --fix
 ```
+
+Windows 发布机安装 Windows 10/11 SDK Desktop C++ 工具、.NET SDK、支持现代 WiX 的固定
+`cargo-wix` 提交和 WiX 5.0.2：
+
+```powershell
+cargo install cargo-wix --git https://github.com/volks73/cargo-wix `
+  --rev 9a8ed9486637e1fb839f209730eda6c95fd12d88 --locked --force
+dotnet tool install --global wix --version 5.0.2
+nexora doctor --fix
+```
+
+`doctor --fix` 会安装与 WiX 版本精确匹配的 UI 和 BootstrapperApplications 扩展；不会替用户
+安装 Windows SDK、.NET SDK、WiX 本体或 Rust target。SDK 工具位于标准 Windows Kits 目录即可，
+无需手工把 `rc.exe`、`fxc.exe`、`signtool.exe` 加入 PATH。
 
 ## 第一次创建项目、构建与安装
 
@@ -44,7 +59,8 @@ nexora icons generate --app desktop
 nexora build --app desktop
 ```
 
-第一次构建会为所选 target 安装 Rust target，并生成：
+构建默认使用 `rustc -vV` 的 host target，也可重复传入 `--target` 显式覆盖。Nexora 不会在构建中
+联网安装 Rust target；缺失时会提示先执行对应的 `rustup target add <target>`。构建会生成：
 
 - `.app`：本地 bundle，包含主程序、ICNS、sidecar 和 `nexora-updater.json`。
 - `.app.zip`：应用内更新负载；sidecar 下载、校验并替换当前 `.app`。
@@ -95,17 +111,20 @@ icon_source = "assets/logos/desktop/logo-icon-source.png"
 managed = true
 
 [apps.desktop.release]
-channel = "stable"
+default_channel = "stable"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/desktop-update.key"
 
+[apps.desktop.release.channels.beta]
+
+[apps.desktop.release.channels.stable]
+
 [apps.desktop.updater]
 enabled = true
 check_on_launch = true
-feed_url = "https://downloads.example.com/desktop-releases/products/desktop/stable/latest.json"
-channels = ["stable"]
+channels = ["stable", "beta"]
 trusted_public_keys = ["desktop-main:ed25519:BASE64_PUBLIC_KEY"]
 signing_key_env = "DESKTOP_UPDATE_SIGNING_KEY"
 check_interval = "15m"
@@ -113,9 +132,6 @@ check_jitter = "1m"
 offline_grace_period = "24h"
 mandatory_restart_delay = "15m"
 health_timeout = "2m"
-
-[apps.desktop.targets]
-required = ["aarch64-apple-darwin"]
 
 [apps.desktop.platforms.macos]
 icon = "assets/logos/desktop/logo-icon.icns"
@@ -125,6 +141,14 @@ expected_team_id = "ABCDE12345"
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
+installer = "wix"
+install_scope = "user"
+publisher = "Example Publisher"
+signing = "none"
+desktop_shortcut_default = false
+start_menu_shortcut_default = true
+launch_after_install_default = true
+minimum_windows_build = 15063
 
 [apps.desktop.platforms.linux]
 icons = [
@@ -174,7 +198,9 @@ icons = [
 | `branding.application_logo` | 是 | 应用内 PNG，通常为 128px | 无 | 否 | 文件不存在或非 PNG 时失败 |
 | `branding.icon_source` | 是 | 图标生成源 PNG | 无 | 否 | 文件不存在、格式/尺寸/透明通道无效时失败 |
 | `branding.managed` | 否 | 允许 `icons generate` 重建已有输出 | `false` | 否 | `false` 且输出已存在时拒绝覆盖；可显式 `--force` |
-| `release.channel` | 是 | 发布通道，如 `stable`；必须包含在 updater channels | 无 | 否 | 不一致时失败 |
+| `release.channel` | 单通道时是 | 兼容的单发布通道，如 `stable`；不能与 `release.channels` 同时使用 | 无 | 否 | 冲突或不属于 updater channels 时失败 |
+| `release.default_channel` | 多通道时是 | 交互菜单默认勾选的 channel，如 `stable` | 无 | 否 | 不存在于 `release.channels` 时失败 |
+| `release.channels.<name>` | 多通道时是 | 声明 `stable`、`beta` 等 channel，可覆盖 version、build number、minimum version 与 runtime config | 无 | 否 | 名称无效或静态配置冲突时失败 |
 | `release.version` | 是 | 完整字段 `${CARGO_PKG_VERSION}`，或显式 SemVer 如 `"1.2.3"` | 无 | 否 | 未知/片段表达式或非 SemVer 失败 |
 | `release.build_number` | 是 | 完整字段 `${BUILD_DATETIME}`，或显式正整数如 `42` | 无 | 否 | 未知字符串、0 或溢出失败 |
 | `release.minimum_supported_version` | 否 | 低于该版本时进入强制更新门禁 | `"0.0.0"` | 否 | 非 SemVer 失败 |
@@ -215,12 +241,23 @@ icons = [
 
 | 字段 | 必填 | 作用、来源与示例 | 默认值 | 秘密 | 配置错误行为 |
 | --- | --- | --- | --- | --- | --- |
-| `targets.required` | 是 | 完整发布必须包含的 macOS Rust targets | 无 | 否 | 空、重复或不支持 target 时失败 |
+| `targets.required` | 否 | 兼容旧配置的 target 列表；新项目通常省略 | `rustc -vV` 的 host | 否 | 重复或不支持 target 时失败 |
 | `platforms.macos.icon` | 是 | 已生成的 `.icns` | 无 | 否 | 文件缺失或 ICNS 无效时失败 |
 | `platforms.macos.signing` | 是 | `none`、`ad_hoc` 或 `developer_id` | 无 | 否 | 未知值失败；生产应为 `developer_id` |
 | `platforms.macos.notarize` | 是 | 是否提交 Apple notarization | 无 | 否 | `true` 且非 Developer ID 时失败 |
 | `platforms.macos.expected_team_id` | 否 | sidecar 安装前要求的新 bundle Team ID | 未配置 | 否 | 不匹配时拒绝安装；ad-hoc 本地验证应省略 |
-| `platforms.windows.icon` | 是 | 统一注册的 ICO | 无 | 否 | 文件缺失/无效时图标生成或校验失败；当前不打包 Windows |
+| `platforms.windows.icon` | 是 | 主 EXE、MSI 与 Setup EXE 使用的 ICO | 无 | 否 | 文件缺失或 ICO 无效时失败 |
+| `platforms.windows.installer` | 否 | Windows 安装器实现；固定为 `wix` | `wix` | 否 | 其他值失败 |
+| `platforms.windows.install_scope` | 否 | 当前只支持无需提权的 `user` | `user` | 否 | `machine` 会被明确拒绝 |
+| `platforms.windows.publisher` | Windows 是 | 安装器发布者和版本资源公司名 | 无 | 否 | Windows 构建缺失时失败 |
+| `platforms.windows.signing` | 否 | `none` 跳过 Authenticode；`authenticode` 签署并验证 Windows 文件身份 | `none` | 否 | 未知值失败；公开生产发布建议使用 `authenticode` |
+| `platforms.windows.signing_thumbprint` | Authenticode 时是 | 当前用户 `My` 证书存储中的 40 位 SHA-1 证书指纹；也可由 `WINDOWS_SIGN_CERTIFICATE_SHA1` 注入 | 未配置 | 否 | `none` 模式配置该字段，或格式无效时构建失败 |
+| `platforms.windows.expected_publisher` | 否 | updater 期望的 signer 证书 SimpleName；省略时使用 `publisher` | `publisher` | 否 | `none` 模式配置、显式空值或运行时不匹配时失败 |
+| `platforms.windows.timestamp_url` | Authenticode 时是 | RFC 3161 时间戳服务 URL | 未配置 | 否 | `none` 模式配置、缺失或空值时构建失败 |
+| `platforms.windows.desktop_shortcut_default` | 否 | 桌面快捷方式 checkbox 默认值 | `false` | 否 | 非布尔值无法解析 |
+| `platforms.windows.start_menu_shortcut_default` | 否 | 开始菜单快捷方式 checkbox 默认值 | `true` | 否 | 非布尔值无法解析 |
+| `platforms.windows.launch_after_install_default` | 否 | 完成页立即运行 checkbox 默认值 | `true` | 否 | 非布尔值无法解析 |
+| `platforms.windows.minimum_windows_build` | 否 | 安装时检查的最低 Windows build | `15063` | 否 | 低于 GPUI 基线时失败 |
 | `platforms.linux.icons` | 是 | 统一注册的 PNG 列表 | 无 | 否 | 空列表或文件无效时失败；当前不打包 Linux |
 
 ## 更新签名密钥
@@ -245,24 +282,59 @@ nexora updater keygen --app desktop \
 客户端能验证新签名后，最后在后续客户端移除旧公钥。直接替换唯一公钥会让旧客户端永久无法
 验证新清单。
 
-三类凭据不可混淆：RustFS/S3 AK/SK 只授权上传对象；Ed25519 私钥签署更新清单，公钥内置于
-客户端验证来源；Apple Developer ID 证书签署 macOS 代码身份并配合 notarization/Gatekeeper。
-它们互不替代，也不应存放在同一配置文件。
+四类凭据不可混淆：RustFS/S3 AK/SK 只授权上传对象；Ed25519 私钥签署更新清单，公钥内置于
+客户端验证来源；Apple Developer ID 证书签署 macOS 代码身份并配合 notarization/Gatekeeper；
+Windows Authenticode 证书签署 EXE、MSI 与 Setup EXE。它们互不替代；发布私钥和证书私钥都
+不能进入客户端、仓库或日志。
 
 ## 签名与验证链路
 
 publish 使用私钥签署 canonical JSON manifest payload，并把签名信封作为 `latest.json` 上传；
 客户端只接受内置公钥验证通过的清单。随后客户端与 sidecar 都验证 app ID、channel、version、
-build number、target 和 release 状态，并对下载的 `.app.zip` 做长度与 SHA-256 校验。macOS
-Developer ID 发布还验证新 bundle 的代码签名与 `expected_team_id`。sidecar 在真正替换前会再次
-独立完成清单、artifact、应用身份和代码签名验证，不能信任主进程传入的 URL 或 hash。
+build number、target 和 release 状态，并对下载的更新归档做长度与 SHA-256 校验。macOS
+Developer ID 发布还验证新 bundle 的代码签名与 `expected_team_id`。Windows 始终验证 ZIP
+路径安全以及主程序和 updater 的 PE 架构；仅在 `signing = "authenticode"` 时进一步通过
+`WinVerifyTrust`、证书 thumbprint 和 publisher 验证两个 EXE。sidecar 在真正替换前会再次独立
+完成清单、artifact、应用身份和平台代码签名验证，不能信任主进程传入的 URL 或 hash。
 
-SHA-256 只证明下载内容与已签清单一致，不证明发布者身份；发布者身份来自 Ed25519 清单签名，
-macOS 可执行身份来自 Developer ID 与 Apple 信任链。
+SHA-256 只证明下载内容与已签清单一致，不证明发布者身份；更新发布授权来自 Ed25519 清单
+签名，macOS 可执行身份来自 Developer ID 与 Apple 信任链，Windows 可执行身份在启用时来自
+Authenticode 与 Windows 信任链。
+
+### Windows Authenticode 策略
+
+本地开发、示例和受控内网测试可以显式使用：
+
+```toml
+[apps.desktop.platforms.windows]
+publisher = "Example Publisher"
+signing = "none"
+```
+
+该模式仍强制执行 Ed25519 manifest 验签、sequence 防重放、artifact size/SHA-256、ZIP 安全和
+PE 架构验证，只跳过 Authenticode。`signing_thumbprint`、`expected_publisher` 或 `timestamp_url`
+不能残留在该模式中，否则构建立即失败；全局存在的 `WINDOWS_SIGN_CERTIFICATE_SHA1` 会被忽略。
+
+公开生产发布建议使用：
+
+```toml
+[apps.desktop.platforms.windows]
+publisher = "Example Publisher"
+signing = "authenticode"
+signing_thumbprint = "00112233445566778899AABBCCDDEEFF00112233"
+expected_publisher = "Example Publisher"
+timestamp_url = "https://timestamp.example.com"
+```
+
+构建会签署并验证主程序、updater、MSI 和 Setup EXE；应用内更新会拒绝未签名、证书链无效、
+thumbprint 不匹配或 publisher 不匹配的主程序和 updater。自签名证书可用于受控测试，但外部
+Windows 设备默认不会信任它。
 
 ## 接入公共 updater 与 sidecar
 
-应用从 bundle 读取构建时嵌入的安全配置，并在 `Application::initialize` 安装一次：
+应用从当前安装目录读取构建时嵌入的安全配置：macOS 位于
+`.app/Contents/Resources/nexora-updater.json`，Windows 位于主 EXE 同级。应用在
+`Application::initialize` 安装一次：
 
 ```rust
 use nexora::desktop;
@@ -276,6 +348,10 @@ fn initialize(
     desktop::install_updater(updater, cx)
 }
 ```
+
+同一个应用二进制需要同时支持 `updater.enabled = false` 的本地或私有构建时，使用
+`from_current_bundle_if_present()`。它只在配置文件缺失时返回 `None`；文件存在但无效时
+仍会报错，不会绕过公钥、传输或签名约束。
 
 独立 sidecar binary 只依赖 `nexora` 的 `desktop` feature：
 
@@ -297,6 +373,18 @@ fn main() -> std::process::ExitCode {
 Dialog、Progress、Button、Icon、Alert/Notification 展示进度。不要在应用中复制 updater UI、
 状态机或 sidecar。
 
+Windows 应用内更新不要求管理员权限。框架会在用户所选安装目录的父目录创建隐藏事务根
+`<install-parent>/.nexora-updater/<app_id>`，让 staging、pending、backup、健康状态和安装结果与
+安装目录始终位于同一卷；事务目录不会放进待替换的应用目录。用户点击立即重启前，框架会先
+检查当前目录、暂存目录、PE 入口、同卷关系以及父目录的创建和重命名权限，预检失败时保持主
+程序运行并显示错误，不会先退出再静默失败。
+
+“稍后重启”使用同步后的临时文件和 Windows 原子替换提交 `pending.json`，已有待安装版本也可
+安全覆盖。记录一旦提交，后续目录同步只能作为尽力而为的耐久性增强，不能再把已提交 payload
+移回 staging。sidecar 在替换或健康确认失败时会停止失败的新进程、恢复旧版本、先写入受限的
+用户可见失败结果，再重新打开旧版本；下次启动通过现有 Notification 显示该结果。安装到当前
+用户不可写的位置会在预检阶段失败，此时应重新选择可写安装路径，而不是把 updater 整体提权。
+
 ## build、publish 与第一次升级验证
 
 `nexora build` 在任何 target 构建前原子写入
@@ -306,28 +394,34 @@ version/build number、两项来源、创建 Unix 秒和本次 targets；同一�
 全部 target 的 artifact 已完整后再次显式 build，动态构建号会严格增大，旧版本化产物不会删除。
 损坏或不支持的收据会在构建前失败，不从目录名猜测身份。
 
-`nexora build` 只构建本地 `.app`、DMG、`.app.zip`、sidecar、bundle 配置、每个 ZIP/DMG 的
-`.sha256` 和 `artifact.json`，不访问对象存储。旁车内容使用小写 SHA-256、两个空格、原始文件名
+`nexora build` 只构建本地平台产物、sidecar、bundle 配置、每个发布产物的 `.sha256` 和
+`artifact.json`，不访问对象存储。Windows 产物为 MSI、安装型 Setup EXE 与更新 ZIP；旁车内容使用小写 SHA-256、两个空格、原始文件名
 和 LF 换行。版本、构建号、图标、updater 配置和 sidecar 全部写入后才签名；ZIP 与 DMG 都来自
 同一个已完成资源写入并签名的 `.app`。
 
 `nexora publish`（包括 yank）只从当前 release receipt 读取 version/build number，不重新计算
-本机时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version、当前配置和
-required targets 一致，再逐个验证 `artifact.json` 身份、文件存在性、大小与 SHA-256。dry-run
+本机时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version 和当前配置
+一致，并按收据冻结的 targets 逐个验证 `artifact.json` 身份、文件存在性、大小与 SHA-256。dry-run
 执行相同的本地与远端预检，但不写本地或远端；available identity 必须严格高于远端
 `(version, build_number)`。
 
 第一次发布：
 
 ```bash
-nexora build --app desktop
+nexora build --app desktop --channel stable
 nexora publish --app desktop --dry-run
 nexora publish --app desktop
 ```
 
+配置多个 `release.channels` 后，真实终端中省略 `--channel` 会出现多选菜单并默认勾选
+`default_channel`；非交互 CI 应显式传可重复的 `--channel` 或 `--all-channels`。
+
 publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则使用远端 sequence 加一。
-它按“版本化 ZIP/DMG 及其 `.sha256` → release notes → immutable sequence manifest → latest
-DMG aliases → `latest.json`”顺序上传，最后匿名回读校验旁车、mutable 对象和 updater 下载 URL。
+它按“版本化平台产物及其 `.sha256` → release notes → immutable sequence manifest → latest
+安装器 aliases → `latest.json`”顺序上传，最后匿名回读校验旁车、mutable 对象和 updater 下载
+URL。每个 macOS target 生成 `latest-<arch>.dmg`，每个 Windows target 生成
+`latest-<arch>.exe` 与 `latest-<arch>.msi`；单 target 发布还分别生成无架构后缀的
+`latest.dmg`、`latest.exe` 或 `latest.msi`。
 发布端从重新校验后的产物摘要生成旁车内容，因此没有本地 `.sha256` 的旧构建仍可发布。对象布局为：
 
 ```text

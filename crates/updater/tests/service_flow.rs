@@ -1,12 +1,10 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "windows"))]
 
 use std::{
     fs,
     io::{Read as _, Write as _},
     net::TcpListener,
-    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -14,6 +12,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "macos")]
+use std::{os::unix::fs::PermissionsExt as _, process::Command};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -23,6 +24,8 @@ use updater::{
     ReleaseStatus, SignedUpdateManifest, UpdateArtifact, UpdateChannel, UpdateConfig, UpdateEvent,
     UpdateManifest, UpdateManifestSignature, UpdateTarget, Updater,
 };
+#[cfg(target_os = "windows")]
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -49,7 +52,8 @@ fn test_root(name: &str) -> PathBuf {
     ))
 }
 
-fn create_signed_app(root: &Path, name: &str) -> PathBuf {
+#[cfg(target_os = "macos")]
+fn create_test_app(root: &Path, name: &str) -> PathBuf {
     let app = root.join(format!("{name}.app"));
     let macos = app.join("Contents/MacOS");
     fs::create_dir_all(&macos).unwrap();
@@ -79,6 +83,82 @@ fn create_signed_app(root: &Path, name: &str) -> PathBuf {
     app
 }
 
+#[cfg(target_os = "windows")]
+fn create_test_app(root: &Path, name: &str) -> PathBuf {
+    let app = root.join(name);
+    fs::create_dir_all(&app).unwrap();
+    let (main_exe, updater_exe) = current_test_exe_names();
+    write_current_arch_pe(&app.join(main_exe));
+    write_current_arch_pe(&app.join(updater_exe));
+    fs::write(app.join("nexora-updater.json"), b"{}").unwrap();
+    app
+}
+
+#[cfg(target_os = "windows")]
+fn current_test_exe_names() -> (String, String) {
+    let main = std::env::current_exe()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let stem = main.strip_suffix(".exe").unwrap();
+    let updater = format!("{stem}-updater.exe");
+    (main, updater)
+}
+
+#[cfg(target_os = "windows")]
+fn write_current_arch_pe(path: &Path) {
+    let machine = if cfg!(target_arch = "x86_64") {
+        0x8664_u16
+    } else if cfg!(target_arch = "aarch64") {
+        0xaa64_u16
+    } else {
+        panic!("unsupported Windows test architecture");
+    };
+    let pe_offset = 0x80_usize;
+    let mut bytes = vec![0_u8; 0x100];
+    bytes[0..2].copy_from_slice(b"MZ");
+    bytes[0x3c..0x40].copy_from_slice(&(pe_offset as u32).to_le_bytes());
+    bytes[pe_offset..pe_offset + 4].copy_from_slice(b"PE\0\0");
+    bytes[pe_offset + 4..pe_offset + 6].copy_from_slice(&machine.to_le_bytes());
+    bytes[pe_offset + 24..pe_offset + 26].copy_from_slice(&0x20b_u16.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+fn package_test_app(app: &Path, archive: &Path) {
+    let status = Command::new("/usr/bin/ditto")
+        .args(["-c", "-k", "--keepParent"])
+        .arg(app)
+        .arg(archive)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[cfg(target_os = "windows")]
+fn package_test_app(app: &Path, archive: &Path) {
+    let file = fs::File::create(archive).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    for entry in fs::read_dir(app).unwrap() {
+        let entry = entry.unwrap();
+        zip.start_file(entry.file_name().to_string_lossy(), options)
+            .unwrap();
+        zip.write_all(&fs::read(entry.path()).unwrap()).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn artifact_kind() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows_update_zip"
+    } else {
+        "macos_app_zip"
+    }
+}
+
 fn sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -98,15 +178,13 @@ fn stage_update_in_cache(
     fs::create_dir_all(&root).unwrap();
     let source = root.join("source");
     fs::create_dir_all(&source).unwrap();
-    let staged_app = create_signed_app(&source, "Fixture");
-    let archive = root.join("update.app.zip");
-    let status = Command::new("/usr/bin/ditto")
-        .args(["-c", "-k", "--keepParent"])
-        .arg(&staged_app)
-        .arg(&archive)
-        .status()
-        .unwrap();
-    assert!(status.success());
+    let staged_app = create_test_app(&source, "Fixture");
+    let archive = root.join(if cfg!(target_os = "windows") {
+        "update.windows.zip"
+    } else {
+        "update.app.zip"
+    });
+    package_test_app(&staged_app, &archive);
     let artifact = fs::read(&archive).unwrap();
 
     let signing_key = SigningKey::from_bytes(&[29_u8; 32]);
@@ -123,10 +201,10 @@ fn stage_update_in_cache(
         notes_url: None,
         artifacts: vec![UpdateArtifact {
             target: target.as_str().to_owned(),
-            url: "update.app.zip".to_owned(),
+            url: archive.file_name().unwrap().to_string_lossy().into_owned(),
             sha256: sha256(&artifact),
             size: artifact.len() as u64,
-            kind: "macos_app_zip".to_owned(),
+            kind: artifact_kind().to_owned(),
         }],
     };
     let signature = signing_key.sign(&serde_json::to_vec(&payload).unwrap());
@@ -178,10 +256,7 @@ fn stage_update_in_cache(
     });
 
     let cache = cache_override.unwrap_or_else(|| root.join("cache"));
-    let current_app = create_signed_app(&root, "Current");
-    let sidecar = root.join("sidecar");
-    fs::write(&sidecar, b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o755)).unwrap();
+    let current_app = create_test_app(&root, "Current");
     let config = UpdateConfig::new(
         format!("http://{address}/latest.json"),
         "com.example.pending-flow",
@@ -193,8 +268,14 @@ fn stage_update_in_cache(
     .with_trusted_public_keys([trusted_key])
     .unwrap()
     .with_app_bundle_path(current_app)
-    .with_sidecar_path(sidecar)
     .with_cache_dir(&cache);
+    #[cfg(target_os = "macos")]
+    let config = {
+        let sidecar = root.join("sidecar");
+        fs::write(&sidecar, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o755)).unwrap();
+        config.with_sidecar_path(sidecar)
+    };
     let session = Updater::new(config.clone()).start().unwrap();
     let events = session.events();
     let staged = loop {
@@ -233,7 +314,7 @@ fn config_for_current(fixture: &StagedFixture, version: &str, build_number: u64)
         "pending-test:ed25519:{}",
         STANDARD.encode(signing_key.verifying_key().to_bytes())
     );
-    UpdateConfig::new(
+    let config = UpdateConfig::new(
         fixture.config.manifest_url().as_str(),
         "com.example.pending-flow",
         version,
@@ -243,9 +324,15 @@ fn config_for_current(fixture: &StagedFixture, version: &str, build_number: u64)
     .unwrap()
     .with_trusted_public_keys([trusted_key])
     .unwrap()
-    .with_app_bundle_path(fixture.root.join("Current.app"))
-    .with_sidecar_path(fixture.root.join("sidecar"))
-    .with_cache_dir(&fixture.cache)
+    .with_app_bundle_path(fixture.root.join(if cfg!(target_os = "windows") {
+        "Current"
+    } else {
+        "Current.app"
+    }))
+    .with_cache_dir(&fixture.cache);
+    #[cfg(target_os = "macos")]
+    let config = config.with_sidecar_path(fixture.root.join("sidecar"));
+    config
 }
 
 fn staging_is_empty(cache: &Path) -> bool {
@@ -291,7 +378,7 @@ fn preserved_update_survives_drop_and_restores_without_artifact_request() {
     assert_eq!(
         requests
             .iter()
-            .filter(|path| path.as_str() == "/update.app.zip")
+            .filter(|path| path.ends_with(".zip") && path.as_str() != "/latest.json")
             .count(),
         1,
         "恢复待安装更新不得再次请求 artifact"

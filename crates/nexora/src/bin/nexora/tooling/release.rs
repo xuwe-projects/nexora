@@ -15,11 +15,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     fs::{self, OpenOptions},
-    io::{IsTerminal as _, Write as _},
+    io::{self, IsTerminal as _, Write as _},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const CONFIG_FILE_NAME: &str = "nexora.toml";
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -28,6 +29,8 @@ const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
+const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
+const CARGO_WIX_MODERN_REVISION: &str = "9a8ed9486637e1fb839f209730eda6c95fd12d88";
 
 /// `nexora build` 的 app/channel 多选参数。
 #[derive(Args, Debug, Clone)]
@@ -44,6 +47,9 @@ pub(crate) struct BuildConfig {
     /// 为每个选中 app 构建全部 channel。
     #[arg(long)]
     all_channels: bool,
+    /// 显式指定构建 target；省略时从当前 rustc host 自动推导。
+    #[arg(long = "target")]
+    target: Vec<String>,
 }
 
 /// `nexora publish` 的操作型参数。
@@ -118,6 +124,7 @@ struct AppConfig {
     branding: BrandingConfig,
     release: Option<ReleaseConfig>,
     updater: UpdaterConfigFile,
+    #[serde(default)]
     targets: TargetConfig,
     platforms: PlatformConfig,
 }
@@ -198,9 +205,10 @@ struct UpdaterConfigFile {
     health_timeout: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TargetConfig {
+    #[serde(default)]
     required: Vec<String>,
 }
 
@@ -242,6 +250,8 @@ struct WindowsConfig {
     expected_publisher: Option<String>,
     #[serde(default)]
     desktop_shortcut_default: bool,
+    #[serde(default = "default_start_menu_shortcut")]
+    start_menu_shortcut_default: bool,
     #[serde(default = "default_launch_after_install")]
     launch_after_install_default: bool,
     #[serde(default)]
@@ -266,7 +276,7 @@ enum SigningMode {
 #[serde(rename_all = "snake_case")]
 enum WindowsInstaller {
     #[default]
-    Nsis,
+    Wix,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -343,6 +353,7 @@ struct ValidatedRelease {
     runtime_config_source: String,
     runtime_config_sha256: String,
     updater_feed: String,
+    targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -385,6 +396,7 @@ struct BuildPlan {
     app_path: PathBuf,
     app_zip_path: PathBuf,
     dmg_path: PathBuf,
+    msi_path: PathBuf,
     setup_path: PathBuf,
     artifact_path: PathBuf,
     notes_source: PathBuf,
@@ -400,6 +412,7 @@ struct WindowsBuildOptions {
     timestamp_url: Option<String>,
     expected_publisher: Option<String>,
     desktop_shortcut_default: bool,
+    start_menu_shortcut_default: bool,
     launch_after_install_default: bool,
     minimum_windows_build: u32,
 }
@@ -456,6 +469,7 @@ enum ArtifactKind {
     MacosAppZip,
     MacosDmg,
     WindowsSetupExe,
+    WindowsMsi,
     #[serde(rename = "windows_update_zip")]
     WindowsZip,
 }
@@ -564,12 +578,13 @@ impl ReleaseReceipt {
             runtime_config_source: configured.runtime_config_source.clone(),
             runtime_config_sha256: configured.runtime_config_sha256.clone(),
             updater_feed: configured.updater_feed.clone(),
+            targets: self.targets.clone(),
         })
     }
 }
 
 impl ResolvedReleaseConfig {
-    fn validated_release(&self, build_number: u64) -> ValidatedRelease {
+    fn validated_release(&self, build_number: u64, targets: Vec<String>) -> ValidatedRelease {
         ValidatedRelease {
             channel: self.channel.clone(),
             version: self.version.clone(),
@@ -581,6 +596,7 @@ impl ResolvedReleaseConfig {
             runtime_config_source: self.runtime_config_source.clone(),
             runtime_config_sha256: self.runtime_config_sha256.clone(),
             updater_feed: self.updater_feed.clone(),
+            targets,
         }
     }
 }
@@ -598,7 +614,7 @@ struct PublishPlan {
     required_targets: Vec<String>,
     immutable_payloads: Vec<Upload>,
     sequence_manifest: Upload,
-    latest_dmg_aliases: Vec<Upload>,
+    latest_installer_aliases: Vec<Upload>,
     latest: Upload,
     latest_json: Vec<u8>,
     verify_urls: Vec<Verification>,
@@ -634,26 +650,10 @@ pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
         let package_version = cargo_package_version(&project.root, &app.package, false)?;
         let configured =
             project.resolved_release(&app_key, app, &channel, Some(package_version))?;
-        let targets = app
-            .targets
-            .required
-            .iter()
-            .filter(|target| host_can_build(target))
-            .cloned()
-            .collect::<Vec<_>>();
-        if targets.is_empty() {
-            return Err(CliError::new(format!(
-                "当前宿主不能构建 app `{app_key}` channel `{channel}` 的任何 required target"
-            )));
-        }
+        let targets = project.resolve_build_targets(app_key.as_str(), app, &config.target)?;
         let receipt = project.prepare_build_receipt(&app_key, app, &configured, &targets)?;
         let release = receipt.validated_release(&configured)?;
-        let plans = project.build_plans(&app_key, &release, false)?;
-        if plans.is_empty() {
-            return Err(CliError::new(format!(
-                "当前宿主不能构建 app `{app_key}` channel `{channel}` 的任何 required target"
-            )));
-        }
+        let plans = project.build_plans(&app_key, &release, &targets)?;
         for plan in &plans {
             execute_build(plan)?;
         }
@@ -802,11 +802,6 @@ impl ProjectDocument {
                 )));
             }
             let channels = self.release_channel_names(app_key, app)?;
-            if app.targets.required.is_empty() {
-                return Err(CliError::new(format!(
-                    "app `{app_key}` 的 targets.required 不能为空"
-                )));
-            }
             let mut seen = BTreeSet::new();
             for target in &app.targets.required {
                 validate_required_target(target)?;
@@ -865,6 +860,34 @@ impl ProjectDocument {
             }
         }
         Ok(())
+    }
+
+    fn resolve_build_targets(
+        &self,
+        app_key: &str,
+        app: &AppConfig,
+        explicit: &[String],
+    ) -> CliResult<Vec<String>> {
+        let requested = if !explicit.is_empty() {
+            explicit.to_vec()
+        } else if !app.targets.required.is_empty() {
+            app.targets.required.clone()
+        } else {
+            vec![rustc_host_target()?]
+        };
+        let mut targets = Vec::new();
+        for target in requested {
+            validate_required_target(&target)?;
+            if !host_can_build(&target) {
+                return Err(CliError::new(format!(
+                    "当前宿主不能构建 app `{app_key}` 的 target `{target}`"
+                )));
+            }
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+        Ok(targets)
     }
 
     fn release_channel_names(&self, app_key: &str, app: &AppConfig) -> CliResult<Vec<String>> {
@@ -1108,20 +1131,38 @@ impl ProjectDocument {
             .transpose()?;
         if let Some(receipt) = &previous {
             validate_receipt_structure(receipt, &path)?;
-            if receipt_matches_configuration(receipt, app_key, app, configured, targets)
-                && (!matches!(configured.build_number, ResolvedBuildNumber::BuildDatetime)
-                    || !release_targets_complete(
-                        &self.root,
-                        app_key,
-                        app,
-                        &receipt.validated_release(configured)?,
-                    ))
-            {
-                println!(
-                    "复用 release receipt：{} / build {}",
-                    receipt.version, receipt.build_number
+            if receipt_matches_configuration(receipt, app_key, app, configured) {
+                let complete = release_targets_complete(
+                    &self.root,
+                    app_key,
+                    app,
+                    &receipt.validated_release(configured)?,
                 );
-                return Ok(receipt.clone());
+                let already_contains_targets = targets
+                    .iter()
+                    .all(|target| receipt.targets.contains(target));
+                if matches!(configured.build_number, ResolvedBuildNumber::BuildDatetime)
+                    && complete
+                    && already_contains_targets
+                {
+                    // 已完成的动态构建再次执行时创建新 build；新增架构则继续补齐同一 receipt。
+                } else {
+                    let original_targets = &receipt.targets;
+                    let mut receipt = receipt.clone();
+                    for target in targets {
+                        if !receipt.targets.contains(target) {
+                            receipt.targets.push(target.clone());
+                        }
+                    }
+                    if receipt.targets != *original_targets {
+                        write_release_receipt_atomic(&path, &receipt)?;
+                    }
+                    println!(
+                        "复用 release receipt：{} / build {}",
+                        receipt.version, receipt.build_number
+                    );
+                    return Ok(receipt);
+                }
             }
         }
 
@@ -1163,15 +1204,9 @@ impl ProjectDocument {
         let receipt_path = self.release_receipt_path(app_key, &configured.channel);
         let receipt = read_release_receipt(&receipt_path)?;
         validate_receipt_structure(&receipt, &receipt_path)?;
-        if !receipt_matches_configuration(
-            &receipt,
-            app_key,
-            app,
-            &configured,
-            &app.targets.required,
-        ) {
+        if !receipt_matches_configuration(&receipt, app_key, app, &configured) {
             return Err(CliError::new(format!(
-                "`{}` 与当前 app/package/channel/version/source/build_number/targets 配置不一致",
+                "`{}` 与当前 app/package/channel/version/source/build_number 配置不一致",
                 receipt_path.display()
             )));
         }
@@ -1329,15 +1364,13 @@ impl ProjectDocument {
         &self,
         app_key: &str,
         release: &ValidatedRelease,
-        include_all_targets: bool,
+        targets: &[String],
     ) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
         let brand_assets = self.brand_assets(app_key, app)?;
         let publish_target = &self.config.publish.targets[&app.publish_target];
-        app.targets
-            .required
+        targets
             .iter()
-            .filter(|target| include_all_targets || host_can_build(target))
             .map(|target| {
                 let arch = target_arch_alias(target)?;
                 let platform = target_platform(target)?;
@@ -1397,6 +1430,7 @@ impl ProjectDocument {
                         }
                     },
                     dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
+                    msi_path: release_dir.join(format!("{technical_stem}.msi")),
                     setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
                     artifact_path: release_dir.join("artifact.json"),
                     notes_source: self
@@ -1470,7 +1504,7 @@ impl ProjectDocument {
             .ok_or_else(|| CliError::new("远端 manifest sequence 已达到 u64 上限"))?;
 
         let mut immutable_payloads = Vec::new();
-        let mut latest_dmg_aliases = Vec::new();
+        let mut latest_installer_aliases = Vec::new();
         let mut verify_urls = Vec::new();
         let mut manifest_artifacts = Vec::new();
         if matches!(status, ReleaseStatus::Available) {
@@ -1485,6 +1519,7 @@ impl ProjectDocument {
                 ArtifactKind::MacosAppZip,
                 ArtifactKind::MacosDmg,
                 ArtifactKind::WindowsSetupExe,
+                ArtifactKind::WindowsMsi,
                 ArtifactKind::WindowsZip,
             ] {
                 for artifact in local_artifacts.iter().filter(|item| item.kind == kind) {
@@ -1555,12 +1590,12 @@ impl ProjectDocument {
             } else {
                 None
             };
-            latest_dmg_aliases = latest_dmg_uploads(
+            latest_installer_aliases = latest_installer_uploads(
                 &local_artifacts,
                 &channel_prefix,
-                app.targets.required.len() == 1,
+                release.targets.len() == 1,
             )?;
-            for upload in &latest_dmg_aliases {
+            for upload in &latest_installer_aliases {
                 let bytes = upload.source.bytes()?;
                 verify_urls.push(Verification {
                     url: public_object_url(&target, &upload.key),
@@ -1589,7 +1624,7 @@ impl ProjectDocument {
                 observed_sequence,
                 sequence,
                 immutable_payloads,
-                latest_dmg_aliases,
+                latest_installer_aliases,
                 latest_key,
                 latest_url,
                 verify_urls,
@@ -1620,7 +1655,7 @@ impl ProjectDocument {
             observed_sequence,
             sequence,
             immutable_payloads,
-            latest_dmg_aliases,
+            latest_installer_aliases,
             latest_key,
             latest_url,
             verify_urls,
@@ -1641,7 +1676,7 @@ fn finalize_publish_plan(
     observed_sequence: Option<u64>,
     sequence: u64,
     immutable_payloads: Vec<Upload>,
-    latest_dmg_aliases: Vec<Upload>,
+    latest_installer_aliases: Vec<Upload>,
     latest_key: String,
     latest_url: String,
     verify_urls: Vec<Verification>,
@@ -1649,6 +1684,7 @@ fn finalize_publish_plan(
     signing_key: &SigningKey,
     payload: ManifestPayload,
 ) -> CliResult<PublishPlan> {
+    let required_targets = release.targets.clone();
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|error| CliError::new(format!("无法序列化 manifest payload: {error}")))?;
     let envelope = SignedManifest {
@@ -1679,7 +1715,7 @@ fn finalize_publish_plan(
         observed_sequence,
         sequence,
         release,
-        required_targets: app.targets.required.clone(),
+        required_targets,
         immutable_payloads,
         sequence_manifest: Upload {
             key: sequence_key,
@@ -1688,7 +1724,7 @@ fn finalize_publish_plan(
             cache_control: IMMUTABLE_CACHE,
             immutable: true,
         },
-        latest_dmg_aliases,
+        latest_installer_aliases,
         latest: Upload {
             key: latest_key,
             source: UploadSource::Bytes(latest_json.clone()),
@@ -1799,13 +1835,17 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     }
     let staging = stage_windows_update_payload(plan, updater_path.as_deref())?;
     create_windows_update_zip(plan, &staging)?;
-    let script = write_windows_nsis_script(plan, &staging)?;
-    build_windows_setup(plan, &script)?;
+    let product_source = write_windows_product_source(plan, &staging)?;
+    build_windows_msi(plan, &staging, &product_source)?;
+    sign_windows_file(plan, &plan.msi_path)?;
+    let bundle_source = write_windows_bundle_source(plan, &staging)?;
+    build_windows_setup(plan, &staging, &bundle_source)?;
     sign_windows_file(plan, &plan.setup_path)?;
     copy_release_notes(plan)?;
     write_artifact_manifest(plan)?;
     println!("EXE: {}", plan.app_path.display());
     println!("WINDOWS ZIP: {}", plan.app_zip_path.display());
+    println!("MSI: {}", plan.msi_path.display());
     println!("SETUP: {}", plan.setup_path.display());
     println!("ARTIFACT: {}", plan.artifact_path.display());
     Ok(())
@@ -1814,12 +1854,7 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
 fn ensure_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
     require_command("cargo")?;
     require_command("rustup")?;
-    run_status(
-        "rustup target add",
-        Command::new("rustup")
-            .current_dir(&plan.project_root)
-            .args(["target", "add", &plan.target]),
-    )?;
+    ensure_rust_target_installed(&plan.target)?;
     if !command_exists("cargo-bundle") {
         run_status(
             "cargo install cargo-bundle",
@@ -1972,6 +2007,20 @@ fn bundled_updater_config(plan: &BuildPlan) -> CliResult<BundledUpdaterConfig> {
         .as_ref()
         .ok_or_else(|| CliError::new("当前构建计划未启用 updater"))?;
     let windows = plan.windows.as_ref();
+    let windows_signature = windows
+        .filter(|options| options.signing == WindowsSigningMode::Authenticode)
+        .map(|options| {
+            let thumbprint = resolve_windows_signing_thumbprint(options)?;
+            let publisher = options.expected_publisher.clone().ok_or_else(|| {
+                CliError::new("Windows Authenticode 签名需要 expected_publisher 或 publisher")
+            })?;
+            Ok((thumbprint, publisher))
+        })
+        .transpose()?;
+    let (expected_windows_signer_thumbprint, expected_windows_publisher) = windows_signature
+        .map_or((None, None), |(thumbprint, publisher)| {
+            (Some(thumbprint), Some(publisher))
+        });
     Ok(BundledUpdaterConfig {
         schema_version: 1,
         app_id: plan.updater_app_id.clone(),
@@ -1983,23 +2032,8 @@ fn bundled_updater_config(plan: &BuildPlan) -> CliResult<BundledUpdaterConfig> {
         allow_insecure_http: plan.allow_insecure_http,
         health_timeout: updater.health_timeout.clone(),
         expected_team_id: plan.expected_team_id.clone(),
-        expected_windows_signer_thumbprint: windows
-            .and_then(|options| options.signing_thumbprint.clone())
-            .or_else(|| {
-                windows
-                    .filter(|options| options.signing == WindowsSigningMode::Authenticode)
-                    .and_then(|_| {
-                        env::var("WINDOWS_SIGN_CERTIFICATE_SHA1")
-                            .ok()
-                            .filter(|value| !value.trim().is_empty())
-                    })
-            }),
-        expected_windows_publisher: windows.and_then(|options| {
-            options
-                .expected_publisher
-                .clone()
-                .or_else(|| Some(options.publisher.clone()))
-        }),
+        expected_windows_signer_thumbprint,
+        expected_windows_publisher,
         check_on_launch: updater.check_on_launch,
     })
 }
@@ -2014,24 +2048,28 @@ fn write_updater_config_to_path(plan: &BuildPlan, path: &Path) -> CliResult<()> 
 
 fn ensure_windows_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
     if env::consts::OS != "windows" {
-        return Err(CliError::new("当前宿主不能构建 Windows required targets"));
+        return Err(CliError::new("当前宿主不能构建 Windows targets"));
     }
     require_command("cargo")?;
     require_command("rustup")?;
-    run_status(
-        "rustup target add",
-        Command::new("rustup")
-            .current_dir(&plan.project_root)
-            .args(["target", "add", &plan.target]),
-    )?;
-    require_command("rc")?;
-    let _ = makensis_command()?;
+    ensure_rust_target_installed(&plan.target)?;
+    let _ = windows_sdk_tool("rc.exe")?;
+    let _ = windows_sdk_tool("fxc.exe")?;
+    ensure_cargo_wix_modern()?;
+    require_command("wix")?;
+    let _ = wix_version()?;
+    for extension in [
+        "WixToolset.UI.wixext",
+        "WixToolset.BootstrapperApplications.wixext",
+    ] {
+        ensure_wix_extension(extension, false)?;
+    }
     if plan
         .windows
         .as_ref()
         .is_some_and(|options| options.signing == WindowsSigningMode::Authenticode)
     {
-        require_command("signtool")?;
+        let _ = windows_sdk_tool("signtool.exe")?;
     }
     Ok(())
 }
@@ -2051,9 +2089,57 @@ fn compile_windows_icon_resource(plan: &BuildPlan) -> CliResult<PathBuf> {
         .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", work_dir.display())))?;
     let rc_path = work_dir.join("nexora-icon.rc");
     let res_path = work_dir.join("nexora-icon.res");
+    let options = windows_options(plan)?;
+    let version = &plan.release.version;
+    if [version.major, version.minor, version.patch]
+        .into_iter()
+        .any(|part| part > u64::from(u16::MAX))
+    {
+        return Err(CliError::new(format!(
+            "版本 `{version}` 超出 Windows PE VERSIONINFO 的四段 u16 范围"
+        )));
+    }
+    let build = plan.release.build_number % (u64::from(u16::MAX) + 1);
+    let dotted_version = windows_file_version(version, plan.release.build_number)?;
     let contents = format!(
-        "1 ICON \"{}\"\r\n",
-        escape_rc_string(&plan.windows_icon.to_string_lossy())
+        r#"1 ICON "{}"
+1 VERSIONINFO
+FILEVERSION {},{},{},{}
+PRODUCTVERSION {},{},{},{}
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080403A8"
+    BEGIN
+      VALUE "CompanyName", "{}\0"
+      VALUE "FileDescription", "{} 应用程序\0"
+      VALUE "FileVersion", "{}\0"
+      VALUE "ProductName", "{}\0"
+      VALUE "ProductVersion", "{}\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0804, 936
+  END
+END
+"#,
+        escape_rc_string(&plan.windows_icon.to_string_lossy()),
+        version.major,
+        version.minor,
+        version.patch,
+        build,
+        version.major,
+        version.minor,
+        version.patch,
+        build,
+        escape_rc_string(&options.publisher),
+        escape_rc_string(&plan.display_name),
+        dotted_version,
+        escape_rc_string(&plan.display_name),
+        version,
     );
     fs::write(&rc_path, contents).map_err(|error| {
         CliError::new(format!(
@@ -2061,9 +2147,10 @@ fn compile_windows_icon_resource(plan: &BuildPlan) -> CliResult<PathBuf> {
             rc_path.display()
         ))
     })?;
+    let rc = windows_sdk_tool("rc.exe")?;
     run_status(
         "rc Windows resources",
-        Command::new("rc")
+        Command::new(rc)
             .arg("/nologo")
             .arg(format!("/fo{}", res_path.display()))
             .arg(&rc_path),
@@ -2075,21 +2162,15 @@ fn build_windows_binary(plan: &BuildPlan, binary: &str, resource: &Path) -> CliR
     let mut command = Command::new("cargo");
     command
         .current_dir(&plan.project_root)
-        .args(["build", "--release", "--package", &plan.package])
+        .args(["rustc", "--release", "--package", &plan.package])
         .args(["--bin", binary, "--target", &plan.target])
-        .env("RUSTFLAGS", windows_resource_rustflags(resource));
+        .arg("--")
+        .arg("-C")
+        .arg(format!("link-arg={}", resource.display()))
+        .arg("-C")
+        .arg("link-arg=/SUBSYSTEM:WINDOWS");
+    prepend_windows_sdk_path(&mut command)?;
     run_status("cargo build Windows binary", &mut command)
-}
-
-fn windows_resource_rustflags(resource: &Path) -> String {
-    let value = format!("-C link-arg={}", resource.display());
-    match env::var("RUSTFLAGS")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(existing) => format!("{existing} {value}"),
-        None => value,
-    }
 }
 
 fn sign_windows_file(plan: &BuildPlan, path: &Path) -> CliResult<()> {
@@ -2103,9 +2184,10 @@ fn sign_windows_file(plan: &BuildPlan, path: &Path) -> CliResult<()> {
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CliError::new("Windows Authenticode 签名需要 timestamp_url"))?;
+    let signtool = windows_sdk_tool("signtool.exe")?;
     run_status(
         "signtool sign",
-        Command::new("signtool")
+        Command::new(&signtool)
             .args(["sign", "/fd", "SHA256", "/s", "My", "/sha1"])
             .arg(&thumbprint)
             .args(["/tr", timestamp_url, "/td", "SHA256"])
@@ -2113,7 +2195,7 @@ fn sign_windows_file(plan: &BuildPlan, path: &Path) -> CliResult<()> {
     )?;
     run_status(
         "signtool verify",
-        Command::new("signtool").args(["verify", "/pa"]).arg(path),
+        Command::new(signtool).args(["verify", "/pa"]).arg(path),
     )
 }
 
@@ -2121,11 +2203,6 @@ fn resolve_windows_signing_thumbprint(options: &WindowsBuildOptions) -> CliResul
     options
         .signing_thumbprint
         .clone()
-        .or_else(|| {
-            env::var("WINDOWS_SIGN_CERTIFICATE_SHA1")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
         .ok_or_else(|| {
             CliError::new(
                 "Windows Authenticode 签名需要 platforms.windows.signing_thumbprint 或 WINDOWS_SIGN_CERTIFICATE_SHA1",
@@ -2176,61 +2253,195 @@ fn stage_windows_update_payload(
 }
 
 fn create_windows_update_zip(plan: &BuildPlan, staging: &Path) -> CliResult<()> {
-    create_parent(&plan.app_zip_path)?;
-    remove_existing_file(&plan.app_zip_path)?;
-    let script_path = windows_work_dir(plan).join("create-update-zip.ps1");
-    let script = r#"
-param(
-  [Parameter(Mandatory=$true)][string]$source,
-  [Parameter(Mandatory=$true)][string]$destination
-)
-$items = Get-ChildItem -LiteralPath $source -Force
-Compress-Archive -LiteralPath $items.FullName -DestinationPath $destination -Force
-"#;
-    fs::write(&script_path, script).map_err(|error| {
+    create_windows_update_zip_at(staging, &plan.app_zip_path)
+}
+
+fn create_windows_update_zip_at(staging: &Path, destination: &Path) -> CliResult<()> {
+    create_parent(destination)?;
+    remove_existing_file(destination)?;
+    let archive_file = fs::File::create(destination).map_err(|error| {
         CliError::new(format!(
-            "无法写入 Windows ZIP 脚本 `{}`: {error}",
-            script_path.display()
+            "无法创建 Windows 更新 ZIP `{}`: {error}",
+            destination.display()
         ))
     })?;
-    run_status(
-        "Compress-Archive Windows update ZIP",
-        Command::new("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(&script_path)
-            .arg(staging)
-            .arg(&plan.app_zip_path),
-    )
+    let mut archive = ZipWriter::new(archive_file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    for relative in collect_relative_files(staging, staging)? {
+        archive
+            .start_file_from_path(&relative, options)
+            .map_err(|error| {
+                CliError::new(format!(
+                    "无法把 Windows 更新条目 `{}` 写入 ZIP: {error}",
+                    relative.display()
+                ))
+            })?;
+        let source_path = staging.join(&relative);
+        let mut source = fs::File::open(&source_path).map_err(|error| {
+            CliError::new(format!(
+                "无法读取 Windows 更新条目 `{}`: {error}",
+                source_path.display()
+            ))
+        })?;
+        io::copy(&mut source, &mut archive).map_err(|error| {
+            CliError::new(format!(
+                "无法压缩 Windows 更新条目 `{}`: {error}",
+                relative.display()
+            ))
+        })?;
+    }
+    archive.finish().map_err(|error| {
+        CliError::new(format!(
+            "无法完成 Windows 更新 ZIP `{}`: {error}",
+            destination.display()
+        ))
+    })?;
+    Ok(())
 }
 
 struct WindowsInstallerSources {
-    nsis_script: String,
+    product_wxs: String,
+    bundle_wxs: String,
     updater_config: Option<BundledUpdaterConfig>,
     file_version: String,
+    msi_version: String,
 }
 
-fn write_windows_nsis_script(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
+fn write_windows_product_source(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
     let sources = windows_installer_sources(plan, staging)?;
-    let script_path = windows_work_dir(plan).join("setup.nsi");
-    let mut contents = vec![0xEF, 0xBB, 0xBF];
-    contents.extend_from_slice(sources.nsis_script.as_bytes());
-    fs::write(&script_path, contents).map_err(|error| {
+    let source_path = windows_work_dir(plan).join("product.wxs");
+    fs::write(&source_path, sources.product_wxs).map_err(|error| {
         CliError::new(format!(
-            "无法写入 NSIS 脚本 `{}`: {error}",
-            script_path.display()
+            "无法写入 WiX MSI 源文件 `{}`: {error}",
+            source_path.display()
         ))
     })?;
-    Ok(script_path)
+    Ok(source_path)
 }
 
-fn build_windows_setup(plan: &BuildPlan, script: &Path) -> CliResult<()> {
-    create_parent(&plan.setup_path)?;
-    remove_existing_file(&plan.setup_path)?;
-    let makensis = makensis_command()?;
-    run_status(
-        "makensis Windows Setup.exe",
-        Command::new(makensis).arg("/V2").arg(script),
+fn write_windows_bundle_source(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
+    let sources = windows_installer_sources(plan, staging)?;
+    let source_path = windows_work_dir(plan).join("bundle.wxs");
+    fs::write(&source_path, sources.bundle_wxs).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 WiX Bundle 源文件 `{}`: {error}",
+            source_path.display()
+        ))
+    })?;
+    Ok(source_path)
+}
+
+fn build_windows_msi(plan: &BuildPlan, staging: &Path, source: &Path) -> CliResult<()> {
+    run_cargo_wix(
+        plan,
+        staging,
+        source,
+        &plan.msi_path,
+        "cargo-wix Windows MSI",
     )
+}
+
+fn build_windows_setup(plan: &BuildPlan, staging: &Path, source: &Path) -> CliResult<()> {
+    run_cargo_wix(
+        plan,
+        staging,
+        source,
+        &plan.setup_path,
+        "cargo-wix Windows Setup.exe",
+    )
+}
+
+fn run_cargo_wix(
+    plan: &BuildPlan,
+    staging: &Path,
+    source: &Path,
+    output: &Path,
+    label: &str,
+) -> CliResult<()> {
+    create_parent(output)?;
+    remove_existing_file(output)?;
+    let extension = if output.extension().and_then(|value| value.to_str()) == Some("msi") {
+        "WixToolset.UI.wixext"
+    } else {
+        "WixToolset.BootstrapperApplications.wixext"
+    };
+    ensure_wix_extension(extension, false)?;
+    let cargo_wix_version = plan.release.version.to_string();
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(windows_work_dir(plan))
+        .args(["wix", "--toolset", "modern"])
+        .args(["--no-build", "--nocapture", "--culture", "zh-CN"])
+        .args(["--package", &plan.package, "--target", &plan.target])
+        .arg("--target-bin-dir")
+        .arg(staging)
+        .args([
+            "--install-version",
+            &cargo_wix_version,
+            "--name",
+            &plan.display_name,
+        ])
+        .arg("--include")
+        .arg(source)
+        .arg("--output")
+        .arg(output)
+        .arg(plan.project_root.join("Cargo.toml"));
+    run_status(label, &mut command)
+}
+
+fn ensure_wix_extension(package: &str, install: bool) -> CliResult<()> {
+    let version = wix_version()?.to_string();
+    let listed = Command::new("wix")
+        .args(["extension", "list", "--global"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法查询 WiX 扩展: {error}")))?;
+    let expected = format!("{package} {version}");
+    if listed.status.success()
+        && String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .any(|line| line.trim() == expected)
+    {
+        return Ok(());
+    }
+    if !install {
+        return Err(CliError::new(format!(
+            "缺少 WiX 扩展 `{package}/{version}`；请运行 `wix extension add --global {package}/{version}`，或执行 `nexora doctor --fix`"
+        )));
+    }
+    run_status(
+        &format!("安装 WiX 扩展 {package}/{version}"),
+        Command::new("wix").args([
+            "extension",
+            "add",
+            "--global",
+            &format!("{package}/{version}"),
+        ]),
+    )
+}
+
+fn wix_version() -> CliResult<Version> {
+    let version_output = Command::new("wix")
+        .arg("--version")
+        .output()
+        .map_err(|error| CliError::new(format!("无法读取 WiX 版本: {error}")))?;
+    if !version_output.status.success() {
+        return Err(CliError::new("`wix --version` 执行失败"));
+    }
+    let raw_version = String::from_utf8_lossy(&version_output.stdout);
+    let version = raw_version
+        .trim()
+        .split_once('+')
+        .map_or(raw_version.trim(), |(version, _)| version);
+    let parsed = Version::parse(version)
+        .map_err(|error| CliError::new(format!("WiX 版本 `{version}` 非法: {error}")))?;
+    if parsed.major < 5 {
+        return Err(CliError::new(format!(
+            "WiX `{version}` 过旧；当前 cargo-wix 的安装 EXE 需要 WiX 5 或更高版本，推荐安装 WiX 5.0.2"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn windows_installer_sources(
@@ -2238,124 +2449,344 @@ fn windows_installer_sources(
     staging: &Path,
 ) -> CliResult<WindowsInstallerSources> {
     let options = windows_options(plan)?;
-    let install_dir = match options.install_scope {
-        WindowsInstallScope::User => format!("$LOCALAPPDATA\\Programs\\{}", plan.app_id),
-        WindowsInstallScope::Machine => format!("$PROGRAMFILES64\\{}", plan.app_id),
-    };
-    let request_level = match options.install_scope {
-        WindowsInstallScope::User => "user",
-        WindowsInstallScope::Machine => "admin",
-    };
-    let default_desktop_shortcut = if options.desktop_shortcut_default {
-        "1"
-    } else {
-        "0"
-    };
-    let default_launch = if options.launch_after_install_default {
-        "1"
-    } else {
-        "0"
-    };
+    if options.install_scope != WindowsInstallScope::User {
+        return Err(CliError::new("WiX 安装器当前仅支持当前用户安装"));
+    }
     let file_version = windows_file_version(&plan.release.version, plan.release.build_number)?;
-    let source = nsis_path(staging);
-    let out_file = nsis_path(&plan.setup_path);
-    let display_name = nsis_string(&plan.display_name);
-    let publisher = nsis_string(&options.publisher);
-    let app_id = nsis_string(&plan.app_id);
-    let package = nsis_string(&plan.package);
-    let main_exe = nsis_string(&safe_file_name(&plan.app_path)?);
-    let minimum_build = options.minimum_windows_build;
-    let script = format!(
-        r#"!include "MUI2.nsh"
-!include "LogicLib.nsh"
+    let msi_version = windows_msi_version(&plan.release.version, plan.release.build_number)?;
+    let display_name = wix_attribute(&plan.display_name);
+    let publisher = wix_attribute(&options.publisher);
+    let app_id = wix_attribute(&plan.app_id);
+    let main_exe = wix_attribute(&safe_file_name(&plan.app_path)?);
+    let (payload_xml, payload_refs) = windows_payload_xml(plan, staging)?;
+    let desktop_default = u8::from(options.desktop_shortcut_default);
+    let start_menu_default = u8::from(options.start_menu_shortcut_default);
+    let launch_default = u8::from(options.launch_after_install_default);
+    let upgrade_code = stable_wix_guid(&format!("{}:msi-upgrade", plan.app_id));
+    let desktop_guid = stable_wix_guid(&format!("{}:desktop-shortcut", plan.app_id));
+    let start_menu_guid = stable_wix_guid(&format!("{}:start-menu-shortcut", plan.app_id));
+    let registry_guid = stable_wix_guid(&format!("{}:install-registry", plan.app_id));
+    let product_wxs = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="{display_name}" Manufacturer="{publisher}" Version="{msi_version}" UpgradeCode="{upgrade_code}" Language="2052" Scope="perUser" InstallerVersion="500" Compressed="yes">
+    <SummaryInformation Codepage="936" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="已安装更高版本的 {display_name}，不能执行降级安装。" />
+    <MediaTemplate EmbedCab="yes" />
 
-Unicode true
-Name "{display_name}"
-OutFile "{out_file}"
-InstallDir "{install_dir}"
-RequestExecutionLevel {request_level}
-SetCompressor /SOLID lzma
-SetCompressorDictSize 32
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="CREATE_DESKTOP_SHORTCUT" Value="{desktop_default}" Secure="yes" />
+    <Property Id="CREATE_START_MENU_SHORTCUT" Value="{start_menu_default}" Secure="yes" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="{launch_default}" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="安装完成后运行 {display_name}" />
+    <Property Id="WINDOWS_BUILD_NUMBER">
+      <RegistrySearch Id="WindowsBuildNumberSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR WINDOWS_BUILD_NUMBER &gt;= {minimum_build}" Message="{display_name} 需要 Windows 10 1703（build {minimum_build}）或更高版本。" />
+    <InstallExecuteSequence>
+      <DisableRollback After="InstallInitialize" Condition="REMOVE AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
 
-VIProductVersion "{file_version}"
-VIAddVersionKey /LANG=1033 "ProductName" "{display_name}"
-VIAddVersionKey /LANG=1033 "CompanyName" "{publisher}"
-VIAddVersionKey /LANG=1033 "FileDescription" "{display_name} Setup"
-VIAddVersionKey /LANG=1033 "FileVersion" "{file_version}"
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="{app_id}">
+{payload_xml}
+          <Component Id="InstallRegistryComponent" Guid="{registry_guid}">
+            <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" />
+            <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="BuildNumber" Type="string" Value="{build_number}" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
 
-Var CreateDesktopShortcut
-Var LaunchAfterInstall
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcutComponent" Guid="{desktop_guid}" Condition="CREATE_DESKTOP_SHORTCUT = 1">
+        <Shortcut Id="DesktopShortcut" Name="{display_name}" Description="启动 {display_name}" Target="[INSTALLFOLDER]{main_exe}" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
 
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "SimpChinese"
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="{display_name}">
+        <Component Id="StartMenuShortcutComponent" Guid="{start_menu_guid}" Condition="CREATE_START_MENU_SHORTCUT = 1">
+          <Shortcut Id="StartMenuShortcut" Name="{display_name}" Description="启动 {display_name}" Target="[INSTALLFOLDER]{main_exe}" WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
 
-Function .onInit
-  StrCpy $CreateDesktopShortcut {default_desktop_shortcut}
-  StrCpy $LaunchAfterInstall {default_launch}
-  ReadRegDWORD $1 SHCTX "Software\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
-  ${{If}} $1 < {minimum_build}
-    MessageBox MB_ICONSTOP "{display_name} 需要 Windows build {minimum_build} 或更高版本。"
-    Abort
-  ${{EndIf}}
-  ReadRegDWORD $1 SHCTX "Software\{app_id}" "BuildNumber"
-  ${{If}} $1 > {build_number}
-    MessageBox MB_ICONSTOP "已安装更新版本，Setup 不会执行降级安装。"
-    Abort
-  ${{EndIf}}
-FunctionEnd
+    <Feature Id="MainFeature" Title="{display_name}" Level="1">
+{payload_refs}
+      <ComponentRef Id="InstallRegistryComponent" />
+      <ComponentRef Id="DesktopShortcutComponent" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
+    </Feature>
 
-Section "Install"
-  SetShellVarContext current
-  SetOutPath "$INSTDIR"
-  File /r "{source}\*.*"
-  WriteRegStr SHCTX "Software\{app_id}" "InstallDir" "$INSTDIR"
-  WriteRegStr SHCTX "Software\{app_id}" "DisplayName" "{display_name}"
-  WriteRegDWORD SHCTX "Software\{app_id}" "BuildNumber" {build_number}
-  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "DisplayName" "{display_name}"
-  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "Publisher" "{publisher}"
-  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "DisplayVersion" "{version}"
-  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "InstallLocation" "$INSTDIR"
-  WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}" "UninstallString" "$INSTDIR\Uninstall.exe"
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\{display_name}"
-  CreateShortcut "$SMPROGRAMS\{display_name}\{display_name}.lnk" "$INSTDIR\{main_exe}"
-  ${{If}} $CreateDesktopShortcut == 1
-    CreateShortcut "$DESKTOP\{display_name}.lnk" "$INSTDIR\{main_exe}"
-  ${{EndIf}}
-  ${{If}} $LaunchAfterInstall == 1
-    ExecShell "" "$INSTDIR\{main_exe}"
-  ${{EndIf}}
-SectionEnd
+    <CustomAction Id="LaunchApplication" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]{main_exe}&quot;" Execute="immediate" Return="asyncNoWait" Impersonate="yes" />
+    <UI>
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Microsoft YaHei UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Microsoft YaHei UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Microsoft YaHei UI" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
 
-Section "Uninstall"
-  Delete "$INSTDIR\{main_exe}"
-  Delete "$INSTDIR\{package}-updater.exe"
-  Delete "$INSTDIR\nexora-updater.json"
-  Delete "$INSTDIR\Uninstall.exe"
-  RMDir /r "$SMPROGRAMS\{display_name}"
-  Delete "$DESKTOP\{display_name}.lnk"
-  DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_id}"
-  DeleteRegKey SHCTX "Software\{app_id}"
-  RMDir "$INSTDIR"
-SectionEnd
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="NexoraOptionsDlg" Width="370" Height="270" Title="[ProductName] 安装程序">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="18" Transparent="yes" NoPrefix="yes" Text="{{\WixUI_Font_Title}}选择安装选项" />
+        <Control Id="Description" Type="Text" X="25" Y="45" Width="320" Height="25" Text="请选择要为当前用户创建的快捷入口。" />
+        <Control Id="DesktopShortcutCheckBox" Type="CheckBox" X="25" Y="82" Width="315" Height="18" Property="CREATE_DESKTOP_SHORTCUT" CheckBoxValue="1" Text="创建桌面快捷方式" />
+        <Control Id="StartMenuShortcutCheckBox" Type="CheckBox" X="25" Y="108" Width="315" Height="18" Property="CREATE_START_MENU_SHORTCUT" CheckBoxValue="1" Text="创建开始菜单快捷方式" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="上一步" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="下一步" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="取消">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="1" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="3" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="NexoraOptionsDlg" Order="4" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="NexoraOptionsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="NexoraOptionsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="NexoraOptionsDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+      <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Package>
+</Wix>
 "#,
+        minimum_build = options.minimum_windows_build,
         build_number = plan.release.build_number,
-        version = plan.release.version,
+    );
+    let bundle_upgrade_code = stable_wix_guid(&format!("{}:bundle-upgrade", plan.app_id));
+    let msi_source = wix_attribute(&plan.msi_path.to_string_lossy());
+    let icon_source = wix_attribute(&plan.windows_icon.to_string_lossy());
+    let bundle_wxs = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="{display_name}" Manufacturer="{publisher}" Version="{msi_version}" UpgradeCode="{bundle_upgrade_code}" IconSourceFile="{icon_source}" Compressed="yes">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="{msi_source}" Compressed="yes" />
+    </Chain>
+  </Bundle>
+</Wix>
+"#,
     );
     Ok(WindowsInstallerSources {
-        nsis_script: script,
+        product_wxs,
+        bundle_wxs,
         updater_config: plan
             .updater
             .as_ref()
             .map(|_| bundled_updater_config(plan))
             .transpose()?,
         file_version,
+        msi_version,
     })
+}
+
+fn windows_payload_xml(plan: &BuildPlan, staging: &Path) -> CliResult<(String, String)> {
+    let relative_files = if staging.is_dir() {
+        collect_relative_files(staging, staging)?
+    } else {
+        let mut files = vec![PathBuf::from(safe_file_name(&plan.app_path)?)];
+        if plan.updater.is_some() {
+            files.push(PathBuf::from(format!("{}-updater.exe", plan.package)));
+            files.push(PathBuf::from("nexora-updater.json"));
+        }
+        files.push(PathBuf::from("config").join(format!("{}.toml", plan.package)));
+        files
+    };
+    let main_exe = safe_file_name(&plan.app_path)?;
+    let mut components = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
+    for relative in relative_files {
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        components
+            .entry(parent.to_path_buf())
+            .or_default()
+            .push(relative);
+    }
+    let mut component_refs = Vec::new();
+    let payload = render_wix_payload_directory(
+        staging,
+        Path::new(""),
+        &components,
+        &main_exe,
+        5,
+        &mut component_refs,
+    )?;
+    let refs = component_refs
+        .into_iter()
+        .map(|id| format!("      <ComponentRef Id=\"{id}\" />\n"))
+        .collect();
+    Ok((payload, refs))
+}
+
+fn collect_relative_files(root: &Path, directory: &Path) -> CliResult<Vec<PathBuf>> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| CliError::new(format!("无法读取 `{}`: {error}", directory.display())))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| CliError::new(format!("无法读取 Windows payload: {error}")))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(collect_relative_files(root, &path)?);
+        } else if path.is_file() {
+            files.push(
+                path.strip_prefix(root)
+                    .map_err(|error| {
+                        CliError::new(format!("无法生成 Windows payload 相对路径: {error}"))
+                    })?
+                    .to_path_buf(),
+            );
+        }
+    }
+    Ok(files)
+}
+
+fn render_wix_payload_directory(
+    staging: &Path,
+    relative: &Path,
+    components: &BTreeMap<PathBuf, Vec<PathBuf>>,
+    main_exe: &str,
+    depth: usize,
+    component_refs: &mut Vec<String>,
+) -> CliResult<String> {
+    let indent = "  ".repeat(depth);
+    let mut xml = String::new();
+    if let Some(files) = components.get(relative) {
+        for file in files {
+            let key = file.to_string_lossy().replace('\\', "/");
+            let component_id = wix_identifier("PayloadComponent", &key);
+            let file_id = if file.file_name().and_then(|name| name.to_str()) == Some(main_exe) {
+                "MainExecutable".to_owned()
+            } else {
+                wix_identifier("PayloadFile", &key)
+            };
+            let source = wix_attribute(&staging.join(file).to_string_lossy());
+            let guid = stable_wix_guid(&format!("payload:{key}"));
+            xml.push_str(&format!(
+                "{indent}<Component Id=\"{component_id}\" Guid=\"{guid}\"><File Id=\"{file_id}\" Source=\"{source}\" KeyPath=\"yes\" /></Component>\n"
+            ));
+            component_refs.push(component_id);
+        }
+    }
+    let child_directories = components
+        .keys()
+        .filter_map(|path| {
+            path.strip_prefix(relative).ok().and_then(|suffix| {
+                let mut parts = suffix.components();
+                let child = parts.next()?;
+                (parts.next().is_none() && !suffix.as_os_str().is_empty())
+                    .then(|| child.as_os_str().to_owned())
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    for child in child_directories {
+        let name = child
+            .to_str()
+            .ok_or_else(|| CliError::new("Windows payload 目录名不是 UTF-8"))?;
+        let child_relative = relative.join(&child);
+        let key = child_relative.to_string_lossy().replace('\\', "/");
+        let directory_id = wix_identifier("PayloadDirectory", &key);
+        xml.push_str(&format!(
+            "{indent}<Directory Id=\"{directory_id}\" Name=\"{}\">\n",
+            wix_attribute(name)
+        ));
+        xml.push_str(&render_wix_payload_directory(
+            staging,
+            &child_relative,
+            components,
+            main_exe,
+            depth + 1,
+            component_refs,
+        )?);
+        xml.push_str(&format!("{indent}</Directory>\n"));
+    }
+    Ok(xml)
+}
+
+fn wix_identifier(prefix: &str, value: &str) -> String {
+    let digest = sha256_hex(value.as_bytes());
+    format!("{prefix}_{}", &digest[..16])
+}
+
+fn stable_wix_guid(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
+fn wix_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn windows_msi_version(version: &Version, build_number: u64) -> CliResult<String> {
+    if version.major > 255 || version.minor > 255 || version.patch > 65_534 {
+        return Err(CliError::new(format!(
+            "版本 `{version}` 超出 MSI ProductVersion 范围（major/minor 最大 255，patch 最大 65534）"
+        )));
+    }
+    let fourth = build_number % 65_535;
+    Ok(format!(
+        "{}.{}.{}.{}",
+        version.major, version.minor, version.patch, fourth
+    ))
 }
 
 fn windows_file_version(version: &Version, build_number: u64) -> CliResult<String> {
@@ -2373,24 +2804,109 @@ fn windows_options(plan: &BuildPlan) -> CliResult<&WindowsBuildOptions> {
 }
 
 fn windows_build_options(config: &WindowsConfig) -> CliResult<WindowsBuildOptions> {
-    if config.installer != WindowsInstaller::Nsis {
-        return Err(CliError::new("Windows 当前只支持 NSIS Setup.exe"));
+    if config.installer != WindowsInstaller::Wix {
+        return Err(CliError::new("Windows 当前只支持 WiX MSI 与 Setup.exe"));
+    }
+    if config.install_scope != WindowsInstallScope::User {
+        return Err(CliError::new(
+            "Windows 安装器当前仅支持 install_scope = \"user\"；machine 模式需要单独的提权与更新权限设计",
+        ));
     }
     let publisher = config
         .publisher
         .clone()
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CliError::new("Windows Setup.exe 需要 platforms.windows.publisher"))?;
+    let (signing_thumbprint, timestamp_url, expected_publisher) = match config.signing {
+        WindowsSigningMode::None => {
+            for (field, configured) in [
+                ("signing_thumbprint", config.signing_thumbprint.is_some()),
+                ("expected_publisher", config.expected_publisher.is_some()),
+                ("timestamp_url", config.timestamp_url.is_some()),
+            ] {
+                if configured {
+                    return Err(CliError::new(format!(
+                        "Windows signing = \"none\" 不能配置 platforms.windows.{field}；请删除该字段或改用 signing = \"authenticode\""
+                    )));
+                }
+            }
+            (None, None, None)
+        }
+        WindowsSigningMode::Authenticode => {
+            let thumbprint = config
+                .signing_thumbprint
+                .clone()
+                .or_else(|| {
+                    env::var("WINDOWS_SIGN_CERTIFICATE_SHA1")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                })
+                .ok_or_else(|| {
+                    CliError::new(
+                        "Windows Authenticode 签名需要 platforms.windows.signing_thumbprint 或 WINDOWS_SIGN_CERTIFICATE_SHA1",
+                    )
+                })?;
+            let thumbprint = normalize_windows_signing_thumbprint(&thumbprint)?;
+            let timestamp_url = config
+                .timestamp_url
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| CliError::new("Windows Authenticode 签名需要 timestamp_url"))?;
+            let expected_publisher = match &config.expected_publisher {
+                Some(value) if value.trim().is_empty() => {
+                    return Err(CliError::new(
+                        "Windows Authenticode 签名的 expected_publisher 不能为空",
+                    ));
+                }
+                Some(value) => value.clone(),
+                None => publisher.clone(),
+            };
+            (
+                Some(thumbprint),
+                Some(timestamp_url),
+                Some(expected_publisher),
+            )
+        }
+    };
+    let minimum_windows_build = config
+        .minimum_windows_build
+        .unwrap_or(MINIMUM_GPUI_WINDOWS_BUILD);
+    if minimum_windows_build < MINIMUM_GPUI_WINDOWS_BUILD {
+        return Err(CliError::new(format!(
+            "minimum_windows_build 不能低于当前锁定 GPUI 的基线 {MINIMUM_GPUI_WINDOWS_BUILD}（Windows 10 1703）"
+        )));
+    }
     Ok(WindowsBuildOptions {
         install_scope: config.install_scope,
         publisher,
         signing: config.signing,
-        signing_thumbprint: config.signing_thumbprint.clone(),
-        timestamp_url: config.timestamp_url.clone(),
-        expected_publisher: config.expected_publisher.clone(),
+        signing_thumbprint,
+        timestamp_url,
+        expected_publisher,
         desktop_shortcut_default: config.desktop_shortcut_default,
+        start_menu_shortcut_default: config.start_menu_shortcut_default,
         launch_after_install_default: config.launch_after_install_default,
-        minimum_windows_build: config.minimum_windows_build.unwrap_or(19045),
+        minimum_windows_build,
     })
+}
+
+fn normalize_windows_signing_thumbprint(value: &str) -> CliResult<String> {
+    let normalized = value
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if normalized.len() == 40
+        && normalized
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        Ok(normalized)
+    } else {
+        Err(CliError::new(
+            "Windows signing_thumbprint 必须是 40 位 SHA-1 证书指纹",
+        ))
+    }
 }
 
 fn windows_binary_path(root: &Path, target: &str, package: &str) -> PathBuf {
@@ -2407,7 +2923,7 @@ fn cargo_target_root(root: &Path) -> PathBuf {
 }
 
 fn is_windows_target(target: &str) -> bool {
-    target == "x86_64-pc-windows-msvc"
+    matches!(target, "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc")
 }
 
 fn target_platform(target: &str) -> CliResult<BuildTargetPlatform> {
@@ -2417,41 +2933,13 @@ fn target_platform(target: &str) -> CliResult<BuildTargetPlatform> {
         Ok(BuildTargetPlatform::Windows)
     } else {
         Err(CliError::new(format!(
-            "当前只支持 macOS 与 Windows required target，收到 `{target}`"
+            "当前只支持 macOS 与 Windows target，收到 `{target}`"
         )))
     }
 }
 
 fn escape_rc_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn nsis_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "$\"")
-}
-
-fn nsis_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "$\"")
-}
-
-fn makensis_command() -> CliResult<PathBuf> {
-    if command_exists("makensis") {
-        return Ok(PathBuf::from("makensis"));
-    }
-    let candidates = [
-        PathBuf::from(r"C:\Program Files (x86)\NSIS\makensis.exe"),
-        PathBuf::from(r"C:\Program Files\NSIS\makensis.exe"),
-        env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join(r"Programs\NSIS\makensis.exe"),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| CliError::new("缺少命令 `makensis`，请安装 NSIS 3 Unicode"))
 }
 
 /// 把配置选择的 ICNS 安装到 macOS bundle 并更新 `CFBundleIconFile`。
@@ -2706,6 +3194,7 @@ fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
         ],
         BuildTargetPlatform::Windows => vec![
             (ArtifactKind::WindowsSetupExe, &plan.setup_path),
+            (ArtifactKind::WindowsMsi, &plan.msi_path),
             (ArtifactKind::WindowsZip, &plan.app_zip_path),
         ],
     };
@@ -2763,7 +3252,7 @@ fn load_release_artifacts(
     release: &ValidatedRelease,
 ) -> CliResult<Vec<LocalArtifact>> {
     let mut result = Vec::new();
-    for target in &app.targets.required {
+    for target in &release.targets {
         let directory = root
             .join(DIST_DIRECTORY)
             .join(app_key)
@@ -2812,6 +3301,7 @@ fn load_release_artifacts(
                 ArtifactKind::MacosAppZip => ".app.zip",
                 ArtifactKind::MacosDmg => ".dmg",
                 ArtifactKind::WindowsSetupExe => ".setup.exe",
+                ArtifactKind::WindowsMsi => ".msi",
                 ArtifactKind::WindowsZip => ".windows.zip",
             };
             if !artifact.file_name.ends_with(expected_suffix) {
@@ -2897,38 +3387,57 @@ fn validate_artifact_identity(
     Ok(())
 }
 
-fn latest_dmg_uploads(
+fn latest_installer_uploads(
     artifacts: &[LocalArtifact],
     channel_prefix: &str,
     single_target: bool,
 ) -> CliResult<Vec<Upload>> {
-    let dmgs = artifacts
+    let installers = artifacts
         .iter()
-        .filter(|artifact| artifact.kind == ArtifactKind::MacosDmg)
+        .filter_map(|artifact| {
+            let (extension, content_type) = match artifact.kind {
+                ArtifactKind::MacosDmg => ("dmg", "application/x-apple-diskimage"),
+                ArtifactKind::WindowsSetupExe => {
+                    ("exe", "application/vnd.microsoft.portable-executable")
+                }
+                ArtifactKind::WindowsMsi => ("msi", "application/x-msi"),
+                ArtifactKind::MacosAppZip | ArtifactKind::WindowsZip => return None,
+            };
+            Some((artifact, extension, content_type))
+        })
         .collect::<Vec<_>>();
-    let mut uploads = dmgs
+    let mut uploads = installers
         .iter()
-        .map(|artifact| {
+        .map(|(artifact, extension, content_type)| {
             Ok(Upload {
                 key: object_key([
                     channel_prefix,
-                    format!("latest-{}.dmg", target_arch_alias(&artifact.target)?).as_str(),
+                    format!(
+                        "latest-{}.{}",
+                        target_arch_alias(&artifact.target)?,
+                        extension
+                    )
+                    .as_str(),
                 ]),
                 source: UploadSource::File(artifact.path.clone()),
-                content_type: "application/x-apple-diskimage",
+                content_type,
                 cache_control: MUTABLE_CACHE,
                 immutable: false,
             })
         })
         .collect::<CliResult<Vec<_>>>()?;
-    if single_target && let Some(dmg) = dmgs.first() {
-        uploads.push(Upload {
-            key: object_key([channel_prefix, "latest.dmg"]),
-            source: UploadSource::File(dmg.path.clone()),
-            content_type: "application/x-apple-diskimage",
-            cache_control: MUTABLE_CACHE,
-            immutable: false,
-        });
+    if single_target {
+        uploads.extend(
+            installers
+                .into_iter()
+                .map(|(artifact, extension, content_type)| Upload {
+                    key: object_key([channel_prefix, format!("latest.{extension}").as_str()]),
+                    source: UploadSource::File(artifact.path.clone()),
+                    content_type,
+                    cache_control: MUTABLE_CACHE,
+                    immutable: false,
+                }),
+        );
     }
     Ok(uploads)
 }
@@ -2950,7 +3459,7 @@ fn print_publish_summary(plan: &PublishPlan, dry_run: bool) {
     println!("Targets：{}", plan.required_targets.join(", "));
     println!("发布目标：{}", plan.publish_target_name);
     println!("将更新：");
-    for upload in &plan.latest_dmg_aliases {
+    for upload in &plan.latest_installer_aliases {
         println!("  {}", upload.key);
     }
     println!("  {}", plan.latest.key);
@@ -2992,7 +3501,7 @@ fn publish_plan(
         )));
     }
 
-    for upload in &plan.latest_dmg_aliases {
+    for upload in &plan.latest_installer_aliases {
         upload_object(client, &plan.target, credentials, upload)?;
     }
     upload_object(client, &plan.target, credentials, &plan.latest)?;
@@ -3593,7 +4102,6 @@ fn receipt_matches_configuration(
     app_key: &str,
     app: &AppConfig,
     configured: &ResolvedReleaseConfig,
-    targets: &[String],
 ) -> bool {
     let build_number_matches = match configured.build_number {
         ResolvedBuildNumber::BuildDatetime => true,
@@ -3605,7 +4113,6 @@ fn receipt_matches_configuration(
         && receipt.version == configured.version.to_string()
         && receipt.version_source == configured.version_source
         && receipt.build_number_source == configured.build_number_source
-        && receipt.targets == targets
         && receipt.runtime_config_source == configured.runtime_config_source
         && receipt.runtime_config_sha256 == configured.runtime_config_sha256
         && receipt.updater_feed == configured.updater_feed
@@ -3804,6 +4311,7 @@ fn required_artifact_kinds(target: &str) -> CliResult<Vec<ArtifactKind>> {
         BuildTargetPlatform::MacOs => Ok(vec![ArtifactKind::MacosAppZip, ArtifactKind::MacosDmg]),
         BuildTargetPlatform::Windows => Ok(vec![
             ArtifactKind::WindowsSetupExe,
+            ArtifactKind::WindowsMsi,
             ArtifactKind::WindowsZip,
         ]),
     }
@@ -3813,7 +4321,7 @@ fn updater_manifest_artifact_kind(kind: ArtifactKind) -> Option<&'static str> {
     match kind {
         ArtifactKind::MacosAppZip => Some("macos_app_zip"),
         ArtifactKind::WindowsZip => Some("windows_update_zip"),
-        ArtifactKind::MacosDmg | ArtifactKind::WindowsSetupExe => None,
+        ArtifactKind::MacosDmg | ArtifactKind::WindowsSetupExe | ArtifactKind::WindowsMsi => None,
     }
 }
 
@@ -3822,8 +4330,9 @@ fn target_arch_alias(target: &str) -> CliResult<&'static str> {
         "aarch64-apple-darwin" => Ok("aarch64"),
         "x86_64-apple-darwin" => Ok("x86_64"),
         "x86_64-pc-windows-msvc" => Ok("x86_64"),
+        "aarch64-pc-windows-msvc" => Ok("aarch64"),
         other => Err(CliError::new(format!(
-            "当前只支持 macOS 与 Windows required target，收到 `{other}`"
+            "当前只支持 macOS 与 Windows target，收到 `{other}`"
         ))),
     }
 }
@@ -3839,7 +4348,7 @@ fn terminal_is_interactive() -> bool {
 
 fn ensure_macos() -> CliResult<()> {
     if env::consts::OS != "macos" {
-        return Err(CliError::new("当前宿主不能构建 macOS required targets"));
+        return Err(CliError::new("当前宿主不能构建 macOS targets"));
     }
     Ok(())
 }
@@ -3848,7 +4357,7 @@ fn ensure_supported_build_host() -> CliResult<()> {
     if matches!(env::consts::OS, "macos" | "windows") {
         Ok(())
     } else {
-        Err(CliError::new("当前宿主不能构建桌面 required targets"))
+        Err(CliError::new("当前宿主不能构建桌面 targets"))
     }
 }
 
@@ -3867,6 +4376,7 @@ fn artifact_kind_name(kind: ArtifactKind) -> &'static str {
         ArtifactKind::MacosAppZip => "macos_app_zip",
         ArtifactKind::MacosDmg => "macos_dmg",
         ArtifactKind::WindowsSetupExe => "windows_setup_exe",
+        ArtifactKind::WindowsMsi => "windows_msi",
         ArtifactKind::WindowsZip => "windows_update_zip",
     }
 }
@@ -3876,6 +4386,7 @@ fn artifact_content_type(kind: ArtifactKind) -> &'static str {
         ArtifactKind::MacosAppZip => "application/zip",
         ArtifactKind::MacosDmg => "application/x-apple-diskimage",
         ArtifactKind::WindowsSetupExe => "application/vnd.microsoft.portable-executable",
+        ArtifactKind::WindowsMsi => "application/x-msi",
         ArtifactKind::WindowsZip => "application/zip",
     }
 }
@@ -4000,6 +4511,30 @@ fn default_launch_after_install() -> bool {
     true
 }
 
+fn rustc_host_target() -> CliResult<String> {
+    let output = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .map_err(|error| CliError::new(format!("无法执行 `rustc -vV`: {error}")))?;
+    if !output.status.success() {
+        return Err(CliError::new(format!(
+            "`rustc -vV` 执行失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let host = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .ok_or_else(|| CliError::new("`rustc -vV` 没有返回 host target"))?;
+    validate_required_target(host)?;
+    Ok(host.to_owned())
+}
+
+fn default_start_menu_shortcut() -> bool {
+    true
+}
+
 pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
     if env::consts::OS == "macos" {
         ensure_macos()?;
@@ -4022,14 +4557,155 @@ pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
         }
         println!("doctor: macOS 构建依赖可用");
     } else if env::consts::OS == "windows" {
-        for command in ["cargo", "rustup", "rc"] {
+        for command in ["cargo", "rustup"] {
             require_command(command)?;
         }
-        let _ = makensis_command()?;
-        println!("doctor: Windows 构建依赖可用");
+        let target = rustc_host_target()?;
+        ensure_rust_target_installed(&target)?;
+        let _ = windows_sdk_tool("rc.exe")?;
+        let _ = windows_sdk_tool("fxc.exe")?;
+        if ensure_cargo_wix_modern().is_err() && fix {
+            run_status(
+                "安装支持现代 WiX 的 cargo-wix",
+                Command::new("cargo").args([
+                    "install",
+                    "cargo-wix",
+                    "--git",
+                    "https://github.com/volks73/cargo-wix",
+                    "--rev",
+                    CARGO_WIX_MODERN_REVISION,
+                    "--locked",
+                    "--force",
+                ]),
+            )?;
+        }
+        ensure_cargo_wix_modern()?;
+        require_command("wix")?;
+        let _ = wix_version()?;
+        for extension in [
+            "WixToolset.UI.wixext",
+            "WixToolset.BootstrapperApplications.wixext",
+        ] {
+            ensure_wix_extension(extension, fix)?;
+        }
+        println!("doctor: Windows SDK、cargo-wix 与 WiX 构建依赖可用");
     } else {
         return Err(CliError::new("当前宿主暂不支持桌面发布构建"));
     }
+    Ok(())
+}
+
+fn ensure_rust_target_installed(target: &str) -> CliResult<()> {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法查询已安装 Rust target: {error}")))?;
+    if !output.status.success() {
+        return Err(CliError::new(format!(
+            "`rustup target list --installed` 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    if String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|installed| installed.trim() == target)
+    {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "Rust target `{target}` 尚未安装；请先运行 `rustup target add {target}`"
+        )))
+    }
+}
+
+fn ensure_cargo_wix_modern() -> CliResult<()> {
+    let output = Command::new("cargo")
+        .args(["wix", "--help"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法执行 `cargo wix --help`: {error}")))?;
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.status.success() && help.contains("--toolset") && help.contains("--migrate") {
+        return Ok(());
+    }
+    Err(CliError::new(format!(
+        "当前 cargo-wix 不支持现代 WiX；请运行 `cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force`"
+    )))
+}
+
+fn windows_sdk_tool(name: &str) -> CliResult<PathBuf> {
+    if command_exists(name) {
+        return Ok(PathBuf::from(name));
+    }
+    let mut bin_roots = Vec::new();
+    for variable in ["ProgramFiles(x86)", "ProgramFiles"] {
+        let Some(root) = env::var_os(variable) else {
+            continue;
+        };
+        let bin = PathBuf::from(root)
+            .join("Windows Kits")
+            .join("10")
+            .join("bin");
+        if !bin_roots.contains(&bin) && bin.is_dir() {
+            bin_roots.push(bin);
+        }
+    }
+    let preferred_arch = if env::consts::ARCH == "aarch64" {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let mut candidates = Vec::new();
+    for bin_root in bin_roots {
+        let mut versions = fs::read_dir(&bin_root)
+            .map_err(|error| {
+                CliError::new(format!(
+                    "无法读取 Windows SDK 目录 `{}`: {error}",
+                    bin_root.display()
+                ))
+            })?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_dir())
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+        for version in versions {
+            for arch in [preferred_arch, "x64"] {
+                let candidate = version.path().join(arch).join(name);
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            CliError::new(format!(
+                "缺少 Windows SDK 工具 `{name}`；请安装 Windows 10/11 SDK（Desktop C++ 工具）"
+            ))
+        })
+}
+
+fn prepend_windows_sdk_path(command: &mut Command) -> CliResult<()> {
+    let mut paths = Vec::new();
+    for tool in ["rc.exe", "fxc.exe"] {
+        let path = windows_sdk_tool(tool)?;
+        if let Some(parent) = path.parent()
+            && !paths.iter().any(|existing| existing == parent)
+        {
+            paths.push(parent.to_path_buf());
+        }
+    }
+    if let Some(existing) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&existing));
+    }
+    let joined = env::join_paths(paths)
+        .map_err(|error| CliError::new(format!("无法构造 Windows SDK PATH: {error}")))?;
+    command.env("PATH", joined);
     Ok(())
 }
 
@@ -4075,6 +4751,8 @@ fn command_exists(command: &str) -> bool {
     if env::consts::OS == "windows" {
         Command::new("where.exe")
             .arg(command)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
     } else {
@@ -4345,9 +5023,14 @@ pub fn inspect_build_plans_for_channel(
             build_datetime_number(Local::now().fixed_offset(), None)?
         }
     };
-    let release = configured.validated_release(build_number);
+    let targets = if app.targets.required.is_empty() {
+        vec![rustc_host_target()?]
+    } else {
+        app.targets.required.clone()
+    };
+    let release = configured.validated_release(build_number, targets.clone());
     project
-        .build_plans(app_key, &release, true)?
+        .build_plans(app_key, &release, &targets)?
         .into_iter()
         .map(|plan| {
             Ok(serde_json::json!({
@@ -4357,6 +5040,7 @@ pub fn inspect_build_plans_for_channel(
                 "app_path": inspect_path(&plan.app_path),
                 "app_zip_path": inspect_path(&plan.app_zip_path),
                 "dmg_path": inspect_path(&plan.dmg_path),
+                "msi_path": inspect_path(&plan.msi_path),
                 "setup_path": inspect_path(&plan.setup_path),
                 "artifact_path": inspect_path(&plan.artifact_path),
                 "target": plan.target,
@@ -4421,8 +5105,12 @@ pub fn inspect_prepare_release_receipt_for_channel(
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
     let package_version = cargo_package_version(&project.root, &app.package, false)?;
     let configured = project.resolved_release(app_key, app, channel, Some(package_version))?;
-    let receipt =
-        project.prepare_build_receipt(app_key, app, &configured, &app.targets.required)?;
+    let targets = if app.targets.required.is_empty() {
+        vec![rustc_host_target()?]
+    } else {
+        app.targets.required.clone()
+    };
+    let receipt = project.prepare_build_receipt(app_key, app, &configured, &targets)?;
     serde_json::to_value(receipt)
         .map_err(|error| CliError::new(format!("无法序列化 release receipt: {error}")))
 }
@@ -4477,7 +5165,7 @@ pub fn inspect_release_selection(
 ///
 /// # Errors
 ///
-/// 配置、artifact.json、文件大小、摘要或 required target 完整性不合法时返回错误。
+/// 配置、artifact.json、文件大小、摘要或 receipt target 完整性不合法时返回错误。
 #[allow(dead_code)]
 pub fn inspect_release_artifacts(
     config_path: impl AsRef<Path>,
@@ -4497,7 +5185,7 @@ pub fn inspect_release_artifacts(
 ///
 /// # Errors
 ///
-/// 配置、artifact.json、文件大小、摘要或 required target 完整性不合法时返回错误。
+/// 配置、artifact.json、文件大小、摘要或 receipt target 完整性不合法时返回错误。
 #[allow(dead_code)]
 pub fn inspect_release_artifacts_for_channel(
     config_path: impl AsRef<Path>,
@@ -4529,7 +5217,34 @@ pub fn inspect_latest_dmg_aliases(
     config_path: impl AsRef<Path>,
     app_key: &str,
 ) -> CliResult<Vec<String>> {
-    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    inspect_latest_installer_aliases(config_path.as_ref(), app_key).map(|aliases| {
+        aliases
+            .into_iter()
+            .filter(|alias| alias.ends_with(".dmg"))
+            .collect()
+    })
+}
+
+/// 为集成测试返回 publish 将创建的 Windows latest EXE/MSI alias key。
+///
+/// # Errors
+///
+/// 配置或本地产物预检失败时返回错误。
+#[allow(dead_code)]
+pub fn inspect_latest_windows_installer_aliases(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+) -> CliResult<Vec<String>> {
+    inspect_latest_installer_aliases(config_path.as_ref(), app_key).map(|aliases| {
+        aliases
+            .into_iter()
+            .filter(|alias| alias.ends_with(".exe") || alias.ends_with(".msi"))
+            .collect()
+    })
+}
+
+fn inspect_latest_installer_aliases(config_path: &Path, app_key: &str) -> CliResult<Vec<String>> {
+    let project = ProjectDocument::load(config_path.to_path_buf())?;
     let app = project
         .config
         .apps
@@ -4543,7 +5258,7 @@ pub fn inspect_latest_dmg_aliases(
         app_key,
         release.channel.as_str(),
     ]);
-    latest_dmg_uploads(&artifacts, &prefix, app.targets.required.len() == 1)
+    latest_installer_uploads(&artifacts, &prefix, release.targets.len() == 1)
         .map(|uploads| uploads.into_iter().map(|upload| upload.key).collect())
 }
 
@@ -4564,7 +5279,7 @@ pub fn inspect_signing_key(config_path: impl AsRef<Path>, app_key: &str) -> CliR
     read_signing_key(&project, app_key, app, &trusted).map(|(key_id, _)| key_id)
 }
 
-/// 为集成测试返回 Windows 安装器源文件快照，不执行 NSIS 或签名命令。
+/// 为集成测试返回 Windows 安装器源文件快照，不执行 cargo-wix 或签名命令。
 ///
 /// # Errors
 ///
@@ -4588,12 +5303,15 @@ pub fn inspect_windows_installer_sources(
             build_datetime_number(Local::now().fixed_offset(), None)?
         }
     };
-    let release = configured.validated_release(build_number);
+    let configured_targets = if app.targets.required.is_empty() {
+        vec![rustc_host_target()?]
+    } else {
+        app.targets.required.clone()
+    };
+    let release = configured.validated_release(build_number, configured_targets.clone());
     let brand_assets = project.brand_assets(app_key, app)?;
     let publish_target = &project.config.publish.targets[&app.publish_target];
-    let target = app
-        .targets
-        .required
+    let target = configured_targets
         .iter()
         .find(|target| is_windows_target(target))
         .ok_or_else(|| CliError::new(format!("app `{app_key}` 没有 Windows target")))?
@@ -4636,6 +5354,7 @@ pub fn inspect_windows_installer_sources(
         app_path: windows_binary_path(&project.root, &target, &app.package),
         app_zip_path: release_dir.join(format!("{technical_stem}.windows.zip")),
         dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
+        msi_path: release_dir.join(format!("{technical_stem}.msi")),
         setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
         artifact_path: release_dir.join("artifact.json"),
         notes_source: project
@@ -4653,7 +5372,22 @@ pub fn inspect_windows_installer_sources(
     let sources = windows_installer_sources(&plan, &staging)?;
     Ok(serde_json::json!({
         "file_version": sources.file_version,
-        "nsis_script": sources.nsis_script,
+        "msi_version": sources.msi_version,
+        "product_wxs": sources.product_wxs,
+        "bundle_wxs": sources.bundle_wxs,
         "updater_config": sources.updater_config,
     }))
+}
+
+/// 为集成测试从 Windows payload staging 生成更新 ZIP。
+///
+/// # Errors
+///
+/// staging 无法读取、目标文件无法创建，或任一文件无法写入 ZIP 时返回错误。
+#[allow(dead_code)]
+pub fn inspect_create_windows_update_zip(
+    staging: impl AsRef<Path>,
+    destination: impl AsRef<Path>,
+) -> CliResult<()> {
+    create_windows_update_zip_at(staging.as_ref(), destination.as_ref())
 }

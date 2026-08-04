@@ -1,10 +1,21 @@
 //! 独立 updater sidecar 的命令行入口和健康确认工具。
 
-use std::{env, ffi::OsString, fs, path::PathBuf, time::Duration};
+use std::{
+    env,
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::Write as _,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::Serialize;
 
 use crate::{UpdateError, macos, windows};
+
+const INSTALL_RESULT_SCHEMA_VERSION: u32 = 1;
+const INSTALL_RESULT_FILE_NAME: &str = "last-install-result.json";
 
 /// 如果当前进程由 `--nexora-updater-sidecar apply` 启动，则执行 sidecar 安装流程。
 ///
@@ -30,7 +41,25 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
 
     let command = SidecarApplyCommand::parse(&args[position + 2..])?;
     let result = apply_staged_update(&command);
+    let old_version_available = !matches!(
+        &result,
+        Err(UpdateError::SidecarFailed(message)) if message.contains("无法恢复旧版本")
+    );
+    if let Err(error) = &result
+        && cfg!(target_os = "windows")
+        && let Err(record_error) = write_install_failure(&command, error)
+    {
+        tracing::warn!(error = %record_error, "无法记录 Windows 更新安装结果");
+    }
     finalize_pending_record(&command, result.is_ok());
+    if result.is_err()
+        && cfg!(target_os = "windows")
+        && old_version_available
+        && !windows::process_is_running(command.parent_pid)
+        && let Err(error) = windows::relaunch_app(&command.current_app)
+    {
+        tracing::warn!(error = %error, "Windows 更新失败后无法自动重新打开旧版本");
+    }
     result?;
     Ok(true)
 }
@@ -103,6 +132,7 @@ pub fn report_health_from_env_args() -> Result<bool, UpdateError> {
 
 #[derive(Debug)]
 struct SidecarApplyCommand {
+    app_id: String,
     parent_pid: u32,
     current_app: PathBuf,
     staged_app: PathBuf,
@@ -115,7 +145,9 @@ struct SidecarApplyCommand {
 
 impl SidecarApplyCommand {
     fn parse(args: &[OsString]) -> Result<Self, UpdateError> {
-        let app_id = required_value(args, "--app-id")?;
+        let app_id = required_value(args, "--app-id")?
+            .into_string()
+            .map_err(|_| UpdateError::SidecarFailed("app id 不是 UTF-8".to_owned()))?;
         let parent_pid = required_value(args, "--parent-pid")?
             .into_string()
             .map_err(|_| UpdateError::SidecarFailed("parent pid 不是 UTF-8".to_owned()))?
@@ -140,9 +172,8 @@ impl SidecarApplyCommand {
             ));
         }
 
-        drop(app_id);
-
         Ok(Self {
+            app_id,
             parent_pid,
             current_app,
             staged_app,
@@ -167,6 +198,19 @@ fn finalize_pending_record(command: &SidecarApplyCommand, succeeded: bool) {
         return;
     }
 
+    if cfg!(target_os = "windows") {
+        let backup_exists = command
+            .current_app
+            .file_name()
+            .is_some_and(|name| command.staging_root.join("backup").join(name).exists());
+        if command.current_app.exists() && !backup_exists {
+            _ = fs::remove_file(installing);
+            _ = fs::remove_dir_all(&command.staging_root);
+            remove_empty_pending_directory(installing);
+        }
+        return;
+    }
+
     if command.current_app.exists() && command.staged_app.exists() {
         _ = fs::rename(installing, pending);
         return;
@@ -180,6 +224,82 @@ fn finalize_pending_record(command: &SidecarApplyCommand, succeeded: bool) {
         _ = fs::remove_file(installing);
         _ = fs::remove_dir_all(&command.staging_root);
         remove_empty_pending_directory(installing);
+    }
+}
+
+#[derive(Serialize)]
+struct InstallResultRecord<'a> {
+    schema_version: u32,
+    app_id: &'a str,
+    message: &'a str,
+    occurred_at: u64,
+}
+
+fn write_install_failure(
+    command: &SidecarApplyCommand,
+    error: &UpdateError,
+) -> Result<(), UpdateError> {
+    let cache_dir = transaction_cache_dir(&command.staging_root)?;
+    fs::create_dir_all(&cache_dir)?;
+    let message = install_failure_message(error);
+    let record = InstallResultRecord {
+        schema_version: INSTALL_RESULT_SCHEMA_VERSION,
+        app_id: &command.app_id,
+        message,
+        occurred_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).map_err(|error| UpdateError::Random(error.to_string()))?;
+    let temporary = cache_dir.join(format!(
+        ".install-result-{}.tmp",
+        URL_SAFE_NO_PAD.encode(random)
+    ));
+    let destination = cache_dir.join(INSTALL_RESULT_FILE_NAME);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        serde_json::to_writer(&mut file, &record)
+            .map_err(UpdateError::InvalidPendingRecordSerialization)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        windows::replace_file(&temporary, &destination)
+    })();
+    if result.is_err() {
+        _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn transaction_cache_dir(staging_root: &Path) -> Result<PathBuf, UpdateError> {
+    let category = staging_root
+        .parent()
+        .ok_or(UpdateError::InvalidPendingPath)?;
+    if !matches!(
+        category.file_name().and_then(|name| name.to_str()),
+        Some("staging" | "pending")
+    ) {
+        return Err(UpdateError::InvalidPendingPath);
+    }
+    category
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or(UpdateError::InvalidPendingPath)
+}
+
+fn install_failure_message(error: &UpdateError) -> &'static str {
+    match error {
+        UpdateError::HealthCheckTimedOut | UpdateError::InvalidHealthSession => {
+            "新版本未能正常启动，已自动恢复旧版本。若应用未自动打开，请手动启动后重新下载。"
+        }
+        UpdateError::SidecarFailed(message) if message.contains("无法恢复旧版本") => {
+            "更新安装失败，并且旧版本自动恢复未完成。请重新运行安装程序修复应用。"
+        }
+        _ => "更新安装未完成，已自动恢复旧版本。若应用未自动打开，请手动启动后重新下载。",
     }
 }
 

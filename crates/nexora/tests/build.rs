@@ -6,7 +6,8 @@ pub mod commands;
 
 use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_latest_dmg_aliases, inspect_prepare_release_receipt,
+    inspect_build_plans_for_channel, inspect_create_windows_update_zip, inspect_latest_dmg_aliases,
+    inspect_latest_windows_installer_aliases, inspect_prepare_release_receipt,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_selection,
     inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
     write_bundle_icon, write_bundle_info, write_sha256_sidecar,
@@ -350,7 +351,12 @@ fn write_complete_artifacts_for_identity(
     .unwrap();
 }
 
-fn write_windows_artifacts(fixture: &Fixture, include_setup: bool, include_zip: bool) {
+fn write_windows_artifacts(
+    fixture: &Fixture,
+    include_setup: bool,
+    include_msi: bool,
+    include_zip: bool,
+) {
     use sha2::{Digest as _, Sha256};
     let runtime_hash = runtime_config_sha256(fixture, "package-one");
     let target = "x86_64-pc-windows-msvc";
@@ -363,6 +369,12 @@ fn write_windows_artifacts(fixture: &Fixture, include_setup: bool, include_zip: 
             "windows_setup_exe",
             "package-one-1.2.3-7-x86_64.setup.exe".to_owned(),
             b"setup".as_slice(),
+        ),
+        (
+            include_msi,
+            "windows_msi",
+            "package-one-1.2.3-7-x86_64.msi".to_owned(),
+            b"msi".as_slice(),
         ),
         (
             include_zip,
@@ -426,16 +438,24 @@ fn with_windows_target(config: String) -> String {
         .replace(
             "icon = \"assets/logos/one/logo-icon.ico\"",
             r#"icon = "assets/logos/one/logo-icon.ico"
-installer = "nsis"
+installer = "wix"
 install_scope = "user"
 publisher = "Nexora Test Publisher"
 signing = "authenticode"
 signing_thumbprint = "00112233445566778899AABBCCDDEEFF00112233"
 timestamp_url = "http://timestamp.example.test"
 desktop_shortcut_default = false
+start_menu_shortcut_default = true
 launch_after_install_default = true
-minimum_windows_build = 19045"#,
+minimum_windows_build = 15063"#,
         )
+}
+
+fn with_unsigned_windows_signing(config: String) -> String {
+    with_windows_target(config).replace(
+        "signing = \"authenticode\"\nsigning_thumbprint = \"00112233445566778899AABBCCDDEEFF00112233\"\ntimestamp_url = \"http://timestamp.example.test\"",
+        "signing = \"none\"",
+    )
 }
 
 #[test]
@@ -657,7 +677,7 @@ fn runtime_config_change_invalidates_existing_receipt() {
 }
 
 #[test]
-fn windows_build_plan_uses_setup_and_update_zip_without_msi() {
+fn windows_build_plan_uses_msi_setup_and_update_zip() {
     let fixture = Fixture::new(
         "windows-plan",
         &with_windows_target(app_config("one", "package-one", "Application One")),
@@ -678,29 +698,86 @@ fn windows_build_plan_uses_setup_and_update_zip_without_msi() {
             .unwrap()
             .ends_with("package-one-1.2.3-7-x86_64.setup.exe")
     );
-    assert!(plan.get("msi_path").is_none());
+    assert!(
+        plan["msi_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("package-one-1.2.3-7-x86_64.msi")
+    );
 }
 
 #[test]
-fn windows_installer_sources_keep_nsis_boundaries() {
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn missing_targets_configuration_uses_rustc_host() {
+    let config = with_windows_target(app_config("one", "package-one", "Application One")).replace(
+        "[apps.one.targets]\nrequired = [\"x86_64-pc-windows-msvc\"]\n\n",
+        "",
+    );
+    let fixture = Fixture::new("automatic-host-target", &config);
+    let plans = inspect_build_plans(fixture.config(), "one").unwrap();
+    let output = std::process::Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let host = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .unwrap();
+
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0]["target"], host);
+}
+
+#[test]
+fn windows_arm64_build_plan_uses_aarch64_artifact_suffix() {
+    let config = with_windows_target(app_config("one", "package-one", "Application One")).replace(
+        "required = [\"x86_64-pc-windows-msvc\"]",
+        "required = [\"aarch64-pc-windows-msvc\"]",
+    );
+    let fixture = Fixture::new("windows-arm64-plan", &config);
+    let plans = inspect_build_plans(fixture.config(), "one").unwrap();
+
+    assert_eq!(plans[0]["target"], "aarch64-pc-windows-msvc");
+    assert!(
+        plans[0]["msi_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("package-one-1.2.3-7-aarch64.msi")
+    );
+}
+
+#[test]
+fn windows_installer_sources_define_chinese_wix_flow() {
     let fixture = Fixture::new(
         "windows-installer-source",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
-    let script = sources["nsis_script"].as_str().unwrap();
+    let product = sources["product_wxs"].as_str().unwrap();
+    let bundle = sources["bundle_wxs"].as_str().unwrap();
     let updater_config = &sources["updater_config"];
 
     assert_eq!(sources["file_version"], "1.2.3.7");
-    assert!(script.contains("RequestExecutionLevel user"));
-    assert!(script.contains("$LOCALAPPDATA\\Programs\\com.example.one"));
-    assert!(script.contains("WriteRegStr SHCTX"));
-    assert!(script.contains("ReadRegDWORD $1"));
-    assert!(script.contains("package-one-updater.exe"));
-    assert!(script.contains("nexora-updater.json"));
-    assert!(!script.contains(".windows.zip"));
-    assert!(!script.contains("MsiPackage"));
-    assert!(!script.contains("WixToolset"));
+    assert_eq!(sources["msi_version"], "1.2.3.7");
+    assert!(product.contains("Language=\"2052\""));
+    assert!(product.contains("Scope=\"perUser\""));
+    assert!(product.contains("WIXUI_INSTALLDIR"));
+    assert!(product.contains("InstallDirDlg"));
+    assert!(product.contains("BrowseDlg"));
+    assert!(product.contains(
+        "<DisableRollback After=\"InstallInitialize\" Condition=\"REMOVE AND NOT UPGRADINGPRODUCTCODE\" />"
+    ));
+    assert!(product.contains("WINDOWS_BUILD_NUMBER &gt;= 15063"));
+    assert!(!product.contains("VersionNT64"));
+    assert!(product.contains("创建桌面快捷方式"));
+    assert!(product.contains("创建开始菜单快捷方式"));
+    assert!(product.contains("安装完成后运行 Application One"));
+    assert!(product.contains("package-one-updater.exe"));
+    assert!(product.contains("nexora-updater.json"));
+    assert!(!product.contains(".windows.zip"));
+    assert!(bundle.contains("WixInternalUIBootstrapperApplication"));
+    assert!(bundle.contains("<MsiPackage"));
     assert_eq!(
         updater_config["expected_windows_signer_thumbprint"],
         "00112233445566778899AABBCCDDEEFF00112233"
@@ -709,6 +786,122 @@ fn windows_installer_sources_keep_nsis_boundaries() {
         updater_config["expected_windows_publisher"],
         "Nexora Test Publisher"
     );
+}
+
+#[test]
+fn windows_update_zip_uses_protocol_paths_and_round_trips_through_updater() {
+    let fixture = Fixture::new(
+        "windows-update-zip",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    let staging = fixture.root.join("windows-payload");
+    fs::create_dir_all(staging.join("config")).unwrap();
+    fs::write(staging.join("main.exe"), b"main").unwrap();
+    fs::write(staging.join("main-updater.exe"), b"updater").unwrap();
+    fs::write(staging.join("nexora-updater.json"), b"{}").unwrap();
+    fs::write(staging.join("config/application.toml"), b"value = true\n").unwrap();
+    let archive_path = fixture.root.join("update.windows.zip");
+
+    inspect_create_windows_update_zip(&staging, &archive_path).unwrap();
+
+    let archive_file = fs::File::open(&archive_path).unwrap();
+    let mut archive = zip::ZipArchive::new(archive_file).unwrap();
+    let mut names = (0..archive.len())
+        .map(|index| archive.by_index(index).unwrap().name().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "config/application.toml",
+            "main-updater.exe",
+            "main.exe",
+            "nexora-updater.json",
+        ]
+    );
+    assert!(names.iter().all(|name| !name.contains('\\')));
+    drop(archive);
+
+    let extracted = fixture.root.join("extracted");
+    updater::extract_windows_update_zip(&archive_path, &extracted, "main.exe", "main-updater.exe")
+        .unwrap();
+    assert_eq!(
+        fs::read(extracted.join("config/application.toml")).unwrap(),
+        b"value = true\n"
+    );
+}
+
+#[test]
+fn unsigned_windows_updater_config_omits_authenticode_identity() {
+    let config = with_unsigned_windows_signing(app_config("one", "package-one", "Application One"));
+    let fixture = Fixture::new("windows-unsigned-updater", &config);
+
+    let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
+    let updater_config = &sources["updater_config"];
+
+    assert!(updater_config["expected_windows_signer_thumbprint"].is_null());
+    assert!(updater_config["expected_windows_publisher"].is_null());
+}
+
+#[test]
+fn unsigned_windows_signing_rejects_authenticode_only_fields() {
+    for (field, setting) in [
+        (
+            "signing_thumbprint",
+            "signing_thumbprint = \"00112233445566778899AABBCCDDEEFF00112233\"",
+        ),
+        (
+            "expected_publisher",
+            "expected_publisher = \"Nexora Test Publisher\"",
+        ),
+        (
+            "timestamp_url",
+            "timestamp_url = \"http://timestamp.example.test\"",
+        ),
+    ] {
+        let config =
+            with_unsigned_windows_signing(app_config("one", "package-one", "Application One"))
+                .replace(
+                    "signing = \"none\"",
+                    &format!("signing = \"none\"\n{setting}"),
+                );
+        let fixture = Fixture::new(&format!("windows-unsigned-{field}"), &config);
+
+        let error = inspect_windows_installer_sources(fixture.config(), "one")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(field), "unexpected error: {error}");
+        assert!(
+            error.contains("signing = \"none\""),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn windows_authenticode_configuration_is_validated_before_packaging() {
+    let invalid_thumbprint =
+        with_windows_target(app_config("one", "package-one", "Application One")).replace(
+            "signing_thumbprint = \"00112233445566778899AABBCCDDEEFF00112233\"",
+            "signing_thumbprint = \"not-a-thumbprint\"",
+        );
+    let fixture = Fixture::new("windows-invalid-thumbprint", &invalid_thumbprint);
+    let error = inspect_windows_installer_sources(fixture.config(), "one")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("40 位 SHA-1"), "unexpected error: {error}");
+
+    let missing_timestamp =
+        with_windows_target(app_config("one", "package-one", "Application One")).replace(
+            "timestamp_url = \"http://timestamp.example.test\"",
+            "timestamp_url = \"\"",
+        );
+    let fixture = Fixture::new("windows-missing-timestamp", &missing_timestamp);
+    let error = inspect_windows_installer_sources(fixture.config(), "one")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("timestamp_url"), "unexpected error: {error}");
 }
 
 #[test]
@@ -723,11 +916,12 @@ fn windows_file_version_accepts_large_release_build_number() {
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
 
     assert_eq!(sources["file_version"], "1.2.3.54236");
+    assert_eq!(sources["msi_version"], "1.2.3.36140");
     assert!(
-        sources["nsis_script"]
+        sources["product_wxs"]
             .as_str()
             .unwrap()
-            .contains("VIProductVersion \"1.2.3.54236\"")
+            .contains("Version=\"1.2.3.36140\"")
     );
 }
 
@@ -1044,18 +1238,18 @@ fn publish_artifact_validation_requires_zip_and_dmg() {
 }
 
 #[test]
-fn publish_artifact_validation_accepts_windows_setup_and_update_zip() {
+fn publish_artifact_validation_accepts_windows_msi_setup_and_update_zip() {
     let fixture = Fixture::new(
         "windows-artifact-validation",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
-    write_windows_artifacts(&fixture, true, true);
+    write_windows_artifacts(&fixture, true, true, true);
     assert_eq!(
         inspect_release_artifacts(fixture.config(), "one").unwrap(),
-        vec!["windows_setup_exe", "windows_update_zip"]
+        vec!["windows_setup_exe", "windows_msi", "windows_update_zip"]
     );
 
-    write_windows_artifacts(&fixture, true, false);
+    write_windows_artifacts(&fixture, true, true, false);
     assert!(
         inspect_release_artifacts(fixture.config(), "one")
             .unwrap_err()
@@ -1112,6 +1306,25 @@ fn latest_dmg_aliases_are_unambiguous() {
         vec![
             "e2e/one/stable/latest-aarch64.dmg",
             "e2e/one/stable/latest-x86_64.dmg"
+        ]
+    );
+}
+
+#[test]
+fn latest_windows_installer_aliases_include_arch_and_single_target_names() {
+    let fixture = Fixture::new(
+        "windows-latest-aliases",
+        &with_windows_target(app_config("one", "package-one", "应用一")),
+    );
+    write_windows_artifacts(&fixture, true, true, true);
+
+    assert_eq!(
+        inspect_latest_windows_installer_aliases(fixture.config(), "one").unwrap(),
+        vec![
+            "e2e/one/stable/latest-x86_64.exe",
+            "e2e/one/stable/latest-x86_64.msi",
+            "e2e/one/stable/latest.exe",
+            "e2e/one/stable/latest.msi",
         ]
     );
 }

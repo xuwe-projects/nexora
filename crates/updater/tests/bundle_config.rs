@@ -69,29 +69,117 @@ fn loads_safe_updater_configuration_from_app_bundle() {
 }
 
 #[test]
-fn rejects_partial_windows_signature_configuration() {
-    let bundle = write_bundle_config(
-        "partial-windows-signature",
-        serde_json::json!({
+fn loads_safe_updater_configuration_from_windows_install_dir() {
+    let install_dir = bundle_root("valid-windows");
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir).unwrap();
+    }
+    fs::create_dir_all(&install_dir).unwrap();
+    fs::write(
+        install_dir.join("nexora-updater.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
             "schema_version": 1,
-            "app_id": "com.example.desktop",
+            "app_id": "com.example.windows",
             "channel": "stable",
-            "feed_url": "https://updates.example.com/latest.json",
+            "feed_url": "http://127.0.0.1:9000/releases/windows/stable/latest.json",
             "trusted_public_keys": [
-                "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+                "windows-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
             ],
-            "current_version": "1.0.0",
-            "current_build_number": 2,
-            "allow_insecure_http": false,
+            "current_version": "2.0.0",
+            "current_build_number": 9,
+            "allow_insecure_http": true,
             "health_timeout": "20s",
-            "expected_windows_signer_thumbprint": "00112233445566778899AABBCCDDEEFF00112233"
-        }),
-    );
+            "check_on_launch": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
-    let error = UpdateConfig::from_app_bundle(&bundle).unwrap_err();
+    let config = UpdateConfig::from_windows_install_dir(&install_dir).unwrap();
 
-    assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
-    fs::remove_dir_all(bundle).unwrap();
+    assert_eq!(config.app_id(), "com.example.windows");
+    assert_eq!(config.current_version().to_string(), "2.0.0");
+    assert_eq!(config.current_build_number(), 9);
+    assert_eq!(config.channel(), UpdateChannel::Stable);
+    assert!(config.windows_signature().is_none());
+    assert!(!config.check_on_launch());
+
+    fs::remove_dir_all(install_dir).unwrap();
+}
+
+#[test]
+fn rejects_partial_windows_signature_configuration() {
+    let base = serde_json::json!({
+        "schema_version": 1,
+        "app_id": "com.example.desktop",
+        "channel": "stable",
+        "feed_url": "https://updates.example.com/latest.json",
+        "trusted_public_keys": [
+            "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+        ],
+        "current_version": "1.0.0",
+        "current_build_number": 2,
+        "allow_insecure_http": false,
+        "health_timeout": "20s"
+    });
+
+    for (name, field, value) in [
+        (
+            "thumbprint-only",
+            "expected_windows_signer_thumbprint",
+            "00112233445566778899AABBCCDDEEFF00112233",
+        ),
+        (
+            "publisher-only",
+            "expected_windows_publisher",
+            "Nexora Test Publisher",
+        ),
+    ] {
+        let mut config = base.clone();
+        config[field] = serde_json::Value::String(value.to_owned());
+        let bundle = write_bundle_config(name, config);
+
+        let error = UpdateConfig::from_app_bundle(&bundle).unwrap_err();
+
+        assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
+        fs::remove_dir_all(bundle).unwrap();
+    }
+}
+
+#[test]
+fn rejects_invalid_complete_windows_signature_configuration() {
+    for (name, thumbprint, publisher) in [
+        ("invalid-thumbprint", "not-a-thumbprint", "Nexora Publisher"),
+        (
+            "empty-publisher",
+            "00112233445566778899AABBCCDDEEFF00112233",
+            "   ",
+        ),
+    ] {
+        let bundle = write_bundle_config(
+            name,
+            serde_json::json!({
+                "schema_version": 1,
+                "app_id": "com.example.desktop",
+                "channel": "stable",
+                "feed_url": "https://updates.example.com/latest.json",
+                "trusted_public_keys": [
+                    "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+                ],
+                "current_version": "1.0.0",
+                "current_build_number": 2,
+                "allow_insecure_http": false,
+                "health_timeout": "20s",
+                "expected_windows_signer_thumbprint": thumbprint,
+                "expected_windows_publisher": publisher
+            }),
+        );
+
+        let error = UpdateConfig::from_app_bundle(&bundle).unwrap_err();
+
+        assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
+        fs::remove_dir_all(bundle).unwrap();
+    }
 }
 
 #[test]

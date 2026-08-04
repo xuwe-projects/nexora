@@ -16,6 +16,7 @@ use std::{
 
 use async_channel::{Receiver, Sender};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+#[cfg(not(target_os = "windows"))]
 use directories::ProjectDirs;
 use reqwest::{Url, blocking::Client};
 use semver::Version;
@@ -34,6 +35,9 @@ const BUNDLED_CONFIG_FILE_NAME: &str = "nexora-updater.json";
 const PENDING_RECORD_SCHEMA_VERSION: u32 = 1;
 const PENDING_RECORD_FILE_NAME: &str = "pending.json";
 const INSTALLING_RECORD_FILE_NAME: &str = "installing.json";
+const INSTALL_RESULT_SCHEMA_VERSION: u32 = 1;
+const INSTALL_RESULT_FILE_NAME: &str = "last-install-result.json";
+const MAX_INSTALL_RESULT_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct BundledUpdateConfig {
@@ -54,6 +58,27 @@ struct BundledUpdateConfig {
     expected_windows_publisher: Option<String>,
     #[serde(default)]
     check_on_launch: bool,
+}
+
+fn current_bundled_config_location() -> Result<(PathBuf, PathBuf), UpdateError> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_bundle = macos::current_app_bundle()?;
+        let config_path = app_bundle
+            .join("Contents/Resources")
+            .join(BUNDLED_CONFIG_FILE_NAME);
+        Ok((app_bundle, config_path))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let install_dir = crate::windows::current_install_dir()?;
+        let config_path = install_dir.join(BUNDLED_CONFIG_FILE_NAME);
+        Ok((install_dir, config_path))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err(UpdateError::UnsupportedPlatform)
+    }
 }
 
 /// Windows Authenticode 签名验证所需的发布者约束。
@@ -89,19 +114,40 @@ pub struct UpdateConfig {
 }
 
 impl UpdateConfig {
-    /// 从当前 macOS 应用 bundle 加载构建时写入的更新配置。
+    /// 从当前平台安装目录加载构建时写入的更新配置。
     ///
-    /// 该方法定位当前可执行文件所属的 `.app`，读取
-    /// `Contents/Resources/nexora-updater.json`，并使用其中的当前版本、构建号、更新地址、
-    /// 通道和可信公钥创建配置。签名私钥与对象存储凭据不会出现在该文件中。
+    /// macOS 从 `.app/Contents/Resources/nexora-updater.json` 读取，Windows 从主 EXE
+    /// 同级的 `nexora-updater.json` 读取。签名私钥与对象存储凭据不会出现在该文件中。
     ///
     /// # Errors
     ///
-    /// 当前进程不在 `.app` 中、配置文件缺失或格式无效、配置协议版本不受支持、更新地址不符合
-    /// 传输安全策略，或可信公钥无效时返回错误。
+    /// 当前平台不支持、无法确定安装目录、配置文件缺失或格式无效、配置协议版本不受支持、
+    /// 更新地址不符合传输安全策略，或可信公钥无效时返回错误。
     pub fn from_current_bundle() -> Result<Self, UpdateError> {
-        let app_bundle = macos::current_app_bundle()?;
-        Self::from_app_bundle(app_bundle)
+        let (installation_path, config_path) = current_bundled_config_location()?;
+        Self::from_bundled_config_path(&config_path, installation_path)
+    }
+
+    /// 当当前安装包已启用 updater 时加载配置。
+    ///
+    /// 构建未启用 updater 且安装目录中没有 `nexora-updater.json` 时返回 `Ok(None)`；
+    /// 配置存在但无效时仍返回错误，不会静默降级为无更新模式。
+    ///
+    /// # Errors
+    ///
+    /// 当前平台不支持、读取配置失败，或已存在的配置不满足更新安全约束时返回错误。
+    pub fn from_current_bundle_if_present() -> Result<Option<Self>, UpdateError> {
+        let location = current_bundled_config_location();
+        let (installation_path, config_path) = match location {
+            Ok(location) => location,
+            Err(UpdateError::AppBundleNotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        match fs::metadata(&config_path) {
+            Ok(_) => Self::from_bundled_config_path(&config_path, installation_path).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// 从指定 macOS `.app` 加载构建时写入的更新配置。
@@ -117,7 +163,28 @@ impl UpdateConfig {
         let config_path = app_bundle
             .join("Contents/Resources")
             .join(BUNDLED_CONFIG_FILE_NAME);
-        let contents = fs::read_to_string(&config_path)?;
+        Self::from_bundled_config_path(&config_path, app_bundle)
+    }
+
+    /// 从指定 Windows 安装目录加载构建时写入的更新配置。
+    ///
+    /// 该目录应同时包含主 EXE、updater sidecar 和 `nexora-updater.json`。正常安装后启动
+    /// 使用 [`Self::from_current_bundle`]；本方法主要用于显式启动器和隔离测试。
+    ///
+    /// # Errors
+    ///
+    /// 配置文件缺失或格式无效、配置协议版本不受支持、更新地址不符合传输安全策略，
+    /// 或可信公钥无效时返回错误。
+    pub fn from_windows_install_dir(install_dir: impl AsRef<Path>) -> Result<Self, UpdateError> {
+        let install_dir = install_dir.as_ref();
+        Self::from_bundled_config_path(&install_dir.join(BUNDLED_CONFIG_FILE_NAME), install_dir)
+    }
+
+    fn from_bundled_config_path(
+        config_path: &Path,
+        installation_path: impl AsRef<Path>,
+    ) -> Result<Self, UpdateError> {
+        let contents = fs::read_to_string(config_path)?;
         let bundled: BundledUpdateConfig = serde_json::from_str(&contents).map_err(|error| {
             UpdateError::InvalidBundleConfig(format!("{}: {error}", config_path.display()))
         })?;
@@ -143,7 +210,7 @@ impl UpdateConfig {
         .and_then(|config| {
             let config = config
                 .with_health_timeout(health_timeout)
-                .with_app_bundle_path(app_bundle)
+                .with_app_bundle_path(installation_path.as_ref())
                 .with_check_on_launch(bundled.check_on_launch);
             let config = if let Some(team_id) = bundled.expected_team_id {
                 config.with_expected_team_id(team_id)
@@ -324,9 +391,9 @@ impl UpdateConfig {
         self
     }
 
-    /// 显式指定当前运行中的 `.app` 路径。
+    /// 显式指定当前运行中的应用安装路径。
     ///
-    /// 正常发布环境无需设置，updater 会从当前可执行文件路径向上查找 `.app`。
+    /// macOS 传入 `.app` 路径，Windows 传入主 EXE 所在目录。正常发布环境无需设置；
     /// 该选项主要用于集成测试和非标准应用启动器。
     pub fn with_app_bundle_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.app_bundle_path = Some(path.into());
@@ -431,9 +498,22 @@ impl UpdateConfig {
             return Ok(path.clone());
         }
 
-        ProjectDirs::from("", "", &self.app_id)
-            .map(|directories| directories.cache_dir().join("updater"))
-            .ok_or(UpdateError::CacheDirectoryUnavailable)
+        #[cfg(target_os = "windows")]
+        {
+            let install_dir = self
+                .app_bundle_path
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(crate::windows::current_install_dir)?;
+            crate::windows::cache_dir_for_install(&install_dir, &self.app_id)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            ProjectDirs::from("", "", &self.app_id)
+                .map(|directories| directories.cache_dir().join("updater"))
+                .ok_or(UpdateError::CacheDirectoryUnavailable)
+        }
     }
 }
 
@@ -565,6 +645,13 @@ struct PendingUpdateRecord {
     staging_root: PathBuf,
     archive_path: PathBuf,
     staged_app: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallResultRecord {
+    schema_version: u32,
+    app_id: String,
+    message: String,
 }
 
 impl Drop for StagingCleanup {
@@ -712,14 +799,6 @@ impl StagedUpdate {
         })?;
         Ok(Some((pending.clone(), installing)))
     }
-
-    pub(crate) fn discard_pending(&self) {
-        if let Some(record) = &self.pending_record
-            && let Some(cache_dir) = record.parent()
-        {
-            discard_pending_cache(cache_dir);
-        }
-    }
 }
 
 /// 与 UI 框架无关的桌面应用更新器。
@@ -769,6 +848,52 @@ impl Updater {
                 Ok(None)
             }
         }
+    }
+
+    pub(crate) fn take_install_failure(&self) -> Result<Option<String>, UpdateError> {
+        if !cfg!(target_os = "windows") {
+            return Ok(None);
+        }
+
+        let result_path = self.config.cache_dir()?.join(INSTALL_RESULT_FILE_NAME);
+        let metadata = match fs::metadata(&result_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let contents = if metadata.len() <= MAX_INSTALL_RESULT_BYTES {
+            fs::read(&result_path)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "安装结果记录过大",
+            ))
+        };
+        let remove_result = fs::remove_file(&result_path);
+        if let Err(error) = remove_result
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %result_path.display(), error = %error, "无法删除已消费的安装结果记录");
+        }
+
+        let record = match contents.map_err(UpdateError::Io).and_then(|contents| {
+            serde_json::from_slice::<InstallResultRecord>(&contents)
+                .map_err(UpdateError::InvalidPendingRecord)
+        }) {
+            Ok(record) => record,
+            Err(error) => {
+                tracing::warn!(error = %error, "忽略无效的 Windows 安装结果记录");
+                return Ok(None);
+            }
+        };
+        if record.schema_version != INSTALL_RESULT_SCHEMA_VERSION
+            || record.app_id != self.config.app_id
+            || record.message.trim().is_empty()
+        {
+            tracing::warn!("忽略与当前应用不匹配的 Windows 安装结果记录");
+            return Ok(None);
+        }
+        Ok(Some(record.message))
     }
 
     /// 在独立工作线程中检查、下载、验证并暂存更新。
@@ -1163,7 +1288,10 @@ fn create_staging_root(
 }
 
 fn staging_base(config: &UpdateConfig) -> Result<PathBuf, UpdateError> {
-    config.cache_dir().map(|path| path.join("staging"))
+    let cache_dir = config.cache_dir()?;
+    #[cfg(target_os = "windows")]
+    crate::windows::prepare_cache_dir(&cache_dir)?;
+    Ok(cache_dir.join("staging"))
 }
 
 fn start_staging_cleanup_worker() -> Option<mpsc::Sender<PathBuf>> {
@@ -1451,14 +1579,29 @@ fn write_pending_record(
             .map_err(UpdateError::InvalidPendingRecordSerialization)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
-        fs::rename(&temporary, record_path)?;
-        File::open(cache_dir)?.sync_all()?;
+        replace_record_file(&temporary, record_path)?;
+        sync_directory_best_effort(cache_dir);
         Ok(())
     })();
     if result.is_err() {
         _ = fs::remove_file(temporary);
     }
     result
+}
+
+fn replace_record_file(source: &Path, destination: &Path) -> Result<(), UpdateError> {
+    if cfg!(target_os = "windows") {
+        return crate::windows::replace_file(source, destination);
+    }
+    fs::rename(source, destination)?;
+    Ok(())
+}
+
+fn sync_directory_best_effort(_path: &Path) {
+    #[cfg(not(target_os = "windows"))]
+    if let Err(error) = File::open(_path).and_then(|directory| directory.sync_all()) {
+        tracing::warn!(path = %_path.display(), error = %error, "待安装记录已提交，但无法同步缓存目录");
+    }
 }
 
 fn cleanup_other_pending_roots(pending_base: &Path, retained: &Path) {

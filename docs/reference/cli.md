@@ -33,6 +33,8 @@ nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
+nexora build --app <id> --channel beta
+nexora build --app <id> --all-channels
 nexora publish
 nexora publish --app <id> --dry-run
 nexora publish --all --yes
@@ -60,6 +62,9 @@ Skill 文件。生成的 `publish-nexora-release` Skill 负责版本升级、完
 同一 app 记录也声明 `assets/logos/<app_key>/` 下的应用内 Logo、图标源文件以及各平台图标；
 `nexora icons generate --app <id>` 只根据所选 app 的源 PNG 重新生成标准 PNG、ICNS 和 ICO。
 手工管理的品牌资源需要显式 `--force` 才允许覆盖。
+同一 app 声明多个 `release.channels` 时，交互终端中的 `nexora build` / `publish` 会显示 channel
+多选菜单并预选 `default_channel`；CI 应显式使用可重复的 `--channel <name>` 或
+`--all-channels`。单通道 `release.channel` 继续兼容。
 `nexora build` 只构建当前宿主的现有产物并写入 `artifact.json`；`nexora publish` 只发布已有
 artifact，不会隐式触发 build。发布命令按更新包和 notes、不可变 manifest、`latest.json` 的顺序
 上传到 RustFS/S3 兼容对象存储，最后通过匿名公开 URL 重新读取并验证 `latest.json`。更新清单

@@ -117,10 +117,24 @@ notarize = false
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
+installer = "wix"
+install_scope = "user"
+publisher = "Example Publisher"
+signing = "none"
+start_menu_shortcut_default = true
+launch_after_install_default = true
+minimum_windows_build = 15063
 
 [apps.desktop.platforms.linux]
 icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
 ```
 
-路径必须是 workspace 内的相对路径。当前生产打包链路实现 macOS `.app`、DMG 与 ICNS；
-Windows/Linux 图标已进入配置、初始化和生成模型，但尚未实现完整安装包与自动安装更新。
+路径必须是 workspace 内的相对路径。`targets.required` 可省略，构建会使用 `rustc -vV` 返回的
+本机 target；需要显式覆盖时使用 `nexora build --target <triple>`。当前生产打包链路实现 macOS
+`.app`/DMG，以及 Windows x86_64/ARM64 的中文 WiX MSI、Burn Setup EXE 和更新 ZIP。
+
+Windows 的 `publisher` 在所有签名模式下都是安装器元数据。`signing = "none"` 仍保留
+Ed25519 manifest、artifact SHA-256、ZIP 安全和 PE 架构校验，但不得同时配置
+`signing_thumbprint`、`expected_publisher` 或 `timestamp_url`。`signing = "authenticode"` 时需要
+证书 thumbprint（或 `WINDOWS_SIGN_CERTIFICATE_SHA1`）与 RFC 3161 `timestamp_url`；
+`expected_publisher` 省略时回退到 `publisher`，更新器会同时验证主程序和 sidecar 的证书身份。

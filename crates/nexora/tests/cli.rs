@@ -1321,6 +1321,9 @@ fn create_defaults_to_a_single_package_project() {
     );
     let main = fs::read_to_string(project.join("src/main.rs")).unwrap();
     assert_eq!(main, expected_main("demo-app", false, false));
+    assert!(
+        main.starts_with("#![cfg_attr(target_os = \"windows\", windows_subsystem = \"windows\")]")
+    );
     assert!(main.contains("#[derive(RustEmbed)]"));
     assert!(main.contains(".application_assets(AppAssets)"));
     assert!(project.join("assets/icons").is_dir());
@@ -1342,6 +1345,9 @@ fn create_defaults_to_a_single_package_project() {
         askama_source(AGENTS_TEMPLATE)
     );
     let nexora_config = fs::read_to_string(project.join("nexora.toml")).unwrap();
+    assert!(nexora_config.contains("default_channel = \"stable\""));
+    assert!(nexora_config.contains("[apps.demo-app.release.channels.beta]"));
+    assert!(nexora_config.contains("[apps.demo-app.release.channels.stable]"));
     assert!(nexora_config.contains("version = \"${CARGO_PKG_VERSION}\""));
     assert!(nexora_config.contains("build_number = \"${BUILD_DATETIME}\""));
     assert!(!project.join("apps").exists());

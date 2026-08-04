@@ -108,7 +108,6 @@ struct MainTemplate<'a> {
 #[template(path = "scaffold/nexora.toml", escape = "none")]
 struct NexoraConfigTemplate<'a> {
     project_name: &'a str,
-    default_target: &'a str,
 }
 
 #[derive(askama::Template)]
@@ -407,12 +406,9 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
     );
     let nexora_source = nexora_dependency_source();
     let nexora_config = normalize_template_output(
-        NexoraConfigTemplate {
-            project_name,
-            default_target: default_desktop_target(),
-        }
-        .render()
-        .map_err(|error| format!("无法渲染 nexora.toml 模板：{error}"))?,
+        NexoraConfigTemplate { project_name }
+            .render()
+            .map_err(|error| format!("无法渲染 nexora.toml 模板：{error}"))?,
     );
 
     match layout {
@@ -534,14 +530,6 @@ fn logo_asset_files(target: &Path, app_key: &str) -> Result<Vec<(String, &'stati
         .map(|(name, contents)| (format!("{prefix}/{name}"), *contents))
         .filter(|(path, _)| !target.join(path).is_file())
         .collect())
-}
-
-fn default_desktop_target() -> &'static str {
-    match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("macos", _) => "aarch64-apple-darwin",
-        _ => "aarch64-apple-darwin",
-    }
 }
 
 fn append_agent_skills(

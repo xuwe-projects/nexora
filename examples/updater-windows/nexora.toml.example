@@ -22,17 +22,20 @@ icon_source = "assets/logos/updater-windows/logo-icon-source.png"
 managed = true
 
 [apps.updater-windows.release]
-channel = "stable"
+default_channel = "stable"
 version = "1.0.1"
 build_number = 5
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/updater-windows.key"
 
+[apps.updater-windows.release.channels.beta]
+
+[apps.updater-windows.release.channels.stable]
+
 [apps.updater-windows.updater]
 enabled = true
 check_on_launch = true
-feed_url = "http://127.0.0.1:9000/nexora-updater-example/e2e/updater-windows/stable/latest.json"
-channels = ["stable"]
+channels = ["stable", "beta"]
 trusted_public_keys = ["updater-windows-main:ed25519:REPLACE_WITH_PUBLIC_KEY"]
 signing_key_env = "NEXORA_EXAMPLE_UPDATE_SIGNING_KEY"
 check_interval = "15m"
@@ -41,9 +44,6 @@ offline_grace_period = "24h"
 mandatory_restart_delay = "60s"
 health_timeout = "20s"
 
-[apps.updater-windows.targets]
-required = ["x86_64-pc-windows-msvc"]
-
 [apps.updater-windows.platforms.macos]
 icon = "assets/logos/updater-windows/logo-icon.icns"
 signing = "ad_hoc"
@@ -51,15 +51,17 @@ notarize = false
 
 [apps.updater-windows.platforms.windows]
 icon = "assets/logos/updater-windows/logo-icon.ico"
-installer = "nsis"
+installer = "wix"
 install_scope = "user"
 publisher = "Nexora Examples"
 signing = "authenticode"
 signing_thumbprint = "0123456789ABCDEF0123456789ABCDEF01234567"
+expected_publisher = "Nexora Examples"
 timestamp_url = "http://timestamp.digicert.com"
 desktop_shortcut_default = false
+start_menu_shortcut_default = true
 launch_after_install_default = true
-minimum_windows_build = 19045
+minimum_windows_build = 15063
 
 [apps.updater-windows.platforms.linux]
 icons = [

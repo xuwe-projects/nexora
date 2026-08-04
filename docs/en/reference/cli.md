@@ -33,6 +33,8 @@ nexora icons generate --app <id>
 nexora updater keygen --app <id>
 nexora build
 nexora build --app <id>
+nexora build --app <id> --channel beta
+nexora build --app <id> --all-channels
 nexora publish
 nexora publish --app <id> --dry-run
 nexora publish --all --yes
@@ -63,7 +65,10 @@ Desktop updates are configured by the repository-root `nexora.toml`, which regis
 policy, branding resources, platform icons, and S3-compatible publish targets. Each app owns an
 `assets/logos/<app_key>/` directory. `nexora icons generate --app <id>` regenerates only that app's
 standard PNG, ICNS, and ICO files from its configured source PNG; manually managed resources require
-an explicit `--force` before they can be replaced. `nexora build` only builds existing artifacts for the
+an explicit `--force` before they can be replaced. When an app declares multiple `release.channels`,
+interactive `nexora build` and `publish` commands show a channel multi-select with `default_channel`
+preselected. CI should pass repeatable `--channel <name>` arguments or `--all-channels`; legacy
+single-channel `release.channel` remains supported. `nexora build` only builds existing artifacts for the
 current host and writes `artifact.json`; `nexora publish` only publishes existing artifacts and never
 runs build implicitly. Publish uploads update files and notes, the immutable manifest, and
 `latest.json` to RustFS/S3-compatible storage, then anonymously reads and verifies `latest.json`.

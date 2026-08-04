@@ -21,17 +21,19 @@ icon_source = "assets/logos/{{ project_name }}/logo-icon-source.png"
 managed = true
 
 [apps.{{ project_name }}.release]
-channel = "stable"
+default_channel = "stable"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
 
+[apps.{{ project_name }}.release.channels.beta]
+
+[apps.{{ project_name }}.release.channels.stable]
+
 [apps.{{ project_name }}.updater]
 enabled = false
 check_on_launch = false
-
-[apps.{{ project_name }}.targets]
-required = ["{{ default_target }}"]
+channels = ["stable", "beta"]
 
 [apps.{{ project_name }}.platforms.macos]
 icon = "assets/logos/{{ project_name }}/logo-icon.icns"
@@ -40,6 +42,12 @@ notarize = false
 
 [apps.{{ project_name }}.platforms.windows]
 icon = "assets/logos/{{ project_name }}/logo-icon.ico"
+installer = "wix"
+install_scope = "user"
+publisher = "{{ project_name }}"
+desktop_shortcut_default = false
+start_menu_shortcut_default = true
+launch_after_install_default = true
 
 [apps.{{ project_name }}.platforms.linux]
 icons = [

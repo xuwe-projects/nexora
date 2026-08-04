@@ -5,8 +5,15 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-use updater::{extract_windows_update_zip, validate_windows_zip_entry_path};
+use updater::{
+    UpdateError, WindowsSignatureConfig, extract_windows_update_zip,
+    validate_windows_zip_entry_path,
+};
 use zip::{ZipWriter, write::SimpleFileOptions};
+
+#[allow(dead_code)]
+#[path = "../src/windows.rs"]
+mod windows_implementation;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -141,6 +148,135 @@ fn windows_update_zip_rejects_duplicate_and_missing_required_files() {
 }
 
 #[test]
+fn unsigned_windows_staging_skips_authenticode_but_keeps_pe_validation() {
+    let fixture = Fixture::new("unsigned-staging");
+    let main = fixture.root.join("main.exe");
+    let updater = fixture.root.join("main-updater.exe");
+    if !write_current_arch_pe(&main) || !write_current_arch_pe(&updater) {
+        return;
+    }
+
+    windows_implementation::verify_staged_update_signatures(
+        &fixture.root,
+        "main.exe",
+        "main-updater.exe",
+        None,
+    )
+    .unwrap();
+
+    fs::write(&updater, b"not a PE file").unwrap();
+    let error = windows_implementation::verify_staged_update_signatures(
+        &fixture.root,
+        "main.exe",
+        "main-updater.exe",
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("不是有效 PE 文件"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn configured_windows_staging_rejects_unsigned_executable() {
+    let fixture = Fixture::new("authenticode-staging");
+    let main = fixture.root.join("main.exe");
+    let updater = fixture.root.join("main-updater.exe");
+    if !write_current_arch_pe(&main) || !write_current_arch_pe(&updater) {
+        return;
+    }
+    let signature = WindowsSignatureConfig {
+        signer_thumbprint: "00112233445566778899AABBCCDDEEFF00112233".to_owned(),
+        publisher: "Nexora Test Publisher".to_owned(),
+    };
+
+    let error = windows_implementation::verify_staged_update_signatures(
+        &fixture.root,
+        "main.exe",
+        "main-updater.exe",
+        Some(&signature),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Authenticode"), "unexpected error: {error}");
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_record_replace_overwrites_existing_destination_atomically() {
+    let fixture = Fixture::new("atomic-record-replace");
+    let source = fixture.root.join("pending.new");
+    let destination = fixture.root.join("pending.json");
+    fs::write(&source, b"new-record").unwrap();
+    fs::write(&destination, b"old-record").unwrap();
+
+    windows_implementation::replace_file(&source, &destination).unwrap();
+
+    assert_eq!(fs::read(&destination).unwrap(), b"new-record");
+    assert!(!source.exists());
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_default_update_cache_is_a_sibling_of_the_install_directory() {
+    let fixture = Fixture::new("same-volume-cache");
+    let install = fixture.root.join("custom-location").join("installed-app");
+
+    let cache =
+        windows_implementation::cache_dir_for_install(&install, "com.example.same-volume-cache")
+            .unwrap();
+
+    assert_eq!(
+        cache,
+        fixture
+            .root
+            .join("custom-location")
+            .join(".nexora-updater")
+            .join("com.example.same-volume-cache")
+    );
+    assert_eq!(install.components().next(), cache.components().next());
+    assert!(!cache.starts_with(&install));
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_install_preflight_accepts_writable_sibling_staging() {
+    let fixture = Fixture::new("install-preflight");
+    let current = fixture.root.join("installed-app");
+    let staging_root = fixture.root.join(".nexora-updater").join("staging");
+    let staged = staging_root.join("extracted");
+    fs::create_dir_all(&current).unwrap();
+    fs::create_dir_all(&staged).unwrap();
+    fs::write(current.join("main.exe"), b"current").unwrap();
+    fs::write(staged.join("main.exe"), b"staged").unwrap();
+
+    windows_implementation::preflight_install_layout(&current, &staged, &staging_root).unwrap();
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_install_preflight_rejects_staging_inside_install_directory() {
+    let fixture = Fixture::new("nested-install-preflight");
+    let current = fixture.root.join("installed-app");
+    let staging_root = current.join(".nexora-updater").join("staging");
+    let staged = staging_root.join("extracted");
+    fs::create_dir_all(&staged).unwrap();
+    fs::write(current.join("main.exe"), b"current").unwrap();
+    fs::write(staged.join("main.exe"), b"staged").unwrap();
+
+    let error = windows_implementation::preflight_install_layout(&current, &staged, &staging_root)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("边界无效"), "unexpected error: {error}");
+}
+
+#[test]
 #[cfg(target_os = "windows")]
 fn windows_update_zip_rejects_existing_reparse_parent() {
     use std::os::windows::fs::symlink_dir;
@@ -171,6 +307,33 @@ fn windows_update_zip_rejects_existing_reparse_parent() {
     assert!(error.contains("reparse point"));
 }
 
+#[test]
+fn windows_install_helper_runs_outside_the_install_directory() {
+    let fixture = Fixture::new("sidecar-working-directory");
+    let install_dir = fixture.root.join("installed-app");
+    let staging_root = fixture.root.join("transactions/staging/session");
+    let staged_app = staging_root.join("extracted");
+    let runtime_dir = fixture.root.join("temporary-sidecar");
+    let sidecar_runtime = runtime_dir.join("main-updater.exe");
+    let bundled_sidecar = staged_app.join("main-updater.exe");
+    let request = windows_implementation::InstallHelperRequest {
+        process_id: 42,
+        app_id: "com.example.desktop",
+        current_app: &install_dir,
+        staged_app: &staged_app,
+        staging_root: &staging_root,
+        sidecar_path: &bundled_sidecar,
+        health_timeout: std::time::Duration::from_secs(120),
+        pending_records: None,
+    };
+
+    let command =
+        windows_implementation::install_helper_command(&sidecar_runtime, request).unwrap();
+
+    assert_eq!(command.get_current_dir(), Some(runtime_dir.as_path()));
+    assert_ne!(command.get_current_dir(), Some(install_dir.as_path()));
+}
+
 fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
     let file = File::create(path).unwrap();
     let mut zip = ZipWriter::new(file);
@@ -180,4 +343,23 @@ fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
         zip.write_all(contents).unwrap();
     }
     zip.finish().unwrap();
+}
+
+fn write_current_arch_pe(path: &Path) -> bool {
+    let machine = if cfg!(target_arch = "x86_64") {
+        0x8664_u16
+    } else if cfg!(target_arch = "aarch64") {
+        0xaa64_u16
+    } else {
+        return false;
+    };
+    let pe_offset = 0x80_usize;
+    let mut bytes = vec![0_u8; 0x100];
+    bytes[0..2].copy_from_slice(b"MZ");
+    bytes[0x3c..0x40].copy_from_slice(&(pe_offset as u32).to_le_bytes());
+    bytes[pe_offset..pe_offset + 4].copy_from_slice(b"PE\0\0");
+    bytes[pe_offset + 4..pe_offset + 6].copy_from_slice(&machine.to_le_bytes());
+    bytes[pe_offset + 24..pe_offset + 26].copy_from_slice(&0x20b_u16.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+    true
 }
