@@ -264,6 +264,13 @@ pub(crate) fn current_install_dir() -> Result<PathBuf, UpdateError> {
         .ok_or_else(|| UpdateError::SidecarFailed("当前 EXE 路径缺少安装目录".to_owned()))
 }
 
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(
+        dead_code,
+        reason = "仅由 Windows 服务分支调用；非 Windows 仍编译本模块以运行归档与路径测试"
+    )
+)]
 pub(crate) fn cache_dir_for_install(
     install_dir: &Path,
     app_id: &str,
@@ -825,6 +832,13 @@ fn ensure_windows() -> Result<(), UpdateError> {
     Err(UpdateError::UnsupportedPlatform)
 }
 
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(
+        dead_code,
+        reason = "仅由 Windows 服务分支调用；非 Windows 仍编译本模块以运行归档与路径测试"
+    )
+)]
 pub(crate) fn prepare_cache_dir(cache_dir: &Path) -> Result<(), UpdateError> {
     fs::create_dir_all(cache_dir)?;
     #[cfg(target_os = "windows")]

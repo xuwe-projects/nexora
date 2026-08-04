@@ -20,11 +20,15 @@ use std::{
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+use updater::{
+    ApplicationReleaseMetadata, MAX_RELEASE_NOTES_BYTES, RELEASE_METADATA_FILE_NAME,
+    RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, UpdateChannel, verify_release_notes_bytes,
+};
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const CONFIG_FILE_NAME: &str = "nexora.toml";
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;
-const RELEASE_RECEIPT_SCHEMA_VERSION: u32 = 2;
+const RELEASE_RECEIPT_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
@@ -154,6 +158,8 @@ struct ReleaseConfig {
     #[serde(default)]
     signing_key_file: Option<String>,
     #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
     channels: BTreeMap<String, ReleaseChannelConfig>,
 }
 
@@ -168,6 +174,8 @@ struct ReleaseChannelConfig {
     minimum_supported_version: Option<String>,
     #[serde(default)]
     runtime_config: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -339,6 +347,7 @@ struct ResolvedReleaseConfig {
     runtime_config_source: String,
     runtime_config_sha256: String,
     updater_feed: String,
+    notes_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +363,7 @@ struct ValidatedRelease {
     runtime_config_sha256: String,
     updater_feed: String,
     targets: Vec<String>,
+    notes_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -372,6 +382,7 @@ struct ReleaseReceipt {
     runtime_config_source: String,
     runtime_config_sha256: String,
     updater_feed: String,
+    notes_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -399,8 +410,14 @@ struct BuildPlan {
     msi_path: PathBuf,
     setup_path: PathBuf,
     artifact_path: PathBuf,
-    notes_source: PathBuf,
     notes_path: PathBuf,
+    notes: Option<ReleaseNotesMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct FrozenReleaseNotes {
+    path: PathBuf,
+    metadata: ReleaseNotesMetadata,
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +519,10 @@ struct ManifestPayload {
     published_at: i64,
     status: ReleaseStatus,
     notes_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notes_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notes_size: Option<u64>,
     artifacts: Vec<ManifestArtifact>,
 }
 
@@ -579,6 +600,7 @@ impl ReleaseReceipt {
             runtime_config_sha256: configured.runtime_config_sha256.clone(),
             updater_feed: configured.updater_feed.clone(),
             targets: self.targets.clone(),
+            notes_source: configured.notes_source.clone(),
         })
     }
 }
@@ -597,6 +619,7 @@ impl ResolvedReleaseConfig {
             runtime_config_sha256: self.runtime_config_sha256.clone(),
             updater_feed: self.updater_feed.clone(),
             targets,
+            notes_source: self.notes_source.clone(),
         }
     }
 }
@@ -653,7 +676,8 @@ pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
         let targets = project.resolve_build_targets(app_key.as_str(), app, &config.target)?;
         let receipt = project.prepare_build_receipt(&app_key, app, &configured, &targets)?;
         let release = receipt.validated_release(&configured)?;
-        let plans = project.build_plans(&app_key, &release, &targets)?;
+        let frozen_notes = freeze_release_notes(&project.root, &app_key, app, &release)?;
+        let plans = project.build_plans(&app_key, &release, &targets, frozen_notes.as_ref())?;
         for plan in &plans {
             execute_build(plan)?;
         }
@@ -1055,6 +1079,17 @@ impl ProjectDocument {
                 "latest.json",
             ]),
         );
+        let notes_source = channel
+            .and_then(|channel| channel.notes.clone())
+            .or_else(|| release.notes.clone());
+        if app.updater.enabled && notes_source.is_none() {
+            return Err(CliError::new(format!(
+                "app `{app_key}` channel `{selected_channel}` 启用了 updater，但合并后缺少 release.notes"
+            )));
+        }
+        if let Some(notes_source) = notes_source.as_deref() {
+            validate_workspace_relative_path(notes_source, "release.notes")?;
+        }
         if release.channels.is_empty()
             && app.updater.enabled
             && app.updater.feed_url != updater_feed
@@ -1074,6 +1109,7 @@ impl ProjectDocument {
             runtime_config_source,
             runtime_config_sha256,
             updater_feed,
+            notes_source,
         })
     }
 
@@ -1187,6 +1223,7 @@ impl ProjectDocument {
             runtime_config_source: configured.runtime_config_source.clone(),
             runtime_config_sha256: configured.runtime_config_sha256.clone(),
             updater_feed: configured.updater_feed.clone(),
+            notes_source: configured.notes_source.clone(),
         };
         write_release_receipt_atomic(&path, &receipt)?;
         println!("RELEASE RECEIPT: {}", path.display());
@@ -1365,6 +1402,7 @@ impl ProjectDocument {
         app_key: &str,
         release: &ValidatedRelease,
         targets: &[String],
+        frozen_notes: Option<&FrozenReleaseNotes>,
     ) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
         let brand_assets = self.brand_assets(app_key, app)?;
@@ -1433,20 +1471,10 @@ impl ProjectDocument {
                     msi_path: release_dir.join(format!("{technical_stem}.msi")),
                     setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
                     artifact_path: release_dir.join("artifact.json"),
-                    notes_source: self
-                        .root
-                        .join("docs/changelog/components")
-                        .join(release.version.to_string())
-                        .join(&app.package)
-                        .join("zh-CN.md"),
-                    notes_path: self
-                        .root
-                        .join(DIST_DIRECTORY)
-                        .join(app_key)
-                        .join(&release.channel)
-                        .join(release.version.to_string())
-                        .join(release.build_number.to_string())
-                        .join("notes.md"),
+                    notes_path: frozen_notes
+                        .map(|notes| notes.path.clone())
+                        .unwrap_or_else(|| release_notes_path(&self.root, app_key, release)),
+                    notes: frozen_notes.map(|notes| notes.metadata.clone()),
                 })
             })
             .collect()
@@ -1576,20 +1604,35 @@ impl ProjectDocument {
                 .join(release.version.to_string())
                 .join(release.build_number.to_string())
                 .join("notes.md");
-            let notes_url = if notes_path.is_file() {
-                let key = object_key([release_prefix.as_str(), "notes.md"]);
-                let url = public_object_url(&target, &key);
-                immutable_payloads.push(Upload {
-                    key,
-                    source: UploadSource::File(notes_path),
-                    content_type: "text/markdown; charset=utf-8",
-                    cache_control: IMMUTABLE_CACHE,
-                    immutable: true,
-                });
-                Some(url)
-            } else {
-                None
+            if !notes_path.is_file() {
+                return Err(CliError::new(format!(
+                    "发布产物缺少已冻结 notes.md：{}；请先重新执行 nexora build",
+                    notes_path.display()
+                )));
+            }
+            let notes_bytes = fs::read(&notes_path).map_err(|error| {
+                CliError::new(format!(
+                    "无法读取已冻结 notes.md `{}`: {error}",
+                    notes_path.display()
+                ))
+            })?;
+            let notes_metadata = ReleaseNotesMetadata {
+                file_name: RELEASE_NOTES_FILE_NAME.to_owned(),
+                size: u64::try_from(notes_bytes.len())
+                    .map_err(|_| CliError::new("已冻结 notes.md 大小无法在当前平台表示"))?,
+                sha256: sha256_hex(&notes_bytes),
             };
+            verify_release_notes_bytes(&notes_metadata, &notes_bytes)
+                .map_err(|error| CliError::new(format!("已冻结 notes.md 无效: {error}")))?;
+            let key = object_key([release_prefix.as_str(), RELEASE_NOTES_FILE_NAME]);
+            let notes_url = Some(public_object_url(&target, &key));
+            immutable_payloads.push(Upload {
+                key,
+                source: UploadSource::File(notes_path),
+                content_type: "text/markdown; charset=utf-8",
+                cache_control: IMMUTABLE_CACHE,
+                immutable: true,
+            });
             latest_installer_aliases = latest_installer_uploads(
                 &local_artifacts,
                 &channel_prefix,
@@ -1613,6 +1656,8 @@ impl ProjectDocument {
                 published_at: unix_now()?,
                 status,
                 notes_url,
+                notes_sha256: Some(notes_metadata.sha256),
+                notes_size: Some(notes_metadata.size),
                 artifacts: manifest_artifacts,
             };
             return finalize_publish_plan(
@@ -1644,6 +1689,8 @@ impl ProjectDocument {
             published_at: unix_now()?,
             status,
             notes_url: None,
+            notes_sha256: None,
+            notes_size: None,
             artifacts: Vec::new(),
         };
         finalize_publish_plan(
@@ -1764,6 +1811,7 @@ fn execute_macos_build(plan: &BuildPlan) -> CliResult<()> {
     )?;
     write_bundle_icon(&plan.app_path, &plan.macos_icon)?;
     write_bundle_runtime_config(plan)?;
+    write_bundle_release_resources(plan)?;
     if plan.updater.is_some() {
         write_bundle_updater_config(plan)?;
         build_and_install_sidecar(plan, &executable)?;
@@ -1774,7 +1822,6 @@ fn execute_macos_build(plan: &BuildPlan) -> CliResult<()> {
     if plan.notarize {
         notarize_dmg(plan)?;
     }
-    copy_release_notes(plan)?;
     write_artifact_manifest(plan)?;
     println!("APP: {}", plan.app_path.display());
     println!("APP ZIP: {}", plan.app_zip_path.display());
@@ -1841,7 +1888,6 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     let bundle_source = write_windows_bundle_source(plan, &staging)?;
     build_windows_setup(plan, &staging, &bundle_source)?;
     sign_windows_file(plan, &plan.setup_path)?;
-    copy_release_notes(plan)?;
     write_artifact_manifest(plan)?;
     println!("EXE: {}", plan.app_path.display());
     println!("WINDOWS ZIP: {}", plan.app_zip_path.display());
@@ -2249,6 +2295,7 @@ fn stage_windows_update_payload(
         write_updater_config_to_path(plan, &staging.join("nexora-updater.json"))?;
     }
     write_runtime_config_to_directory(plan, &staging.join("config"))?;
+    write_release_resources_to_directory(plan, &staging)?;
     Ok(staging)
 }
 
@@ -3172,18 +3219,145 @@ fn notarize_dmg(plan: &BuildPlan) -> CliResult<()> {
     )
 }
 
-fn copy_release_notes(plan: &BuildPlan) -> CliResult<()> {
-    if !plan.notes_source.is_file() {
-        return Ok(());
-    }
-    create_parent(&plan.notes_path)?;
-    fs::copy(&plan.notes_source, &plan.notes_path).map_err(|error| {
+fn release_notes_path(root: &Path, app_key: &str, release: &ValidatedRelease) -> PathBuf {
+    root.join(DIST_DIRECTORY)
+        .join(app_key)
+        .join(&release.channel)
+        .join(release.version.to_string())
+        .join(release.build_number.to_string())
+        .join(RELEASE_NOTES_FILE_NAME)
+}
+
+fn freeze_release_notes(
+    root: &Path,
+    app_key: &str,
+    app: &AppConfig,
+    release: &ValidatedRelease,
+) -> CliResult<Option<FrozenReleaseNotes>> {
+    let path = release_notes_path(root, app_key, release);
+    let Some(source) = release.notes_source.as_deref() else {
+        if app.updater.enabled {
+            return Err(CliError::new(format!(
+                "app `{app_key}` channel `{}` 启用了 updater，但没有配置 release.notes",
+                release.channel
+            )));
+        }
+        return Ok(None);
+    };
+    let bytes = if path.is_file() {
+        fs::read(&path).map_err(|error| {
+            CliError::new(format!(
+                "无法读取已冻结 release notes `{}`: {error}",
+                path.display()
+            ))
+        })?
+    } else {
+        let source_path = resolve_workspace_file(root, source, "release.notes")?;
+        let size = fs::metadata(&source_path)
+            .map_err(|error| {
+                CliError::new(format!(
+                    "无法读取 release.notes `{}` 元数据: {error}",
+                    source_path.display()
+                ))
+            })?
+            .len();
+        if size == 0 || size > MAX_RELEASE_NOTES_BYTES {
+            return Err(CliError::new(format!(
+                "release.notes 必须在 1..={MAX_RELEASE_NOTES_BYTES} 字节范围内：{}",
+                source_path.display()
+            )));
+        }
+        let bytes = fs::read(&source_path).map_err(|error| {
+            CliError::new(format!(
+                "无法读取 release.notes `{}`: {error}",
+                source_path.display()
+            ))
+        })?;
+        create_parent(&path)?;
+        fs::write(&path, &bytes).map_err(|error| {
+            CliError::new(format!(
+                "无法冻结 release notes `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        bytes
+    };
+    let metadata = ReleaseNotesMetadata {
+        file_name: RELEASE_NOTES_FILE_NAME.to_owned(),
+        size: u64::try_from(bytes.len())
+            .map_err(|_| CliError::new("release.notes 大小无法在当前平台表示"))?,
+        sha256: sha256_hex(&bytes),
+    };
+    verify_release_notes_bytes(&metadata, &bytes)
+        .map_err(|error| CliError::new(format!("release.notes 无效: {error}")))?;
+    Ok(Some(FrozenReleaseNotes { path, metadata }))
+}
+
+fn write_bundle_release_resources(plan: &BuildPlan) -> CliResult<()> {
+    write_release_resources_to_directory(plan, &plan.app_path.join("Contents/Resources"))
+}
+
+fn write_release_resources_to_directory(plan: &BuildPlan, directory: &Path) -> CliResult<()> {
+    fs::create_dir_all(directory).map_err(|error| {
         CliError::new(format!(
-            "无法复制 release notes `{}`: {error}",
-            plan.notes_source.display()
+            "无法创建发布资源目录 `{}`: {error}",
+            directory.display()
         ))
     })?;
-    Ok(())
+    if let Some(notes) = &plan.notes {
+        let destination = directory.join(RELEASE_NOTES_FILE_NAME);
+        fs::copy(&plan.notes_path, &destination).map_err(|error| {
+            CliError::new(format!(
+                "无法把冻结 release notes 写入安装包 `{}`: {error}",
+                destination.display()
+            ))
+        })?;
+        if sha256_file(&destination)? != notes.sha256 {
+            return Err(CliError::new(
+                "安装包内 release notes SHA-256 与冻结内容不一致",
+            ));
+        }
+    } else {
+        let destination = directory.join(RELEASE_NOTES_FILE_NAME);
+        if destination.exists() {
+            fs::remove_file(&destination).map_err(|error| {
+                CliError::new(format!(
+                    "无法移除安装包内过期 release notes `{}`: {error}",
+                    destination.display()
+                ))
+            })?;
+        }
+    }
+    let channel = parse_update_channel(&plan.release.channel)?;
+    let metadata = ApplicationReleaseMetadata {
+        schema_version: 1,
+        app_key: plan.app_key.clone(),
+        app_id: plan.updater_app_id.clone(),
+        display_name: plan.display_name.clone(),
+        package: plan.package.clone(),
+        version: plan.release.version.clone(),
+        build_number: plan.release.build_number,
+        channel,
+        target: plan.target.clone(),
+        notes: plan.notes.clone(),
+    };
+    metadata
+        .validate()
+        .map_err(|error| CliError::new(format!("无法生成发布元数据: {error}")))?;
+    let mut contents = serde_json::to_vec_pretty(&metadata)
+        .map_err(|error| CliError::new(format!("无法序列化发布元数据: {error}")))?;
+    contents.push(b'\n');
+    fs::write(directory.join(RELEASE_METADATA_FILE_NAME), contents)
+        .map_err(|error| CliError::new(format!("无法写入发布元数据: {error}")))
+}
+
+fn parse_update_channel(channel: &str) -> CliResult<UpdateChannel> {
+    match channel {
+        "stable" => Ok(UpdateChannel::Stable),
+        "beta" => Ok(UpdateChannel::Beta),
+        "nightly" => Ok(UpdateChannel::Nightly),
+        _ => Err(CliError::new(format!("发布通道 `{channel}` 不受支持"))),
+    }
 }
 
 fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
@@ -4094,6 +4268,9 @@ fn validate_receipt_structure(receipt: &ReleaseReceipt, path: &Path) -> CliResul
         )));
     }
     validate_http_url(&receipt.updater_feed, "release receipt updater_feed")?;
+    if let Some(notes_source) = receipt.notes_source.as_deref() {
+        validate_workspace_relative_path(notes_source, "release receipt notes_source")?;
+    }
     Ok(())
 }
 
@@ -4116,6 +4293,7 @@ fn receipt_matches_configuration(
         && receipt.runtime_config_source == configured.runtime_config_source
         && receipt.runtime_config_sha256 == configured.runtime_config_sha256
         && receipt.updater_feed == configured.updater_feed
+        && receipt.notes_source == configured.notes_source
         && build_number_matches
 }
 
@@ -5030,7 +5208,7 @@ pub fn inspect_build_plans_for_channel(
     };
     let release = configured.validated_release(build_number, targets.clone());
     project
-        .build_plans(app_key, &release, &targets)?
+        .build_plans(app_key, &release, &targets, None)?
         .into_iter()
         .map(|plan| {
             Ok(serde_json::json!({
@@ -5053,6 +5231,7 @@ pub fn inspect_build_plans_for_channel(
                 "runtime_config_source": plan.release.runtime_config_source,
                 "runtime_config_sha256": plan.release.runtime_config_sha256,
                 "updater_feed": plan.release.updater_feed,
+                "notes_source": plan.release.notes_source,
                 "signing": format!("{:?}", plan.signing),
                 "notarize": plan.notarize,
             }))
@@ -5113,6 +5292,125 @@ pub fn inspect_prepare_release_receipt_for_channel(
     let receipt = project.prepare_build_receipt(app_key, app, &configured, &targets)?;
     serde_json::to_value(receipt)
         .map_err(|error| CliError::new(format!("无法序列化 release receipt: {error}")))
+}
+
+/// 为集成测试按真实构建规则冻结并校验指定 app/channel 的更新日志。
+///
+/// 返回冻结路径、字节数和 SHA-256；该入口不会执行 target 构建、签名或归档命令。
+///
+/// # Errors
+///
+/// 配置缺少日志、路径越界或不存在、文件不是普通文件、不可读、超过 1 MiB、不是 UTF-8，
+/// 或无法写入版本化 dist 目录时返回错误。
+#[allow(dead_code)]
+pub fn inspect_freeze_release_notes(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+) -> CliResult<Option<serde_json::Value>> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let configured = project.resolved_release(app_key, app, channel, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::BuildDatetime => {
+            build_datetime_number(Local::now().fixed_offset(), None)?
+        }
+        ResolvedBuildNumber::Literal(value) => value,
+    };
+    let targets = if app.targets.required.is_empty() {
+        vec![rustc_host_target()?]
+    } else {
+        app.targets.required.clone()
+    };
+    let release = configured.validated_release(build_number, targets);
+    freeze_release_notes(&project.root, app_key, app, &release).map(|notes| {
+        notes.map(|notes| {
+            serde_json::json!({
+                "path": inspect_path(&notes.path),
+                "size": notes.metadata.size,
+                "sha256": notes.metadata.sha256,
+            })
+        })
+    })
+}
+
+/// 为集成测试按真实打包路径写入指定 target 的发布元数据和冻结日志。
+///
+/// macOS 使用 `.app/Contents/Resources` 共用写入逻辑，Windows 使用 Setup 与 update ZIP
+/// 共用的 payload staging 逻辑；该入口不执行编译、签名或归档命令。
+///
+/// # Errors
+///
+/// 配置、发布身份、日志冻结、target 选择或资源写入失败时返回错误。
+#[allow(dead_code)]
+pub fn inspect_release_resources(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    target: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let channel = project.default_release_channel(app_key, app)?;
+    let configured = project.resolved_release(app_key, app, &channel, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::BuildDatetime => {
+            build_datetime_number(Local::now().fixed_offset(), None)?
+        }
+        ResolvedBuildNumber::Literal(value) => value,
+    };
+    let targets = if app.targets.required.is_empty() {
+        vec![target.to_owned()]
+    } else {
+        app.targets.required.clone()
+    };
+    if !targets.iter().any(|configured| configured == target) {
+        return Err(CliError::new(format!(
+            "app `{app_key}` 不包含 target `{target}`"
+        )));
+    }
+    let release = configured.validated_release(build_number, targets.clone());
+    let frozen_notes = freeze_release_notes(&project.root, app_key, app, &release)?;
+    let mut plans = project.build_plans(app_key, &release, &targets, frozen_notes.as_ref())?;
+    let plan = plans
+        .drain(..)
+        .find(|plan| plan.target == target)
+        .ok_or_else(|| CliError::new(format!("app `{app_key}` 不包含 target `{target}`")))?;
+    let directory = match plan.platform {
+        BuildTargetPlatform::MacOs => {
+            let directory = plan.app_path.join("Contents/Resources");
+            write_release_resources_to_directory(&plan, &directory)?;
+            directory
+        }
+        BuildTargetPlatform::Windows => {
+            create_parent(&plan.app_path)?;
+            fs::write(&plan.app_path, b"test executable")
+                .map_err(|error| CliError::new(format!("无法写入测试主程序: {error}")))?;
+            stage_windows_update_payload(&plan, None)?
+        }
+    };
+    let metadata: ApplicationReleaseMetadata = serde_json::from_slice(
+        &fs::read(directory.join(RELEASE_METADATA_FILE_NAME))
+            .map_err(|error| CliError::new(format!("无法读取测试发布元数据: {error}")))?,
+    )
+    .map_err(|error| CliError::new(format!("无法解析测试发布元数据: {error}")))?;
+    let notes_sha256 = if metadata.notes.is_some() {
+        Some(sha256_file(&directory.join(RELEASE_NOTES_FILE_NAME))?)
+    } else {
+        None
+    };
+    Ok(serde_json::json!({
+        "directory": inspect_path(&directory),
+        "metadata": metadata,
+        "notes_sha256": notes_sha256,
+    }))
 }
 
 /// 为集成测试执行与 build/publish 相同的 app 选择规则，不触发交互菜单。
@@ -5357,16 +5655,12 @@ pub fn inspect_windows_installer_sources(
         msi_path: release_dir.join(format!("{technical_stem}.msi")),
         setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
         artifact_path: release_dir.join("artifact.json"),
-        notes_source: project
-            .root
-            .join("docs/changelog/components")
-            .join(app_key)
-            .join("zh-CN.md"),
         notes_path: project
             .root
             .join(DIST_DIRECTORY)
             .join(app_key)
             .join("notes.md"),
+        notes: None,
     };
     let staging = windows_work_dir(&plan).join("payload");
     let sources = windows_installer_sources(&plan, &staging)?;

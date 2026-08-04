@@ -6,14 +6,21 @@
 mod dialog;
 mod macos;
 mod manifest;
+mod release;
 mod service;
 mod sidecar;
 mod windows;
 
-pub use dialog::{open_update_dialog, start_update_check_on_launch};
+pub use dialog::{open_update_dialog, show_update_completed_dialog, start_update_check_on_launch};
 pub use manifest::{
     ReleaseStatus, SignedUpdateManifest, TrustedPublicKey, UpdateArtifact, UpdateChannel,
     UpdateManifest, UpdateManifestSignature, UpdateRelease, UpdateTarget,
+};
+pub use release::{
+    ApplicationReleaseMetadata, LoadedApplicationReleaseMetadata, MAX_RELEASE_NOTES_BYTES,
+    RELEASE_METADATA_FILE_NAME, RELEASE_NOTES_FILE_NAME, ReleaseMetadataError, ReleaseNotesError,
+    ReleaseNotesMetadata, load_current_release_metadata, load_release_metadata_from_directory,
+    read_verified_local_release_notes, verify_release_notes_bytes,
 };
 pub use service::{
     CancellationToken, StagedUpdate, UpdateConfig, UpdateError, UpdateEvent, UpdateSession,

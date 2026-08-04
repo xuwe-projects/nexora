@@ -23,6 +23,8 @@ pub mod desktop;
 #[cfg(feature = "desktop")]
 mod application;
 #[cfg(feature = "desktop")]
+mod application_info;
+#[cfg(feature = "desktop")]
 mod defaults;
 #[cfg(feature = "desktop")]
 mod metadata;
@@ -41,6 +43,8 @@ pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
     ApplicationTabStyle, PanelHeaderAction, install_panel_header_actions,
 };
+#[cfg(feature = "desktop")]
+pub use application_info::ApplicationInfo;
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]

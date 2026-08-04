@@ -25,6 +25,8 @@ default_channel = "stable"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
+# 更新日志路径相对于仓库根目录；channel 配置可以覆盖此值。
+notes = "docs/releases/current/zh-CN.md"
 
 [apps.{{ project_name }}.release.channels.beta]
 

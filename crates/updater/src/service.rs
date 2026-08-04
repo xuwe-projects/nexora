@@ -18,14 +18,16 @@ use async_channel::{Receiver, Sender};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 #[cfg(not(target_os = "windows"))]
 use directories::ProjectDirs;
-use reqwest::{Url, blocking::Client};
+use reqwest::{Url, blocking::Client, redirect};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{
-    SignedUpdateManifest, TrustedPublicKey, UpdateChannel, UpdateRelease, UpdateTarget, macos,
+    MAX_RELEASE_NOTES_BYTES, RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, SignedUpdateManifest,
+    TrustedPublicKey, UpdateChannel, UpdateRelease, UpdateTarget,
+    load_release_metadata_from_directory, macos, verify_release_notes_bytes,
 };
 
 const MAX_APP_ID_BYTES: usize = 255;
@@ -111,6 +113,7 @@ pub struct UpdateConfig {
     cache_dir_override: Option<PathBuf>,
     check_on_launch: bool,
     health_report_on_launch: bool,
+    allow_insecure_http: bool,
 }
 
 impl UpdateConfig {
@@ -196,6 +199,40 @@ impl UpdateConfig {
         }
         if bundled.trusted_public_keys.is_empty() {
             return Err(UpdateError::MissingTrustedPublicKeys);
+        }
+        let resource_directory = config_path.parent().ok_or_else(|| {
+            UpdateError::InvalidBundleConfig(format!(
+                "bundle updater 配置路径缺少父目录: {}",
+                config_path.display()
+            ))
+        })?;
+        let release = load_release_metadata_from_directory(resource_directory)
+            .map_err(|error| UpdateError::InvalidBundleConfig(error.to_string()))?
+            .ok_or_else(|| {
+                UpdateError::InvalidBundleConfig(
+                    "bundle 缺少 nexora-release.json，无法确认当前发布身份".to_owned(),
+                )
+            })?;
+        let release = release.metadata();
+        let bundled_version = Version::parse(&bundled.current_version)?;
+        let mut differences = Vec::new();
+        if bundled.app_id != release.app_id {
+            differences.push("app_id");
+        }
+        if bundled_version != release.version {
+            differences.push("version");
+        }
+        if bundled.current_build_number != release.build_number {
+            differences.push("build_number");
+        }
+        if bundled.channel != release.channel {
+            differences.push("channel");
+        }
+        if !differences.is_empty() {
+            return Err(UpdateError::InvalidBundleConfig(format!(
+                "updater 配置与 nexora-release.json 不一致: {}",
+                differences.join(", ")
+            )));
         }
         let health_timeout = parse_bundled_duration(&bundled.health_timeout)?;
         Self::with_transport_policy(
@@ -292,6 +329,7 @@ impl UpdateConfig {
             cache_dir_override: None,
             check_on_launch: false,
             health_report_on_launch: true,
+            allow_insecure_http,
         })
     }
 
@@ -948,6 +986,65 @@ impl Updater {
         })
     }
 
+    /// 下载并验证一份已通过签名清单发现的远程更新日志。
+    ///
+    /// 旧清单或字段不完整时返回 `Ok(None)`，更新安装仍可继续。只有 URL、大小和 SHA-256
+    /// 同时存在时才发起请求；响应不会写入本地可信缓存。
+    ///
+    /// # Errors
+    ///
+    /// `release` 不含最初验签的清单、URL 不符合传输策略、网络读取失败，或内容超过上限、
+    /// 大小、SHA-256、UTF-8 与安全链接校验失败时返回错误。
+    pub fn fetch_release_notes(
+        &self,
+        release: &UpdateRelease,
+    ) -> Result<Option<String>, UpdateError> {
+        release.verified_manifest()?;
+        let (Some(url), Some(sha256), Some(size)) = (
+            release.notes_url.as_deref(),
+            release.notes_sha256.as_deref(),
+            release.notes_size,
+        ) else {
+            return Ok(None);
+        };
+        if size == 0 || size > MAX_RELEASE_NOTES_BYTES {
+            return Err(UpdateError::InvalidReleaseNotes(format!(
+                "声明大小必须在 1..={MAX_RELEASE_NOTES_BYTES} 字节范围内"
+            )));
+        }
+        let url = self
+            .config
+            .manifest_url
+            .join(url)
+            .map_err(|error| UpdateError::InvalidUrl(error.to_string()))?;
+        validate_transport(&url, self.config.allow_insecure_http)?;
+        let client = build_client(&self.config)?;
+        let response = client.get(url).send()?.error_for_status()?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > size || length > MAX_RELEASE_NOTES_BYTES)
+        {
+            return Err(UpdateError::InvalidReleaseNotes(
+                "响应大小超过清单声明或客户端安全上限".to_owned(),
+            ));
+        }
+        let capacity = usize::try_from(size).map_err(|_| {
+            UpdateError::InvalidReleaseNotes("日志大小无法在当前平台表示".to_owned())
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        response
+            .take(MAX_RELEASE_NOTES_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        let metadata = ReleaseNotesMetadata {
+            file_name: RELEASE_NOTES_FILE_NAME.to_owned(),
+            size,
+            sha256: sha256.to_owned(),
+        };
+        verify_release_notes_bytes(&metadata, &bytes)
+            .map(Some)
+            .map_err(|error| UpdateError::InvalidReleaseNotes(error.to_string()))
+    }
+
     fn spawn_worker(
         &self,
         name: &str,
@@ -1066,8 +1163,18 @@ fn check_release(
 }
 
 fn build_client(config: &UpdateConfig) -> Result<Client, UpdateError> {
+    let allow_insecure_http = config.allow_insecure_http;
     Client::builder()
         .timeout(config.request_timeout)
+        .redirect(redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("updater HTTP 重定向次数过多");
+            }
+            if validate_transport(attempt.url(), allow_insecure_http).is_err() {
+                return attempt.error("updater HTTP 重定向目标不符合传输安全策略");
+            }
+            attempt.follow()
+        }))
         .user_agent(format!(
             "{}/{} ({})",
             config.app_id, config.current_version, config.current_build_number
@@ -1779,6 +1886,12 @@ pub enum UpdateError {
     #[error("更新清单无法序列化用于签名: {0}")]
     InvalidManifestSerialization(
         /// JSON 序列化失败原因。
+        String,
+    ),
+    /// 远程更新日志缺少可信字段，或下载后的大小、摘要、UTF-8 与内容安全校验失败。
+    #[error("更新日志验证失败: {0}")]
+    InvalidReleaseNotes(
+        /// 不含响应正文和秘密的稳定失败原因。
         String,
     ),
     /// 更新服务器使用了客户端尚不支持的协议版本。

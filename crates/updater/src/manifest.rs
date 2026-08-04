@@ -134,6 +134,10 @@ pub struct UpdateRelease {
     pub artifact: UpdateArtifact,
     /// 可选的远程更新日志地址。
     pub notes_url: Option<String>,
+    /// 可选的远程更新日志 SHA-256；旧清单可能缺少该字段。
+    pub notes_sha256: Option<String>,
+    /// 可选的远程更新日志准确字节数；旧清单可能缺少该字段。
+    pub notes_size: Option<u64>,
     /// 该更新是否强制安装。
     pub mandatory: bool,
     pub(crate) verified_manifest: Option<Arc<SignedUpdateManifest>>,
@@ -173,6 +177,12 @@ pub struct UpdateManifest {
     pub status: ReleaseStatus,
     /// 可选的远程更新日志地址。
     pub notes_url: Option<String>,
+    /// 可选的远程更新日志 SHA-256；缺失时仍可安装，但客户端不得渲染远程正文。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_sha256: Option<String>,
+    /// 可选的远程更新日志准确字节数；缺失时仍可安装，但客户端不得渲染远程正文。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_size: Option<u64>,
     /// 不同操作系统和架构对应的安装包列表。
     pub artifacts: Vec<UpdateArtifact>,
 }
@@ -358,6 +368,8 @@ impl UpdateManifest {
             manifest_sequence: self.manifest_sequence,
             artifact,
             notes_url: self.notes_url.clone(),
+            notes_sha256: self.notes_sha256.clone(),
+            notes_size: self.notes_size,
             mandatory,
             verified_manifest: None,
         }))

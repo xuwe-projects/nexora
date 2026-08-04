@@ -104,6 +104,16 @@ fn default_login_only_connects_update_button_through_installed_updater() {
 
 #[cfg(feature = "desktop")]
 #[test]
+fn default_login_formats_general_release_identity_without_channel_or_build_zero_fallback() {
+    assert!(DEFAULT_LOGIN_SOURCE.contains("crate::desktop::application_info(cx)"));
+    assert!(DEFAULT_LOGIN_SOURCE.contains("· Build {build_number}"));
+    assert!(DEFAULT_LOGIN_SOURCE.contains("application_info.build_number().map_or_else"));
+    assert!(!DEFAULT_LOGIN_SOURCE.contains("Build 0"));
+    assert!(!DEFAULT_LOGIN_SOURCE.contains("application_info.channel()"));
+}
+
+#[cfg(feature = "desktop")]
+#[test]
 fn account_client_adds_default_management_features() {
     let registry = AppRegistry::builder()
         .account_defaults(true)

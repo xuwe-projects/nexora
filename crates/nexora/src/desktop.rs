@@ -21,6 +21,7 @@ pub use crate::account::client::{
     oidc_config, retry_recovery, set_remember_login, sign_out, start_login,
 };
 pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
+pub use crate::application_info::{ApplicationInfo, application_info};
 pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
     UpdateArtifact, UpdateChannel, UpdateConfig, UpdateError, UpdateEvent, UpdateManifest,

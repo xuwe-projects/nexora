@@ -35,6 +35,8 @@ fn payload() -> UpdateManifest {
         published_at: 1_784_304_000,
         status: ReleaseStatus::Available,
         notes_url: Some("https://updates.example.com/notes.md".to_owned()),
+        notes_sha256: None,
+        notes_size: None,
         artifacts: vec![UpdateArtifact {
             target: "aarch64-apple-darwin".to_owned(),
             url: "console.app.zip".to_owned(),
@@ -111,12 +113,39 @@ fn signed_manifest_accepts_trusted_key_and_rotation() {
         TrustedPublicKey::parse(&trusted_key("main", &main)).unwrap(),
     ];
     let manifest = signed_manifest("main", &main);
+    assert!(!manifest.contains("notes_sha256"));
+    assert!(!manifest.contains("notes_size"));
 
     let verified =
         SignedUpdateManifest::parse_and_verify(&manifest, &trusted).expect("签名应通过验证");
 
     assert_eq!(verified.manifest_sequence, 42);
     assert_eq!(verified.build_number, 1043);
+}
+
+#[test]
+fn release_notes_integrity_fields_are_covered_by_manifest_signature() {
+    let main = signing_key();
+    let trusted = vec![TrustedPublicKey::parse(&trusted_key("main", &main)).unwrap()];
+    let mut payload = payload();
+    payload.notes_sha256 = Some("a".repeat(64));
+    payload.notes_size = Some(123);
+    let signature = main.sign(&serde_json::to_vec(&payload).unwrap());
+    let envelope = SignedUpdateManifest {
+        schema_version: 1,
+        payload,
+        signatures: vec![UpdateManifestSignature {
+            key_id: "main".to_owned(),
+            algorithm: "ed25519".to_owned(),
+            signature: STANDARD.encode(signature.to_bytes()),
+        }],
+    };
+    let mut json = serde_json::to_value(envelope).unwrap();
+    json["payload"]["notes_size"] = serde_json::json!(124);
+
+    let error = SignedUpdateManifest::parse_and_verify(&json.to_string(), &trusted)
+        .expect_err("篡改更新日志完整性字段必须破坏签名");
+    assert!(matches!(error, UpdateError::ManifestSignatureRejected));
 }
 
 #[test]
@@ -151,6 +180,38 @@ fn higher_build_number_updates_same_semver() {
 
     assert_eq!(release.build_number, 1043);
     assert_eq!(release.version.to_string(), "1.2.0-beta.2");
+}
+
+#[test]
+fn release_notes_integrity_fields_are_selected_and_old_manifests_remain_compatible() {
+    let config = UpdateConfig::new(
+        "https://updates.example.com/beta/latest.json",
+        "com.example.console",
+        "1.0.0",
+        1,
+        UpdateChannel::Beta,
+    )
+    .unwrap();
+    let mut manifest = payload();
+    manifest.notes_sha256 = Some("a".repeat(64));
+    manifest.notes_size = Some(123);
+    let release = manifest
+        .select_update(&config, UpdateTarget::MacOsAarch64)
+        .unwrap()
+        .unwrap();
+    let expected_sha256 = "a".repeat(64);
+    assert_eq!(
+        release.notes_sha256.as_deref(),
+        Some(expected_sha256.as_str())
+    );
+    assert_eq!(release.notes_size, Some(123));
+
+    let mut legacy = serde_json::to_value(payload()).unwrap();
+    legacy.as_object_mut().unwrap().remove("notes_sha256");
+    legacy.as_object_mut().unwrap().remove("notes_size");
+    let parsed: UpdateManifest = serde_json::from_value(legacy).unwrap();
+    assert!(parsed.notes_sha256.is_none());
+    assert!(parsed.notes_size.is_none());
 }
 
 #[test]

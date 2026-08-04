@@ -9,7 +9,8 @@ use gpui_component::{IconName, button::Button};
 use thiserror::Error;
 
 use ::updater::{
-    UpdateConfig, open_update_dialog, report_health_from_env_args, start_update_check_on_launch,
+    UpdateConfig, open_update_dialog, report_health_from_env_args, show_update_completed_dialog,
+    start_update_check_on_launch,
 };
 
 #[derive(Clone)]
@@ -25,6 +26,12 @@ pub enum UpdaterInstallError {
     /// 当前进程已经安装过 updater；应用必须只维护一份 app 级更新配置。
     #[error("当前应用已经安装 updater，不能重复安装第二份配置")]
     AlreadyInstalled,
+    /// updater 当前版本、构建号、通道或 app ID 与正式安装包发布元数据不一致。
+    #[error("updater 配置与应用发布信息不一致: {0}")]
+    ReleaseIdentityMismatch(
+        /// 不含秘密的字段差异说明。
+        String,
+    ),
 }
 
 /// 在 Nexora 桌面运行时安装一份 app 级 updater 配置。
@@ -39,6 +46,33 @@ pub enum UpdaterInstallError {
 pub fn install_updater(config: UpdateConfig, cx: &mut App) -> Result<(), UpdaterInstallError> {
     if cx.has_global::<InstalledUpdater>() {
         return Err(UpdaterInstallError::AlreadyInstalled);
+    }
+    if let Some(info) = cx.try_global::<crate::ApplicationInfo>()
+        && let (Some(app_id), Some(version), Some(build_number), Some(channel)) = (
+            info.app_id(),
+            info.version(),
+            info.build_number(),
+            info.channel(),
+        )
+    {
+        let mut differences = Vec::new();
+        if config.app_id() != app_id {
+            differences.push("app_id");
+        }
+        if config.current_version().to_string() != version {
+            differences.push("version");
+        }
+        if config.current_build_number() != build_number {
+            differences.push("build_number");
+        }
+        if config.channel() != channel {
+            differences.push("channel");
+        }
+        if !differences.is_empty() {
+            return Err(UpdaterInstallError::ReleaseIdentityMismatch(
+                differences.join(", "),
+            ));
+        }
     }
     cx.set_global(InstalledUpdater { config });
     updater_actions::bind_keys(cx);
@@ -97,10 +131,26 @@ pub(crate) fn start_installed_updater(window: &mut Window, cx: &mut App) {
     };
     let config = installed.config.clone();
     window.defer(cx, move |window, cx| {
-        if config.health_report_on_launch()
-            && let Err(error) = report_health_from_env_args()
-        {
-            tracing::warn!(error = %error, "无法报告 updater 启动健康状态");
+        if config.health_report_on_launch() {
+            match report_health_from_env_args() {
+                Ok(true) => {
+                    if let Some(release) = crate::desktop::application_info(cx)
+                        .loaded_release()
+                        .cloned()
+                    {
+                        show_update_completed_dialog(
+                            release.metadata().clone(),
+                            release.resource_directory().to_path_buf(),
+                            window,
+                            cx,
+                        );
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "无法报告 updater 启动健康状态");
+                }
+            }
         }
         if config.check_on_launch() {
             start_update_check_on_launch(config, window, cx);

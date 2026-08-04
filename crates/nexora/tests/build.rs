@@ -6,11 +6,12 @@ pub mod commands;
 
 use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_create_windows_update_zip, inspect_latest_dmg_aliases,
+    inspect_build_plans_for_channel, inspect_create_windows_update_zip,
+    inspect_freeze_release_notes, inspect_latest_dmg_aliases,
     inspect_latest_windows_installer_aliases, inspect_prepare_release_receipt,
-    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_selection,
-    inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
-    write_bundle_icon, write_bundle_info, write_sha256_sidecar,
+    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
+    inspect_release_selection, inspect_signing_key, inspect_windows_installer_sources,
+    validate_display_name, write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -84,6 +85,12 @@ version = "9.8.7"
                 .filter(|line| !line.contains('.'))
         }) {
             write_brand_assets(&root, app_key);
+            fs::create_dir_all(root.join("docs/releases")).unwrap();
+            fs::write(
+                root.join("docs/releases").join(format!("{app_key}.md")),
+                format!("# {app_key} 更新日志\n"),
+            )
+            .unwrap();
         }
         Self { root }
     }
@@ -160,6 +167,7 @@ channel = "stable"
 version = "1.2.3"
 build_number = 7
 minimum_supported_version = "0.0.0"
+notes = "docs/releases/{key}.md"
 
 [apps.{key}.updater]
 enabled = true
@@ -204,10 +212,10 @@ fn multi_channel_app_config(key: &str, package: &str, display_name: &str) -> Str
     app_config(key, package, display_name)
         .replace(
             &format!(
-                "[apps.{key}.release]\nchannel = \"stable\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\""
+                "[apps.{key}.release]\nchannel = \"stable\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\nnotes = \"docs/releases/{key}.md\""
             ),
             &format!(
-                "[apps.{key}.release]\ndefault_channel = \"nightly\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\n\n[apps.{key}.release.channels.nightly]\n\n[apps.{key}.release.channels.beta]\nbuild_number = 8\nminimum_supported_version = \"1.0.0\"\nruntime_config = \"config/{package}-beta.toml\"\n\n[apps.{key}.release.channels.stable]"
+                "[apps.{key}.release]\ndefault_channel = \"nightly\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\nnotes = \"docs/releases/{key}.md\"\n\n[apps.{key}.release.channels.nightly]\n\n[apps.{key}.release.channels.beta]\nbuild_number = 8\nminimum_supported_version = \"1.0.0\"\nruntime_config = \"config/{package}-beta.toml\"\n\n[apps.{key}.release.channels.stable]"
             ),
         )
         .replace(
@@ -276,7 +284,7 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
     fs::write(
         fixture.root.join("dist/one/stable/release.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "app_key": "one",
             "package": "package-one",
             "channel": "stable",
@@ -292,7 +300,8 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
             },
             "runtime_config_source": "config/package-one.toml",
             "runtime_config_sha256": runtime_hash,
-            "updater_feed": "http://127.0.0.1:9000/releases/e2e/one/stable/latest.json"
+            "updater_feed": "http://127.0.0.1:9000/releases/e2e/one/stable/latest.json",
+            "notes_source": "docs/releases/one.md"
         }))
         .unwrap(),
     )
@@ -410,7 +419,7 @@ fn write_windows_artifacts(
     fs::write(
         fixture.root.join("dist/one/stable/release.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "app_key": "one",
             "package": "package-one",
             "channel": "stable",
@@ -422,7 +431,8 @@ fn write_windows_artifacts(
             "targets": [target],
             "runtime_config_source": "config/package-one.toml",
             "runtime_config_sha256": runtime_hash,
-            "updater_feed": "http://127.0.0.1:9000/releases/e2e/one/stable/latest.json"
+            "updater_feed": "http://127.0.0.1:9000/releases/e2e/one/stable/latest.json",
+            "notes_source": "docs/releases/one.md"
         }))
         .unwrap(),
     )
@@ -1084,7 +1094,7 @@ fn multi_channel_rejects_invalid_default_and_static_feed() {
 #[test]
 fn release_configuration_is_required_and_validated() {
     let missing = app_config("one", "package-one", "应用一").replace(
-        "[apps.one.release]\nchannel = \"stable\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\n\n",
+        "[apps.one.release]\nchannel = \"stable\"\nversion = \"1.2.3\"\nbuild_number = 7\nminimum_supported_version = \"0.0.0\"\nnotes = \"docs/releases/one.md\"\n\n",
         "",
     );
     let fixture = Fixture::new("missing-release", &missing);
@@ -1114,6 +1124,149 @@ fn release_configuration_is_required_and_validated() {
             .to_string()
             .contains("大于 0")
     );
+}
+
+#[test]
+fn release_notes_are_required_safe_utf8_bounded_and_frozen() {
+    let missing = app_config("one", "package-one", "应用一")
+        .replace("notes = \"docs/releases/one.md\"\n", "");
+    let fixture = Fixture::new("notes-missing", &missing);
+    assert!(
+        inspect_freeze_release_notes(fixture.config(), "one", "stable")
+            .unwrap_err()
+            .to_string()
+            .contains("release.notes")
+    );
+
+    let escaped = app_config("one", "package-one", "应用一").replace(
+        "notes = \"docs/releases/one.md\"",
+        "notes = \"../outside.md\"",
+    );
+    let fixture = Fixture::new("notes-escaped", &escaped);
+    assert!(
+        inspect_freeze_release_notes(fixture.config(), "one", "stable")
+            .unwrap_err()
+            .to_string()
+            .contains("相对路径")
+    );
+
+    let fixture = Fixture::new(
+        "notes-invalid-utf8",
+        &app_config("one", "package-one", "应用一"),
+    );
+    fs::write(fixture.root.join("docs/releases/one.md"), [0xff, 0xfe]).unwrap();
+    assert!(
+        inspect_freeze_release_notes(fixture.config(), "one", "stable")
+            .unwrap_err()
+            .to_string()
+            .contains("UTF-8")
+    );
+
+    let fixture = Fixture::new(
+        "notes-too-large",
+        &app_config("one", "package-one", "应用一"),
+    );
+    fs::write(
+        fixture.root.join("docs/releases/one.md"),
+        vec![b'a'; updater::MAX_RELEASE_NOTES_BYTES as usize + 1],
+    )
+    .unwrap();
+    assert!(
+        inspect_freeze_release_notes(fixture.config(), "one", "stable")
+            .unwrap_err()
+            .to_string()
+            .contains("1..=")
+    );
+
+    let fixture = Fixture::new("notes-frozen", &app_config("one", "package-one", "应用一"));
+    let first = inspect_freeze_release_notes(fixture.config(), "one", "stable")
+        .unwrap()
+        .unwrap();
+    let frozen_path = PathBuf::from(first["path"].as_str().unwrap());
+    let frozen = fs::read(&frozen_path).unwrap();
+    fs::write(
+        fixture.root.join("docs/releases/one.md"),
+        "# 已修改源文件\n",
+    )
+    .unwrap();
+    let second = inspect_freeze_release_notes(fixture.config(), "one", "stable")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first["sha256"], second["sha256"]);
+    assert_eq!(fs::read(frozen_path).unwrap(), frozen);
+}
+
+#[test]
+fn release_channel_can_override_notes_source() {
+    let config = multi_channel_app_config("one", "package-one", "应用一").replace(
+        "[apps.one.release.channels.beta]\nbuild_number = 8",
+        "[apps.one.release.channels.beta]\nnotes = \"docs/releases/beta.md\"\nbuild_number = 8",
+    );
+    let fixture = Fixture::new("notes-channel-override", &config);
+    fs::write(fixture.root.join("docs/releases/beta.md"), "# Beta\n").unwrap();
+    fs::write(
+        fixture.root.join("config/package-one-beta.toml"),
+        "value = \"beta\"\n",
+    )
+    .unwrap();
+    let plan = inspect_build_plans_for_channel(fixture.config(), "one", "beta").unwrap();
+    assert_eq!(plan[0]["notes_source"], "docs/releases/beta.md");
+}
+
+#[test]
+fn macos_and_windows_payloads_carry_receipt_identity_and_identical_notes() {
+    let mac = Fixture::new(
+        "mac-release-resources",
+        &app_config("one", "package-one", "应用一"),
+    );
+    let receipt = inspect_prepare_release_receipt(mac.config(), "one").unwrap();
+    let resources = inspect_release_resources(mac.config(), "one", "aarch64-apple-darwin").unwrap();
+    assert_eq!(resources["metadata"]["version"], receipt["version"]);
+    assert_eq!(
+        resources["metadata"]["build_number"],
+        receipt["build_number"]
+    );
+    assert_eq!(
+        resources["metadata"]["notes"]["sha256"],
+        resources["notes_sha256"]
+    );
+    assert!(
+        resources["directory"]
+            .as_str()
+            .unwrap()
+            .ends_with(".app/Contents/Resources")
+    );
+
+    let windows = Fixture::new(
+        "windows-release-resources",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    let resources =
+        inspect_release_resources(windows.config(), "one", "x86_64-pc-windows-msvc").unwrap();
+    assert_eq!(resources["metadata"]["target"], "x86_64-pc-windows-msvc");
+    assert_eq!(
+        resources["metadata"]["notes"]["sha256"],
+        resources["notes_sha256"]
+    );
+    assert!(
+        resources["directory"]
+            .as_str()
+            .unwrap()
+            .ends_with("payload")
+    );
+}
+
+#[test]
+fn updater_disabled_release_still_writes_build_identity_without_notes() {
+    let config = app_config("one", "package-one", "应用一")
+        .replace("enabled = true", "enabled = false")
+        .replace("notes = \"docs/releases/one.md\"\n", "");
+    let fixture = Fixture::new("release-without-updater", &config);
+    let resources =
+        inspect_release_resources(fixture.config(), "one", "aarch64-apple-darwin").unwrap();
+    assert_eq!(resources["metadata"]["build_number"], 7);
+    assert!(resources["metadata"]["notes"].is_null());
+    assert!(resources["notes_sha256"].is_null());
 }
 
 #[test]

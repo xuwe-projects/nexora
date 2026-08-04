@@ -26,15 +26,27 @@ impl Render for DefaultLoginFeature {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = crate::account::client::login_snapshot(cx);
         let branding = crate::application::application_branding(cx);
+        let application_info = crate::desktop::application_info(cx);
+        let version_label = application_info.version().map_or_else(
+            || application_info.application_name().to_owned(),
+            |version| {
+                application_info.build_number().map_or_else(
+                    || format!("{} {version}", application_info.application_name()),
+                    |build_number| {
+                        format!(
+                            "{} {version} · Build {build_number}",
+                            application_info.application_name()
+                        )
+                    },
+                )
+            },
+        );
         let status = visible_status(snapshot.status.as_ref()).then_some(snapshot.status);
         let settings_target = cx.entity().downgrade();
 
         LoginGate::new(
             branding.application_name.clone(),
-            branding.application_version.clone().map_or_else(
-                || branding.application_name.clone(),
-                |version| format!("{} {version}", branding.application_name),
-            ),
+            version_label,
             |_, _, cx| {
                 _ = crate::account::client::start_login(cx);
             },

@@ -4,8 +4,9 @@ use actions::updater::CheckForUpdates;
 use gpui::{Empty, TestAppContext};
 use gpui_component::kbd::Kbd;
 use nexora::desktop::{
-    UpdateChannel, UpdateConfig, UpdateError, check_for_updates_button, install_updater,
-    report_health_from_env_args, run_sidecar_from_env_args, updater_available,
+    ApplicationInfo, UpdateChannel, UpdateConfig, UpdateError, application_info,
+    check_for_updates_button, install_updater, report_health_from_env_args,
+    run_sidecar_from_env_args, updater_available,
 };
 
 const UPDATER_INTEGRATION_SOURCE: &str = include_str!("../src/desktop/updater.rs");
@@ -72,4 +73,21 @@ fn sidecar_runtime_entries_are_available_from_desktop_facade() {
 
     assert!(!run_sidecar().unwrap());
     assert!(!report_health().unwrap());
+}
+
+#[test]
+fn general_application_info_reader_is_available_from_desktop_facade() {
+    let _: for<'a> fn(&'a gpui::App) -> &'a ApplicationInfo = application_info;
+}
+
+#[test]
+fn only_successful_health_session_opens_update_completed_dialog() {
+    let startup = UPDATER_INTEGRATION_SOURCE
+        .split_once("pub(crate) fn start_installed_updater")
+        .map(|(_, source)| source)
+        .unwrap();
+    assert!(startup.contains("match report_health_from_env_args()"));
+    assert!(startup.contains("Ok(true) =>"));
+    assert!(startup.contains("show_update_completed_dialog("));
+    assert!(startup.contains("Ok(false) => {}"));
 }

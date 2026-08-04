@@ -1,6 +1,6 @@
 //! GPUI 更新确认、进度弹窗与应用级更新协调器。
 
-use std::thread;
+use std::{path::PathBuf, thread};
 
 use gpui::{
     AnyElement, App, Context, Entity, Global, IntoElement, ParentElement as _, Render, Task,
@@ -9,20 +9,156 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::DialogFooter,
     h_flex,
     notification::Notification,
     progress::Progress,
+    text::TextView,
     v_flex,
 };
 
-use crate::{CancellationToken, StagedUpdate, UpdateConfig, UpdateEvent, UpdateRelease, Updater};
+use crate::{
+    ApplicationReleaseMetadata, CancellationToken, StagedUpdate, UpdateConfig, UpdateEvent,
+    UpdateRelease, Updater, read_verified_local_release_notes,
+};
 
 struct UpdateCoordinatorGlobal {
     coordinator: Entity<UpdateCoordinator>,
 }
 
 impl Global for UpdateCoordinatorGlobal {}
+
+struct UpdateCompletedDialogShown;
+
+impl Global for UpdateCompletedDialogShown {}
+
+/// 在 sidecar 健康确认成功后的首个主窗口展示一次更新完成日志。
+///
+/// 调用方必须只在 [`crate::report_health_from_env_args`] 返回 `Ok(true)` 后调用。函数会设置
+/// 进程级一次性标记，并从新安装包资源目录异步读取、验证本地 `notes.md`；日志失败不会影响
+/// 健康确认或应用继续运行。
+pub fn show_update_completed_dialog(
+    metadata: ApplicationReleaseMetadata,
+    resource_directory: PathBuf,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if cx.has_global::<UpdateCompletedDialogShown>() {
+        return;
+    }
+    cx.set_global(UpdateCompletedDialogShown);
+    let view = cx.new(|_| UpdateCompletedDialog::new(metadata));
+    window.open_dialog(cx, {
+        let view = view.clone();
+        move |dialog, _, _| {
+            dialog
+                .w(px(720.0))
+                .title("更新完成")
+                .overlay_closable(true)
+                .close_button(true)
+                .keyboard(true)
+                .child(view.clone())
+        }
+    });
+    view.update(cx, |this, cx| {
+        this.load(resource_directory, window, cx);
+    });
+}
+
+struct UpdateCompletedDialog {
+    metadata: ApplicationReleaseMetadata,
+    notes: CompletedReleaseNotesStatus,
+    task: Option<Task<()>>,
+}
+
+impl UpdateCompletedDialog {
+    fn new(metadata: ApplicationReleaseMetadata) -> Self {
+        let notes = if metadata.notes.is_some() {
+            CompletedReleaseNotesStatus::Loading
+        } else {
+            CompletedReleaseNotesStatus::Unavailable
+        };
+        Self {
+            metadata,
+            notes,
+            task: None,
+        }
+    }
+
+    fn load(&mut self, resource_directory: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(notes) = self.metadata.notes.clone() else {
+            return;
+        };
+        let (sender, receiver) = async_channel::bounded(1);
+        if let Err(error) = thread::Builder::new()
+            .name("nexora-local-release-notes".to_owned())
+            .spawn(move || {
+                _ = sender.send_blocking(read_verified_local_release_notes(
+                    &resource_directory,
+                    &notes,
+                ));
+            })
+        {
+            tracing::warn!(error = %error, "无法启动本地更新日志读取线程");
+            self.notes = CompletedReleaseNotesStatus::Failed;
+            cx.notify();
+            return;
+        }
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let Ok(result) = receiver.recv().await else {
+                return;
+            };
+            _ = this.update_in(cx, |this, _, cx| {
+                this.notes = match result {
+                    Ok(markdown) => CompletedReleaseNotesStatus::Loaded(markdown),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "更新完成后无法读取本地更新日志");
+                        CompletedReleaseNotesStatus::Failed
+                    }
+                };
+                cx.notify();
+            });
+        }));
+    }
+}
+
+impl Render for UpdateCompletedDialog {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let version = format!(
+            "{} · Build {}",
+            self.metadata.version, self.metadata.build_number
+        );
+        v_flex()
+            .gap_4()
+            .child(format!("已成功更新到 {version}。"))
+            .child(match &self.notes {
+                CompletedReleaseNotesStatus::Loading => update_progress_content(
+                    "正在读取更新日志...",
+                    Progress::new("completed-notes-loading").loading(true),
+                    None,
+                ),
+                CompletedReleaseNotesStatus::Loaded(markdown) => {
+                    TextView::markdown("completed-release-notes-markdown", markdown.clone())
+                        .selectable(true)
+                        .scrollable(true)
+                        .h(px(320.0))
+                        .into_any_element()
+                }
+                CompletedReleaseNotesStatus::Unavailable => v_flex()
+                    .child("本次安装包未携带更新日志。")
+                    .into_any_element(),
+                CompletedReleaseNotesStatus::Failed => v_flex()
+                    .child("更新已完成，但无法读取更新日志。")
+                    .into_any_element(),
+            })
+    }
+}
+
+enum CompletedReleaseNotesStatus {
+    Loading,
+    Loaded(String),
+    Unavailable,
+    Failed,
+}
 
 /// 在主窗口创建完成后静默检查一次应用更新。
 ///
@@ -69,6 +205,8 @@ struct UpdateCoordinator {
     task: Option<Task<()>>,
     manual_check: bool,
     background_download: bool,
+    release_notes: ReleaseNotesStatus,
+    release_notes_task: Option<Task<()>>,
 }
 
 impl UpdateCoordinator {
@@ -81,6 +219,8 @@ impl UpdateCoordinator {
             task: None,
             manual_check: false,
             background_download: false,
+            release_notes: ReleaseNotesStatus::Unavailable,
+            release_notes_task: None,
         }
     }
 
@@ -162,6 +302,8 @@ impl UpdateCoordinator {
         self.release = None;
         self.manual_check = manual_check;
         self.background_download = false;
+        self.release_notes = ReleaseNotesStatus::Unavailable;
+        self.release_notes_task.take();
 
         let session = match Updater::new(self.config.clone()).check() {
             Ok(session) => session,
@@ -221,6 +363,11 @@ impl UpdateCoordinator {
             UpdateEvent::UpdateAvailable(release) => {
                 self.status = UpdateDialogStatus::UpdateAvailable;
                 self.release = Some(release.clone());
+                self.release_notes = if trusted_release_notes_available(&release) {
+                    ReleaseNotesStatus::NotRequested
+                } else {
+                    ReleaseNotesStatus::Unavailable
+                };
                 self.cancellation = None;
                 if self.manual_check {
                     window.close_dialog(cx);
@@ -350,6 +497,129 @@ impl UpdateCoordinator {
         cx.notify();
     }
 
+    fn load_release_notes(
+        &mut self,
+        release: UpdateRelease,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.release_notes, ReleaseNotesStatus::NotRequested) {
+            return;
+        }
+        self.release_notes = ReleaseNotesStatus::Loading;
+        let updater = Updater::new(self.config.clone());
+        let (sender, receiver) = async_channel::bounded(1);
+        if let Err(error) = thread::Builder::new()
+            .name("nexora-release-notes".to_owned())
+            .spawn(move || {
+                _ = sender.send_blocking(updater.fetch_release_notes(&release));
+            })
+        {
+            self.release_notes = ReleaseNotesStatus::Failed(error.to_string());
+            cx.notify();
+            return;
+        }
+        self.release_notes_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let Ok(result) = receiver.recv().await else {
+                return;
+            };
+            _ = this.update_in(cx, |this, _, cx| {
+                this.release_notes = match result {
+                    Ok(Some(markdown)) => ReleaseNotesStatus::Loaded(markdown),
+                    Ok(None) => ReleaseNotesStatus::Unavailable,
+                    Err(error) => ReleaseNotesStatus::Failed(error.to_string()),
+                };
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn update_prompt_content(&self, release: &UpdateRelease, cx: &mut Context<Self>) -> AnyElement {
+        let mandatory = release.mandatory;
+        let version = format!("v{} ({})", release.version, release.build_number);
+        let release_for_notes = release.clone();
+        let immediate_release = release.clone();
+        let background_release = release.clone();
+        v_flex()
+            .gap_4()
+            .child(if mandatory {
+                format!("当前版本已停止支持，请更新到 {version}。")
+            } else {
+                format!("{version} 已可用，现在要更新吗？")
+            })
+            .child(match &self.release_notes {
+                ReleaseNotesStatus::NotRequested => Button::new("update-view-release-notes")
+                    .label("查看更新日志")
+                    .outline()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.load_release_notes(release_for_notes.clone(), window, cx);
+                    }))
+                    .into_any_element(),
+                ReleaseNotesStatus::Loading => update_progress_content(
+                    "正在加载更新日志...",
+                    Progress::new("update-notes-loading").loading(true),
+                    None,
+                ),
+                ReleaseNotesStatus::Loaded(markdown) => {
+                    TextView::markdown("update-release-notes-markdown", markdown.clone())
+                        .selectable(true)
+                        .scrollable(true)
+                        .h(px(320.0))
+                        .into_any_element()
+                }
+                ReleaseNotesStatus::Failed(message) => v_flex()
+                    .gap_2()
+                    .child("无法读取更新日志，仍可继续更新。")
+                    .child(message.clone())
+                    .into_any_element(),
+                ReleaseNotesStatus::Unavailable => v_flex()
+                    .child("本次更新未提供可验证的更新日志。")
+                    .into_any_element(),
+            })
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .when(!mandatory, |footer| {
+                        footer
+                            .child(
+                                Button::new("update-later")
+                                    .label("稍后")
+                                    .outline()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        window.close_dialog(cx);
+                                        this.defer_update(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("update-background")
+                                    .label("后台下载")
+                                    .outline()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        window.close_dialog(cx);
+                                        this.start_download(
+                                            background_release.clone(),
+                                            true,
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                    })
+                    .child(
+                        Button::new("update-immediate")
+                            .label("立即更新")
+                            .primary()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                window.close_dialog(cx);
+                                this.start_download(immediate_release.clone(), false, window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn cancel(&mut self) {
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.cancel();
@@ -440,13 +710,11 @@ impl Render for UpdateCoordinator {
                 Progress::new("update-checking").loading(true),
                 None,
             ),
-            UpdateDialogStatus::UpdateAvailable => update_progress_content(
-                "正在准备下载更新...",
-                Progress::new("update-preparing").loading(true),
-                self.release.as_ref().map(|release| {
-                    format!("新版本 v{} ({})", release.version, release.build_number)
-                }),
-            ),
+            UpdateDialogStatus::UpdateAvailable => self
+                .release
+                .as_ref()
+                .map(|release| self.update_prompt_content(release, cx))
+                .unwrap_or_else(|| v_flex().child("更新发布信息不可用。 ").into_any_element()),
             UpdateDialogStatus::Downloading { downloaded, total } => {
                 let progress = total
                     .filter(|total| *total > 0)
@@ -551,66 +819,16 @@ fn open_update_prompt(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let version = format!("v{} ({})", release.version, release.build_number);
     let mandatory = release.mandatory;
-    window.open_alert_dialog(cx, move |alert, _, _| {
-        let immediate_coordinator = coordinator.clone();
-        let immediate_release = release.clone();
-        let footer = DialogFooter::new()
-            .when(!mandatory, |footer| {
-                let later_coordinator = coordinator.clone();
-                let background_coordinator = coordinator.clone();
-                let background_release = release.clone();
-                footer
-                    .child(
-                        Button::new("update-later")
-                            .label("稍后")
-                            .outline()
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                later_coordinator.update(cx, |this, cx| this.defer_update(cx));
-                            }),
-                    )
-                    .child(
-                        Button::new("update-background")
-                            .label("后台下载")
-                            .outline()
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                background_coordinator.update(cx, |this, cx| {
-                                    this.start_download(
-                                        background_release.clone(),
-                                        true,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }),
-                    )
-            })
-            .child(
-                Button::new("update-immediate")
-                    .label("立即更新")
-                    .primary()
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        immediate_coordinator.update(cx, |this, cx| {
-                            this.start_download(immediate_release.clone(), false, window, cx);
-                        });
-                    }),
-            );
-        alert
+    window.open_dialog(cx, move |dialog, _, _| {
+        dialog
+            .w(px(720.0))
             .title(if mandatory {
                 "需要更新后才能继续使用"
             } else {
                 "发现新版本"
             })
-            .description(if mandatory {
-                format!("当前版本已停止支持，请更新到 {version}。")
-            } else {
-                format!("{version} 已可用，现在要更新吗？")
-            })
-            .footer(footer)
+            .child(coordinator.clone())
             .overlay_closable(false)
             .close_button(false)
             .keyboard(false)
@@ -705,6 +923,18 @@ enum UpdateDialogStatus {
     UpToDate,
     Failed(String),
     Cancelled,
+}
+
+enum ReleaseNotesStatus {
+    Unavailable,
+    NotRequested,
+    Loading,
+    Loaded(String),
+    Failed(String),
+}
+
+fn trusted_release_notes_available(release: &UpdateRelease) -> bool {
+    release.notes_url.is_some() && release.notes_sha256.is_some() && release.notes_size.is_some()
 }
 
 impl UpdateDialogStatus {

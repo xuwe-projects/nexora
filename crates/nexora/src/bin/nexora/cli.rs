@@ -405,6 +405,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
             .map_err(|error| format!("无法渲染 .gitignore 模板：{error}"))?,
     );
     let nexora_source = nexora_dependency_source();
+    let release_notes = include_str!("../../../templates/scaffold/release-notes.md").to_owned();
     let nexora_config = normalize_template_output(
         NexoraConfigTemplate { project_name }
             .render()
@@ -438,6 +439,9 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 "assets/icons".to_owned(),
                 "assets/logos".to_owned(),
                 format!("assets/logos/{project_name}"),
+                "docs".to_owned(),
+                "docs/releases".to_owned(),
+                "docs/releases/current".to_owned(),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
@@ -445,6 +449,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 ("src/main.rs".to_owned(), main),
                 ("src/features.rs".to_owned(), features_module),
                 ("src/features/home.rs".to_owned(), home_feature),
+                ("docs/releases/current/zh-CN.md".to_owned(), release_notes),
             ];
             append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
             append_file_if_missing(target, &mut files, "README.md", readme)?;
@@ -492,6 +497,9 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                 "assets".to_owned(),
                 "assets/logos".to_owned(),
                 format!("assets/logos/{project_name}"),
+                "docs".to_owned(),
+                "docs/releases".to_owned(),
+                "docs/releases/current".to_owned(),
             ];
             let mut files = vec![
                 (".gitignore".to_owned(), gitignore),
@@ -506,6 +514,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
                     format!("{desktop_directory}/src/features/home.rs"),
                     home_feature,
                 ),
+                ("docs/releases/current/zh-CN.md".to_owned(), release_notes),
             ];
             append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
 

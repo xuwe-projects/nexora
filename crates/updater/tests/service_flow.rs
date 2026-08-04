@@ -199,6 +199,8 @@ fn stage_update_in_cache(
         published_at: 1_784_304_000,
         status: ReleaseStatus::Available,
         notes_url: None,
+        notes_sha256: None,
+        notes_size: None,
         artifacts: vec![UpdateArtifact {
             target: target.as_str().to_owned(),
             url: archive.file_name().unwrap().to_string_lossy().into_owned(),
@@ -545,6 +547,8 @@ fn check_reports_available_release_without_requesting_artifact() {
         published_at: 1_784_304_000,
         status: ReleaseStatus::Available,
         notes_url: None,
+        notes_sha256: None,
+        notes_size: None,
         artifacts: vec![UpdateArtifact {
             target: target.as_str().to_owned(),
             url: "update.app.zip".to_owned(),

@@ -138,7 +138,6 @@ fn panel_header_actions(cx: &mut App) -> Vec<AnyElement> {
 #[derive(Clone)]
 pub(crate) struct ApplicationBranding {
     pub(crate) application_name: String,
-    pub(crate) application_version: Option<String>,
     pub(crate) logo: Option<ApplicationLogo>,
 }
 
@@ -149,7 +148,6 @@ pub(crate) fn application_branding(cx: &App) -> ApplicationBranding {
         .cloned()
         .unwrap_or_else(|| ApplicationBranding {
             application_name: "Nexora".to_owned(),
-            application_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             logo: None,
         })
 }
@@ -429,6 +427,13 @@ pub enum ApplicationError {
         path: String,
         /// 被首路由匹配到的 Window 稳定标识。
         id: &'static str,
+    },
+
+    /// 正式安装包携带的 `nexora-release.json` 存在但无法读取或通过结构校验。
+    #[error("无法加载应用发布信息：{message}")]
+    InvalidReleaseMetadata {
+        /// 不包含秘密或文件正文的失败原因。
+        message: String,
     },
 }
 
@@ -1095,8 +1100,14 @@ where
         account_initial_route,
     } = prepare_application(&options)?;
     let locale = options.locale.clone();
-    let application_name = options.application_name.clone();
+    let configured_application_name = options.application_name.clone();
     let application_version = options.application_version.clone();
+    let application_info = crate::application_info::ApplicationInfo::load(
+        configured_application_name,
+        application_version.clone(),
+    )
+    .map_err(|message| ApplicationError::InvalidReleaseMetadata { message })?;
+    let application_name = application_info.application_name().to_owned();
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
     let tab_style = options.tab_style;
@@ -1119,7 +1130,7 @@ where
         options: desktop_options,
         locale,
         application_name,
-        application_version,
+        application_info,
         application_logo,
         account_enabled: false,
         sidebar_subtitle,
@@ -1143,7 +1154,7 @@ struct ApplicationAdapter<A> {
     options: DesktopApplicationOptions,
     locale: String,
     application_name: String,
-    application_version: Option<String>,
+    application_info: crate::application_info::ApplicationInfo,
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
@@ -1181,9 +1192,10 @@ where
         );
         restore_appearance_preferences(&self.shell_preferences, cx);
         restore_main_window_options(&mut self.options, &self.shell_preferences, cx);
+        let application_name = self.application_info.application_name().to_owned();
+        cx.set_global(self.application_info.clone());
         cx.set_global(ApplicationBranding {
-            application_name: self.application_name.clone(),
-            application_version: self.application_version.clone(),
+            application_name,
             logo: self.application_logo,
         });
         actions::init();

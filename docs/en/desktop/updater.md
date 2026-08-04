@@ -4,7 +4,8 @@ Nexora uses a signed `latest.json`, platform update archives, and an independent
 
 The production path supports macOS and Windows x86_64/ARM64. Windows builds create a Simplified
 Chinese WiX MSI and a Burn Setup EXE while in-app updates consume only `windows.zip`. The default
-Windows floor follows the pinned GPUI baseline: Windows 10 1703, build 15063.
+Windows floor follows the pinned GPUI baseline: Windows 10 1703, build 15063. Linux release
+resources follow the same metadata contract, but Linux auto-installation is not documented here.
 
 ## First-time prerequisites
 
@@ -46,6 +47,7 @@ default_channel = "stable"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
+notes = "docs/releases/1.2.3/en.md"
 
 [apps.desktop.release.channels.beta]
 
@@ -58,6 +60,7 @@ The supported release identity parameters are:
 | --- | --- | --- |
 | `release.version` | Exact `${CARGO_PKG_VERSION}` or a literal SemVer such as `"1.2.3"` | A validated SemVer |
 | `release.build_number` | Exact `${BUILD_DATETIME}` or a literal positive integer such as `42` | A positive `u64` |
+| `release.notes` | Repository-relative UTF-8 Markdown path; required when updater is enabled and overridable per channel | Frozen `notes.md`, limited to 1 MiB |
 
 `package` controls Cargo, the cargo-bundle source path, and technical artifact names. `display_name` controls Info.plist, the DMG volume, and the app name users see after installation. `${CARGO_PKG_VERSION}` reads the selected app package through `cargo metadata --no-deps --format-version 1`, including packages that use `version.workspace = true`; it is not the workspace root name or Nexora CLI version. A literal SemVer remains supported.
 
@@ -82,6 +85,23 @@ entry and updater traffic never uses Account tokens or business permissions.
 Builds that intentionally support `updater.enabled = false` use
 `UpdateConfig::from_current_bundle_if_present()`. It returns `None` only when the bundled file is
 absent; an existing but invalid file remains an error and cannot bypass trust or transport checks.
+
+Every formal package receives `nexora-release.json` and optional `notes.md` before signing and
+archiving. They live in `.app/Contents/Resources` on macOS and beside the main executable on
+Windows. Schema 1 records the app key/ID, display name, package, version, positive build number,
+channel, target, and optional notes file name, byte size, and SHA-256. It contains no secrets.
+
+Applications can read the validated identity without retaining updater state:
+
+```rust
+let info = nexora::desktop::application_info(cx);
+let build_number: Option<u64> = info.build_number();
+```
+
+During `cargo run` and tests, a missing metadata file is development mode: name/version fall back
+to `ApplicationOptions`, while app ID, build number, and channel are `None`. An existing invalid
+file fails startup. An installed updater must match the general metadata's app ID, version, build
+number, and channel.
 
 After installation, the Sidebar Footer item, native macOS menu, and default shortcut all dispatch
 the same `CheckForUpdates` action. The shortcut is `Cmd+Shift+U` on macOS and `Ctrl+Shift+U` on
@@ -155,6 +175,27 @@ Developers do not maintain `manifest_sequence`. A missing remote `latest.json` (
 Versioned platform artifacts, their `.sha256` sidecars, and sequence manifests are immutable. Publish derives each checksum sidecar from the revalidated artifact digest, so older builds without local sidecars remain publishable. Each macOS target receives a no-cache `latest-<arch>.dmg`; each Windows target receives `latest-<arch>.exe` and `latest-<arch>.msi`. A single-target release additionally receives the corresponding `latest.dmg`, `latest.exe`, or `latest.msi`. Signed `latest.json` is uploaded last. The updater manifest still contains only in-app update ZIP payloads, never a first-install DMG, Setup EXE, or MSI.
 
 The client reads its current `(version, build_number)` from its own bundle. Server `latest.json` represents only the latest available release. Version comparison uses `(version, build_number)`; manifest sequence is solely replay protection.
+
+## Release notes trust and migration
+
+`release.notes` is resolved from the repository root and may be overridden per channel. With the
+updater enabled it must be a readable, non-empty UTF-8 regular file inside the repository and no
+larger than 1 MiB. Build freezes it once as
+`dist/<app>/<channel>/<version>/<build_number>/notes.md`; every target packages identical bytes,
+and publish reads only that frozen file.
+
+Available manifests sign `notes_url`, `notes_sha256`, and `notes_size`. Old manifests without the
+integrity fields remain installable, but new clients do not render their remote URL. The in-app
+dialog downloads notes only on first request and renders them only after transport, size, digest,
+UTF-8, and content checks. A failed notes request never blocks an update. After a successful
+sidecar health launch, the new package shows its locally verified notes once; ordinary launches and
+first installation do not.
+
+Existing updater projects must add `notes = "docs/releases/current/en.md"` to each effective
+release (or channel override), move or reference the previous changelog explicitly, and rebuild the
+release before publishing. The former hard-coded changelog directory is no longer an implicit
+fallback. Old release receipts use an unsupported schema and must be regenerated by build rather
+than edited by hand.
 
 ## Startup checks and user confirmation
 

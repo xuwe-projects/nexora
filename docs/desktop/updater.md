@@ -6,7 +6,8 @@ DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更�
 
 当前生产链路实现 macOS 与 Windows x86_64/ARM64。Windows 首次构建同时生成简体中文 WiX MSI
 和 Burn Setup EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随当前锁定 GPUI，
-即 Windows 10 1703（build 15063）。
+即 Windows 10 1703（build 15063）。Linux 发布资源沿用同一元数据契约，但本页不承诺 Linux
+自动安装。
 
 ## 开发环境第一次准备
 
@@ -72,6 +73,23 @@ nexora build --app desktop
 - sidecar：独立进程，重新验签、下载、校验、暂存、等待主进程退出、事务替换、重启、健康
   确认并在失败时回滚。
 
+每个正式安装包还会在签名和归档前写入 `nexora-release.json` 与可选 `notes.md`。macOS 位于
+`.app/Contents/Resources`，Windows 位于主 EXE 同级目录，因此初始 Setup 和 update ZIP 携带
+同一份发布身份。元数据 schema 1 包含 `app_key`、`app_id`、`display_name`、`package`、
+`version`、`build_number`、`channel`、`target`，以及日志的文件名、字节数和 SHA-256；不包含
+任何私钥、对象存储凭据或 token。
+
+业务代码无需保留 updater 配置即可读取当前发布身份：
+
+```rust
+let info = nexora::desktop::application_info(cx);
+let build_number: Option<u64> = info.build_number();
+```
+
+正式产物以通过校验的 `nexora-release.json` 为准。普通 `cargo run` 或测试找不到该文件时，名称和
+版本回退 `ApplicationOptions`，app ID、build number 和 channel 返回 `None`；文件存在但非法时
+启动失败。安装 updater 时，其 app ID、version、build number 和 channel 必须与通用元数据一致。
+
 应用使用 `nexora::config::initialize(None)` 时，Nexora 会忽略 sidecar 注入的
 `--nexora-updater-health-*` 内部参数并继续选择默认 TOML；显式配置路径和普通首个位置参数
 仍保持原有优先级。这样新版本可以完成配置初始化、创建主窗口并回报健康，而不会把健康会话
@@ -115,6 +133,7 @@ default_channel = "stable"
 version = "${CARGO_PKG_VERSION}"
 build_number = "${BUILD_DATETIME}"
 minimum_supported_version = "0.0.0"
+notes = "docs/releases/1.2.3/zh-CN.md"
 signing_key_file = ".secrets/desktop-update.key"
 
 [apps.desktop.release.channels.beta]
@@ -204,6 +223,7 @@ icons = [
 | `release.version` | 是 | 完整字段 `${CARGO_PKG_VERSION}`，或显式 SemVer 如 `"1.2.3"` | 无 | 否 | 未知/片段表达式或非 SemVer 失败 |
 | `release.build_number` | 是 | 完整字段 `${BUILD_DATETIME}`，或显式正整数如 `42` | 无 | 否 | 未知字符串、0 或溢出失败 |
 | `release.minimum_supported_version` | 否 | 低于该版本时进入强制更新门禁 | `"0.0.0"` | 否 | 非 SemVer 失败 |
+| `release.notes` | updater 启用时是 | 本次发布的 UTF-8 Markdown，路径相对仓库根目录；channel 可覆盖 | 无 | 否 | 缺失、越界、非普通文件、超过 1 MiB 或非 UTF-8 时 build 失败 |
 | `release.signing_key_file` | 否 | 更新签名私钥文件，相对根目录或绝对路径 | 未配置 | **是（文件内容）** | 见下方严格优先级 |
 
 `${CARGO_PKG_VERSION}` 通过 `cargo metadata --no-deps --format-version 1` 读取所选 app 的
@@ -216,6 +236,37 @@ icons = [
 `nexora icons generate --app <key>` 只消费所选 app 的品牌路径。构建把 ICNS 复制到
 `.app/Contents/Resources` 并写入 `CFBundleIconFile`，不会修改 Cargo manifest。DMG 文件及其
 挂载卷不设置软件品牌图标，保留系统默认外观，也不增加 `dmg_icon` 一类重复配置。
+
+### 更新日志冻结、发布与展示
+
+`release.notes` 相对仓库根目录解析，channel 的同名字段覆盖根 release 设置。启用 updater 时，
+缺失、非普通文件、越出仓库、不可读、空文件、无效 UTF-8 或超过 1 MiB 都会在打包前失败；
+未启用 updater 的应用可以省略。build 只把所选内容冻结到
+`dist/<app>/<channel>/<version>/<build_number>/notes.md`，全部 target 复用同一份字节，publish
+只读取该冻结文件，不回读源文档。
+
+available manifest 同时签名 `notes_url`、`notes_sha256` 和 `notes_size`。旧 manifest 缺少摘要或
+大小时仍可检查并安装，但新客户端不会下载或渲染其中的 URL。远程日志仅在 manifest 已验签、
+URL 符合传输策略、大小和 SHA-256 一致且正文为安全 UTF-8 Markdown 后交给
+`TextView::markdown`；失败只影响日志展示，不阻止更新。
+
+更新确认 Dialog 首次点击“查看更新日志”才异步获取正文，并保留“稍后/后台下载/立即更新”原有
+行为；强制更新仍不可关闭或绕过。sidecar 替换成功后的健康启动会在首个主窗口上展示一次安装包
+内日志，普通启动、首次安装和后续重启不会重复弹出。本地日志损坏不影响健康确认或回滚判断。
+
+### 旧项目迁移
+
+已有 updater 项目必须在每个实际发布配置增加 Markdown 路径，然后重新执行 build：
+
+```toml
+[apps.desktop.release]
+notes = "docs/releases/current/zh-CN.md"
+```
+
+若各通道内容不同，在 `[apps.desktop.release.channels.beta]` 等表中覆盖 `notes`。旧的
+`docs/changelog/components/<version>/<package>/zh-CN.md` 不再被隐式读取；先把文件移动或直接把
+新字段指向现有文件。receipt schema 已升级，旧 `dist/<app>/<channel>/release.json` 不会被猜测
+修复，应为该 release 重新 build，再 publish。不要手工编辑安装包内的发布元数据或冻结日志。
 
 ### updater
 

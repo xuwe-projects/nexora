@@ -21,6 +21,23 @@ fn write_bundle_config(name: &str, value: serde_json::Value) -> PathBuf {
         serde_json::to_vec_pretty(&value).unwrap(),
     )
     .unwrap();
+    let release = serde_json::json!({
+        "schema_version": 1,
+        "app_key": "desktop",
+        "app_id": value["app_id"].as_str().unwrap_or("com.example.desktop"),
+        "display_name": "Desktop",
+        "package": "desktop",
+        "version": value["current_version"].as_str().unwrap_or("1.0.0"),
+        "build_number": value["current_build_number"].as_u64().unwrap_or(2),
+        "channel": value["channel"].as_str().unwrap_or("stable"),
+        "target": "aarch64-apple-darwin",
+        "notes": null
+    });
+    fs::write(
+        resources.join("nexora-release.json"),
+        serde_json::to_vec_pretty(&release).unwrap(),
+    )
+    .unwrap();
     bundle
 }
 
@@ -90,6 +107,23 @@ fn loads_safe_updater_configuration_from_windows_install_dir() {
             "allow_insecure_http": true,
             "health_timeout": "20s",
             "check_on_launch": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        install_dir.join("nexora-release.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "app_key": "desktop",
+            "app_id": "com.example.windows",
+            "display_name": "Desktop",
+            "package": "desktop",
+            "version": "2.0.0",
+            "build_number": 9,
+            "channel": "stable",
+            "target": "x86_64-pc-windows-msvc",
+            "notes": null
         }))
         .unwrap(),
     )
@@ -205,4 +239,38 @@ fn rejects_unknown_bundle_configuration_schema() {
 
     assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
     fs::remove_dir_all(bundle).unwrap();
+}
+
+#[test]
+fn rejects_missing_or_mismatched_general_release_metadata() {
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "app_id": "com.example.desktop",
+        "channel": "stable",
+        "feed_url": "https://updates.example.com/latest.json",
+        "trusted_public_keys": [
+            "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+        ],
+        "current_version": "1.0.0",
+        "current_build_number": 2,
+        "allow_insecure_http": false,
+        "health_timeout": "20s"
+    });
+    let missing = write_bundle_config("missing-release", value.clone());
+    fs::remove_file(missing.join("Contents/Resources/nexora-release.json")).unwrap();
+    assert!(matches!(
+        UpdateConfig::from_app_bundle(&missing),
+        Err(UpdateError::InvalidBundleConfig(_))
+    ));
+    fs::remove_dir_all(missing).unwrap();
+
+    let mismatched = write_bundle_config("mismatched-release", value);
+    let path = mismatched.join("Contents/Resources/nexora-release.json");
+    let mut release: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    release["build_number"] = serde_json::json!(3);
+    fs::write(path, serde_json::to_vec_pretty(&release).unwrap()).unwrap();
+    let error = UpdateConfig::from_app_bundle(&mismatched).unwrap_err();
+    assert!(matches!(error, UpdateError::InvalidBundleConfig(_)));
+    assert!(error.to_string().contains("build_number"));
+    fs::remove_dir_all(mismatched).unwrap();
 }
