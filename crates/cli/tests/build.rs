@@ -11,8 +11,9 @@ use commands::{
     inspect_effective_publish_target, inspect_freeze_release_notes,
     inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
     inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
-    inspect_signing_key, inspect_windows_installer_sources, inspect_windows_resource_scripts,
-    validate_display_name, write_bundle_icon, write_bundle_info, write_sha256_sidecar,
+    inspect_signing_key, inspect_windows_binary_link_args, inspect_windows_installer_sources,
+    inspect_windows_resource_scripts, validate_display_name, write_bundle_icon, write_bundle_info,
+    write_sha256_sidecar,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -830,6 +831,18 @@ fn windows_arm64_build_plan_uses_aarch64_artifact_suffix() {
             .as_str()
             .unwrap()
             .ends_with("Application One-aarch64.msi")
+    );
+}
+
+#[test]
+fn windows_binary_uses_gui_subsystem_with_rust_main_entrypoint() {
+    assert_eq!(
+        inspect_windows_binary_link_args(Path::new("nexora-icon.res")),
+        vec![
+            "link-arg=nexora-icon.res",
+            "link-arg=/SUBSYSTEM:WINDOWS",
+            "link-arg=/ENTRY:mainCRTStartup",
+        ]
     );
 }
 

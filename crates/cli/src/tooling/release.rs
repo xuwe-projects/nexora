@@ -2326,13 +2326,20 @@ fn build_windows_binary(plan: &BuildPlan, binary: &str, resource: &Path) -> CliR
         .current_dir(&plan.project_root)
         .args(["rustc", "--release", "--package", &plan.package])
         .args(["--bin", binary, "--target", &plan.target])
-        .arg("--")
-        .arg("-C")
-        .arg(format!("link-arg={}", resource.display()))
-        .arg("-C")
-        .arg("link-arg=/SUBSYSTEM:WINDOWS");
+        .arg("--");
+    for argument in windows_binary_link_args(resource) {
+        command.arg("-C").arg(argument);
+    }
     prepend_windows_sdk_path(&mut command)?;
     run_status("cargo build Windows binary", &mut command)
+}
+
+fn windows_binary_link_args(resource: &Path) -> [String; 3] {
+    [
+        format!("link-arg={}", resource.display()),
+        "link-arg=/SUBSYSTEM:WINDOWS".to_owned(),
+        "link-arg=/ENTRY:mainCRTStartup".to_owned(),
+    ]
 }
 
 fn sign_windows_file(plan: &BuildPlan, path: &Path) -> CliResult<()> {
@@ -6017,6 +6024,17 @@ pub fn inspect_compile_windows_resource_executables(
         )?;
     }
     Ok((outputs[0].1.clone(), outputs[1].1.clone()))
+}
+
+/// 为集成测试返回 Windows 主程序与 updater sidecar 使用的 MSVC 链接参数。
+///
+/// 返回值保持实际 `cargo rustc` 命令中的参数顺序，用于验证资源文件、GUI 子系统与
+/// Rust `main` 对应的 CRT 入口点会被一起传给链接器。
+#[allow(dead_code)]
+pub fn inspect_windows_binary_link_args(resource: impl AsRef<Path>) -> Vec<String> {
+    windows_binary_link_args(resource.as_ref())
+        .into_iter()
+        .collect()
 }
 
 /// 为集成测试从 Windows payload staging 生成更新 ZIP。
