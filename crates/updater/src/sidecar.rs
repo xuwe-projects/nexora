@@ -64,6 +64,14 @@ fn apply_staged_update(command: &SidecarApplyCommand) -> Result<(), UpdateError>
     )
 }
 
+/// 从当前进程参数读取 updater 健康确认会话并写入确认文件。
+///
+/// 主程序启动早期可调用该函数；当参数中不存在健康确认会话时返回 `Ok(false)`，
+/// 存在并成功写入确认文件时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当健康会话标识不是 URL-safe base64、确认文件父目录无法创建，或确认文件无法写入时返回错误。
 pub fn report_health_from_env_args() -> Result<bool, UpdateError> {
     let args = env::args_os().collect::<Vec<_>>();
     let Some(session) = value_after(&args, "--nexora-updater-health-session") else {
