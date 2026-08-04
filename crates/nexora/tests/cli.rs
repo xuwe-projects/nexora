@@ -738,7 +738,7 @@ fn publish_dry_run_signs_latest_from_existing_artifact_metadata() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
-        for stream in listener.incoming().take(4) {
+        for stream in listener.incoming().take(6) {
             let mut stream = stream.unwrap();
             let mut request = [0_u8; 2048];
             let _ = stream.read(&mut request);
@@ -991,12 +991,27 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
         store.puts(),
         vec![
             format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}"),
+            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}.sha256"),
             format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}"),
+            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}.sha256"),
             format!("{prefix}/manifests/1.json"),
             format!("{prefix}/latest-aarch64.dmg"),
             format!("{prefix}/latest.dmg"),
             format!("{prefix}/latest.json"),
         ]
+    );
+    assert_eq!(
+        store.object(&format!(
+            "{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}.sha256"
+        )),
+        format!("794f396be329ce58e99c9084550e92f52c2799a83a4ae46e6fcd6efde6b1a922  {zip_name}\n")
+            .into_bytes()
+    );
+    assert_eq!(
+        store.object(&format!(
+            "{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}.sha256"
+        )),
+        format!("{:x}  {dmg_name}\n", Sha256::digest(b"dmg")).into_bytes()
     );
     let latest: serde_json::Value =
         serde_json::from_slice(&store.object(&format!("{prefix}/latest.json"))).unwrap();
@@ -1156,10 +1171,10 @@ fn publish_rejects_concurrent_sequence_change_before_mutable_uploads() {
     let puts = store.puts();
     assert_eq!(
         puts.len(),
-        3,
-        "只允许写入两个版本化产物和 sequence manifest"
+        5,
+        "只允许写入两个版本化产物、对应校验文件和 sequence manifest"
     );
-    assert!(puts[2].ends_with("/manifests/1.json"));
+    assert!(puts[4].ends_with("/manifests/1.json"));
     assert!(!puts.iter().any(|path| path.ends_with("/latest.json")));
     assert!(!puts.iter().any(|path| path.ends_with("/latest.dmg")));
 }

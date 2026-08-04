@@ -2,7 +2,7 @@
 
 use super::{CliError, CliResult};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::{TimeZone as _, Utc};
+use chrono::{FixedOffset, Local, TimeZone as _, Utc};
 use clap::{Args, Subcommand};
 use dialoguer::{Confirm, MultiSelect};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
@@ -1129,7 +1129,7 @@ impl ProjectDocument {
         let build_number = match configured.build_number {
             ResolvedBuildNumber::Literal(value) => value,
             ResolvedBuildNumber::BuildDatetime => {
-                build_datetime_number(Utc::now(), previous_build_number)?
+                build_datetime_number(Local::now().fixed_offset(), previous_build_number)?
             }
         };
         let receipt = ReleaseReceipt {
@@ -1495,9 +1495,25 @@ impl ProjectDocument {
                     ]);
                     let url = public_object_url(&target, &key);
                     immutable_payloads.push(Upload {
-                        key,
+                        key: key.clone(),
                         source: UploadSource::File(artifact.path.clone()),
                         content_type: artifact_content_type(kind),
+                        cache_control: IMMUTABLE_CACHE,
+                        immutable: true,
+                    });
+                    let checksum_key = format!("{key}.sha256");
+                    let checksum_url = public_object_url(&target, &checksum_key);
+                    let checksum =
+                        sha256_sidecar_contents(&artifact.file_name, &artifact.sha256).into_bytes();
+                    verify_urls.push(Verification {
+                        url: checksum_url,
+                        expected_sha256: sha256_hex(&checksum),
+                        label: format!("{} SHA-256 sidecar", artifact.target),
+                    });
+                    immutable_payloads.push(Upload {
+                        key: checksum_key,
+                        source: UploadSource::Bytes(checksum),
+                        content_type: "text/plain; charset=utf-8",
                         cache_control: IMMUTABLE_CACHE,
                         immutable: true,
                     });
@@ -2683,16 +2699,25 @@ fn copy_release_notes(plan: &BuildPlan) -> CliResult<()> {
 }
 
 fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
-    let artifacts = match plan.platform {
+    let artifact_paths = match plan.platform {
         BuildTargetPlatform::MacOs => vec![
-            artifact_entry(ArtifactKind::MacosAppZip, &plan.app_zip_path)?,
-            artifact_entry(ArtifactKind::MacosDmg, &plan.dmg_path)?,
+            (ArtifactKind::MacosAppZip, &plan.app_zip_path),
+            (ArtifactKind::MacosDmg, &plan.dmg_path),
         ],
         BuildTargetPlatform::Windows => vec![
-            artifact_entry(ArtifactKind::WindowsSetupExe, &plan.setup_path)?,
-            artifact_entry(ArtifactKind::WindowsZip, &plan.app_zip_path)?,
+            (ArtifactKind::WindowsSetupExe, &plan.setup_path),
+            (ArtifactKind::WindowsZip, &plan.app_zip_path),
         ],
     };
+    let artifacts = artifact_paths
+        .into_iter()
+        .map(|(kind, path)| {
+            let artifact = artifact_entry(kind, path)?;
+            let checksum_path = write_sha256_sidecar_with_digest(path, &artifact.sha256)?;
+            println!("SHA256: {}", checksum_path.display());
+            Ok(artifact)
+        })
+        .collect::<CliResult<Vec<_>>>()?;
     let manifest = ArtifactManifest {
         schema_version: ARTIFACT_SCHEMA_VERSION,
         app_id: plan.updater_app_id.clone(),
@@ -3657,14 +3682,14 @@ fn write_release_receipt_atomic(path: &Path, receipt: &ReleaseReceipt) -> CliRes
 }
 
 fn build_datetime_number(
-    now: chrono::DateTime<Utc>,
+    now: chrono::DateTime<FixedOffset>,
     previous_build_number: Option<u64>,
 ) -> CliResult<u64> {
     let current = now
         .format("%y%m%d%H%M%S")
         .to_string()
         .parse::<u64>()
-        .map_err(|error| CliError::new(format!("无法生成 UTC build number: {error}")))?;
+        .map_err(|error| CliError::new(format!("无法生成本机时间 build number: {error}")))?;
     let next = previous_build_number
         .map(|value| {
             value
@@ -3675,20 +3700,26 @@ fn build_datetime_number(
     Ok(next.map_or(current, |value| current.max(value)))
 }
 
-/// 按指定 Unix 秒生成与 build 相同的 UTC 构建号，供集成测试验证时间与单调性规则。
+/// 按指定 Unix 秒和 UTC offset 生成与 build 相同的本机时间构建号。
+///
+/// `utc_offset_seconds` 用于在集成测试中固定构建机器的本机时区；生产构建直接读取操作系统
+/// 本机时区。输出采用 24 小时制 `yyMMddHHmmss`，并继续保证相对上一个构建号严格递增。
 ///
 /// # Errors
 ///
-/// Unix 秒超出 Chrono 范围，或上一个本地构建号已达到 `u64` 上限时返回错误。
+/// UTC offset 或 Unix 秒超出 Chrono 支持范围，或上一个本地构建号已达到 `u64` 上限时返回错误。
 #[allow(dead_code)]
 pub fn inspect_build_datetime_number(
     unix_seconds: i64,
+    utc_offset_seconds: i32,
     previous_build_number: Option<u64>,
 ) -> CliResult<u64> {
-    let now = Utc
+    let offset = FixedOffset::east_opt(utc_offset_seconds)
+        .ok_or_else(|| CliError::new("UTC offset 超出 Chrono 支持范围"))?;
+    let now = offset
         .timestamp_opt(unix_seconds, 0)
         .single()
-        .ok_or_else(|| CliError::new("Unix 秒超出 UTC 时间范围"))?;
+        .ok_or_else(|| CliError::new("Unix 秒超出本机时间范围"))?;
     build_datetime_number(now, previous_build_number)
 }
 
@@ -3880,6 +3911,36 @@ fn sha256_file(path: &Path) -> CliResult<String> {
     let bytes = fs::read(path)
         .map_err(|error| CliError::new(format!("无法读取 `{}`: {error}", path.display())))?;
     Ok(sha256_hex(&bytes))
+}
+
+/// 为最终构建产物写入标准 `<文件名>.sha256` 旁车文件。
+///
+/// 文件内容使用小写 SHA-256、两个空格、原始文件名和 LF 换行，可直接供常见校验工具读取。
+/// 该函数使用 Rust 内置摘要实现，不依赖宿主安装 `shasum` 或 `sha256sum`。
+///
+/// # Errors
+///
+/// 产物不存在或不可读、路径缺少安全的 UTF-8 文件名，或旁车文件无法写入时返回错误。
+#[allow(dead_code)]
+pub fn write_sha256_sidecar(path: &Path) -> CliResult<PathBuf> {
+    let sha256 = sha256_file(path)?;
+    write_sha256_sidecar_with_digest(path, &sha256)
+}
+
+fn write_sha256_sidecar_with_digest(path: &Path, sha256: &str) -> CliResult<PathBuf> {
+    let file_name = safe_file_name(path)?;
+    let checksum_path = path.with_file_name(format!("{file_name}.sha256"));
+    fs::write(&checksum_path, sha256_sidecar_contents(&file_name, sha256)).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 SHA-256 文件 `{}`: {error}",
+            checksum_path.display()
+        ))
+    })?;
+    Ok(checksum_path)
+}
+
+fn sha256_sidecar_contents(file_name: &str, sha256: &str) -> String {
+    format!("{sha256}  {file_name}\n")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -4280,7 +4341,9 @@ pub fn inspect_build_plans_for_channel(
     let configured = project.resolved_release(app_key, app, channel, None)?;
     let build_number = match configured.build_number {
         ResolvedBuildNumber::Literal(value) => value,
-        ResolvedBuildNumber::BuildDatetime => build_datetime_number(Utc::now(), None)?,
+        ResolvedBuildNumber::BuildDatetime => {
+            build_datetime_number(Local::now().fixed_offset(), None)?
+        }
     };
     let release = configured.validated_release(build_number);
     project

@@ -19,6 +19,8 @@
 
 ## Changed
 
+- `nexora build` 恢复为最终 ZIP 与 DMG 生成标准 `.sha256` 旁车，publish 会把旁车上传到版本化
+  release 目录；`${BUILD_DATETIME}` 改用构建机器本机时区的 24 小时制 `yyMMddHHmmss`。
 - 更新协议改为 Ed25519 签名信封和 `build_number` 字段，保留 SHA-256 作为负载完整性校验。
 - macOS updater 安装阶段改为启动复制到随机临时目录的独立 sidecar，并通过一次性健康确认决定
   保留新版本或回滚旧版本。

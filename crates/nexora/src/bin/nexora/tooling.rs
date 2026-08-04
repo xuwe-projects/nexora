@@ -16,7 +16,7 @@ pub use release::{
     inspect_build_plans_for_channel, inspect_latest_dmg_aliases, inspect_prepare_release_receipt,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_selection,
     inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
-    write_bundle_icon, write_bundle_info,
+    write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 
 /// CLI 命令解析与执行流程共用的结果类型。

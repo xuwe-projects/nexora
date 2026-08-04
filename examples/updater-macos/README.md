@@ -68,10 +68,11 @@ nexora build --app updater-macos
 ```
 
 示例默认从所选 `nexora-updater-macos-example` package 读取 Cargo version（包括
-`version.workspace = true`），并用 UTC `yyMMddHHmmss` 生成 build number。`nexora build` 会先把
+`version.workspace = true`），并用构建机器本机时区的 24 小时制 `yyMMddHHmmss` 生成 build
+number。`nexora build` 会先把
 最终身份冻结到 `dist/updater-macos/stable/release.json`，再生成 `.app`、DMG、`.app.zip`、
-sidecar、bundle updater 配置、SHA-256 和 `artifact.json`，不访问 RustFS。失败重试在 target 未
-完整时复用该构建号；完整构建后再次执行会生成严格更高的动态构建号。
+sidecar、bundle updater 配置、每个 ZIP/DMG 的 `.sha256` 和 `artifact.json`，不访问 RustFS。
+失败重试在 target 未完整时复用该构建号；完整构建后再次执行会生成严格更高的动态构建号。
 
 打开生成的 DMG，把“macOS 更新程序示例.app”拖入
 `/Applications`，再从 Finder 启动。DMG 是首次安装介质；`.app.zip` 是 sidecar 使用的更新负载；
@@ -97,8 +98,10 @@ nexora publish --app updater-macos
 
 `nexora publish` 只从 release receipt 读取冻结的 version/build number，校验所有 required target
 的 artifact、大小和 SHA-256，不重新计算时间，也不会隐式 build。它读取并验签远端
-`latest.json`，要求待发布 identity 严格更高，计算新的 manifest sequence，最后才上传 mutable
-`latest.json`，并匿名回读所有更新 URL。dry-run 走相同预检但不写本地或远端。
+`latest.json`，要求待发布 identity 严格更高，上传版本化 ZIP/DMG 及其 `.sha256`，计算新的
+manifest sequence，最后才上传 mutable `latest.json`，并匿名回读校验旁车和所有更新 URL。
+发布端从重新校验后的摘要生成旁车，因此旧构建没有本地 `.sha256` 时仍可发布。dry-run 走相同
+预检但不写本地或远端。
 
 ## 从旧版本升级
 

@@ -51,6 +51,7 @@ nexora build --app desktop
 - DMG：首次分发与安装介质；用户把显示名称对应的 `.app` 拖入 Applications。
 - `release.json`：`dist/<app>/<channel>/release.json` 中冻结的本次 release identity 与目标列表。
 - `artifact.json`：本地 build 产物索引与 SHA-256；publish 只消费它描述的既有产物。
+- `<产物>.sha256`：ZIP 与 DMG 的标准 SHA-256 旁车文件，内容为摘要、两个空格和文件名。
 - `latest.json`：publish 最后上传的 Ed25519 签名清单；客户端只信任内置公钥验证通过的内容。
 - sidecar：独立进程，重新验签、下载、校验、暂存、等待主进程退出、事务替换、重启、健康
   确认并在失败时回滚。
@@ -181,8 +182,9 @@ icons = [
 
 `${CARGO_PKG_VERSION}` 通过 `cargo metadata --no-deps --format-version 1` 读取所选 app 的
 `package`，因此同时支持 package 自有 `version` 和 `version.workspace = true`；它不是 workspace
-根名称或 Nexora CLI 自身版本。`${BUILD_DATETIME}` 使用 UTC `yyMMddHHmmss`，并在同秒重建或
-时钟回拨时取 `max(当前 UTC 值, 上次本地构建号 + 1)`。这两个表达式都必须占满字段，不提供
+根名称或 Nexora CLI 自身版本。`${BUILD_DATETIME}` 使用构建机器本机时区的 24 小时制
+`yyMMddHHmmss`，并在同秒重建、时钟回拨、夏令时回拨或时区变化时取
+`max(当前本机时间值, 上次本地构建号 + 1)`。这两个表达式都必须占满字段，不提供
 任意环境变量插值或通用模板引擎。显式 SemVer 与正整数继续兼容。
 
 `nexora icons generate --app <key>` 只消费所选 app 的品牌路径。构建把 ICNS 复制到
@@ -304,12 +306,13 @@ version/build number、两项来源、创建 Unix 秒和本次 targets；同一�
 全部 target 的 artifact 已完整后再次显式 build，动态构建号会严格增大，旧版本化产物不会删除。
 损坏或不支持的收据会在构建前失败，不从目录名猜测身份。
 
-`nexora build` 只构建本地 `.app`、DMG、`.app.zip`、sidecar、bundle 配置、hash 和
-`artifact.json`，不访问对象存储。版本、构建号、图标、updater 配置和 sidecar 全部写入后才
-签名；ZIP 与 DMG 都来自同一个已完成资源写入并签名的 `.app`。
+`nexora build` 只构建本地 `.app`、DMG、`.app.zip`、sidecar、bundle 配置、每个 ZIP/DMG 的
+`.sha256` 和 `artifact.json`，不访问对象存储。旁车内容使用小写 SHA-256、两个空格、原始文件名
+和 LF 换行。版本、构建号、图标、updater 配置和 sidecar 全部写入后才签名；ZIP 与 DMG 都来自
+同一个已完成资源写入并签名的 `.app`。
 
 `nexora publish`（包括 yank）只从当前 release receipt 读取 version/build number，不重新计算
-UTC 时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version、当前配置和
+本机时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version、当前配置和
 required targets 一致，再逐个验证 `artifact.json` 身份、文件存在性、大小与 SHA-256。dry-run
 执行相同的本地与远端预检，但不写本地或远端；available identity 必须严格高于远端
 `(version, build_number)`。
@@ -323,8 +326,9 @@ nexora publish --app desktop
 ```
 
 publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则使用远端 sequence 加一。
-它按“版本化 ZIP/DMG → release notes → immutable sequence manifest → latest DMG aliases →
-`latest.json`”顺序上传，最后匿名回读 mutable 对象和 updater 下载 URL。对象布局为：
+它按“版本化 ZIP/DMG 及其 `.sha256` → release notes → immutable sequence manifest → latest
+DMG aliases → `latest.json`”顺序上传，最后匿名回读校验旁车、mutable 对象和 updater 下载 URL。
+发布端从重新校验后的产物摘要生成旁车内容，因此没有本地 `.sha256` 的旧构建仍可发布。对象布局为：
 
 ```text
 <prefix>/<app>/<channel>/latest.json

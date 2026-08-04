@@ -17,6 +17,9 @@
 
 ## Changed
 
+- `nexora build` again writes standard `.sha256` sidecars for final ZIP and DMG artifacts, publish
+  uploads them beside versioned releases, and `${BUILD_DATETIME}` now uses the build machine's local
+  timezone with 24-hour `yyMMddHHmmss` formatting.
 - The update protocol now uses an Ed25519 signed envelope and `build_number`; SHA-256 remains the
   payload integrity check.
 - macOS updater installation now starts an independent sidecar copied to a random temporary

@@ -9,7 +9,7 @@ use commands::{
     inspect_build_plans_for_channel, inspect_latest_dmg_aliases, inspect_prepare_release_receipt,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_selection,
     inspect_signing_key, inspect_windows_installer_sources, validate_display_name,
-    write_bundle_icon, write_bundle_info,
+    write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -535,19 +535,46 @@ fn unknown_release_expressions_are_rejected() {
 }
 
 #[test]
-fn build_datetime_is_twelve_digit_utc_and_strictly_increasing() {
-    let current = inspect_build_datetime_number(1_785_765_975, None).unwrap();
-    assert_eq!(current, 260_803_140_615);
+fn build_datetime_uses_local_24_hour_time_and_is_strictly_increasing() {
+    let current = inspect_build_datetime_number(1_785_765_975, 8 * 60 * 60, None).unwrap();
+    assert_eq!(current, 260_803_220_615);
     assert_eq!(current.to_string().len(), 12);
     assert_eq!(
-        inspect_build_datetime_number(1_785_765_975, Some(current)).unwrap(),
+        inspect_build_datetime_number(1_785_765_975, 8 * 60 * 60, Some(current)).unwrap(),
         current + 1
     );
     assert_eq!(
-        inspect_build_datetime_number(1_785_765_974, Some(current + 10)).unwrap(),
+        inspect_build_datetime_number(1_785_765_974, 8 * 60 * 60, Some(current + 10)).unwrap(),
         current + 11
     );
-    assert!(inspect_build_datetime_number(1_785_765_975, Some(u64::MAX)).is_err());
+    assert_eq!(
+        inspect_build_datetime_number(1_785_765_975, 0, None).unwrap(),
+        260_803_140_615
+    );
+    assert!(inspect_build_datetime_number(1_785_765_975, 8 * 60 * 60, Some(u64::MAX)).is_err());
+}
+
+#[test]
+fn checksum_writes_standard_sha256_sidecar_for_each_artifact_name() {
+    let fixture = Fixture::new(
+        "sha256-sidecar",
+        &app_config("one", "package-one", "应用一"),
+    );
+
+    for file_name in ["package-one.app.zip", "package-one.dmg"] {
+        let artifact = fixture.root.join(file_name);
+        fs::write(&artifact, b"nexora").unwrap();
+
+        let checksum = write_sha256_sidecar(&artifact).unwrap();
+
+        assert_eq!(checksum, fixture.root.join(format!("{file_name}.sha256")));
+        assert_eq!(
+            fs::read_to_string(checksum).unwrap(),
+            format!(
+                "6684bd7ca5b118220b0b7f9996bc71c75359fec3242a3c8ce8a53e889081bf55  {file_name}\n"
+            )
+        );
+    }
 }
 
 #[test]

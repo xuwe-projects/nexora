@@ -66,7 +66,7 @@ Rules:
 - Multiple apps may share a publish target, but `app_id`, `object_prefix` and output paths must not conflict.
 - A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
 - `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
-- `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression is UTC `yyMMddHHmmss` and uses `max(current UTC value, previous local build number + 1)` after same-second builds or clock rollback. Unknown strings, zero and overflow are rejected.
+- `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression uses the build machine's local timezone and 24-hour `yyMMddHHmmss`, then applies `max(current local value, previous local build number + 1)` after same-second builds, clock rollback, daylight-saving fallback or timezone changes. Unknown strings, zero and overflow are rejected.
 - Explicit version/build values remain compatible. Build freezes the resolved identity in `dist/<app>/<channel>/release.json`; publish and yank read this receipt and never recompute dynamic values. `manifest_sequence` is never configured locally.
 - Server, library, migration and unregistered packages do not participate.
 
@@ -107,7 +107,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 
 ## Build
 
-- `nexora build` compiles only the selected app main binary and updater sidecar, initial installer artifact, update payload, SHA-256 and `artifact.json`.
+- `nexora build` compiles only the selected app main binary and updater sidecar, initial installer artifact, update payload, standard `<artifact>.sha256` sidecars and `artifact.json`.
 - It does not access S3 and does not publish.
 - Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.
 - All targets in one build use that receipt. A matching incomplete retry reuses it. After every planned target artifact is complete, another explicit dynamic build creates a strictly higher build number and updates the current receipt without deleting old versioned artifacts. Corrupt/unsupported receipts fail before build and are never reconstructed from directory names.
@@ -129,7 +129,7 @@ Platform outputs:
 - It reads `nexora.toml`, selects apps, then reads the current release receipt. It validates the receipt against app/package/channel, selected Cargo package version, current sources/configuration and required targets; it validates each `artifact.json`, file existence, size and SHA-256 before upload.
 - Dry-run performs the same receipt, artifact and remote checks without local or remote writes. An available identity must be strictly greater than the remote `(version, build_number)`. Yank uses the receipt identity.
 - Stable publish must include all required targets.
-- Upload versioned `.app.zip`, versioned DMG, notes, immutable sequence manifest, target-specific latest DMGs, optional single-target `latest.dmg`, and finally `latest.json`; then verify mutable objects and every updater URL anonymously.
+- Upload versioned `.app.zip` and DMG files with standard `<artifact>.sha256` sidecars, notes, immutable sequence manifest, target-specific latest DMGs, optional single-target `latest.dmg`, and finally `latest.json`; then verify mutable objects, checksum sidecars and every updater URL anonymously. Publish derives checksum sidecars from the revalidated artifact digests so builds created before local sidecars were restored remain publishable.
 - Read and verify remote `latest.json` before publishing. HTTP 404 means sequence 1; otherwise use remote sequence plus one. Dry-run performs the same read without writes. Re-read before mutable uploads and reject concurrent sequence changes.
 - Use layout:
 
