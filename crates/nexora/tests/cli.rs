@@ -275,12 +275,17 @@ fn write_publish_cargo_package(directory: &TestDirectory) {
     .unwrap();
 }
 
-fn write_publish_receipt(directory: &TestDirectory) {
+fn write_publish_receipt(directory: &TestDirectory, base: &str) {
+    use sha2::{Digest as _, Sha256};
+
+    let runtime_config = b"# Nexora publish test runtime config\n";
+    fs::create_dir_all(directory.path().join("config")).unwrap();
+    fs::write(directory.path().join("config/desktop.toml"), runtime_config).unwrap();
     fs::create_dir_all(directory.path().join("dist/desktop/stable")).unwrap();
     fs::write(
         directory.path().join("dist/desktop/stable/release.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "app_key": "desktop",
             "package": "desktop",
             "channel": "stable",
@@ -289,7 +294,10 @@ fn write_publish_receipt(directory: &TestDirectory) {
             "version_source": "literal",
             "build_number_source": "literal",
             "created_at": 1,
-            "targets": ["aarch64-apple-darwin"]
+            "targets": ["aarch64-apple-darwin"],
+            "runtime_config_source": "config/desktop.toml",
+            "runtime_config_sha256": format!("{:x}", Sha256::digest(runtime_config)),
+            "updater_feed": format!("{base}/desktop-releases/e2e-test/desktop/stable/latest.json")
         }))
         .unwrap(),
     )
@@ -302,7 +310,7 @@ fn prepare_publish_app(directory: &TestDirectory, base: &str) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
 
     write_publish_cargo_package(directory);
-    write_publish_receipt(directory);
+    write_publish_receipt(directory, base);
     let release_dir = directory
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
@@ -662,13 +670,14 @@ fn help_and_version_are_available() {
     assert!(build_help.status.success());
     let build_help = String::from_utf8_lossy(&build_help.stdout);
     assert!(build_help.contains("build [OPTIONS]"));
-    assert!(build_help.contains("--app <APP>"));
+    for expected in ["--app <APP>", "--channel <CHANNEL>", "--all-channels"] {
+        assert!(build_help.contains(expected));
+    }
     for removed in [
         "--package",
         "--app-name",
         "--app-version",
         "--build-number",
-        "--channel",
         "--mode",
         "--sign",
         "--sign-identity",
@@ -683,14 +692,20 @@ fn help_and_version_are_available() {
     let publish_help = directory.run(&["help", "publish"]);
     assert!(publish_help.status.success());
     let publish_help = String::from_utf8_lossy(&publish_help.stdout);
-    for expected in ["--app <APP>", "--all", "--dry-run", "--yes"] {
+    for expected in [
+        "--app <APP>",
+        "--all",
+        "--channel <CHANNEL>",
+        "--all-channels",
+        "--dry-run",
+        "--yes",
+    ] {
         assert!(publish_help.contains(expected));
     }
     for removed in [
         "--app-version",
         "--build-number",
         "--manifest-sequence",
-        "--channel",
         "--signing-key-file",
         "--minimum-supported-version",
     ] {
@@ -734,9 +749,9 @@ fn help_and_version_are_available() {
 fn publish_dry_run_signs_latest_from_existing_artifact_metadata() {
     let directory = TestDirectory::new("publish-dry-run");
     write_publish_cargo_package(&directory);
-    write_publish_receipt(&directory);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    write_publish_receipt(&directory, format!("http://{address}").as_str());
     let server = thread::spawn(move || {
         for stream in listener.incoming().take(6) {
             let mut stream = stream.unwrap();
@@ -868,9 +883,9 @@ fn publish_uploads_zip_dmg_aliases_and_latest_in_required_order() {
 
     let directory = TestDirectory::new("publish-order");
     write_publish_cargo_package(&directory);
-    write_publish_receipt(&directory);
     let store = MockObjectStore::new();
     let base = store.base_url();
+    write_publish_receipt(&directory, &base);
     let release_dir = directory
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");

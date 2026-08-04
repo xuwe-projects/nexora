@@ -611,6 +611,7 @@ fn verify_certificate_identity(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn hex_upper(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut output, byte| {
         use std::fmt::Write as _;

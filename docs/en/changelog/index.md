@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [0.25.0: desktop Account session persistence and release verification](./0.25.0)
 - [0.24.2: Multi-channel release configuration restore](./0.24.2)
 - [0.24.1: Windows date-like build number compatibility fix](./0.24.1)
 - [0.24.0: Windows NSIS installer and update ZIP](./0.24.0)

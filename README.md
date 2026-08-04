@@ -9,10 +9,10 @@ Feature、桌面 Shell、Account 认证授权、默认用户与角色管理，�
 
 ## 安装 CLI
 
-安装已发布的 `v0.24.2`：
+安装已发布的 `v0.25.0`：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.24.2 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.25.0 nexora --locked --force --no-default-features --features cli --bin nexora
 ```
 
 在 Nexora 仓库根目录安装本地源码：
