@@ -28,13 +28,16 @@ use crate::config::{__private::ProvidesAccountClientSettings, AccountClientSecti
 mod runtime;
 
 pub use contracts::account as contract;
-pub use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache, PendingOidcLogin};
+pub use oidc::{
+    OidcClient, OidcConfig, OidcError, OidcPrompt, OidcRevocationResult, OidcSession,
+    OidcTokenCache, PendingOidcLogin,
+};
 pub(crate) use runtime::observe_authentication_in;
 pub use runtime::{
     AccountAuthenticationScope, AccountLoginFailure, AccountLoginRuntimeError,
     AccountLoginSnapshot, api_session, authentication_scope, install_authenticator,
-    is_authenticated, login_profile, login_session, login_snapshot, observe_authentication,
-    sign_out, start_login,
+    is_authenticated, login_profile, login_session, login_snapshot, login_with_other_account,
+    observe_authentication, retry_recovery, set_remember_login, sign_out, start_login,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -162,10 +165,18 @@ fn client_config_from(
 }
 
 fn oidc_config_from(settings: &Settings) -> Result<OidcConfig, OidcError> {
+    let mut scopes = settings.oidc.scopes.clone();
+    if !scopes
+        .iter()
+        .flat_map(|scope| scope.split_whitespace())
+        .any(|scope| scope == "offline_access")
+    {
+        scopes.push("offline_access".to_owned());
+    }
     OidcConfig::new(
         settings.oidc.issuer_url.trim(),
         settings.oidc.client_id.trim().to_owned(),
-        settings.oidc.scopes.iter().cloned(),
+        scopes,
         settings.oidc.redirect_uri.trim(),
     )
 }
@@ -234,8 +245,23 @@ impl AccountAuthenticator {
     ///
     /// Provider discovery、loopback listener 或 PKCE 随机值初始化失败时返回错误。
     pub fn begin_login(&self) -> Result<PendingAccountLogin, AccountAuthenticationError> {
+        self.begin_login_with_prompt(None)
+    }
+
+    /// 启动一次可选账号选择器的 OIDC 登录。
+    ///
+    /// `prompt` 为 [`OidcPrompt::SelectAccount`] 时，Provider 会展示已有账号并允许用户
+    /// 选择其他账号；传入 `None` 时与 [`Self::begin_login`] 相同。
+    ///
+    /// # Errors
+    ///
+    /// Provider discovery、loopback listener 或 PKCE 随机值初始化失败时返回错误。
+    pub fn begin_login_with_prompt(
+        &self,
+        prompt: Option<OidcPrompt>,
+    ) -> Result<PendingAccountLogin, AccountAuthenticationError> {
         Ok(PendingAccountLogin {
-            pending: self.oidc.begin_login()?,
+            pending: self.oidc.begin_login_with_prompt(prompt)?,
             account: self.account.clone(),
         })
     }
@@ -251,6 +277,19 @@ impl AccountAuthenticator {
     ) -> Result<AccountLogin, AccountAuthenticationError> {
         let session = self.oidc.refresh(tokens)?;
         validate_account_login(&self.account, session)
+    }
+
+    /// 撤销内存中的 refresh token，不影响浏览器中的 Provider SSO 会话。
+    ///
+    /// # Errors
+    ///
+    /// Provider discovery、网络请求或撤销响应失败时返回 [`AccountAuthenticationError`]；
+    /// Provider 未声明撤销端点时返回 `ProviderUnsupported` 结果而不是错误。
+    pub fn revoke_refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<OidcRevocationResult, AccountAuthenticationError> {
+        Ok(self.oidc.revoke_refresh_token(refresh_token)?)
     }
 
     /// 对已有的 OIDC 会话重新执行 Account `/me` 业务门禁。

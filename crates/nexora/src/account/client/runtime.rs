@@ -4,6 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     AnyWindowHandle, App, AppContext as _, ClipboardItem, Context, Global, SharedString,
@@ -12,6 +13,8 @@ use gpui::{
 use gpui_component::{
     IconName, Sizable as _, WindowExt as _, button::Button, notification::Notification,
 };
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use super::{
@@ -19,7 +22,10 @@ use super::{
     AccountSession, PendingAccountLogin,
 };
 use contracts::account::AccessProfileResponse;
-use oidc::OidcSession;
+use oidc::{OidcSession, OidcTokenCache, OidcUserProfile};
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use keyring::Entry;
 
 /// Account 登录门禁可以安全读取的状态快照。
 ///
@@ -33,6 +39,18 @@ pub struct AccountLoginSnapshot {
     pub authenticated: bool,
     /// 是否正在创建登录请求、等待浏览器回调或校验业务账号。
     pub busy: bool,
+    /// 是否正在从安全存储静默恢复会话。
+    pub restoring: bool,
+    /// 当前平台是否支持安全凭据持久化；Linux 始终为 `false`。
+    pub secure_storage_supported: bool,
+    /// 最近一次安全存储操作是否成功可用。
+    pub secure_storage_available: bool,
+    /// 当前偏好是否允许下次启动尝试恢复。
+    pub remember_login: bool,
+    /// 是否已经提交了“安全凭据可恢复”标记。
+    pub recovery_allowed: bool,
+    /// 当前恢复失败是否可以由用户手动重试。
+    pub can_retry_recovery: bool,
     /// 适合直接显示在登录门禁中的当前状态或最近一次错误。
     pub status: SharedString,
     /// 最近一次登录失败的结构化信息；成功或开始下一次登录后为 `None`。
@@ -67,6 +85,15 @@ struct AccountLoginState {
     busy: bool,
     status: SharedString,
     failure: Option<AccountLoginFailure>,
+    tokens: Option<OidcTokenCache>,
+    restoring: bool,
+    remember_login: bool,
+    recovery_allowed: bool,
+    secure_storage_supported: bool,
+    secure_storage_available: bool,
+    can_retry_recovery: bool,
+    refresh_scheduled: bool,
+    refresh_in_flight: bool,
     generation: u64,
     authentication_revision: u64,
     cancellation: Option<Arc<AtomicBool>>,
@@ -103,12 +130,23 @@ pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) 
         } else {
             (0, 0)
         };
+    let preferences = crate::application::shell_preferences_snapshot(cx);
+    let secure_storage_supported = secure_storage_supported();
     let state = AccountLoginState {
         authenticator,
         login: None,
+        tokens: None,
         busy: false,
+        restoring: false,
         status: "未登录".into(),
         failure: None,
+        remember_login: secure_storage_supported && preferences.account.remember_login,
+        recovery_allowed: secure_storage_supported && preferences.account.recovery_allowed,
+        secure_storage_supported,
+        secure_storage_available: secure_storage_supported,
+        can_retry_recovery: false,
+        refresh_scheduled: false,
+        refresh_in_flight: false,
         generation,
         authentication_revision,
         cancellation: None,
@@ -120,6 +158,7 @@ pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) 
         cx.set_global(state);
     }
     refresh_login_windows(cx);
+    start_recovery(cx);
 }
 
 /// 返回当前 Account 登录状态的无敏感信息快照。
@@ -129,6 +168,12 @@ pub fn login_snapshot(cx: &App) -> AccountLoginSnapshot {
             configured: false,
             authenticated: false,
             busy: false,
+            restoring: false,
+            secure_storage_supported: secure_storage_supported(),
+            secure_storage_available: false,
+            remember_login: secure_storage_supported(),
+            recovery_allowed: false,
+            can_retry_recovery: false,
             status: "未配置 Account 登录".into(),
             failure: None,
         };
@@ -139,6 +184,12 @@ pub fn login_snapshot(cx: &App) -> AccountLoginSnapshot {
         configured: true,
         authenticated: state.login.is_some(),
         busy: state.busy,
+        restoring: state.restoring,
+        secure_storage_supported: state.secure_storage_supported,
+        secure_storage_available: state.secure_storage_available,
+        remember_login: state.remember_login,
+        recovery_allowed: state.recovery_allowed,
+        can_retry_recovery: state.can_retry_recovery,
         status: state.status.clone(),
         failure: state.failure.clone(),
     }
@@ -231,7 +282,9 @@ pub fn start_login(cx: &mut App) -> Result<(), AccountLoginRuntimeError> {
         (state.authenticator.clone(), state.generation)
     };
     refresh_login_windows(cx);
-    let begin_task = cx.background_spawn(async move { authenticator.begin_login() });
+    let begin_task = cx.background_spawn(async move {
+        authenticator.begin_login_with_prompt(Some(oidc::OidcPrompt::SelectAccount))
+    });
     cx.spawn(async move |cx| {
         let result = begin_task.await;
         cx.update(|cx| match result {
@@ -248,24 +301,125 @@ pub fn start_login(cx: &mut App) -> Result<(), AccountLoginRuntimeError> {
 
 /// 清除当前进程中的 Account 会话并重新显示登录门禁。
 ///
-/// 当前实现不会持久化 refresh token，因此退出只需要释放内存中的 OIDC 与业务资料。
-/// 尚未完成的浏览器登录结果会被作废，不能在退出后重新写回会话。
+/// 退出会先作废当前 generation 和界面状态，再在后台禁止恢复、删除安全凭据并尽力
+/// 撤销内存中的 refresh token；不会调用 Provider 全局退出或清除浏览器 SSO Cookie。
 pub fn sign_out(cx: &mut App) {
     if !cx.has_global::<AccountLoginState>() {
         return;
     }
-    let state = cx.global_mut::<AccountLoginState>();
-    if let Some(cancellation) = state.cancellation.take() {
-        cancellation.store(true, Ordering::Release);
-    }
-    state.generation = state.generation.wrapping_add(1);
-    state.authentication_revision = state.authentication_revision.wrapping_add(1);
-    state.login = None;
-    state.busy = false;
-    state.status = "已退出登录".into();
-    state.failure = None;
-    state.login_window = None;
+    let (authenticator, refresh_token) = {
+        let state = cx.global_mut::<AccountLoginState>();
+        let refresh_token = state
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.refresh_token.clone());
+        if let Some(cancellation) = state.cancellation.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        state.generation = state.generation.wrapping_add(1);
+        state.authentication_revision = state.authentication_revision.wrapping_add(1);
+        state.login = None;
+        state.tokens = None;
+        state.busy = false;
+        state.restoring = false;
+        state.refresh_scheduled = false;
+        state.refresh_in_flight = false;
+        state.recovery_allowed = false;
+        state.can_retry_recovery = false;
+        state.status = "已退出登录".into();
+        state.failure = None;
+        state.login_window = None;
+        (state.authenticator.clone(), refresh_token)
+    };
+    crate::application::update_shell_preferences(cx, |preferences| {
+        preferences.account.recovery_allowed = false;
+    });
+    let preferences_flush = crate::application::shell_preferences_flush_signal(cx);
     refresh_login_windows(cx);
+
+    let key = credential_key(&authenticator);
+    let cleanup = cx.background_spawn(async move {
+        if let Some(receiver) = preferences_flush {
+            _ = receiver.recv();
+        }
+        let _ = secure_delete(key.as_str());
+        if let Some(refresh_token) = refresh_token {
+            let _ = authenticator.revoke_refresh_token(refresh_token.as_str());
+        }
+    });
+    cx.spawn(async move |_cx| {
+        cleanup.await;
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="退出清理属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+/// 更新“保持登录状态”偏好。
+///
+/// Linux 上该调用会保持未选中且不会接入任何凭据存储。取消勾选会立即禁止恢复并在
+/// 后台删除已有安全凭据。
+pub fn set_remember_login(remember_login: bool, cx: &mut App) {
+    let Some(state) = cx.try_global::<AccountLoginState>() else {
+        return;
+    };
+    let remember_login = state.secure_storage_supported && remember_login;
+    let authenticator = {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.remember_login = remember_login;
+        if !remember_login {
+            state.recovery_allowed = false;
+        }
+        state.authenticator.clone()
+    };
+    crate::application::update_shell_preferences(cx, |preferences| {
+        preferences.account.remember_login = remember_login;
+        if !remember_login {
+            preferences.account.recovery_allowed = false;
+        }
+    });
+    if !remember_login {
+        let preferences_flush = crate::application::shell_preferences_flush_signal(cx);
+        let key = credential_key(&authenticator);
+        cx.background_spawn(async move {
+            if let Some(receiver) = preferences_flush {
+                _ = receiver.recv();
+            }
+            let _ = secure_delete(key.as_str());
+        })
+        // nexora-lint: allow(nexora::detached_lifecycle) reason="删除安全凭据必须在偏好写入完成后于后台执行，不能阻塞 GPUI 事件循环"
+        .detach();
+    }
+    refresh_login_windows(cx);
+}
+
+/// 手动重试最近一次静默恢复，不会自动打开浏览器。
+///
+/// # Errors
+///
+/// 当 Account 认证器尚未安装时返回 [`AccountLoginRuntimeError::NotInstalled`]；已有登录
+/// 或恢复任务运行时返回 [`AccountLoginRuntimeError::LoginInProgress`]。恢复请求本身的
+/// OIDC 错误会通过登录状态暴露，不会由本函数同步返回。
+pub fn retry_recovery(cx: &mut App) -> Result<(), AccountLoginRuntimeError> {
+    if !cx.has_global::<AccountLoginState>() {
+        return Err(AccountLoginRuntimeError::NotInstalled);
+    }
+    if cx.global::<AccountLoginState>().busy {
+        return Err(AccountLoginRuntimeError::LoginInProgress);
+    }
+    start_recovery(cx);
+    Ok(())
+}
+
+/// 放弃当前恢复许可并以账号选择模式重新打开交互式登录。
+///
+/// # Errors
+///
+/// 当 Account 认证器尚未安装或已有登录/恢复任务运行时，返回对应的
+/// [`AccountLoginRuntimeError`]；浏览器登录过程及其 OIDC 错误会通过登录状态异步暴露。
+pub fn login_with_other_account(cx: &mut App) -> Result<(), AccountLoginRuntimeError> {
+    invalidate_current_attempt(cx);
+    set_recovery_disabled(cx);
+    start_login(cx)
 }
 
 /// 观察当前 Entity 所属应用中的 Account 认证作用域变化。
@@ -341,14 +495,19 @@ fn complete_login(
     }
     match result {
         Ok(login) => {
+            let tokens = login.session().tokens().clone();
             let state = cx.global_mut::<AccountLoginState>();
             state.authentication_revision = state.authentication_revision.wrapping_add(1);
             state.busy = false;
+            state.restoring = false;
             state.cancellation = None;
             state.login_window = None;
+            state.can_retry_recovery = false;
+            state.tokens = Some(tokens.clone());
             state.login = Some(login);
             state.status = "登录成功".into();
             state.failure = None;
+            persist_session(tokens, generation, true, cx);
         }
         Err(error) => {
             let failure = login_failure(&error);
@@ -356,9 +515,12 @@ fn complete_login(
             let state = cx.global_mut::<AccountLoginState>();
             state.authentication_revision = state.authentication_revision.wrapping_add(1);
             state.busy = false;
+            state.restoring = false;
             state.cancellation = None;
             state.login_window = None;
             state.login = None;
+            state.tokens = None;
+            state.can_retry_recovery = false;
             state.status = if displayed {
                 "未登录".into()
             } else {
@@ -385,6 +547,546 @@ fn update_status(
     state.status = status.into();
     refresh_login_windows(cx);
     true
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredCredential {
+    version: u8,
+    refresh_token: String,
+    subject: String,
+    profile: OidcUserProfile,
+}
+
+enum SecureStorageError {
+    Unavailable,
+    Corrupt,
+}
+
+fn secure_storage_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
+fn credential_key(authenticator: &AccountAuthenticator) -> String {
+    let config = authenticator.oidc.config();
+    let material = format!("{}\0{}", config.issuer_url(), config.client_id());
+    let digest = Sha256::digest(material.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn stored_credential(tokens: &OidcTokenCache) -> Option<StoredCredential> {
+    Some(StoredCredential {
+        version: 1,
+        refresh_token: tokens
+            .refresh_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())?,
+        subject: tokens.profile.as_ref()?.subject.clone(),
+        profile: tokens.profile.clone()?,
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn secure_load(key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
+    let entry =
+        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+    let value = match entry.get_password() {
+        Ok(value) => value,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => return Err(SecureStorageError::Unavailable),
+    };
+    let credential = serde_json::from_str::<StoredCredential>(value.as_str())
+        .map_err(|_| SecureStorageError::Corrupt)?;
+    if credential.version != 1
+        || credential.refresh_token.trim().is_empty()
+        || credential.subject.trim().is_empty()
+        || credential.subject != credential.profile.subject
+    {
+        return Err(SecureStorageError::Corrupt);
+    }
+    Ok(Some(credential))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn secure_load(_key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
+    Ok(None)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn secure_save(key: &str, credential: &StoredCredential) -> Result<(), SecureStorageError> {
+    let value = serde_json::to_string(credential).map_err(|_| SecureStorageError::Unavailable)?;
+    let entry =
+        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+    entry
+        .set_password(value.as_str())
+        .map_err(|_| SecureStorageError::Unavailable)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn secure_save(_key: &str, _credential: &StoredCredential) -> Result<(), SecureStorageError> {
+    Err(SecureStorageError::Unavailable)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn secure_delete(key: &str) -> Result<(), SecureStorageError> {
+    let entry =
+        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err(SecureStorageError::Unavailable),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn secure_delete(_key: &str) -> Result<(), SecureStorageError> {
+    Ok(())
+}
+
+fn set_recovery_disabled(cx: &mut App) {
+    if !cx.has_global::<AccountLoginState>() {
+        return;
+    }
+    let authenticator = {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.recovery_allowed = false;
+        state.can_retry_recovery = false;
+        state.authenticator.clone()
+    };
+    crate::application::update_shell_preferences(cx, |preferences| {
+        preferences.account.recovery_allowed = false;
+    });
+    let preferences_flush = crate::application::shell_preferences_flush_signal(cx);
+    let key = credential_key(&authenticator);
+    cx.background_spawn(async move {
+        if let Some(receiver) = preferences_flush {
+            _ = receiver.recv();
+        }
+        let _ = secure_delete(key.as_str());
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="删除安全凭据必须在偏好写入完成后于后台执行，不能阻塞 GPUI 事件循环"
+    .detach();
+}
+
+fn invalidate_current_attempt(cx: &mut App) {
+    if let Some(state) = cx.try_global::<AccountLoginState>()
+        && let Some(cancellation) = state.cancellation.as_ref()
+    {
+        cancellation.store(true, Ordering::Release);
+    }
+    let state = cx.global_mut::<AccountLoginState>();
+    state.generation = state.generation.wrapping_add(1);
+    state.cancellation = None;
+    state.busy = false;
+    state.restoring = false;
+    state.refresh_scheduled = false;
+    state.refresh_in_flight = false;
+}
+
+fn start_recovery(cx: &mut App) {
+    let Some(state) = cx.try_global::<AccountLoginState>() else {
+        return;
+    };
+    if state
+        .tokens
+        .as_ref()
+        .and_then(|tokens| tokens.refresh_token.as_ref())
+        .is_some()
+        && (!state.recovery_allowed || !state.secure_storage_supported)
+    {
+        start_memory_recovery(cx);
+        return;
+    }
+    if !state.secure_storage_supported || !state.remember_login || !state.recovery_allowed {
+        return;
+    }
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let (authenticator, generation) = {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.generation = state.generation.wrapping_add(1);
+        state.busy = true;
+        state.restoring = true;
+        state.can_retry_recovery = false;
+        state.status = "正在恢复登录状态…".into();
+        state.failure = None;
+        state.cancellation = Some(cancellation);
+        (state.authenticator.clone(), state.generation)
+    };
+    refresh_login_windows(cx);
+    let key = credential_key(&authenticator);
+    let load = cx.background_spawn(async move { secure_load(key.as_str()) });
+    cx.spawn(async move |cx| {
+        let result = load.await;
+        cx.update(|cx| finish_recovery_load(result, authenticator, generation, cx));
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="静默恢复属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn start_memory_recovery(cx: &mut App) {
+    let (authenticator, tokens, generation) = {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.generation = state.generation.wrapping_add(1);
+        state.busy = true;
+        state.restoring = true;
+        state.refresh_in_flight = true;
+        state.can_retry_recovery = false;
+        state.status = "正在恢复登录状态…".into();
+        state.failure = None;
+        (
+            state.authenticator.clone(),
+            state
+                .tokens
+                .clone()
+                .expect("memory recovery requires tokens"),
+            state.generation,
+        )
+    };
+    refresh_login_windows(cx);
+    let refresh_tokens = tokens.clone();
+    let refresh = cx.background_spawn(async move { authenticator.refresh(&refresh_tokens) });
+    cx.spawn(async move |cx| {
+        let result = refresh.await;
+        cx.update(|cx| finish_refresh(result, generation, cx));
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="内存 refresh token 恢复属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn finish_recovery_load(
+    result: Result<Option<StoredCredential>, SecureStorageError>,
+    authenticator: AccountAuthenticator,
+    generation: u64,
+    cx: &mut App,
+) {
+    if !attempt_is_current(generation, cx) {
+        return;
+    }
+    let credential = match result {
+        Ok(credential) => credential,
+        Err(SecureStorageError::Corrupt) => {
+            set_recovery_failure(generation, "无法读取保存的登录状态，请重新登录", false, cx);
+            set_recovery_disabled(cx);
+            return;
+        }
+        Err(SecureStorageError::Unavailable) => {
+            set_recovery_failure(generation, "暂时无法访问安全存储，请稍后重试", true, cx);
+            return;
+        }
+    };
+    let Some(credential) = credential else {
+        crate::application::update_shell_preferences(cx, |preferences| {
+            preferences.account.recovery_allowed = false;
+        });
+        let state = cx.global_mut::<AccountLoginState>();
+        state.recovery_allowed = false;
+        state.busy = false;
+        state.restoring = false;
+        state.cancellation = None;
+        state.status = "未登录".into();
+        refresh_login_windows(cx);
+        return;
+    };
+    let tokens = OidcTokenCache {
+        refresh_token: Some(credential.refresh_token),
+        profile: Some(credential.profile),
+        ..Default::default()
+    };
+    let refresh_tokens = tokens.clone();
+    let refresh = cx.background_spawn(async move { authenticator.refresh(&refresh_tokens) });
+    cx.spawn(async move |cx| {
+        let result = refresh.await;
+        cx.update(|cx| finish_recovery(result, tokens, generation, cx));
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="静默恢复刷新属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn finish_recovery(
+    result: Result<AccountLogin, AccountAuthenticationError>,
+    previous_tokens: OidcTokenCache,
+    generation: u64,
+    cx: &mut App,
+) {
+    if !attempt_is_current(generation, cx) {
+        return;
+    }
+    match result {
+        Ok(login) => {
+            let tokens = login.session().tokens().clone();
+            let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
+            state.busy = false;
+            state.restoring = false;
+            state.cancellation = None;
+            state.login = Some(login);
+            state.tokens = Some(tokens.clone());
+            state.status = "登录状态已恢复".into();
+            state.failure = None;
+            persist_session(tokens, generation, true, cx);
+        }
+        Err(error) if is_permanent_failure(&error) => {
+            set_recovery_disabled(cx);
+            let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
+            state.busy = false;
+            state.restoring = false;
+            state.cancellation = None;
+            state.login = None;
+            state.tokens = None;
+            state.can_retry_recovery = false;
+            state.status = "保存的登录状态已失效，请重新登录".into();
+            state.failure = Some(AccountLoginFailure {
+                message: "保存的登录状态已失效，请重新登录".into(),
+                request_id: None,
+            });
+            refresh_login_windows(cx);
+        }
+        Err(_) => {
+            let state = cx.global_mut::<AccountLoginState>();
+            state.busy = false;
+            state.restoring = false;
+            state.cancellation = None;
+            state.tokens = Some(previous_tokens);
+            state.can_retry_recovery = true;
+            state.status = "暂时无法恢复登录状态，请重试".into();
+            state.failure = Some(AccountLoginFailure {
+                message: "暂时无法恢复登录状态，请重试".into(),
+                request_id: None,
+            });
+            refresh_login_windows(cx);
+        }
+    }
+}
+
+fn set_recovery_failure(generation: u64, message: &str, retryable: bool, cx: &mut App) {
+    if !attempt_is_current(generation, cx) {
+        return;
+    }
+    let state = cx.global_mut::<AccountLoginState>();
+    state.busy = false;
+    state.restoring = false;
+    state.cancellation = None;
+    state.can_retry_recovery = retryable;
+    state.status = message.into();
+    state.failure = Some(AccountLoginFailure {
+        message: message.into(),
+        request_id: None,
+    });
+    refresh_login_windows(cx);
+}
+
+fn is_permanent_failure(error: &AccountAuthenticationError) -> bool {
+    match error {
+        AccountAuthenticationError::Oidc(error) => {
+            error.is_refresh_token_rejected() || matches!(error, oidc::OidcError::SubjectMismatch)
+        }
+        AccountAuthenticationError::Account(AccountClientError::Rejected { code, .. }) => {
+            matches!(
+                code.as_str(),
+                "account_suspended" | "account_not_registered"
+            )
+        }
+        AccountAuthenticationError::Account(_) => false,
+    }
+}
+
+fn persist_session(tokens: OidcTokenCache, generation: u64, force: bool, cx: &mut App) {
+    if tokens.refresh_token.is_some() {
+        schedule_refresh(generation, tokens.expires_at, cx);
+    }
+    let Some(state) = cx.try_global::<AccountLoginState>() else {
+        return;
+    };
+    if !state.secure_storage_supported || !state.remember_login {
+        return;
+    }
+    if !force && state.recovery_allowed {
+        return;
+    }
+    let Some(credential) = stored_credential(&tokens) else {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.recovery_allowed = false;
+        state.status = "当前账号未提供可恢复凭据".into();
+        crate::application::update_shell_preferences(cx, |preferences| {
+            preferences.account.recovery_allowed = false;
+        });
+        refresh_login_windows(cx);
+        return;
+    };
+    let authenticator = state.authenticator.clone();
+    let key = credential_key(&authenticator);
+    {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.recovery_allowed = false;
+    }
+    crate::application::update_shell_preferences(cx, |preferences| {
+        preferences.account.recovery_allowed = false;
+    });
+    let preferences_flush = crate::application::shell_preferences_flush_signal(cx);
+    let save = cx.background_spawn(async move {
+        if let Some(receiver) = preferences_flush {
+            _ = receiver.recv();
+        }
+        secure_save(key.as_str(), &credential)
+    });
+    cx.spawn(async move |cx| {
+        let result = save.await;
+        cx.update(|cx| {
+            if !attempt_is_current(generation, cx) {
+                return;
+            }
+            match result {
+                Ok(()) => {
+                    let state = cx.global_mut::<AccountLoginState>();
+                    state.recovery_allowed = true;
+                    state.secure_storage_available = true;
+                    crate::application::update_shell_preferences(cx, |preferences| {
+                        preferences.account.recovery_allowed = true;
+                    });
+                }
+                Err(_) => {
+                    let state = cx.global_mut::<AccountLoginState>();
+                    state.secure_storage_available = false;
+                    state.status = "保持登录状态失败，当前会话仍可继续使用".into();
+                    state.failure = Some(AccountLoginFailure {
+                        message: "保持登录状态失败，当前会话仍可继续使用".into(),
+                        request_id: None,
+                    });
+                }
+            }
+            refresh_login_windows(cx);
+        });
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="安全凭据写入属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn schedule_refresh(generation: u64, expires_at: Option<u64>, cx: &mut App) {
+    let Some(expires_at) = expires_at else {
+        return;
+    };
+    if !cx.has_global::<AccountLoginState>() {
+        return;
+    }
+    let state = cx.global_mut::<AccountLoginState>();
+    if state.refresh_scheduled || state.refresh_in_flight {
+        return;
+    }
+    state.refresh_scheduled = true;
+    let delay_seconds = expires_at
+        .saturating_sub(unix_seconds().saturating_add(60))
+        .max(5);
+    let timer = cx
+        .background_executor()
+        .timer(Duration::from_secs(delay_seconds));
+    cx.spawn(async move |cx| {
+        timer.await;
+        cx.update(|cx| begin_refresh(generation, cx));
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="自动续期计时器属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn begin_refresh(generation: u64, cx: &mut App) {
+    if !attempt_is_current(generation, cx) {
+        return;
+    }
+    let (authenticator, tokens) = {
+        let state = cx.global_mut::<AccountLoginState>();
+        state.refresh_scheduled = false;
+        if state.refresh_in_flight {
+            return;
+        }
+        let Some(tokens) = state.tokens.clone() else {
+            return;
+        };
+        state.refresh_in_flight = true;
+        (state.authenticator.clone(), tokens)
+    };
+    let refresh = cx.background_spawn(async move { authenticator.refresh(&tokens) });
+    cx.spawn(async move |cx| {
+        let result = refresh.await;
+        cx.update(|cx| finish_refresh(result, generation, cx));
+    })
+    // nexora-lint: allow(nexora::detached_lifecycle) reason="自动续期请求属于应用级 Account Global 生命周期"
+    .detach();
+}
+
+fn finish_refresh(
+    result: Result<AccountLogin, AccountAuthenticationError>,
+    generation: u64,
+    cx: &mut App,
+) {
+    if !attempt_is_current(generation, cx) {
+        return;
+    }
+    let previous_expired = cx
+        .global::<AccountLoginState>()
+        .tokens
+        .as_ref()
+        .is_some_and(OidcTokenCache::is_expired);
+    cx.global_mut::<AccountLoginState>().refresh_in_flight = false;
+    match result {
+        Ok(login) => {
+            let tokens = login.session().tokens().clone();
+            let rotated = cx
+                .global::<AccountLoginState>()
+                .tokens
+                .as_ref()
+                .and_then(|old| old.refresh_token.as_ref())
+                != tokens.refresh_token.as_ref();
+            let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
+            state.login = Some(login);
+            state.tokens = Some(tokens.clone());
+            state.busy = false;
+            state.restoring = false;
+            state.status = "登录状态已更新".into();
+            state.failure = None;
+            persist_session(tokens, generation, rotated, cx);
+        }
+        Err(error) if is_permanent_failure(&error) => {
+            set_recovery_disabled(cx);
+            let state = cx.global_mut::<AccountLoginState>();
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
+            state.login = None;
+            state.tokens = None;
+            state.status = "登录状态已失效，请重新登录".into();
+            state.failure = Some(AccountLoginFailure {
+                message: "登录状态已失效，请重新登录".into(),
+                request_id: None,
+            });
+            refresh_login_windows(cx);
+        }
+        Err(error) => {
+            if previous_expired {
+                let state = cx.global_mut::<AccountLoginState>();
+                state.login = None;
+                state.status = "登录已过期，请重试恢复".into();
+                state.failure = Some(login_failure(&error));
+                state.can_retry_recovery = true;
+            } else {
+                let state = cx.global_mut::<AccountLoginState>();
+                state.status = "登录状态暂时无法更新，将自动重试".into();
+                state.failure = Some(login_failure(&error));
+            }
+            schedule_refresh(
+                generation,
+                cx.global::<AccountLoginState>()
+                    .tokens
+                    .as_ref()
+                    .and_then(|t| t.expires_at),
+                cx,
+            );
+            refresh_login_windows(cx);
+        }
+    }
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 struct LoginFailureNotification;

@@ -17,8 +17,8 @@ pub use crate::account::client::{
     ApiSettings, OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache,
     PendingAccountLogin, PendingOidcLogin, Settings as AccountSettings, api_session,
     authentication_scope, client_config, contract, install_authenticator, is_authenticated,
-    login_profile, login_session, login_snapshot, observe_authentication, oidc_config, sign_out,
-    start_login,
+    login_profile, login_session, login_snapshot, login_with_other_account, observe_authentication,
+    oidc_config, retry_recovery, set_remember_login, sign_out, start_login,
 };
 pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
 pub use ::updater::{

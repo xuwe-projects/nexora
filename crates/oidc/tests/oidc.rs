@@ -11,7 +11,10 @@ use jsonwebtoken::{
     Algorithm, EncodingKey, Header, encode,
     jwk::{Jwk, PublicKeyUse},
 };
-use oidc::{OidcClient, OidcConfig, OidcError, OidcSession, OidcTokenCache, OidcUserProfile};
+use oidc::{
+    OidcClient, OidcConfig, OidcError, OidcPrompt, OidcRevocationResult, OidcSession,
+    OidcTokenCache, OidcUserProfile,
+};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -79,6 +82,95 @@ fn config_and_cached_session_keep_existing_behavior() {
     };
     let session = OidcSession::from_token_cache(tokens).unwrap();
     assert_eq!(session.profile().display_name(), "Ada");
+}
+
+#[test]
+fn prompt_select_account_is_encoded_and_legacy_login_has_no_prompt() {
+    let (issuer, server) = spawn_provider(2, |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| match request.path.as_str() {
+            "/.well-known/openid-configuration" => {
+                HttpResponse::json(discovery_document(&issuer, false))
+            }
+            path => panic!("unexpected provider request: {path}"),
+        }
+    });
+    let client = client(&issuer);
+    let selected = client
+        .begin_login_with_prompt(Some(OidcPrompt::SelectAccount))
+        .unwrap();
+    let selected_parameters = query_parameters(&Url::parse(selected.authorization_url()).unwrap());
+    assert_eq!(
+        selected_parameters.get("prompt").map(String::as_str),
+        Some("select_account")
+    );
+    drop(selected);
+
+    let legacy = client.begin_login().unwrap();
+    let legacy_parameters = query_parameters(&Url::parse(legacy.authorization_url()).unwrap());
+    assert!(!legacy_parameters.contains_key("prompt"));
+    drop(legacy);
+    server.join().unwrap();
+}
+
+#[test]
+fn refresh_token_revocation_uses_public_client_form_without_secret() {
+    let requests = Arc::new(Mutex::new(Vec::<HttpRequest>::new()));
+    let server_requests = Arc::clone(&requests);
+    let (issuer, server) = spawn_provider(2, move |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| {
+            server_requests.lock().unwrap().push(request.clone());
+            match request.path.as_str() {
+                "/.well-known/openid-configuration" => {
+                    let mut document = discovery_document(&issuer, false);
+                    document["revocation_endpoint"] = json!(format!("{issuer}/revoke"));
+                    HttpResponse::json(document)
+                }
+                "/revoke" => HttpResponse::json(json!({})),
+                path => panic!("unexpected provider request: {path}"),
+            }
+        }
+    });
+    let result = client(&issuer)
+        .revoke_refresh_token("refresh-secret")
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(result, OidcRevocationResult::Revoked);
+    let requests = requests.lock().unwrap();
+    let form = url::form_urlencoded::parse(requests[1].body.as_bytes())
+        .into_owned()
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        form.get("token").map(String::as_str),
+        Some("refresh-secret")
+    );
+    assert_eq!(
+        form.get("token_type_hint").map(String::as_str),
+        Some("refresh_token")
+    );
+    assert_eq!(form.get("client_id").map(String::as_str), Some(CLIENT_ID));
+    assert!(!form.contains_key("client_secret"));
+}
+
+#[test]
+fn missing_revocation_endpoint_is_a_non_fatal_provider_result() {
+    let (issuer, server) = spawn_provider(1, |issuer| {
+        let issuer = issuer.to_owned();
+        move |request| match request.path.as_str() {
+            "/.well-known/openid-configuration" => {
+                HttpResponse::json(discovery_document(&issuer, false))
+            }
+            path => panic!("unexpected provider request: {path}"),
+        }
+    });
+
+    let result = client(&issuer)
+        .revoke_refresh_token("refresh-token")
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(result, OidcRevocationResult::ProviderUnsupported);
 }
 
 #[test]

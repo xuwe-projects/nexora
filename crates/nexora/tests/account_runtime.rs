@@ -50,6 +50,15 @@ fn test_authenticator() -> AccountAuthenticator {
         },
     };
     let config = client_config(&settings, &settings.api).expect("测试 Account 客户端配置应有效");
+    assert_eq!(
+        config
+            .oidc()
+            .scopes()
+            .iter()
+            .filter(|scope| scope.as_str() == "offline_access")
+            .count(),
+        1
+    );
     AccountAuthenticator::new(&config).expect("测试认证协调器应能离线构造")
 }
 

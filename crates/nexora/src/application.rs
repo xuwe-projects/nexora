@@ -6,7 +6,7 @@
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
-    sync::mpsc::{self, Sender},
+    sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -516,8 +516,32 @@ pub struct ShellPreferences {
     pub appearance: ShellAppearancePreferences,
     /// 主窗口最后一次有效的显示器和窗口边界记录。
     pub main_window: Option<MainWindowPlacement>,
+    /// Account 登录偏好与恢复许可；其中不包含任何 token 或安全存储内容。
+    pub account: AccountPreferences,
     #[serde(skip_serializing)]
     startup_display_uuid: Option<String>,
+}
+
+/// Shell 偏好文件中的 Account 非敏感登录选项。
+///
+/// `remember_login` 只记录用户是否希望下次启动尝试恢复；`recovery_allowed` 是安全存储
+/// 写入完成后的提交标记。两者都不包含 refresh token、access token 或完整认证响应。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AccountPreferences {
+    /// Windows/macOS 上登录成功后是否尝试保存恢复凭据，默认开启。
+    pub remember_login: bool,
+    /// 只有安全凭据已成功保存时才为 `true`，默认关闭。
+    pub recovery_allowed: bool,
+}
+
+impl Default for AccountPreferences {
+    fn default() -> Self {
+        Self {
+            remember_login: true,
+            recovery_allowed: false,
+        }
+    }
 }
 
 /// Shell 持久化的外观偏好。
@@ -793,6 +817,12 @@ pub(crate) fn shell_preferences_snapshot(cx: &App) -> ShellPreferences {
         .unwrap_or_default()
 }
 
+pub(crate) fn shell_preferences_flush_signal(cx: &App) -> Option<Receiver<()>> {
+    cx.try_global::<ShellPreferencesRuntime>()
+        .and_then(|runtime| runtime.writer.as_ref())
+        .and_then(PreferencesWriter::flush_signal)
+}
+
 pub(crate) fn persist_current_appearance_preferences(cx: &mut App) {
     let appearance = ShellAppearancePreferences::from_theme(cx);
     update_shell_preferences(cx, |preferences| {
@@ -837,35 +867,16 @@ impl PreferencesWriter {
             .name("nexora-shell-preferences".to_owned())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
-                    let mut preferences = match command {
-                        PreferencesWriteCommand::Persist(preferences) => preferences,
-                        PreferencesWriteCommand::Flush(ack) => {
-                            _ = ack.send(());
-                            continue;
-                        }
-                        PreferencesWriteCommand::Shutdown => break,
-                    };
-                    let mut flush_acks = Vec::new();
-                    let mut shutdown = false;
-                    while let Ok(command) = receiver.try_recv() {
-                        match command {
-                            PreferencesWriteCommand::Persist(latest) => preferences = latest,
-                            PreferencesWriteCommand::Flush(ack) => flush_acks.push(ack),
-                            PreferencesWriteCommand::Shutdown => {
-                                shutdown = true;
-                                break;
+                    match command {
+                        PreferencesWriteCommand::Persist(preferences) => {
+                            if let Err(error) = store.save(&preferences) {
+                                tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
                             }
                         }
-                    }
-
-                    if let Err(error) = store.save(&preferences) {
-                        tracing::warn!(error = %error, "无法保存 Shell 用户偏好");
-                    }
-                    for ack in flush_acks {
-                        _ = ack.send(());
-                    }
-                    if shutdown {
-                        break;
+                        PreferencesWriteCommand::Flush(ack) => {
+                            _ = ack.send(());
+                        }
+                        PreferencesWriteCommand::Shutdown => break,
                     }
                 }
             })?;
@@ -891,6 +902,14 @@ impl PreferencesWriter {
         {
             _ = receiver.recv();
         }
+    }
+
+    fn flush_signal(&self) -> Option<Receiver<()>> {
+        let (sender, receiver) = mpsc::channel();
+        self.sender
+            .send(PreferencesWriteCommand::Flush(sender))
+            .ok()
+            .map(|_| receiver)
     }
 }
 

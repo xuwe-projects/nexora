@@ -46,6 +46,18 @@ impl Render for DefaultLoginFeature {
         )
         .configured(snapshot.configured)
         .busy(snapshot.busy)
+        .remember_login(snapshot.remember_login)
+        .remember_login_enabled(snapshot.secure_storage_supported)
+        .on_remember_login(|checked, _, cx| {
+            crate::account::client::set_remember_login(*checked, cx);
+        })
+        .recovery_actions(snapshot.can_retry_recovery)
+        .on_retry_recovery(|_, _, cx| {
+            _ = crate::account::client::retry_recovery(cx);
+        })
+        .on_login_other_account(|_, _, cx| {
+            _ = crate::account::client::login_with_other_account(cx);
+        })
         .status(status)
         .login_label(format!("使用 {} 账户登录", branding.application_name))
         .when_some(branding.logo, |gate, logo| gate.logo(logo.image()))

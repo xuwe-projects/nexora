@@ -32,6 +32,33 @@ nexora::desktop::install_authenticator(authenticator, cx);
 不需要额外的 `account_enabled` 开关；没有安装认证器的普通桌面应用不会创建登录门禁，也
 不会注入 `/users` 与 `/roles` 默认页面。
 
+## 会话保持与自动续期
+
+桌面 Account 配置会确保 OIDC scope 包含 `offline_access`，但不会重复添加调用方已经提供的
+scope。默认登录页在 Windows/macOS 首次显示“保持登录状态”且默认选中；该选项只写入
+`workspace.toml` 中的非敏感偏好。Linux 上复选框固定未选中并禁用，不接入 Secret Service，
+也不会把 token 写入文件。
+
+勾选后，登录成功会先把仅含 refresh token、OIDC subject、最小 profile 和版本号的记录写入
+macOS Keychain 或 Windows Credential Manager，成功后才提交 `recovery_allowed`。重启后只有
+偏好允许且安全存储记录存在时才会静默刷新，并再次调用 Account `/me`；恢复期间不会打开浏览器。
+Provider 轮换 refresh token 时会先撤销旧的恢复许可，再保存新记录。安全存储暂时失败不影响
+当前进程登录，后续刷新会再次尝试；Access Token 接近过期时运行时会在后台自动续期，旧任务由
+generation 丢弃，同一账号的资料刷新不会销毁业务 Feature 或 Window。
+
+网络、Provider 5xx 和 Account 5xx 等临时错误会保留仍可能有效的 refresh token 并退避重试；
+`invalid_grant`、subject 不一致、`account_suspended` 和 `account_not_registered` 会禁止恢复、
+清理本地凭据并返回登录门禁。默认登录请求使用 `prompt=select_account`，因此可以选择其他
+浏览器账号。登录页提供“重试恢复”和“使用其他账号登录”，后者不会执行 Provider 全局退出。
+
+## 退出与撤销
+
+`sign_out()` 先立即清理内存会话和业务门禁，再后台写入 `recovery_allowed=false`、删除安全
+凭据并尽力调用 Provider 的 `revocation_endpoint` 撤销 refresh token。撤销请求只包含 token、
+`token_type_hint=refresh_token` 和 `client_id`，不发送 client secret；没有撤销端点或撤销失败
+也不会阻止本地退出。普通退出不调用 `end_session_endpoint`，不会清除浏览器 Cookie，因此
+仍保留 ZITADEL SSO。
+
 ## 默认管理能力
 
 `/users` 使用卡片化 DataTable 展示圆形首字母/默认 Avatar 标识、登录用户名和紧凑状态 Tag，支持列顺序移动与列宽
@@ -57,4 +84,7 @@ ZITADEL 同步最新用户名、邮箱与展示名。页面还支持选择初始
 并调用相同的用户开通、状态、用户角色、角色和权限方法。
 
 完整替换登录布局时使用 `LoginFeature`。结构化错误可以从
-`login_snapshot(cx).failure` 读取。
+`login_snapshot(cx).failure` 读取。该快照还提供 `busy`、`restoring`、`remember_login`、
+`secure_storage_supported`、`can_retry_recovery` 等无敏感状态；自定义登录页可调用
+`set_remember_login`、`retry_recovery` 和 `login_with_other_account`，不需要读取 Keychain
+或任何 token。

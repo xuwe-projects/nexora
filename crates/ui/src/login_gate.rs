@@ -12,6 +12,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     h_flex, v_flex,
 };
 
@@ -20,6 +21,7 @@ const NETWORK_BYTES: &[u8] = include_bytes!("../assets/login-network.png");
 const NETWORK_DARK_BYTES: &[u8] = include_bytes!("../assets/login-network-dark.png");
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type RememberLoginHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
 /// 无业务导航的全窗口登录门禁。
 ///
@@ -32,6 +34,9 @@ pub struct LoginGate {
     logo: Arc<Image>,
     configured: bool,
     busy: bool,
+    remember_login: bool,
+    remember_login_enabled: bool,
+    can_retry_recovery: bool,
     status: Option<SharedString>,
     login_label: SharedString,
     protection_label: SharedString,
@@ -39,6 +44,9 @@ pub struct LoginGate {
     on_login: ClickHandler,
     on_settings: ClickHandler,
     on_check_updates: Option<ClickHandler>,
+    on_remember_login: Option<RememberLoginHandler>,
+    on_retry_recovery: Option<ClickHandler>,
+    on_login_other_account: Option<ClickHandler>,
     privacy_url: SharedString,
     help_url: SharedString,
     title_bar: bool,
@@ -64,11 +72,17 @@ impl LoginGate {
             logo: default_application_logo(),
             configured: true,
             busy: false,
+            remember_login: true,
+            remember_login_enabled: true,
+            can_retry_recovery: false,
             status: None,
             busy_label: "正在连接认证服务...".into(),
             on_login: Rc::new(on_login),
             on_settings: Rc::new(on_settings),
             on_check_updates: None,
+            on_remember_login: None,
+            on_retry_recovery: None,
+            on_login_other_account: None,
             privacy_url: "https://github.com/xuwe-projects/nexora".into(),
             help_url: "https://github.com/xuwe-projects/nexora/issues".into(),
             title_bar: true,
@@ -93,6 +107,51 @@ impl LoginGate {
     /// 设置认证流程是否正在执行；忙碌状态会显示加载图标并防止重复登录。
     pub fn busy(mut self, busy: bool) -> Self {
         self.busy = busy;
+        self
+    }
+
+    /// 设置受控“保持登录状态”复选框的当前值。
+    pub fn remember_login(mut self, remember_login: bool) -> Self {
+        self.remember_login = remember_login;
+        self
+    }
+
+    /// 设置“保持登录状态”是否可用；Linux 可传入 `false` 以显示禁用说明。
+    pub fn remember_login_enabled(mut self, enabled: bool) -> Self {
+        self.remember_login_enabled = enabled;
+        self
+    }
+
+    /// 接收用户修改保持登录偏好的回调；回调参数是点击后的受控值。
+    pub fn on_remember_login(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_remember_login = Some(Rc::new(handler));
+        self
+    }
+
+    /// 设置是否显示恢复失败后的重试与账号切换入口。
+    pub fn recovery_actions(mut self, can_retry: bool) -> Self {
+        self.can_retry_recovery = can_retry;
+        self
+    }
+
+    /// 设置“重试恢复”按钮的回调。
+    pub fn on_retry_recovery(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_retry_recovery = Some(Rc::new(handler));
+        self
+    }
+
+    /// 设置“使用其他账号登录”按钮的回调。
+    pub fn on_login_other_account(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_login_other_account = Some(Rc::new(handler));
         self
     }
 
@@ -166,6 +225,9 @@ impl RenderOnce for LoginGate {
         let on_login = self.on_login.clone();
         let on_settings = self.on_settings.clone();
         let on_check_updates = self.on_check_updates.clone();
+        let on_remember_login = self.on_remember_login.clone();
+        let on_retry_recovery = self.on_retry_recovery.clone();
+        let on_login_other_account = self.on_login_other_account.clone();
 
         div()
             .relative()
@@ -283,6 +345,31 @@ impl RenderOnce for LoginGate {
                                     .on_click(move |event, window, cx| on_login(event, window, cx)),
                             )
                             .child(
+                                v_flex()
+                                    .mt_4()
+                                    .gap_1()
+                                    .child(
+                                        Checkbox::new("remember-login")
+                                            .with_size(theme::component_size(cx))
+                                            .checked(self.remember_login)
+                                            .disabled(!self.remember_login_enabled || self.busy)
+                                            .label("保持登录状态")
+                                            .when_some(on_remember_login, |checkbox, handler| {
+                                                checkbox.on_click(move |checked, window, cx| {
+                                                    handler(checked, window, cx);
+                                                })
+                                            }),
+                                    )
+                                    .when(!self.remember_login_enabled, |this| {
+                                        this.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("当前平台暂不支持保持登录状态"),
+                                        )
+                                    }),
+                            )
+                            .child(
                                 h_flex()
                                     .mt_6()
                                     .gap_3()
@@ -303,6 +390,42 @@ impl RenderOnce for LoginGate {
                                         .text_sm()
                                         .text_color(theme.muted_foreground)
                                         .child(status),
+                                )
+                            })
+                            .when(self.can_retry_recovery, |this| {
+                                this.child(
+                                    h_flex()
+                                        .mt_4()
+                                        .gap_2()
+                                        .child(
+                                            Button::new("retry-account-recovery")
+                                                .with_size(theme::component_size(cx))
+                                                .disabled(self.busy)
+                                                .label("重试恢复")
+                                                .when_some(
+                                                    on_retry_recovery.clone(),
+                                                    |button, handler| {
+                                                        button.on_click(move |event, window, cx| {
+                                                            handler(event, window, cx);
+                                                        })
+                                                    },
+                                                ),
+                                        )
+                                        .child(
+                                            Button::new("login-other-account")
+                                                .with_size(theme::component_size(cx))
+                                                .disabled(self.busy)
+                                                .ghost()
+                                                .label("使用其他账号登录")
+                                                .when_some(
+                                                    on_login_other_account.clone(),
+                                                    |button, handler| {
+                                                        button.on_click(move |event, window, cx| {
+                                                            handler(event, window, cx);
+                                                        })
+                                                    },
+                                                ),
+                                        ),
                                 )
                             }),
                     ),

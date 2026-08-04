@@ -171,6 +171,21 @@ impl OidcClient {
     ///
     /// discovery 请求失败、回调端口绑定失败或 PKCE 随机值生成失败时返回错误。
     pub fn begin_login(&self) -> Result<PendingOidcLogin, OidcError> {
+        self.begin_login_with_prompt(None)
+    }
+
+    /// 启动一次带可选 [`OidcPrompt`] 的 Authorization Code + PKCE 登录。
+    ///
+    /// 传入 [`OidcPrompt::SelectAccount`] 时，Provider 会优先展示账号选择页；传入
+    /// `None` 时保持 [`Self::begin_login`] 的原有无 `prompt` 行为。
+    ///
+    /// # Errors
+    ///
+    /// discovery 请求失败、回调端口绑定失败或 PKCE 随机值生成失败时返回错误。
+    pub fn begin_login_with_prompt(
+        &self,
+        prompt: Option<OidcPrompt>,
+    ) -> Result<PendingOidcLogin, OidcError> {
         let metadata = discover(&self.http, &self.config)?;
         let listener = TcpListener::bind(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -188,6 +203,7 @@ impl OidcClient {
             &nonce,
             &verifier,
             &redirect_uri,
+            prompt,
         );
 
         Ok(PendingOidcLogin {
@@ -255,6 +271,70 @@ impl OidcClient {
             tokens: refreshed_tokens,
         })
     }
+
+    /// 撤销当前 Provider 声明的 refresh token。
+    ///
+    /// 请求只发送 refresh token、`token_type_hint=refresh_token` 和 public client id，
+    /// 不发送桌面端 client secret。Provider 未声明撤销端点时返回
+    /// [`OidcRevocationResult::ProviderUnsupported`]，调用方仍应继续完成本地退出。
+    ///
+    /// # Errors
+    ///
+    /// refresh token 为空、discovery 失败、网络失败或 Provider 返回非成功状态时返回
+    /// [`OidcError`]；错误文本不会包含 token 内容。
+    pub fn revoke_refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<OidcRevocationResult, OidcError> {
+        let refresh_token = refresh_token.trim();
+        if refresh_token.is_empty() {
+            return Err(OidcError::MissingRefreshToken);
+        }
+        let metadata = discover(&self.http, &self.config)?;
+        let Some(endpoint) = metadata.revocation_endpoint else {
+            return Ok(OidcRevocationResult::ProviderUnsupported);
+        };
+        let response = self
+            .http
+            .post(endpoint)
+            .form(&[
+                ("token", refresh_token),
+                ("token_type_hint", "refresh_token"),
+                ("client_id", self.config.client_id()),
+            ])
+            .send()?;
+        if response.status().is_success() {
+            Ok(OidcRevocationResult::Revoked)
+        } else {
+            Err(OidcError::RevocationFailed {
+                status: response.status().as_u16(),
+            })
+        }
+    }
+}
+
+/// 交互式 OIDC 登录时要求 Provider 展示账号选择器的强类型参数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OidcPrompt {
+    /// 要求 Provider 展示已有账号并允许用户选择或添加账号。
+    SelectAccount,
+}
+
+impl OidcPrompt {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SelectAccount => "select_account",
+        }
+    }
+}
+
+/// OIDC Provider 对 refresh token 撤销能力的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OidcRevocationResult {
+    /// Provider 已接受撤销请求。
+    Revoked,
+    /// Provider discovery 未声明撤销端点；本地退出仍然可以继续。
+    ProviderUnsupported,
 }
 
 /// 登录流程启动后等待浏览器回调的上下文。
@@ -533,6 +613,12 @@ pub enum OidcError {
         /// Provider 返回的 OAuth 错误码与可选错误描述。
         String,
     ),
+    /// Provider 返回非成功状态，拒绝了 refresh token 撤销请求。
+    #[error("OIDC refresh token 撤销失败（HTTP {status}）")]
+    RevocationFailed {
+        /// Provider 返回的 HTTP 状态码。
+        status: u16,
+    },
     /// token endpoint 以非成功状态码返回了结构化 OAuth 错误。
     #[error("OIDC token endpoint 返回 OAuth 错误: {message}")]
     TokenEndpointOAuth {
@@ -653,6 +739,7 @@ struct DiscoveryDocument {
     token_endpoint: Option<Url>,
     userinfo_endpoint: Option<Url>,
     jwks_uri: Option<Url>,
+    revocation_endpoint: Option<Url>,
     id_token_signing_alg_values_supported: Option<Vec<String>>,
 }
 
@@ -663,6 +750,7 @@ struct OidcMetadata {
     token_endpoint: Url,
     userinfo_endpoint: Option<Url>,
     jwks_uri: Url,
+    revocation_endpoint: Option<Url>,
     id_token_signing_alg_values_supported: Vec<String>,
 }
 
@@ -705,6 +793,7 @@ fn discover(client: &Client, config: &OidcConfig) -> Result<OidcMetadata, OidcEr
         jwks_uri: document
             .jwks_uri
             .ok_or(OidcError::MissingMetadata("jwks_uri"))?,
+        revocation_endpoint: document.revocation_endpoint,
         id_token_signing_alg_values_supported: signing_algorithms,
     })
 }
@@ -716,6 +805,7 @@ fn authorization_url(
     nonce: &str,
     verifier: &str,
     redirect_uri: &str,
+    prompt: Option<OidcPrompt>,
 ) -> String {
     let challenge = pkce_challenge(verifier);
     let mut url = metadata.authorization_endpoint.clone();
@@ -728,6 +818,9 @@ fn authorization_url(
         .append_pair("nonce", nonce)
         .append_pair("code_challenge", challenge.as_str())
         .append_pair("code_challenge_method", "S256");
+    if let Some(prompt) = prompt {
+        url.query_pairs_mut().append_pair("prompt", prompt.as_str());
+    }
     url.into()
 }
 

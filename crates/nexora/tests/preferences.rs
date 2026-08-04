@@ -4,8 +4,8 @@ use desktop::ApplicationOptions as DesktopApplicationOptions;
 use gpui::{Bounds, TestAppContext, WindowBounds, point, px, size};
 use gpui_component::{Size, Theme, ThemeMode};
 use nexora::__private::{
-    MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences, ShellPreferences,
-    restore_appearance_preferences, restore_main_window_options,
+    AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
+    ShellPreferences, restore_appearance_preferences, restore_main_window_options,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
@@ -35,6 +35,18 @@ fn shell_preferences_default_to_safe_values() {
         theme::DEFAULT_COMPONENT_SIZE.as_str()
     );
     assert!(preferences.main_window.is_none());
+    assert_eq!(preferences.account, AccountPreferences::default());
+}
+
+#[test]
+fn old_preferences_use_safe_account_defaults() {
+    let preferences: ShellPreferences = toml::from_str("pinned_tabs = []").unwrap();
+
+    assert!(preferences.account.remember_login);
+    assert!(!preferences.account.recovery_allowed);
+    let serialized = toml::to_string(&preferences).unwrap();
+    assert!(!serialized.contains("access_token"));
+    assert!(!serialized.contains("refresh_token"));
 }
 
 #[test]
