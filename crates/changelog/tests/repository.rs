@@ -54,6 +54,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.25.0",
             "0.22.0",
             "0.21.3",
             "0.21.2",

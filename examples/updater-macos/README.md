@@ -18,7 +18,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.25.0 nexora --locked --force \
+  --tag v0.26.0 nexora --locked --force \
   --no-default-features --features cli --bin nexora
 
 nexora doctor
