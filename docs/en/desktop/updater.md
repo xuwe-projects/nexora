@@ -15,7 +15,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.27.0 cli --locked --force --bin nexora
+  --tag v0.27.1 cli --locked --force --bin nexora
 nexora doctor
 # Installs cargo-bundle/create-dmg if either is missing:
 nexora doctor --fix

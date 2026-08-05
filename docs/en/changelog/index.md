@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [0.27.1: Windows GUI linker entry-point fix](./0.27.1)
 - [0.27.0: standalone CLI, self-update, and branded publishing](./0.27.0)
 - [0.26.0: complete Windows updater flow and trusted release notes](./0.26.0)
 - [0.25.0: desktop Account session persistence and release verification](./0.25.0)

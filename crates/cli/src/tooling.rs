@@ -11,6 +11,7 @@ use std::{error::Error, fmt, path::PathBuf};
 pub(super) use release::{BuildConfig, PublishConfig};
 
 #[cfg(windows)]
+#[allow(unused_imports)]
 pub use release::inspect_compile_windows_resource_executables;
 #[allow(unused_imports)]
 pub use release::{

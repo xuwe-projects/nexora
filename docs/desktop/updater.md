@@ -19,7 +19,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.27.0 cli --locked --force --bin nexora
+  --tag v0.27.1 cli --locked --force --bin nexora
 ```
 
 `nexora doctor` 按当前宿主检查工具链；缺少工具时返回失败。在 macOS 上，`nexora doctor --fix` 会尝试用

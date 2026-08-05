@@ -451,7 +451,7 @@ fn verify_file(path: &Path, expected_size: u64, expected_sha256: &str) -> Result
 
 #[cfg(windows)]
 fn replace_windows_file(target: &Path, replacement: &Path, parent_pid: u32) -> Result<(), String> {
-    use std::{os::windows::ffi::OsStrExt as _, thread, time::Duration};
+    use std::{thread, time::Duration};
     use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
 
     let backup = target.with_file_name(format!(".nexora-update-backup-{parent_pid}.exe"));
@@ -497,10 +497,11 @@ fn replace_windows_file(target: &Path, replacement: &Path, parent_pid: u32) -> R
             .map(|error| error.to_string())
             .unwrap_or_else(|| "未知错误".to_owned()),
         replacement.display(),
-        backup
-            .is_file()
-            .then(|| format!("，可恢复备份位于 `{}`", backup.display()))
-            .unwrap_or_default()
+        if backup.is_file() {
+            format!("，可恢复备份位于 `{}`", backup.display())
+        } else {
+            String::new()
+        }
     ))
 }
 
