@@ -1,6 +1,6 @@
 # Windows 更新程序示例
 
-这个独立 workspace 用来验证 Nexora 的 Windows x86_64/ARM64 首次安装和自动更新链路。首次安装同时生成 WiX MSI 和安装型 `setup.exe`；Setup EXE 使用 Burn 包装 MSI，并直接显示同一套简体中文 MSI 向导。应用内自动更新仍只下载并应用 `windows.zip`，不会重新运行首次安装程序。
+这个独立 workspace 用来验证 Nexora 的 Windows x86_64/ARM64 首次安装和自动更新链路。首次安装同时生成 branded `.exe` 和 WiX MSI；EXE 使用 Burn 包装 MSI，并直接显示同一套简体中文 MSI 向导。应用内自动更新仍只下载并应用 `windows.zip`，不会重新运行首次安装程序。
 
 安装向导包含安装目录、安装选项、确认、进度和完成页面。安装选项可勾选桌面快捷方式与开始菜单快捷方式；完成页可勾选立即运行应用。当前只支持不提权的当前用户安装，默认目录为 `%LOCALAPPDATA%\Programs\<app_id>`。
 
@@ -63,11 +63,15 @@ nexora publish --app updater-windows
 channel 多选菜单并默认勾选 `stable`；CI 或脚本应显式传 `--channel stable`、`--channel beta`
 或 `--all-channels`，避免依赖非交互默认值。
 
-`build` 只在本地生成版本化 MSI、Setup EXE、`windows.zip`、release notes、SHA-256 旁车文件和 `artifact.json`，不访问 S3。Windows 更新 ZIP 由 Rust 直接写入，归档条目统一使用 `/`，不会把本机的 `\\` 路径分隔符带入更新协议。`publish` 只校验并发布已有产物，不隐式构建。MSI/Setup 用于首次安装，更新清单只引用 `windows.zip`。
+`build` 只在本地生成 `<display_name>-<arch>.msi`、`<display_name>-<arch>.exe`、
+`<display_name>-<arch>.windows.zip`、release notes、SHA-256 旁车文件和 `artifact.json`，不访问
+S3。Windows 更新 ZIP 由 Rust 直接写入，归档条目统一使用 `/`，不会把本机的 `\\` 路径分隔符
+带入更新协议。`publish` 只校验并发布已有产物，不隐式构建。MSI/EXE 用于首次安装，更新清单
+只引用 versioned `windows.zip`。
 
 ## 真实验收
 
-- 分别启动 `.msi` 与 `.setup.exe`，两者都显示简体中文安装步骤。
+- 分别启动 `.msi` 与 branded `.exe`，两者都显示简体中文安装步骤。
 - 安装选项页可以切换“创建桌面快捷方式”和“创建开始菜单快捷方式”。
 - 完成页可以切换“安装完成后运行应用”，点击“完成”后行为与 checkbox 一致。
 - 安装目录默认位于 `%LOCALAPPDATA%\Programs\com.nexora.examples.updater-windows`，也可以在安装目录页改到用户选择的位置。

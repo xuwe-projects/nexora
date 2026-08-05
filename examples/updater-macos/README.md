@@ -2,7 +2,8 @@
 
 这个独立 workspace 验证 Nexora 的首次 DMG 安装、签名 `latest.json`、`.app.zip` 自更新、公共
 更新界面、独立 sidecar、健康确认和失败回滚。可见名称是“macOS 更新程序示例”；Cargo package
-与远端技术产物名仍为 `nexora-updater-macos-example`。
+内部 executable 与 updater sidecar 名仍使用 `nexora-updater-macos-example`；外部分发文件使用
+展示名称与架构，例如 `macOS 更新程序示例-aarch64.dmg`。
 
 示例使用 `assets/logos/updater-macos/` 的 app 级品牌资源，只通过 `nexora::desktop` 安装 updater
 并运行 sidecar；没有直接依赖内部 `updater` crate，也没有私有弹窗或状态机。
@@ -18,8 +19,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.26.0 nexora --locked --force \
-  --no-default-features --features cli --bin nexora
+  --tag v0.27.0 cli --locked --force --bin nexora
 
 nexora doctor
 # 缺 cargo-bundle/create-dmg 时可让 CLI 安装：
@@ -99,7 +99,8 @@ nexora publish --app updater-macos
 `nexora publish` 只从 release receipt 读取冻结的 version/build number，校验所有 required target
 的 artifact、大小和 SHA-256，不重新计算时间，也不会隐式 build。它读取并验签远端
 `latest.json`，要求待发布 identity 严格更高，上传版本化 ZIP/DMG 及其 `.sha256`，计算新的
-manifest sequence，最后才上传 mutable `latest.json`，并匿名回读校验旁车和所有更新 URL。
+manifest sequence，先更新 channel 根 branded 文件，最后才上传 mutable `latest.json`，并匿名回读
+校验旁车和所有 versioned 更新 URL。不会再生成安装包 `latest.*` alias。
 发布端从重新校验后的摘要生成旁车，因此旧构建没有本地 `.sha256` 时仍可发布。dry-run 走相同
 预检但不写本地或远端。
 

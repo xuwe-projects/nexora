@@ -19,8 +19,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.26.0 nexora --locked --force \
-  --no-default-features --features cli --bin nexora
+  --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 `nexora doctor` 按当前宿主检查工具链；缺少工具时返回失败。在 macOS 上，`nexora doctor --fix` 会尝试用
@@ -73,6 +72,10 @@ nexora build --app desktop
 - sidecar：独立进程，重新验签、下载、校验、暂存、等待主进程退出、事务替换、重启、健康
   确认并在失败时回滚。
 
+外部分发文件统一命名为 `<display_name>-<arch><suffix>`，例如 `iMES-aarch64.dmg`、
+`iMES-x86_64.windows.zip`；version、build number、Cargo package 和完整 target triple 不进入文件名。
+内部主 executable 与 sidecar 仍使用技术 `package`，不会因展示名称变化而破坏定位契约。
+
 每个正式安装包还会在签名和归档前写入 `nexora-release.json` 与可选 `notes.md`。macOS 位于
 `.app/Contents/Resources`，Windows 位于主 EXE 同级目录，因此初始 Setup 和 update ZIP 携带
 同一份发布身份。元数据 schema 1 包含 `app_key`、`app_id`、`display_name`、`package`、
@@ -115,13 +118,20 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "https://downloads.example.com/desktop-releases"
 allow_insecure_http = false
+credential_env_prefix = "NEXORA_PUBLISH"
+
+[publish.targets.rustfs.channels.beta]
+endpoint = "http://192.168.0.250:9000"
+public_base_url = "http://192.168.0.250:9000/desktop-releases"
+allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH_BETA"
 
 [apps.desktop]
 package = "desktop"
 app_id = "com.example.desktop"
 display_name = "示例桌面应用"
 publish_target = "rustfs"
-object_prefix = "products"
+object_prefix = ""
 
 [apps.desktop.branding]
 application_logo = "assets/logos/desktop/logo-icon-128.png"
@@ -195,11 +205,15 @@ icons = [
 | `force_path_style` | 否 | 使用 `endpoint/bucket/key`，RustFS/MinIO 常设 `true` | `false` | 否 | 错误模式会导致对象地址或签名失败 |
 | `public_base_url` | 是 | 匿名下载 bucket 根 URL，由公开下载配置取得 | 无 | 否 | URL 无效失败；必须能匿名 GET |
 | `allow_insecure_http` | 否 | 仅本地/LAN 测试允许 HTTP | `false` | 否 | HTTP 且未设 `true` 时立即失败 |
+| `credential_env_prefix` | 否 | 发布凭据组前缀 | `NEXORA_PUBLISH` | 否 | 不是安全环境变量前缀时失败 |
+| `channels.<channel>` | 否 | 按字段覆盖该 channel 的 target；省略字段继承基础 target | 无 | 否 | 合并后的完整 target 统一校验 |
 
-发布凭据不写入 TOML。publish 从 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` 读取，或从
-`RUSTFS_ACCESS_KEY_ID`/`RUSTFS_SECRET_ACCESS_KEY` 读取；可选 `AWS_SESSION_TOKEN`。bucket 必须
-提前创建，并允许 `public_base_url` 下的 release 对象匿名下载。生产 endpoint 与下载地址都必须
-使用 HTTPS。
+发布凭据不写入 TOML。默认先读取完整的 `NEXORA_PUBLISH_ACCESS_KEY_ID` /
+`NEXORA_PUBLISH_SECRET_ACCESS_KEY` / 可选 `NEXORA_PUBLISH_SESSION_TOKEN`；只有三个字段全部不存在
+时才读取完整 AWS 组。任一组只出现 access 或 secret 都立即失败，session token 也不会跨组借用。
+自定义 prefix（例如 `NEXORA_PUBLISH_BETA`）缺失或不完整时不会回退默认 Nexora/AWS 生产组。
+`RUSTFS_*` 已移除。bucket 必须提前创建，并允许 `public_base_url` 下的对象匿名下载；生产 endpoint
+与下载地址都必须使用 HTTPS。
 
 ### app、品牌与 release
 
@@ -211,9 +225,9 @@ icons = [
 | `apps.<app_key>` | 是 | CLI 稳定 app key，如 `desktop`；进入对象路径 | 无 | 否 | 缺 app 或 key 不安全时失败 |
 | `package` | 是 | Cargo package 名，从 `cargo metadata` 取得 | 无 | 否 | package 不存在时 build 失败 |
 | `app_id` | 是 | 永久 bundle identifier，如 `com.example.desktop` | 无 | 否 | 格式无效或冲突时失败 |
-| `display_name` | 是 | Finder、DMG、安装路径显示名称 | 无 | 否 | 空值、路径字符或控制字符失败 |
+| `display_name` | 是 | 用户可见名称和外部分发文件 stem；支持合法 Unicode | 无 | 否 | 分隔符、Windows 禁止字符/设备名、NUL、尾随点或空格失败 |
 | `publish_target` | 是 | 引用 `publish.targets` 的名称 | 无 | 否 | 目标不存在时失败 |
-| `object_prefix` | 是 | bucket 内产品前缀，如 `products` | 无 | 否 | 不安全路径段失败 |
+| `object_prefix` | 是 | 可选额外对象前缀；`""` 表示不增加前缀 | 无 | 否 | 非空值包含不安全路径段时失败 |
 | `branding.application_logo` | 是 | 应用内 PNG，通常为 128px | 无 | 否 | 文件不存在或非 PNG 时失败 |
 | `branding.icon_source` | 是 | 图标生成源 PNG | 无 | 否 | 文件不存在、格式/尺寸/透明通道无效时失败 |
 | `branding.managed` | 否 | 允许 `icons generate` 重建已有输出 | `false` | 否 | `false` 且输出已存在时拒绝覆盖；可显式 `--force` |
@@ -381,6 +395,16 @@ timestamp_url = "https://timestamp.example.com"
 thumbprint 不匹配或 publisher 不匹配的主程序和 updater。自签名证书可用于受控测试，但外部
 Windows 设备默认不会信任它。
 
+Windows 构建分别为主程序和 updater 编译 UTF-8/Unicode PE VERSIONINFO。主程序的
+`FileDescription`/`ProductName` 是 `display_name`，`InternalName` 和 `OriginalFilename` 保持
+技术 package；updater 的描述追加“更新程序”，内部名和原文件名使用 `<package>-updater`。
+资源写入后才执行 Authenticode 签名，避免签名后修改 EXE。
+
+主窗口原生 title 的优先级依次是应用显式 `WindowOptions.titlebar.title`、安装元数据中的
+`display_name`、开发模式的 `ApplicationOptions::application_name`。默认登录页与自定义
+`LoginFeature` 都由 Shell 提供一组 `gpui-component::TitleBar` 窗口控制；独立使用
+`LoginGate` 时保留其默认 TitleBar，不需要应用自制关闭、最小化或最大化按钮。
+
 ## 接入公共 updater 与 sidecar
 
 应用从当前安装目录读取构建时嵌入的安全配置：macOS 位于
@@ -446,7 +470,7 @@ version/build number、两项来源、创建 Unix 秒和本次 targets；同一�
 损坏或不支持的收据会在构建前失败，不从目录名猜测身份。
 
 `nexora build` 只构建本地平台产物、sidecar、bundle 配置、每个发布产物的 `.sha256` 和
-`artifact.json`，不访问对象存储。Windows 产物为 MSI、安装型 Setup EXE 与更新 ZIP；旁车内容使用小写 SHA-256、两个空格、原始文件名
+`artifact.json`，不访问对象存储。Windows 产物为 branded `.exe`、MSI 与更新 ZIP；旁车内容使用小写 SHA-256、两个空格、完整 branded 文件名
 和 LF 换行。版本、构建号、图标、updater 配置和 sidecar 全部写入后才签名；ZIP 与 DMG 都来自
 同一个已完成资源写入并签名的 `.app`。
 
@@ -468,18 +492,30 @@ nexora publish --app desktop
 `default_channel`；非交互 CI 应显式传可重复的 `--channel` 或 `--all-channels`。
 
 publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则使用远端 sequence 加一。
-它按“版本化平台产物及其 `.sha256` → release notes → immutable sequence manifest → latest
-安装器 aliases → `latest.json`”顺序上传，最后匿名回读校验旁车、mutable 对象和 updater 下载
-URL。每个 macOS target 生成 `latest-<arch>.dmg`，每个 Windows target 生成
-`latest-<arch>.exe` 与 `latest-<arch>.msi`；单 target 发布还分别生成无架构后缀的
-`latest.dmg`、`latest.exe` 或 `latest.msi`。
-发布端从重新校验后的产物摘要生成旁车内容，因此没有本地 `.sha256` 的旧构建仍可发布。对象布局为：
+它先上传并匿名校验所有 versioned 不可变产物、checksum 与 release notes；并发 sequence 再检查
+通过后，更新 channel 根 branded 产物和 checksum，再上传 sequence manifest，最后上传并回读
+`latest.json`。updater manifest 的 URL 始终指向 versioned update payload，不会指向下次发布会
+覆盖的 channel 根文件。
+
+`latest.json` 是签名更新清单，继续保留且最后更新。新的发布不再生成 `latest.dmg`、
+`latest-<arch>.dmg`、`latest.exe`、`latest.msi`、`latest.zip` 等安装包/负载 alias。对象布局为：
 
 ```text
-<prefix>/<app>/<channel>/latest.json
-<prefix>/<app>/<channel>/manifests/<sequence>.json
-<prefix>/<app>/<channel>/releases/<version>/<build>/<target>/...
+[<object_prefix>/]<app_key>/<channel>/latest.json
+[<object_prefix>/]<app_key>/<channel>/manifests/<sequence>.json
+[<object_prefix>/]<app_key>/<channel>/<display_name>-<arch><suffix>
+[<object_prefix>/]<app_key>/<channel>/<version>/<build>/<arch>/<display_name>-<arch><suffix>
 ```
+
+例如 `object_prefix = ""`、app key 为 `imes` 时，当前下载地址可以是
+`.../imes/nightly/iMES-aarch64.dmg`，不可变地址是
+`.../imes/nightly/1.2.3/260805120000/aarch64/iMES-aarch64.dmg`。公开架构目录只使用
+`x86_64`/`aarch64`，不使用完整 Rust target triple，也没有 `releases` 中间目录。
+`app_key` 决定 feed 与远端目录身份；修改 `display_name` 只改变用户可见名称和新 artifact 文件名。
+
+升级发布端后，管理员可以手工清理旧 channel 根的 installer `latest.*` alias，但 Nexora 不会
+自动删除任何远端对象。不要删除旧 versioned immutable 对象，否则仍引用它们的旧客户端 manifest
+会失效。
 
 从旧版本升级验证时，先通过 DMG 安装基础版本，再更新 Cargo package version（或显式
 `release.version` / `release.build_number`），重新 build、dry-run、publish。启动已安装旧版本，确认启动检查不阻塞

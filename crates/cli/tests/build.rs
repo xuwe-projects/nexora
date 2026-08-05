@@ -1,25 +1,66 @@
-#![cfg(feature = "cli")]
-
 #[allow(dead_code)]
-#[path = "../src/bin/nexora/tooling.rs"]
+#[path = "../src/tooling.rs"]
 pub mod commands;
 
+#[cfg(windows)]
+use commands::inspect_compile_windows_resource_executables;
 use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_create_windows_update_zip,
-    inspect_freeze_release_notes, inspect_latest_dmg_aliases,
-    inspect_latest_windows_installer_aliases, inspect_prepare_release_receipt,
-    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
-    inspect_release_selection, inspect_signing_key, inspect_windows_installer_sources,
+    inspect_build_plans_for_channel, inspect_channel_artifact_keys,
+    inspect_create_windows_update_zip, inspect_credential_selection,
+    inspect_effective_publish_target, inspect_freeze_release_notes,
+    inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
+    inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
+    inspect_signing_key, inspect_windows_installer_sources, inspect_windows_resource_scripts,
     validate_display_name, write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvironmentGuard {
+    original: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvironmentGuard {
+    fn clear(names: &[&'static str]) -> Self {
+        let original = names
+            .iter()
+            .map(|name| (*name, env::var_os(name)))
+            .collect::<Vec<_>>();
+        for name in names {
+            unsafe { env::remove_var(name) };
+        }
+        Self { original }
+    }
+
+    fn set(name: &str, value: &str) {
+        unsafe { env::set_var(name, value) };
+    }
+
+    fn unset(name: &str) {
+        unsafe { env::remove_var(name) };
+    }
+}
+
+impl Drop for EnvironmentGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.original {
+            match value {
+                Some(value) => unsafe { env::set_var(name, value) },
+                None => unsafe { env::remove_var(name) },
+            }
+        }
+    }
+}
 
 struct Fixture {
     root: PathBuf,
@@ -248,7 +289,7 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
     };
     let mut entries = Vec::new();
     if zip {
-        let name = format!("package-one-1.2.3-7-{arch}.app.zip");
+        let name = format!("应用一-{arch}.app.zip");
         fs::write(directory.join(&name), b"zip").unwrap();
         entries.push(serde_json::json!({
             "kind": "macos_app_zip",
@@ -258,7 +299,7 @@ fn write_artifacts(fixture: &Fixture, target: &str, zip: bool, dmg: bool) {
         }));
     }
     if dmg {
-        let name = format!("package-one-1.2.3-7-{arch}.dmg");
+        let name = format!("应用一-{arch}.dmg");
         fs::write(directory.join(&name), b"dmg").unwrap();
         entries.push(serde_json::json!({
             "kind": "macos_dmg",
@@ -327,8 +368,8 @@ fn write_complete_artifacts_for_identity(
     } else {
         "x86_64"
     };
-    let zip_name = format!("package-one-{version}-{build_number}-{arch}.app.zip");
-    let dmg_name = format!("package-one-{version}-{build_number}-{arch}.dmg");
+    let zip_name = format!("应用一-{arch}.app.zip");
+    let dmg_name = format!("应用一-{arch}.dmg");
     fs::write(directory.join(&zip_name), b"zip").unwrap();
     fs::write(directory.join(&dmg_name), b"dmg").unwrap();
     fs::write(
@@ -362,6 +403,7 @@ fn write_complete_artifacts_for_identity(
 
 fn write_windows_artifacts(
     fixture: &Fixture,
+    display_name: &str,
     include_setup: bool,
     include_msi: bool,
     include_zip: bool,
@@ -376,19 +418,19 @@ fn write_windows_artifacts(
         (
             include_setup,
             "windows_setup_exe",
-            "package-one-1.2.3-7-x86_64.setup.exe".to_owned(),
+            format!("{display_name}-x86_64.exe"),
             b"setup".as_slice(),
         ),
         (
             include_msi,
             "windows_msi",
-            "package-one-1.2.3-7-x86_64.msi".to_owned(),
+            format!("{display_name}-x86_64.msi"),
             b"msi".as_slice(),
         ),
         (
             include_zip,
             "windows_update_zip",
-            "package-one-1.2.3-7-x86_64.windows.zip".to_owned(),
+            format!("{display_name}-x86_64.windows.zip"),
             b"zip".as_slice(),
         ),
     ] {
@@ -468,6 +510,40 @@ fn with_unsigned_windows_signing(config: String) -> String {
     )
 }
 
+#[cfg(windows)]
+fn windows_host_config(config: String) -> String {
+    let output = std::process::Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let host = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .unwrap();
+    config.replace("x86_64-pc-windows-msvc", host)
+}
+
+#[cfg(windows)]
+fn windows_version_info(path: &Path) -> serde_json::Value {
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$i=(Get-Item -LiteralPath $env:NEXORA_PE_SMOKE_PATH).VersionInfo; $i | Select-Object FileDescription,ProductName,InternalName,OriginalFilename | ConvertTo-Json -Compress",
+        ])
+        .env("NEXORA_PE_SMOKE_PATH", path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "PowerShell VersionInfo 读取失败：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
 #[test]
 fn package_and_display_name_are_separate() {
     let fixture = Fixture::new(
@@ -489,7 +565,7 @@ fn package_and_display_name_are_separate() {
 }
 
 #[test]
-fn technical_artifact_names_include_package_version_build_and_arch() {
+fn distribution_artifact_names_use_display_name_and_arch() {
     let fixture = Fixture::new(
         "artifacts",
         &app_config("desktop", "technical-package", "产品名称"),
@@ -502,13 +578,13 @@ fn technical_artifact_names_include_package_version_build_and_arch() {
         plan["app_zip_path"]
             .as_str()
             .unwrap()
-            .ends_with("technical-package-1.2.3-7-aarch64.app.zip")
+            .ends_with("产品名称-aarch64.app.zip")
     );
     assert!(
         plan["dmg_path"]
             .as_str()
             .unwrap()
-            .ends_with("technical-package-1.2.3-7-aarch64.dmg")
+            .ends_with("产品名称-aarch64.dmg")
     );
 }
 
@@ -687,7 +763,7 @@ fn runtime_config_change_invalidates_existing_receipt() {
 }
 
 #[test]
-fn windows_build_plan_uses_msi_setup_and_update_zip() {
+fn windows_build_plan_uses_branded_exe_msi_and_update_zip() {
     let fixture = Fixture::new(
         "windows-plan",
         &with_windows_target(app_config("one", "package-one", "Application One")),
@@ -700,19 +776,19 @@ fn windows_build_plan_uses_msi_setup_and_update_zip() {
         plan["app_zip_path"]
             .as_str()
             .unwrap()
-            .ends_with("package-one-1.2.3-7-x86_64.windows.zip")
+            .ends_with("Application One-x86_64.windows.zip")
     );
     assert!(
         plan["setup_path"]
             .as_str()
             .unwrap()
-            .ends_with("package-one-1.2.3-7-x86_64.setup.exe")
+            .ends_with("Application One-x86_64.exe")
     );
     assert!(
         plan["msi_path"]
             .as_str()
             .unwrap()
-            .ends_with("package-one-1.2.3-7-x86_64.msi")
+            .ends_with("Application One-x86_64.msi")
     );
 }
 
@@ -753,7 +829,7 @@ fn windows_arm64_build_plan_uses_aarch64_artifact_suffix() {
         plans[0]["msi_path"]
             .as_str()
             .unwrap()
-            .ends_with("package-one-1.2.3-7-aarch64.msi")
+            .ends_with("Application One-aarch64.msi")
     );
 }
 
@@ -945,6 +1021,11 @@ fn invalid_display_names_are_rejected() {
         "bad\\name",
         "bad\0name",
         "bad\nname",
+        "bad:name",
+        "bad*name",
+        "CON",
+        "lpt1.txt",
+        "trailing. ",
     ] {
         assert!(validate_display_name(value).is_err(), "{value:?}");
     }
@@ -1396,13 +1477,13 @@ fn publish_artifact_validation_accepts_windows_msi_setup_and_update_zip() {
         "windows-artifact-validation",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
-    write_windows_artifacts(&fixture, true, true, true);
+    write_windows_artifacts(&fixture, "Application One", true, true, true);
     assert_eq!(
         inspect_release_artifacts(fixture.config(), "one").unwrap(),
         vec!["windows_setup_exe", "windows_msi", "windows_update_zip"]
     );
 
-    write_windows_artifacts(&fixture, true, true, false);
+    write_windows_artifacts(&fixture, "Application One", true, true, false);
     assert!(
         inspect_release_artifacts(fixture.config(), "one")
             .unwrap_err()
@@ -1436,14 +1517,16 @@ fn publish_artifacts_are_read_from_the_exact_selected_channel() {
 }
 
 #[test]
-fn latest_dmg_aliases_are_unambiguous() {
+fn channel_root_uses_branded_macos_names_and_checksums() {
     let fixture = Fixture::new("single-alias", &app_config("one", "package-one", "应用一"));
     write_artifacts(&fixture, "aarch64-apple-darwin", true, true);
     assert_eq!(
-        inspect_latest_dmg_aliases(fixture.config(), "one").unwrap(),
+        inspect_channel_artifact_keys(fixture.config(), "one").unwrap(),
         vec![
-            "e2e/one/stable/latest-aarch64.dmg",
-            "e2e/one/stable/latest.dmg"
+            "e2e/one/stable/应用一-aarch64.app.zip",
+            "e2e/one/stable/应用一-aarch64.app.zip.sha256",
+            "e2e/one/stable/应用一-aarch64.dmg",
+            "e2e/one/stable/应用一-aarch64.dmg.sha256",
         ]
     );
 
@@ -1455,31 +1538,257 @@ fn latest_dmg_aliases_are_unambiguous() {
     write_artifacts(&fixture, "aarch64-apple-darwin", true, true);
     write_artifacts(&fixture, "x86_64-apple-darwin", true, true);
     assert_eq!(
-        inspect_latest_dmg_aliases(fixture.config(), "one").unwrap(),
+        inspect_channel_artifact_keys(fixture.config(), "one").unwrap(),
         vec![
-            "e2e/one/stable/latest-aarch64.dmg",
-            "e2e/one/stable/latest-x86_64.dmg"
+            "e2e/one/stable/应用一-aarch64.app.zip",
+            "e2e/one/stable/应用一-aarch64.app.zip.sha256",
+            "e2e/one/stable/应用一-aarch64.dmg",
+            "e2e/one/stable/应用一-aarch64.dmg.sha256",
+            "e2e/one/stable/应用一-x86_64.app.zip",
+            "e2e/one/stable/应用一-x86_64.app.zip.sha256",
+            "e2e/one/stable/应用一-x86_64.dmg",
+            "e2e/one/stable/应用一-x86_64.dmg.sha256",
         ]
     );
 }
 
 #[test]
-fn latest_windows_installer_aliases_include_arch_and_single_target_names() {
+fn channel_root_uses_branded_windows_names_without_latest_aliases() {
     let fixture = Fixture::new(
         "windows-latest-aliases",
         &with_windows_target(app_config("one", "package-one", "应用一")),
     );
-    write_windows_artifacts(&fixture, true, true, true);
+    write_windows_artifacts(&fixture, "应用一", true, true, true);
 
     assert_eq!(
-        inspect_latest_windows_installer_aliases(fixture.config(), "one").unwrap(),
+        inspect_channel_artifact_keys(fixture.config(), "one").unwrap(),
         vec![
-            "e2e/one/stable/latest-x86_64.exe",
-            "e2e/one/stable/latest-x86_64.msi",
-            "e2e/one/stable/latest.exe",
-            "e2e/one/stable/latest.msi",
+            "e2e/one/stable/应用一-x86_64.exe",
+            "e2e/one/stable/应用一-x86_64.exe.sha256",
+            "e2e/one/stable/应用一-x86_64.msi",
+            "e2e/one/stable/应用一-x86_64.msi.sha256",
+            "e2e/one/stable/应用一-x86_64.windows.zip",
+            "e2e/one/stable/应用一-x86_64.windows.zip.sha256",
         ]
     );
+}
+
+#[test]
+fn empty_object_prefix_uses_app_key_root_without_double_slashes() {
+    let config = app_config("one", "package-one", "iMES")
+        .replace("object_prefix = \"e2e\"", "object_prefix = \"\"")
+        .replace("/releases/e2e/one/", "/releases/one/");
+    let fixture = Fixture::new("empty-object-prefix", &config);
+    inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    let layout = inspect_publish_object_layout(
+        fixture.config(),
+        "one",
+        "aarch64-apple-darwin",
+        "iMES-aarch64.dmg",
+    )
+    .unwrap();
+
+    assert_eq!(layout["latest_key"], "one/stable/latest.json");
+    assert_eq!(layout["sequence_key"], "one/stable/manifests/42.json");
+    assert_eq!(layout["channel_key"], "one/stable/iMES-aarch64.dmg");
+    assert_eq!(
+        layout["versioned_key"],
+        "one/stable/1.2.3/7/aarch64/iMES-aarch64.dmg"
+    );
+    assert!(!layout.to_string().contains("//one"));
+    assert!(
+        !layout["versioned_key"]
+            .as_str()
+            .unwrap()
+            .contains("releases")
+    );
+}
+
+#[test]
+fn app_key_keeps_feed_identity_stable_when_display_name_changes() {
+    let fixture = Fixture::new(
+        "stable-app-key",
+        &app_config("one", "package-one", "旧名称"),
+    );
+    inspect_prepare_release_receipt(fixture.config(), "one").unwrap();
+    let before = inspect_publish_object_layout(
+        fixture.config(),
+        "one",
+        "aarch64-apple-darwin",
+        "旧名称-aarch64.dmg",
+    )
+    .unwrap();
+    let config = fs::read_to_string(fixture.config())
+        .unwrap()
+        .replace("display_name = \"旧名称\"", "display_name = \"新名称\"");
+    fs::write(fixture.config(), config).unwrap();
+    let after = inspect_publish_object_layout(
+        fixture.config(),
+        "one",
+        "aarch64-apple-darwin",
+        "新名称-aarch64.dmg",
+    )
+    .unwrap();
+
+    assert_eq!(before["latest_key"], after["latest_key"]);
+    assert_eq!(before["sequence_key"], after["sequence_key"]);
+    assert!(after["channel_key"].as_str().unwrap().contains("新名称"));
+}
+
+#[test]
+fn channel_publish_target_overrides_merge_by_field_and_revalidate_http() {
+    let fixture = Fixture::new("channel-target", &app_config("one", "package-one", "iMES"));
+    let config = fs::read_to_string(fixture.config())
+        .unwrap()
+        .replace("http://127.0.0.1:9000", "https://s3.example.com")
+        .replace(
+            "http://127.0.0.1:9000/releases",
+            "https://downloads.example.com",
+        )
+        .replace("allow_insecure_http = true", "allow_insecure_http = false")
+        .replace(
+            "\n[apps.one]",
+            r#"
+[publish.targets.rustfs.channels.nightly]
+endpoint = "http://192.168.0.250:9000"
+public_base_url = "http://192.168.0.250:9000/releases"
+allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
+
+[apps.one]"#,
+        );
+    fs::write(fixture.config(), config).unwrap();
+    let nightly = inspect_effective_publish_target(fixture.config(), "one", "nightly").unwrap();
+    assert_eq!(nightly["endpoint"], "http://192.168.0.250:9000");
+    assert_eq!(nightly["bucket"], "releases");
+    assert_eq!(nightly["region"], "us-east-1");
+    assert_eq!(nightly["force_path_style"], true);
+    assert_eq!(nightly["allow_insecure_http"], true);
+    assert_eq!(nightly["credential_env_prefix"], "NEXORA_PUBLISH_NIGHTLY");
+    let stable = inspect_effective_publish_target(fixture.config(), "one", "stable").unwrap();
+    assert_eq!(stable["endpoint"], "https://s3.example.com");
+    assert_eq!(stable["credential_env_prefix"], "NEXORA_PUBLISH");
+
+    let invalid = fs::read_to_string(fixture.config()).unwrap().replace(
+        "public_base_url = \"http://192.168.0.250:9000/releases\"\nallow_insecure_http = true",
+        "public_base_url = \"http://192.168.0.250:9000/releases\"\nallow_insecure_http = false",
+    );
+    fs::write(fixture.config(), invalid).unwrap();
+    assert!(
+        inspect_effective_publish_target(fixture.config(), "one", "nightly")
+            .unwrap_err()
+            .to_string()
+            .contains("allow_insecure_http")
+    );
+}
+
+#[test]
+fn publish_credentials_select_complete_groups_atomically() {
+    let _lock = ENVIRONMENT_LOCK.lock().unwrap();
+    let names = [
+        "NEXORA_PUBLISH_ACCESS_KEY_ID",
+        "NEXORA_PUBLISH_SECRET_ACCESS_KEY",
+        "NEXORA_PUBLISH_SESSION_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID",
+        "NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY",
+        "NEXORA_PUBLISH_NIGHTLY_SESSION_TOKEN",
+        "RUSTFS_ACCESS_KEY_ID",
+        "RUSTFS_SECRET_ACCESS_KEY",
+    ];
+    let _environment = EnvironmentGuard::clear(&names);
+
+    EnvironmentGuard::set("NEXORA_PUBLISH_ACCESS_KEY_ID", "nexora-access");
+    EnvironmentGuard::set("NEXORA_PUBLISH_SECRET_ACCESS_KEY", "nexora-secret");
+    EnvironmentGuard::set("NEXORA_PUBLISH_SESSION_TOKEN", "nexora-session");
+    EnvironmentGuard::set("AWS_ACCESS_KEY_ID", "aws-access");
+    EnvironmentGuard::set("AWS_SECRET_ACCESS_KEY", "aws-secret");
+    let selected = inspect_credential_selection("NEXORA_PUBLISH").unwrap();
+    assert_eq!(selected["source_prefix"], "NEXORA_PUBLISH");
+    assert_eq!(selected["has_session_token"], true);
+
+    EnvironmentGuard::unset("NEXORA_PUBLISH_SECRET_ACCESS_KEY");
+    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
+    EnvironmentGuard::unset("NEXORA_PUBLISH_ACCESS_KEY_ID");
+    EnvironmentGuard::unset("NEXORA_PUBLISH_SESSION_TOKEN");
+    EnvironmentGuard::set("AWS_SESSION_TOKEN", "aws-session");
+    let selected = inspect_credential_selection("NEXORA_PUBLISH").unwrap();
+    assert_eq!(selected["source_prefix"], "AWS");
+    assert_eq!(selected["has_session_token"], true);
+
+    EnvironmentGuard::unset("AWS_SECRET_ACCESS_KEY");
+    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
+    EnvironmentGuard::set("AWS_SECRET_ACCESS_KEY", "aws-secret");
+    EnvironmentGuard::set("NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID", "nightly-access");
+    EnvironmentGuard::set("NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY", "nightly-secret");
+    let selected = inspect_credential_selection("NEXORA_PUBLISH_NIGHTLY").unwrap();
+    assert_eq!(selected["source_prefix"], "NEXORA_PUBLISH_NIGHTLY");
+    EnvironmentGuard::unset("NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY");
+    assert!(inspect_credential_selection("NEXORA_PUBLISH_NIGHTLY").is_err());
+
+    EnvironmentGuard::unset("NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID");
+    EnvironmentGuard::unset("AWS_ACCESS_KEY_ID");
+    EnvironmentGuard::unset("AWS_SECRET_ACCESS_KEY");
+    EnvironmentGuard::unset("AWS_SESSION_TOKEN");
+    EnvironmentGuard::set("RUSTFS_ACCESS_KEY_ID", "legacy-access");
+    EnvironmentGuard::set("RUSTFS_SECRET_ACCESS_KEY", "legacy-secret");
+    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
+}
+
+#[test]
+fn windows_resources_use_utf8_unicode_table_and_distinct_process_identity() {
+    let fixture = Fixture::new(
+        "windows-resource",
+        &with_windows_target(app_config("one", "package-one", "中文 iMES")),
+    );
+    let scripts = inspect_windows_resource_scripts(fixture.config(), "one").unwrap();
+    let main = scripts["main"].as_str().unwrap();
+    let updater = scripts["updater"].as_str().unwrap();
+
+    for script in [main, updater] {
+        assert!(script.starts_with("#pragma code_page(65001)"));
+        assert!(script.contains("BLOCK \"080404B0\""));
+        assert!(script.contains("VALUE \"Translation\", 0x0804, 1200"));
+        assert!(script.contains("VALUE \"ProductName\", \"中文 iMES\\0\""));
+        assert!(!script.contains("080403A8"));
+        assert!(!script.contains("0x0804, 936"));
+    }
+    assert!(main.contains("VALUE \"FileDescription\", \"中文 iMES\\0\""));
+    assert!(main.contains("VALUE \"InternalName\", \"package-one\\0\""));
+    assert!(main.contains("VALUE \"OriginalFilename\", \"package-one.exe\\0\""));
+    assert!(updater.contains("VALUE \"FileDescription\", \"中文 iMES 更新程序\\0\""));
+    assert!(updater.contains("VALUE \"InternalName\", \"package-one-updater\\0\""));
+    assert!(updater.contains("VALUE \"OriginalFilename\", \"package-one-updater.exe\\0\""));
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files() {
+    let config = windows_host_config(with_windows_target(app_config(
+        "one",
+        "package-one",
+        "中文 iMES",
+    )));
+    let fixture = Fixture::new("windows-pe-version-info", &config);
+    let (main, updater) = inspect_compile_windows_resource_executables(
+        fixture.config(),
+        "one",
+        fixture.root.join("pe-smoke"),
+    )
+    .unwrap();
+    let main = windows_version_info(&main);
+    let updater = windows_version_info(&updater);
+
+    assert_eq!(main["FileDescription"], "中文 iMES");
+    assert_eq!(main["ProductName"], "中文 iMES");
+    assert_eq!(main["InternalName"], "package-one");
+    assert_eq!(main["OriginalFilename"], "package-one.exe");
+    assert_eq!(updater["FileDescription"], "中文 iMES 更新程序");
+    assert_eq!(updater["ProductName"], "中文 iMES");
+    assert_eq!(updater["InternalName"], "package-one-updater");
+    assert_eq!(updater["OriginalFilename"], "package-one-updater.exe");
 }
 
 #[test]

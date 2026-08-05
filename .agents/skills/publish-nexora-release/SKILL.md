@@ -76,7 +76,7 @@ Issue 或 PR 仅在确实关联时写成可点击链接，例如
 cargo fmt --all --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo run -p nexora -- lint --workspace . --deny-warnings
+cargo run -p cli -- lint --workspace . --deny-warnings
 bash scripts/check-scaffold-consumer.sh
 cd docs && bun install --frozen-lockfile && bun run build
 ```

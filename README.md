@@ -9,16 +9,16 @@ Feature、桌面 Shell、Account 认证授权、默认用户与角色管理，�
 
 ## 安装 CLI
 
-安装已发布的 `v0.26.0`：
+从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.26.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 在 Nexora 仓库根目录安装本地源码：
 
 ```bash
-cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --path crates/cli --locked --force --bin nexora
 ```
 
 这两条单行命令都可以直接用于 Bash、zsh、PowerShell 和 CMD。Rustup 通常会自动把 Cargo
@@ -31,6 +31,9 @@ cargo install --path crates/nexora --locked --force --no-default-features --feat
 ```toml
 nexora = { path = "/path/to/nexora/crates/nexora", default-features = false }
 ```
+
+CLI 安装后可运行 `nexora update`，从官方 GitHub Release 下载当前平台的预编译 binary，校验
+manifest、文件大小和 SHA-256 后原子替换 CLI；它不会修改项目依赖、源码或业务桌面应用。
 
 ## 创建项目
 
@@ -93,6 +96,8 @@ cargo run -p nexora \
 cargo fmt --all -- --check
 cargo test -p nexora --all-features
 cargo clippy -p nexora --all-features --all-targets -- -D warnings
+cargo test -p cli
+cargo run -p cli -- lint --workspace . --deny-warnings
 cd docs && bun install && bun run build
 ```
 

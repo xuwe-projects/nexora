@@ -1,0 +1,170 @@
+name: Release Nexora CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag and workspace version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          test "$version" = "$workspace_version"
+      - name: Test CLI
+        run: cargo test -p cli --locked
+      - name: Check CLI help
+        run: cargo run -p cli --locked -- --help
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: target/x86_64-apple-darwin/release/nexora
+            asset: nexora-x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            executable: target/aarch64-apple-darwin/release/nexora
+            asset: nexora-aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            executable: target/x86_64-pc-windows-msvc/release/nexora.exe
+            asset: nexora-x86_64-pc-windows-msvc.exe
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            executable: target/aarch64-pc-windows-msvc/release/nexora.exe
+            asset: nexora-aarch64-pc-windows-msvc.exe
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            executable: target/x86_64-unknown-linux-gnu/release/nexora
+            asset: nexora-x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            executable: target/aarch64-unknown-linux-gnu/release/nexora
+            asset: nexora-aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
+      - name: Test Windows Unicode resource contract
+        if: contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          cargo test -p cli --locked --test build windows_resources_use_utf8_unicode_table_and_distinct_process_identity
+          cargo test -p cli --locked --test build windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files
+      - name: Build release binary
+        shell: bash
+        run: cargo build -p cli --release --locked --target "${{ matrix.target }}"
+      - name: Verify embedded version and stage asset
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          actual="$("${{ matrix.executable }}" --version)"
+          test "$actual" = "nexora $version"
+          mkdir -p release-assets
+          cp "${{ matrix.executable }}" "release-assets/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: release-assets/${{ matrix.asset }}
+          if-no-files-found: error
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - name: Generate and validate update manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          release = tag.removeprefix("v")
+          repository = os.environ["GITHUB_REPOSITORY"]
+          assets = {
+              "x86_64-apple-darwin": "nexora-x86_64-apple-darwin",
+              "aarch64-apple-darwin": "nexora-aarch64-apple-darwin",
+              "x86_64-pc-windows-msvc": "nexora-x86_64-pc-windows-msvc.exe",
+              "aarch64-pc-windows-msvc": "nexora-aarch64-pc-windows-msvc.exe",
+              "x86_64-unknown-linux-gnu": "nexora-x86_64-unknown-linux-gnu",
+              "aarch64-unknown-linux-gnu": "nexora-aarch64-unknown-linux-gnu",
+          }
+          manifest_assets = {}
+          for target, name in assets.items():
+              path = Path("release-assets") / name
+              if not path.is_file():
+                  raise SystemExit(f"missing release asset: {name}")
+              data = path.read_bytes()
+              manifest_assets[target] = {
+                  "name": name,
+                  "url": f"https://github.com/{repository}/releases/download/{tag}/{name}",
+                  "size": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              }
+          manifest = {
+              "schema_version": 1,
+              "release": release,
+              "draft": False,
+              "assets": manifest_assets,
+          }
+          Path("release-assets/nexora-update.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-update-manifest
+          path: release-assets/nexora-update.json
+          if-no-files-found: error
+
+  publish:
+    needs: manifest
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create draft release, upload complete asset set, then publish
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          notes_file="docs/changelog/${version}.md"
+          test -f "$notes_file"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"
+            test "$draft" = "true"
+          else
+            gh release create "$tag" --verify-tag --draft --title "Nexora $version" --notes-file "$notes_file"
+          fi
+          gh release upload "$tag" release-assets/* --clobber
+          gh release edit "$tag" --title "Nexora $version" --notes-file "$notes_file" --draft=false

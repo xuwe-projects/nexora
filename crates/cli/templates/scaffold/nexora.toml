@@ -7,13 +7,20 @@ bucket = "desktop-releases"
 region = "us-east-1"
 force_path_style = true
 public_base_url = "https://example.invalid/desktop-releases"
+allow_insecure_http = false
+credential_env_prefix = "NEXORA_PUBLISH"
+
+# channel target 按字段覆盖；未出现的 bucket/region/path-style 等继承基础 target。
+[publish.targets.default.channels.beta]
+credential_env_prefix = "NEXORA_PUBLISH_BETA"
 
 [apps.{{ project_name }}]
 package = "{{ project_name }}"
 app_id = "com.example.{{ project_name }}"
 display_name = "{{ project_name }}"
 publish_target = "default"
-object_prefix = "desktop"
+# 空字符串表示不增加额外对象前缀；稳定目录身份来自上面的 app key。
+object_prefix = ""
 
 [apps.{{ project_name }}.branding]
 application_logo = "assets/logos/{{ project_name }}/logo-icon-128.png"

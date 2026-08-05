@@ -407,11 +407,11 @@ cargo fmt --all
 cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo run -p nexora -- lint --workspace . --deny-warnings
+cargo run -p cli -- lint --workspace . --deny-warnings
 ```
 
 - `nexora lint` 是本仓库的团队规则门禁，负责补充 rustc 和 Clippy 无法覆盖的 workspace 依赖、crate 组织、中文 rustdoc、测试目录、GPUI 生命周期、技术选型、API 与数据库边界检查。
-- 自定义 lint 的完整规则、级别和带原因豁免格式见 `crates/nexora/LINTS.md`；确定性 `error` 不允许豁免，启发式 `warning` 必须经过审查后才能局部放行。
+- 自定义 lint 的完整规则、级别和带原因豁免格式见 `crates/cli/LINTS.md`；确定性 `error` 不允许豁免，启发式 `warning` 必须经过审查后才能局部放行。
 - 需要生成或验证开发构建产物时运行 `cargo build --workspace`；修改发布配置、条件编译或仅在优化构建中出现的代码时，额外运行 `cargo build --workspace --release`。
 - 修改可执行程序行为时，除自动化测试外，使用 `cargo run -p <package> -- <args>` 和代表性参数验证关键路径。
 - 修复 `rustfmt`、编译器、Clippy 或测试报告的全部相关错误和警告，然后重新运行受影响的检查，直到结果通过；不要通过无依据的 `allow` 属性掩盖问题。

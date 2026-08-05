@@ -1,6 +1,5 @@
 //! Nexora 命令行入口。
 
-#[path = "nexora/cli.rs"]
 mod cli;
 
 use std::process::ExitCode;

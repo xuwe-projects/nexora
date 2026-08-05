@@ -130,6 +130,38 @@ fn option_builders_replace_framework_defaults() {
 }
 
 #[test]
+fn native_window_title_uses_framework_default_only_when_application_did_not_set_one() {
+    let options = ApplicationOptions::new().default_native_window_title("安装元数据名称");
+    assert_eq!(
+        options
+            .window_options
+            .as_ref()
+            .and_then(|options| options.titlebar.as_ref())
+            .and_then(|titlebar| titlebar.title.as_deref()),
+        Some("安装元数据名称")
+    );
+
+    let mut explicit = ApplicationOptions::new();
+    explicit
+        .window_options
+        .as_mut()
+        .unwrap()
+        .titlebar
+        .as_mut()
+        .unwrap()
+        .title = Some("应用显式标题".into());
+    let explicit = explicit.default_native_window_title("安装元数据名称");
+    assert_eq!(
+        explicit
+            .window_options
+            .as_ref()
+            .and_then(|options| options.titlebar.as_ref())
+            .and_then(|titlebar| titlebar.title.as_deref()),
+        Some("应用显式标题")
+    );
+}
+
+#[test]
 fn validation_rejects_missing_initial_feature_before_startup() {
     let error = ConfiguredApplication {
         initial_path: "/missing",

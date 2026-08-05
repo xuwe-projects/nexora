@@ -451,13 +451,17 @@ impl RenderOnce for LoginGate {
             )
             .when(self.title_bar, |this| {
                 this.child(
-                    TitleBar::new()
+                    div()
+                        .debug_selector(|| "login-gate-title-bar".into())
                         .absolute()
                         .top_0()
                         .left_0()
                         .right_0()
-                        .border_b(px(0.0))
-                        .bg(gpui::transparent_black()),
+                        .child(
+                            TitleBar::new()
+                                .border_b(px(0.0))
+                                .bg(gpui::transparent_black()),
+                        ),
                 )
             })
     }

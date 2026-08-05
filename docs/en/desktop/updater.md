@@ -15,8 +15,7 @@ rustup target add aarch64-apple-darwin
 cargo install cargo-bundle
 brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.26.0 nexora --locked --force \
-  --no-default-features --features cli --bin nexora
+  --tag v0.27.0 cli --locked --force --bin nexora
 nexora doctor
 # Installs cargo-bundle/create-dmg if either is missing:
 nexora doctor --fix
@@ -62,7 +61,12 @@ The supported release identity parameters are:
 | `release.build_number` | Exact `${BUILD_DATETIME}` or a literal positive integer such as `42` | A positive `u64` |
 | `release.notes` | Repository-relative UTF-8 Markdown path; required when updater is enabled and overridable per channel | Frozen `notes.md`, limited to 1 MiB |
 
-`package` controls Cargo, the cargo-bundle source path, and technical artifact names. `display_name` controls Info.plist, the DMG volume, and the app name users see after installation. `${CARGO_PKG_VERSION}` reads the selected app package through `cargo metadata --no-deps --format-version 1`, including packages that use `version.workspace = true`; it is not the workspace root name or Nexora CLI version. A literal SemVer remains supported.
+`package` controls Cargo, the internal main executable, and updater sidecar names. `display_name`
+controls user-visible metadata and distribution filenames such as `iMES-aarch64.dmg` and
+`iMES-x86_64.windows.zip`. Version, build number, package, and full target triple do not enter the
+distribution filename. `${CARGO_PKG_VERSION}` reads the selected app package through `cargo
+metadata --no-deps --format-version 1`, including packages that use `version.workspace = true`; it
+is not the workspace root name or Nexora CLI version. A literal SemVer remains supported.
 
 `${BUILD_DATETIME}` is the complete 24-hour `yyMMddHHmmss` value in the build machine's local timezone. A build in the same second or after clock rollback, daylight-saving fallback, or a timezone change uses `max(current local value, previous local build number + 1)`. A literal positive integer remains supported. Expressions must occupy the entire field; unknown expressions, fragments, arbitrary environment variables, zero, and overflow are rejected.
 
@@ -70,8 +74,15 @@ The signing key is read from `release.signing_key_file`, resolved relative to `n
 
 Create the key with `nexora updater keygen --app <key> --private-key-file <ignored-path>`. Rotate by
 first shipping a client that trusts both old and new public keys, then changing the signing private
-key, and only later removing the old public key. RustFS credentials authorize uploads, Ed25519 signs
+key, and only later removing the old public key. S3 credentials authorize uploads, Ed25519 signs
 the update manifest, and Apple Developer ID signs macOS code; these credentials are independent.
+
+Publish first reads the complete `NEXORA_PUBLISH` credential group. It falls back to the complete
+AWS group only when every Nexora field is absent; access, secret, and session token never mix across
+groups. Channel-specific `credential_env_prefix` values read only their own group and never fall
+back. `RUSTFS_*` is no longer read. Channel publish-target overrides inherit omitted fields from the
+base target and the merged URLs and HTTP policy are validated afterward. `object_prefix = ""` means
+that the stable app key starts directly at the bucket root.
 
 Applications load `UpdateConfig::from_current_bundle()` from
 `.app/Contents/Resources/nexora-updater.json` on macOS or `nexora-updater.json` beside the main
@@ -119,7 +130,11 @@ A single app is selected automatically. Multiple apps use an interactive `displa
 
 Before building any target, build atomically freezes the resolved identity in `dist/<app>/<channel>/release.json`. The receipt contains its schema, app key, package, channel, final version/build number and their sources, signed-integer Unix creation second, and planned targets. Every target in that build shares the identity. An incomplete retry reuses a matching receipt; once all target artifacts are complete, another explicit dynamic build creates a strictly higher number without deleting old versioned artifacts. A corrupt or unsupported receipt fails before target builds and is never reconstructed from directory names.
 
-Build never accesses object storage and never installs a missing Rust target implicitly. It builds the selected host-compatible target, main binary, and `<executable>-updater` sidecar. macOS produces `.app.zip` plus DMG. Windows produces MSI, a Burn Setup EXE that reuses the Chinese MSI UI, and `windows.zip`; only the ZIP enters the updater manifest. Every release artifact receives a standard SHA-256 sidecar and is indexed by `artifact.json`.
+Build never accesses object storage and never installs a missing Rust target implicitly. It builds
+the selected host-compatible target, main binary, and `<executable>-updater` sidecar. macOS produces
+branded `.app.zip` and DMG files. Windows produces branded `.exe`, MSI, and `windows.zip`; only the
+ZIP enters the updater manifest. Every release artifact receives a standard SHA-256 sidecar using
+the complete branded filename and is indexed by `artifact.json`.
 
 ## Windows Authenticode policy
 
@@ -155,6 +170,15 @@ chain, a mismatched certificate thumbprint, or a mismatched publisher for either
 or updater. A self-signed certificate is suitable only for controlled testing unless every target
 device explicitly trusts its root.
 
+Windows builds compile separate UTF-8/Unicode PE resources for the main process and updater. The
+main `FileDescription` is the display name; the updater description appends “更新程序”. Their
+`InternalName` and `OriginalFilename` retain the technical package identities. Authenticode signing
+runs only after each final resource has been linked.
+
+The native main-window title prefers an application-supplied title, then installed release
+`display_name`, then development `ApplicationOptions::application_name`. Shell login pages use one
+official `gpui-component::TitleBar`; applications do not implement their own window controls.
+
 Publish, dry-run, and yank read version/build number and targets only from the receipt and never recompute local time or run build. Publish validates the receipt against the app, package, channel, current Cargo package version, and configuration, then validates each receipt target's `artifact.json`, file size, and SHA-256. Dry-run performs the same local and remote checks without local or remote writes. An available release must be strictly greater than the remote `(version, build_number)`.
 
 The DMG is the first-install medium; `.app.zip` is the self-update payload; `release.json` freezes
@@ -172,7 +196,23 @@ instead of treating a health-session flag as a configuration filename.
 
 Developers do not maintain `manifest_sequence`. A missing remote `latest.json` (HTTP 404 only) yields sequence 1; otherwise publish verifies the signed remote manifest and increments its sequence. Dry-run performs the same read without writes. Before mutable uploads, publish reads the remote sequence again and rejects concurrent changes.
 
-Versioned platform artifacts, their `.sha256` sidecars, and sequence manifests are immutable. Publish derives each checksum sidecar from the revalidated artifact digest, so older builds without local sidecars remain publishable. Each macOS target receives a no-cache `latest-<arch>.dmg`; each Windows target receives `latest-<arch>.exe` and `latest-<arch>.msi`. A single-target release additionally receives the corresponding `latest.dmg`, `latest.exe`, or `latest.msi`. Signed `latest.json` is uploaded last. The updater manifest still contains only in-app update ZIP payloads, never a first-install DMG, Setup EXE, or MSI.
+Versioned platform artifacts, their `.sha256` sidecars, and sequence manifests are immutable.
+Publish uploads and anonymously verifies immutable objects first, updates branded channel-root
+objects next, then writes the sequence manifest and signed `latest.json` last. Updater URLs always
+point at versioned immutable payloads. The layout is:
+
+```text
+[<object_prefix>/]<app_key>/<channel>/latest.json
+[<object_prefix>/]<app_key>/<channel>/manifests/<sequence>.json
+[<object_prefix>/]<app_key>/<channel>/<display_name>-<arch><suffix>
+[<object_prefix>/]<app_key>/<channel>/<version>/<build>/<arch>/<display_name>-<arch><suffix>
+```
+
+Architecture directories are `x86_64` or `aarch64`, never full Rust triples, and there is no
+`releases` path segment. Signed `latest.json` remains; installer/update aliases such as
+`latest.dmg`, `latest-<arch>.dmg`, `latest.exe`, `latest.msi`, and `latest.zip` are no longer
+generated. Nexora never deletes old remote aliases or immutable objects. Administrators may remove
+legacy channel-root aliases manually, but old immutable versioned objects must remain available.
 
 The client reads its current `(version, build_number)` from its own bundle. Server `latest.json` represents only the latest available release. Version comparison uses `(version, build_number)`; manifest sequence is solely replay protection.
 

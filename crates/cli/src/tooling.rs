@@ -10,14 +10,17 @@ use std::{error::Error, fmt, path::PathBuf};
 
 pub(super) use release::{BuildConfig, PublishConfig};
 
+#[cfg(windows)]
+pub use release::inspect_compile_windows_resource_executables;
 #[allow(unused_imports)]
 pub use release::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_create_windows_update_zip,
-    inspect_freeze_release_notes, inspect_latest_dmg_aliases,
-    inspect_latest_windows_installer_aliases, inspect_prepare_release_receipt,
-    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
-    inspect_release_selection, inspect_signing_key, inspect_windows_installer_sources,
+    inspect_build_plans_for_channel, inspect_channel_artifact_keys,
+    inspect_create_windows_update_zip, inspect_credential_selection,
+    inspect_effective_publish_target, inspect_freeze_release_notes,
+    inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
+    inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
+    inspect_signing_key, inspect_windows_installer_sources, inspect_windows_resource_scripts,
     validate_display_name, write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 

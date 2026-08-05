@@ -4,6 +4,8 @@
 mod skills;
 #[path = "tooling.rs"]
 mod tooling;
+#[path = "update.rs"]
+mod update;
 
 use std::{
     env,
@@ -21,51 +23,51 @@ const DEFAULT_PROJECT_NAME: &str = "nexora-app";
 const LOGO_ASSETS: &[(&str, &[u8])] = &[
     (
         "logo-icon-16.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-16.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-16.png"),
     ),
     (
         "logo-icon-24.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-24.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-24.png"),
     ),
     (
         "logo-icon-32.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-32.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-32.png"),
     ),
     (
         "logo-icon-48.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-48.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-48.png"),
     ),
     (
         "logo-icon-64.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-64.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-64.png"),
     ),
     (
         "logo-icon-128.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-128.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-128.png"),
     ),
     (
         "logo-icon-256.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-256.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-256.png"),
     ),
     (
         "logo-icon-512.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-512.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-512.png"),
     ),
     (
         "logo-icon-1024.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-1024.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-1024.png"),
     ),
     (
         "logo-icon-source.png",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon-source.png"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon-source.png"),
     ),
     (
         "logo-icon.icns",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon.icns"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon.icns"),
     ),
     (
         "logo-icon.ico",
-        include_bytes!("../../../templates/scaffold/assets/logos/logo-icon.ico"),
+        include_bytes!("../templates/scaffold/assets/logos/logo-icon.ico"),
     ),
 ];
 
@@ -200,6 +202,24 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum NexoraCommand {
+    /// 通过官方 GitHub Release 预编译二进制更新 Nexora CLI 自身。
+    Update,
+
+    /// Windows CLI 自更新使用的隐藏 helper。
+    #[command(name = "__update-helper", hide = true)]
+    InternalUpdateHelper {
+        #[arg(long)]
+        parent_pid: u32,
+        #[arg(long)]
+        target: PathBuf,
+        #[arg(long)]
+        replacement: PathBuf,
+        #[arg(long)]
+        expected_size: u64,
+        #[arg(long)]
+        expected_sha256: String,
+    },
+
     /// 构建、签名并打包桌面应用。
     Build(Box<tooling::BuildConfig>),
 
@@ -269,6 +289,20 @@ pub(super) fn run() -> Result<(), String> {
     }
 
     match cli.command {
+        Some(NexoraCommand::Update) => update::run(),
+        Some(NexoraCommand::InternalUpdateHelper {
+            parent_pid,
+            target,
+            replacement,
+            expected_size,
+            expected_sha256,
+        }) => update::run_windows_helper(
+            parent_pid,
+            &target,
+            &replacement,
+            expected_size,
+            &expected_sha256,
+        ),
         Some(NexoraCommand::Build(config)) => {
             tooling::run_build_command(*config).map_err(|error| error.to_string())
         }
@@ -405,7 +439,7 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
             .map_err(|error| format!("无法渲染 .gitignore 模板：{error}"))?,
     );
     let nexora_source = nexora_dependency_source();
-    let release_notes = include_str!("../../../templates/scaffold/release-notes.md").to_owned();
+    let release_notes = include_str!("../templates/scaffold/release-notes.md").to_owned();
     let nexora_config = normalize_template_output(
         NexoraConfigTemplate { project_name }
             .render()

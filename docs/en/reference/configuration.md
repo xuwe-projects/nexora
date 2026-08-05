@@ -87,13 +87,25 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "http://127.0.0.1:9000/desktop-releases"
 allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH"
+
+[publish.targets.rustfs.channels.nightly]
+endpoint = "http://192.168.0.250:9000"
+public_base_url = "http://192.168.0.250:9000/desktop-releases"
+allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 ```
 
 `endpoint` is the signed S3 API URL; `public_base_url` is the anonymous client read URL. Local RustFS
-over HTTP must explicitly enable `allow_insecure_http`. Publish credentials come from
-`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or `RUSTFS_ACCESS_KEY_ID` /
-`RUSTFS_SECRET_ACCESS_KEY` and must not be written to configuration files. Each E2E run should use a
-unique `object_prefix`.
+over HTTP must explicitly enable `allow_insecure_http`. Channel tables override the base target by
+field; omitted fields inherit, and the merged endpoint, public URL, and HTTP policy are revalidated.
+
+The default credential group is `NEXORA_PUBLISH_ACCESS_KEY_ID`,
+`NEXORA_PUBLISH_SECRET_ACCESS_KEY`, and optional `NEXORA_PUBLISH_SESSION_TOKEN`. Only when that whole
+group is absent does publish atomically fall back to the complete AWS group; fields never mix across
+groups. A custom `credential_env_prefix` reads only its own complete group. `RUSTFS_*` is no longer
+read. `object_prefix = ""` places the stable app key directly at the bucket root without empty path
+segments or doubled slashes.
 
 Each desktop app declares its stable app key, bundle identifier, branding, and platform icons in the
 same app registration. Both single-package and workspace layouts resolve resources from the workspace
@@ -105,7 +117,7 @@ package = "desktop"
 app_id = "com.example.desktop"
 display_name = "Desktop Example"
 publish_target = "rustfs"
-object_prefix = "products"
+object_prefix = ""
 
 [apps.desktop.branding]
 application_logo = "assets/logos/desktop/logo-icon-128.png"

@@ -12,7 +12,7 @@ if command -v cygpath >/dev/null 2>&1; then
     manifest_root="$(cygpath -m "$root")"
 fi
 
-cargo build --manifest-path "$root/Cargo.toml" -p nexora --bin nexora
+cargo build --manifest-path "$root/Cargo.toml" -p cli --bin nexora
 nexora_bin="$target_dir_path/debug/nexora"
 if [[ -x "$nexora_bin.exe" ]]; then
     nexora_bin="$nexora_bin.exe"

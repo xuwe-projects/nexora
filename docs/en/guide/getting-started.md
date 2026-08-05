@@ -7,16 +7,16 @@ order: 2
 
 ## Install the CLI
 
-Install the current release from GitHub:
+Install the released standalone `cli` package from its GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.26.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 Framework contributors can install their local checkout from the repository root:
 
 ```bash
-cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --path crates/cli --locked --force --bin nexora
 ```
 
 Both commands are intentionally single-line and work in Bash, zsh, PowerShell, and CMD. Rustup

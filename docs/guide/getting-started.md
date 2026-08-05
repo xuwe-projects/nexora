@@ -7,16 +7,16 @@ order: 2
 
 ## 安装 CLI
 
-普通用户从 GitHub 安装当前已发布版本：
+从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.26.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 框架开发者可以在 Nexora 仓库根目录安装本地源码：
 
 ```bash
-cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --path crates/cli --locked --force --bin nexora
 ```
 
 两条命令保持为单行，因此可以直接用于 Bash、zsh、PowerShell 和 CMD。Rustup 通常会配置

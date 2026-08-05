@@ -1,5 +1,3 @@
-#![cfg(feature = "cli")]
-
 use std::{
     env, fs,
     io::{Read as _, Write as _},
@@ -93,7 +91,8 @@ impl Drop for TestDirectory {
 struct MockState {
     objects: std::collections::BTreeMap<String, Vec<u8>>,
     puts: Vec<String>,
-    replace_latest_after_manifest: Option<(String, Vec<u8>)>,
+    replace_latest_on_recheck: Option<(String, Vec<u8>)>,
+    latest_reads: usize,
     fail_put_suffix: Option<String>,
 }
 
@@ -132,23 +131,29 @@ impl MockObjectStore {
                                 } else {
                                     state.objects.insert(path.clone(), body);
                                     state.puts.push(path);
-                                    if state
-                                        .puts
-                                        .last()
-                                        .is_some_and(|path| path.contains("/manifests/"))
-                                        && let Some((latest_path, latest)) =
-                                            state.replace_latest_after_manifest.take()
-                                    {
-                                        state.objects.insert(latest_path, latest);
-                                    }
                                     ("200 OK", Vec::new())
                                 }
                             }
-                            "GET" => state
-                                .objects
-                                .get(&path)
-                                .cloned()
-                                .map_or(("404 Not Found", Vec::new()), |body| ("200 OK", body)),
+                            "GET" => {
+                                if state
+                                    .replace_latest_on_recheck
+                                    .as_ref()
+                                    .is_some_and(|(latest_path, _)| latest_path == &path)
+                                {
+                                    state.latest_reads += 1;
+                                    if state.latest_reads == 2
+                                        && let Some((latest_path, latest)) =
+                                            state.replace_latest_on_recheck.take()
+                                    {
+                                        state.objects.insert(latest_path, latest);
+                                    }
+                                }
+                                state
+                                    .objects
+                                    .get(&path)
+                                    .cloned()
+                                    .map_or(("404 Not Found", Vec::new()), |body| ("200 OK", body))
+                            }
                             "HEAD" => {
                                 if state.objects.contains_key(&path) {
                                     ("200 OK", Vec::new())
@@ -202,8 +207,8 @@ impl MockObjectStore {
             .insert(path.into(), bytes);
     }
 
-    fn replace_latest_after_manifest(&self, path: impl Into<String>, bytes: Vec<u8>) {
-        self.state.lock().unwrap().replace_latest_after_manifest = Some((path.into(), bytes));
+    fn replace_latest_on_recheck(&self, path: impl Into<String>, bytes: Vec<u8>) {
+        self.state.lock().unwrap().replace_latest_on_recheck = Some((path.into(), bytes));
     }
 
     fn fail_put_suffix(&self, suffix: impl Into<String>) {
@@ -330,8 +335,8 @@ fn prepare_publish_app(directory: &TestDirectory, base: &str) -> [u8; 32] {
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
     fs::create_dir_all(&release_dir).unwrap();
-    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
-    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    let zip_name = "Desktop-aarch64.app.zip";
+    let dmg_name = "Desktop-aarch64.dmg";
     fs::write(release_dir.join(zip_name), b"appzip").unwrap();
     fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
     fs::write(
@@ -681,6 +686,8 @@ fn help_and_version_are_available() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("build"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("doctor"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("lint"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("update"));
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("__update-helper"));
 
     let build_help = directory.run(&["help", "build"]);
     assert!(build_help.status.success());
@@ -786,8 +793,8 @@ fn publish_dry_run_signs_latest_from_existing_artifact_metadata() {
         .join("1.0.1")
         .join("12/aarch64-apple-darwin");
     fs::create_dir_all(&release_dir).unwrap();
-    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
-    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    let zip_name = "Desktop-aarch64.app.zip";
+    let dmg_name = "Desktop-aarch64.dmg";
     fs::write(release_dir.join(zip_name), b"appzip").unwrap();
     fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
     use sha2::{Digest as _, Sha256};
@@ -899,7 +906,7 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
 }
 
 #[test]
-fn publish_uploads_zip_dmg_aliases_and_latest_in_required_order() {
+fn publish_uploads_branded_artifacts_and_latest_in_required_order() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use ed25519_dalek::SigningKey;
     use sha2::{Digest as _, Sha256};
@@ -913,8 +920,8 @@ fn publish_uploads_zip_dmg_aliases_and_latest_in_required_order() {
         .path()
         .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin");
     fs::create_dir_all(&release_dir).unwrap();
-    let zip_name = "desktop-1.0.1-12-aarch64.app.zip";
-    let dmg_name = "desktop-1.0.1-12-aarch64.dmg";
+    let zip_name = "Desktop-aarch64.app.zip";
+    let dmg_name = "Desktop-aarch64.dmg";
     fs::write(release_dir.join(zip_name), b"appzip").unwrap();
     fs::write(release_dir.join(dmg_name), b"dmg").unwrap();
     fs::write(
@@ -1034,28 +1041,26 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
     assert_eq!(
         store.puts(),
         vec![
-            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}"),
-            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}.sha256"),
-            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}"),
-            format!("{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}.sha256"),
-            format!("{prefix}/releases/1.0.1/12/notes.md"),
+            format!("{prefix}/1.0.1/12/aarch64/{zip_name}"),
+            format!("{prefix}/1.0.1/12/aarch64/{zip_name}.sha256"),
+            format!("{prefix}/1.0.1/12/aarch64/{dmg_name}"),
+            format!("{prefix}/1.0.1/12/aarch64/{dmg_name}.sha256"),
+            format!("{prefix}/1.0.1/12/notes.md"),
+            format!("{prefix}/{zip_name}"),
+            format!("{prefix}/{zip_name}.sha256"),
+            format!("{prefix}/{dmg_name}"),
+            format!("{prefix}/{dmg_name}.sha256"),
             format!("{prefix}/manifests/1.json"),
-            format!("{prefix}/latest-aarch64.dmg"),
-            format!("{prefix}/latest.dmg"),
             format!("{prefix}/latest.json"),
         ]
     );
     assert_eq!(
-        store.object(&format!(
-            "{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{zip_name}.sha256"
-        )),
+        store.object(&format!("{prefix}/1.0.1/12/aarch64/{zip_name}.sha256")),
         format!("794f396be329ce58e99c9084550e92f52c2799a83a4ae46e6fcd6efde6b1a922  {zip_name}\n")
             .into_bytes()
     );
     assert_eq!(
-        store.object(&format!(
-            "{prefix}/releases/1.0.1/12/aarch64-apple-darwin/{dmg_name}.sha256"
-        )),
+        store.object(&format!("{prefix}/1.0.1/12/aarch64/{dmg_name}.sha256")),
         format!("{:x}  {dmg_name}\n", Sha256::digest(b"dmg")).into_bytes()
     );
     let latest: serde_json::Value =
@@ -1063,11 +1068,11 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
     assert_eq!(latest["payload"]["manifest_sequence"], 1);
     assert_eq!(latest["payload"]["artifacts"].as_array().unwrap().len(), 1);
     assert_eq!(latest["payload"]["artifacts"][0]["kind"], "macos_app_zip");
-    let notes = store.object(&format!("{prefix}/releases/1.0.1/12/notes.md"));
+    let notes = store.object(&format!("{prefix}/1.0.1/12/notes.md"));
     assert_eq!(notes, "# 1.0.1\n\n- 发布测试更新日志。\n".as_bytes());
     assert_eq!(
         latest["payload"]["notes_url"],
-        format!("{base}/desktop-releases/e2e-test/desktop/stable/releases/1.0.1/12/notes.md")
+        format!("{base}/desktop-releases/e2e-test/desktop/stable/1.0.1/12/notes.md")
     );
     assert_eq!(latest["payload"]["notes_size"], notes.len());
     assert_eq!(
@@ -1158,9 +1163,9 @@ fn publish_rejects_artifact_mismatch_before_upload() {
     let base = store.base_url();
     prepare_publish_app(&directory, &base);
     fs::write(
-        directory.path().join(
-            "dist/desktop/stable/1.0.1/12/aarch64-apple-darwin/desktop-1.0.1-12-aarch64.app.zip",
-        ),
+        directory
+            .path()
+            .join("dist/desktop/stable/1.0.1/12/aarch64-apple-darwin/Desktop-aarch64.app.zip"),
         b"tampered",
     )
     .unwrap();
@@ -1213,7 +1218,7 @@ fn publish_rejects_concurrent_sequence_change_before_mutable_uploads() {
     let base = store.base_url();
     let seed = prepare_publish_app(&directory, &base);
     let latest_path = "/desktop-releases/e2e-test/desktop/stable/latest.json";
-    store.replace_latest_after_manifest(latest_path, signed_remote_manifest(seed, 9));
+    store.replace_latest_on_recheck(latest_path, signed_remote_manifest(seed, 9));
 
     let output = directory.run_with_env(
         &["publish", "--app", "desktop", "--yes"],
@@ -1227,13 +1232,16 @@ fn publish_rejects_concurrent_sequence_change_before_mutable_uploads() {
     let puts = store.puts();
     assert_eq!(
         puts.len(),
-        6,
-        "只允许写入两个版本化产物、对应校验文件、更新日志和 sequence manifest"
+        5,
+        "并发冲突前只允许写入两个版本化产物、对应校验文件和更新日志"
     );
     assert!(puts[4].ends_with("/notes.md"));
-    assert!(puts[5].ends_with("/manifests/1.json"));
     assert!(!puts.iter().any(|path| path.ends_with("/latest.json")));
-    assert!(!puts.iter().any(|path| path.ends_with("/latest.dmg")));
+    assert!(
+        !puts.iter().any(|path| {
+            path == "/desktop-releases/e2e-test/desktop/stable/Desktop-aarch64.dmg"
+        })
+    );
 }
 
 #[test]
@@ -1242,7 +1250,8 @@ fn publish_rejects_existing_immutable_object_before_upload() {
     let store = MockObjectStore::new();
     let base = store.base_url();
     prepare_publish_app(&directory, &base);
-    let existing = "/desktop-releases/e2e-test/desktop/stable/releases/1.0.1/12/aarch64-apple-darwin/desktop-1.0.1-12-aarch64.app.zip";
+    let existing =
+        "/desktop-releases/e2e-test/desktop/stable/1.0.1/12/aarch64/Desktop-aarch64.app.zip";
     store.insert(existing, b"already-there".to_vec());
 
     let output = directory.run(&["publish", "--app", "desktop", "--dry-run"]);
@@ -1252,12 +1261,12 @@ fn publish_rejects_existing_immutable_object_before_upload() {
 }
 
 #[test]
-fn latest_dmg_failure_prevents_latest_json_upload() {
-    let directory = TestDirectory::new("publish-latest-dmg-failure");
+fn branded_dmg_failure_prevents_latest_json_upload() {
+    let directory = TestDirectory::new("publish-branded-dmg-failure");
     let store = MockObjectStore::new();
     let base = store.base_url();
     prepare_publish_app(&directory, &base);
-    store.fail_put_suffix("/latest-aarch64.dmg");
+    store.fail_put_suffix("/stable/Desktop-aarch64.dmg");
 
     let output = directory.run_with_env(
         &["publish", "--app", "desktop", "--yes"],
@@ -1267,11 +1276,11 @@ fn latest_dmg_failure_prevents_latest_json_upload() {
         ],
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("latest-aarch64.dmg"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Desktop-aarch64.dmg"));
     let puts = store.puts();
     assert!(
         puts.iter()
-            .any(|path| path.ends_with("/latest-aarch64.dmg"))
+            .any(|path| path.ends_with("/stable/Desktop-aarch64.dmg"))
     );
     assert!(!puts.iter().any(|path| path.ends_with("/latest.json")));
 }

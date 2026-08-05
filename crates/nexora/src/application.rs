@@ -363,6 +363,27 @@ impl ApplicationOptions {
         self
     }
 
+    /// 仅在应用没有显式设置原生 title 时补充主窗口默认 title。
+    ///
+    /// Nexora 启动器在 `open_window` 前用安装元数据中的最终 `display_name` 调用该方法；
+    /// 开发运行没有安装元数据时使用 [`Self::application_name`]。应用在
+    /// `WindowOptions::titlebar.title` 中提供的值始终优先，不会被覆盖。
+    pub fn default_native_window_title(
+        mut self,
+        default_title: impl Into<gpui::SharedString>,
+    ) -> Self {
+        let window_options = self
+            .window_options
+            .get_or_insert_with(WindowOptions::default);
+        let titlebar = window_options
+            .titlebar
+            .get_or_insert_with(TitleBar::title_bar_options);
+        if titlebar.title.is_none() {
+            titlebar.title = Some(default_title.into());
+        }
+        self
+    }
+
     /// 设置启动时优先使用的显示器稳定 UUID。
     pub fn startup_display_uuid(mut self, display_uuid: impl Into<String>) -> Self {
         self.startup_display_uuid = Some(display_uuid.into());
@@ -379,19 +400,17 @@ impl ApplicationOptions {
         self
     }
 
-    fn into_desktop_options(self) -> DesktopApplicationOptions {
-        let mut window_options = self.window_options.unwrap_or_default();
-        if window_options.titlebar.is_none() {
-            window_options.titlebar = Some(TitleBar::title_bar_options());
-        }
+    fn into_desktop_options(self, default_window_title: &str) -> DesktopApplicationOptions {
+        let mut this = self.default_native_window_title(default_window_title);
+        let window_options = this.window_options.take();
         DesktopApplicationOptions {
-            daemon_mode: self.daemon_mode,
-            activate: self.activate,
-            window_options: Some(window_options),
-            window_size: self.window_size,
-            window_min_size: self.window_min_size,
-            startup_display_uuid: self.startup_display_uuid,
-            application_assets: self.application_assets,
+            daemon_mode: this.daemon_mode,
+            activate: this.activate,
+            window_options,
+            window_size: this.window_size,
+            window_min_size: this.window_min_size,
+            startup_display_uuid: this.startup_display_uuid,
+            application_assets: this.application_assets,
         }
     }
 }
@@ -1124,7 +1143,7 @@ where
         })
         .unwrap_or_default();
     let pinned_tab_paths = shell_preferences.pinned_tabs.clone();
-    let desktop_options = options.into_desktop_options();
+    let desktop_options = options.into_desktop_options(application_name.as_str());
     let adapter = ApplicationAdapter {
         application,
         options: desktop_options,
@@ -3231,13 +3250,17 @@ impl Render for ApplicationShell {
                 .size_full()
                 .child(self.login_feature.clone())
                 .child(
-                    TitleBar::new()
+                    div()
+                        .debug_selector(|| "nexora-shell-login-title-bar".into())
                         .absolute()
                         .top_0()
                         .left_0()
                         .right_0()
-                        .border_b(px(0.0))
-                        .bg(gpui::transparent_black()),
+                        .child(
+                            TitleBar::new()
+                                .border_b(px(0.0))
+                                .bg(gpui::transparent_black()),
+                        ),
                 )
                 .when_some(navigation_error, |element, message| {
                     element.child(

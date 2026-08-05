@@ -7,16 +7,16 @@ order: 2
 
 ## Installation
 
-Install a published GitHub tag:
+Install the released standalone `cli` package from its GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.26.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:
 
 ```bash
-cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --path crates/cli --locked --force --bin nexora
 ```
 
 These commands use no shell-specific line continuation or environment-variable syntax, so the same
@@ -41,6 +41,7 @@ nexora publish --all --yes
 nexora publish --app <id> yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
+nexora update
 nexora version
 ```
 
@@ -70,8 +71,13 @@ interactive `nexora build` and `publish` commands show a channel multi-select wi
 preselected. CI should pass repeatable `--channel <name>` arguments or `--all-channels`; legacy
 single-channel `release.channel` remains supported. `nexora build` only builds existing artifacts for the
 current host and writes `artifact.json`; `nexora publish` only publishes existing artifacts and never
-runs build implicitly. Publish uploads update files and notes, the immutable manifest, and
-`latest.json` to RustFS/S3-compatible storage, then anonymously reads and verifies `latest.json`.
+runs build implicitly. Publish uploads and verifies immutable versioned files first, then updates
+the branded channel-root files and sequence manifest, and uploads signed `latest.json` last.
 `latest.json` is an Ed25519 signed envelope. Public keys live in `trusted_public_keys`; private
 signing keys are read only from a secure file or the environment variable named by
 `signing_key_env`. Forced updates are written with `--minimum-supported-version`.
+
+`nexora update` updates only the CLI itself from the official GitHub Release. It accepts HTTPS
+assets only, verifies manifest schema, version, target, size, and SHA-256, then uses the platform's
+safe replacement flow. It never edits project dependencies or source, updates desktop apps, falls
+back to local Cargo compilation, or requests sudo/UAC.

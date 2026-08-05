@@ -8,6 +8,7 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "http://127.0.0.1:9000/nexora-updater-example"
 allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH"
 
 [apps.updater-windows]
 package = "nexora-updater-windows-example"

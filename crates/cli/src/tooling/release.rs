@@ -33,6 +33,7 @@ const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
+const DEFAULT_CREDENTIAL_ENV_PREFIX: &str = "NEXORA_PUBLISH";
 const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
 const CARGO_WIX_MODERN_REVISION: &str = "9a8ed9486637e1fb839f209730eda6c95fd12d88";
 
@@ -115,6 +116,74 @@ struct PublishTarget {
     public_base_url: String,
     #[serde(default)]
     allow_insecure_http: bool,
+    #[serde(default = "default_credential_env_prefix")]
+    credential_env_prefix: String,
+    #[serde(default)]
+    channels: BTreeMap<String, PublishTargetOverride>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishTargetOverride {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    bucket: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
+    force_path_style: Option<bool>,
+    #[serde(default)]
+    public_base_url: Option<String>,
+    #[serde(default)]
+    allow_insecure_http: Option<bool>,
+    #[serde(default)]
+    credential_env_prefix: Option<String>,
+}
+
+impl PublishTarget {
+    fn for_channel(&self, channel: &str) -> Self {
+        let Some(override_target) = self.channels.get(channel) else {
+            let mut target = self.clone();
+            target.channels.clear();
+            return target;
+        };
+        Self {
+            provider: override_target
+                .provider
+                .clone()
+                .unwrap_or_else(|| self.provider.clone()),
+            endpoint: override_target
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| self.endpoint.clone()),
+            bucket: override_target
+                .bucket
+                .clone()
+                .unwrap_or_else(|| self.bucket.clone()),
+            region: override_target
+                .region
+                .clone()
+                .or_else(|| self.region.clone()),
+            force_path_style: override_target
+                .force_path_style
+                .unwrap_or(self.force_path_style),
+            public_base_url: override_target
+                .public_base_url
+                .clone()
+                .unwrap_or_else(|| self.public_base_url.clone()),
+            allow_insecure_http: override_target
+                .allow_insecure_http
+                .unwrap_or(self.allow_insecure_http),
+            credential_env_prefix: override_target
+                .credential_env_prefix
+                .clone()
+                .unwrap_or_else(|| self.credential_env_prefix.clone()),
+            channels: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -637,10 +706,11 @@ struct PublishPlan {
     required_targets: Vec<String>,
     immutable_payloads: Vec<Upload>,
     sequence_manifest: Upload,
-    latest_installer_aliases: Vec<Upload>,
+    channel_artifacts: Vec<Upload>,
     latest: Upload,
     latest_json: Vec<u8>,
-    verify_urls: Vec<Verification>,
+    immutable_verify_urls: Vec<Verification>,
+    channel_verify_urls: Vec<Verification>,
     latest_url: String,
 }
 
@@ -739,8 +809,8 @@ pub(super) fn run_publish_command(config: PublishConfig) -> CliResult<()> {
         return Err(CliError::new("已取消发布"));
     }
 
-    let credentials = S3Credentials::from_env()?;
     for plan in &plans {
+        let credentials = S3Credentials::from_env(&plan.target.credential_env_prefix)?;
         publish_plan(plan, &client, &credentials)?;
     }
     Ok(())
@@ -792,13 +862,19 @@ impl ProjectDocument {
         for (name, target) in &self.config.publish.targets {
             validate_safe_component(name, "publish target 名称")?;
             validate_publish_target(target)?;
+            for channel in target.channels.keys() {
+                validate_channel_name(channel)?;
+                validate_publish_target(&target.for_channel(channel))?;
+            }
         }
         for (app_key, app) in &self.config.apps {
             validate_safe_component(app_key, "app key")?;
             validate_safe_component(&app.package, "package")?;
             validate_app_id(&app.app_id)?;
             validate_display_name(&app.display_name)?;
-            validate_safe_component(&app.object_prefix, "object_prefix")?;
+            if !app.object_prefix.is_empty() {
+                validate_safe_component(&app.object_prefix, "object_prefix")?;
+            }
             validate_workspace_relative_path(&app.branding.application_logo, "application_logo")?;
             validate_workspace_relative_path(&app.branding.icon_source, "icon_source")?;
             validate_workspace_relative_path(&app.platforms.macos.icon, "macOS icon")?;
@@ -1069,9 +1145,9 @@ impl ProjectDocument {
             channel.and_then(|channel| channel.runtime_config.as_deref()),
         )?;
         let runtime_config_sha256 = sha256_file(&runtime_config)?;
-        let target = &self.config.publish.targets[&app.publish_target];
+        let target = self.config.publish.targets[&app.publish_target].for_channel(selected_channel);
         let updater_feed = public_object_url(
-            target,
+            &target,
             &object_key([
                 app.object_prefix.as_str(),
                 app_key,
@@ -1406,7 +1482,8 @@ impl ProjectDocument {
     ) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
         let brand_assets = self.brand_assets(app_key, app)?;
-        let publish_target = &self.config.publish.targets[&app.publish_target];
+        let publish_target =
+            self.config.publish.targets[&app.publish_target].for_channel(&release.channel);
         targets
             .iter()
             .map(|target| {
@@ -1420,10 +1497,7 @@ impl ProjectDocument {
                     .join(release.version.to_string())
                     .join(release.build_number.to_string())
                     .join(target);
-                let technical_stem = format!(
-                    "{}-{}-{}-{arch}",
-                    app.package, release.version, release.build_number
-                );
+                let artifact_stem = format!("{}-{arch}", app.display_name);
                 Ok(BuildPlan {
                     project_root: self.root.clone(),
                     app_key: app_key.to_owned(),
@@ -1461,15 +1535,15 @@ impl ProjectDocument {
                     },
                     app_zip_path: match platform {
                         BuildTargetPlatform::MacOs => {
-                            release_dir.join(format!("{technical_stem}.app.zip"))
+                            release_dir.join(format!("{artifact_stem}.app.zip"))
                         }
                         BuildTargetPlatform::Windows => {
-                            release_dir.join(format!("{technical_stem}.windows.zip"))
+                            release_dir.join(format!("{artifact_stem}.windows.zip"))
                         }
                     },
-                    dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
-                    msi_path: release_dir.join(format!("{technical_stem}.msi")),
-                    setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
+                    dmg_path: release_dir.join(format!("{artifact_stem}.dmg")),
+                    msi_path: release_dir.join(format!("{artifact_stem}.msi")),
+                    setup_path: release_dir.join(format!("{artifact_stem}.exe")),
                     artifact_path: release_dir.join("artifact.json"),
                     notes_path: frozen_notes
                         .map(|notes| notes.path.clone())
@@ -1495,7 +1569,7 @@ impl ProjectDocument {
         }
         let release = self.release_from_receipt(app_key, app, channel)?;
         let updater_app_id = app.updater.app_id.as_deref().unwrap_or(&app.app_id);
-        let target = self.config.publish.targets[&app.publish_target].clone();
+        let target = self.config.publish.targets[&app.publish_target].for_channel(&release.channel);
         let trusted_keys = parse_trusted_keys(&app.updater.trusted_public_keys)?;
         let (signing_key_id, signing_key) = read_signing_key(self, app_key, app, &trusted_keys)?;
         let channel_prefix = object_key([
@@ -1532,14 +1606,14 @@ impl ProjectDocument {
             .ok_or_else(|| CliError::new("远端 manifest sequence 已达到 u64 上限"))?;
 
         let mut immutable_payloads = Vec::new();
-        let mut latest_installer_aliases = Vec::new();
-        let mut verify_urls = Vec::new();
+        let mut channel_artifacts = Vec::new();
+        let mut immutable_verify_urls = Vec::new();
+        let mut channel_verify_urls = Vec::new();
         let mut manifest_artifacts = Vec::new();
         if matches!(status, ReleaseStatus::Available) {
             let local_artifacts = load_release_artifacts(&self.root, app_key, app, &release)?;
             let release_prefix = object_key([
                 channel_prefix.as_str(),
-                "releases",
                 release.version.to_string().as_str(),
                 release.build_number.to_string().as_str(),
             ]);
@@ -1551,11 +1625,9 @@ impl ProjectDocument {
                 ArtifactKind::WindowsZip,
             ] {
                 for artifact in local_artifacts.iter().filter(|item| item.kind == kind) {
-                    let key = object_key([
-                        release_prefix.as_str(),
-                        artifact.target.as_str(),
-                        artifact.file_name.as_str(),
-                    ]);
+                    let arch = target_arch_alias(&artifact.target)?;
+                    let key =
+                        object_key([release_prefix.as_str(), arch, artifact.file_name.as_str()]);
                     let url = public_object_url(&target, &key);
                     immutable_payloads.push(Upload {
                         key: key.clone(),
@@ -1564,11 +1636,16 @@ impl ProjectDocument {
                         cache_control: IMMUTABLE_CACHE,
                         immutable: true,
                     });
+                    immutable_verify_urls.push(Verification {
+                        url: url.clone(),
+                        expected_sha256: artifact.sha256.clone(),
+                        label: format!("{} versioned artifact", artifact.file_name),
+                    });
                     let checksum_key = format!("{key}.sha256");
                     let checksum_url = public_object_url(&target, &checksum_key);
                     let checksum =
                         sha256_sidecar_contents(&artifact.file_name, &artifact.sha256).into_bytes();
-                    verify_urls.push(Verification {
+                    immutable_verify_urls.push(Verification {
                         url: checksum_url,
                         expected_sha256: sha256_hex(&checksum),
                         label: format!("{} SHA-256 sidecar", artifact.target),
@@ -1587,11 +1664,6 @@ impl ProjectDocument {
                             sha256: artifact.sha256.clone(),
                             size: artifact.size,
                             kind: manifest_kind.to_owned(),
-                        });
-                        verify_urls.push(Verification {
-                            url,
-                            expected_sha256: artifact.sha256.clone(),
-                            label: format!("{} updater ZIP", artifact.target),
                         });
                     }
                 }
@@ -1625,7 +1697,12 @@ impl ProjectDocument {
             verify_release_notes_bytes(&notes_metadata, &notes_bytes)
                 .map_err(|error| CliError::new(format!("已冻结 notes.md 无效: {error}")))?;
             let key = object_key([release_prefix.as_str(), RELEASE_NOTES_FILE_NAME]);
-            let notes_url = Some(public_object_url(&target, &key));
+            let notes_url = public_object_url(&target, &key);
+            immutable_verify_urls.push(Verification {
+                url: notes_url.clone(),
+                expected_sha256: notes_metadata.sha256.clone(),
+                label: "versioned release notes".to_owned(),
+            });
             immutable_payloads.push(Upload {
                 key,
                 source: UploadSource::File(notes_path),
@@ -1633,14 +1710,10 @@ impl ProjectDocument {
                 cache_control: IMMUTABLE_CACHE,
                 immutable: true,
             });
-            latest_installer_aliases = latest_installer_uploads(
-                &local_artifacts,
-                &channel_prefix,
-                release.targets.len() == 1,
-            )?;
-            for upload in &latest_installer_aliases {
+            channel_artifacts = channel_artifact_uploads(&local_artifacts, &channel_prefix)?;
+            for upload in &channel_artifacts {
                 let bytes = upload.source.bytes()?;
-                verify_urls.push(Verification {
+                channel_verify_urls.push(Verification {
                     url: public_object_url(&target, &upload.key),
                     expected_sha256: sha256_hex(&bytes),
                     label: upload.key.clone(),
@@ -1655,7 +1728,7 @@ impl ProjectDocument {
                 minimum_supported_version: release.minimum_supported_version.clone(),
                 published_at: unix_now()?,
                 status,
-                notes_url,
+                notes_url: Some(notes_url),
                 notes_sha256: Some(notes_metadata.sha256),
                 notes_size: Some(notes_metadata.size),
                 artifacts: manifest_artifacts,
@@ -1669,10 +1742,11 @@ impl ProjectDocument {
                 observed_sequence,
                 sequence,
                 immutable_payloads,
-                latest_installer_aliases,
+                channel_artifacts,
                 latest_key,
                 latest_url,
-                verify_urls,
+                immutable_verify_urls,
+                channel_verify_urls,
                 signing_key_id,
                 &signing_key,
                 payload,
@@ -1702,10 +1776,11 @@ impl ProjectDocument {
             observed_sequence,
             sequence,
             immutable_payloads,
-            latest_installer_aliases,
+            channel_artifacts,
             latest_key,
             latest_url,
-            verify_urls,
+            immutable_verify_urls,
+            channel_verify_urls,
             signing_key_id,
             &signing_key,
             payload,
@@ -1723,10 +1798,11 @@ fn finalize_publish_plan(
     observed_sequence: Option<u64>,
     sequence: u64,
     immutable_payloads: Vec<Upload>,
-    latest_installer_aliases: Vec<Upload>,
+    channel_artifacts: Vec<Upload>,
     latest_key: String,
     latest_url: String,
-    verify_urls: Vec<Verification>,
+    immutable_verify_urls: Vec<Verification>,
+    channel_verify_urls: Vec<Verification>,
     signing_key_id: String,
     signing_key: &SigningKey,
     payload: ManifestPayload,
@@ -1771,7 +1847,7 @@ fn finalize_publish_plan(
             cache_control: IMMUTABLE_CACHE,
             immutable: true,
         },
-        latest_installer_aliases,
+        channel_artifacts,
         latest: Upload {
             key: latest_key,
             source: UploadSource::Bytes(latest_json.clone()),
@@ -1780,7 +1856,8 @@ fn finalize_publish_plan(
             immutable: false,
         },
         latest_json,
-        verify_urls,
+        immutable_verify_urls,
+        channel_verify_urls,
         latest_url,
     })
 }
@@ -1863,11 +1940,12 @@ fn write_runtime_config_to_directory(plan: &BuildPlan, config_directory: &Path) 
 fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     println!("build: {} ({})", plan.display_name, plan.app_key);
     ensure_windows_build_dependencies(plan)?;
-    let resource = compile_windows_icon_resource(plan)?;
-    build_windows_binary(plan, &plan.package, &resource)?;
+    let main_resource = compile_windows_resource(plan, WindowsResourceKind::Main)?;
+    build_windows_binary(plan, &plan.package, &main_resource)?;
     let updater_path = if plan.updater.is_some() {
         let sidecar = format!("{}-updater", plan.package);
-        build_windows_binary(plan, &sidecar, &resource)?;
+        let updater_resource = compile_windows_resource(plan, WindowsResourceKind::Updater)?;
+        build_windows_binary(plan, &sidecar, &updater_resource)?;
         Some(windows_binary_path(
             &plan.project_root,
             &plan.target,
@@ -2128,13 +2206,49 @@ fn windows_work_dir(plan: &BuildPlan) -> PathBuf {
         .join(&plan.target)
 }
 
-fn compile_windows_icon_resource(plan: &BuildPlan) -> CliResult<PathBuf> {
+#[derive(Clone, Copy)]
+enum WindowsResourceKind {
+    Main,
+    Updater,
+}
+
+fn compile_windows_resource(
+    plan: &BuildPlan,
+    resource_kind: WindowsResourceKind,
+) -> CliResult<PathBuf> {
     validate_ico(&plan.windows_icon)?;
     let work_dir = windows_work_dir(plan);
     fs::create_dir_all(&work_dir)
         .map_err(|error| CliError::new(format!("无法创建 `{}`: {error}", work_dir.display())))?;
-    let rc_path = work_dir.join("nexora-icon.rc");
-    let res_path = work_dir.join("nexora-icon.res");
+    let role = match resource_kind {
+        WindowsResourceKind::Main => "main",
+        WindowsResourceKind::Updater => "updater",
+    };
+    let rc_path = work_dir.join(format!("nexora-{role}.rc"));
+    let res_path = work_dir.join(format!("nexora-{role}.res"));
+    let contents = windows_resource_script(plan, resource_kind)?;
+    fs::write(&rc_path, contents).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 Windows resource `{}`: {error}",
+            rc_path.display()
+        ))
+    })?;
+    let rc = windows_sdk_tool("rc.exe")?;
+    run_status(
+        "rc Windows resources",
+        Command::new(rc)
+            .arg("/nologo")
+            .arg("/c65001")
+            .arg(format!("/fo{}", res_path.display()))
+            .arg(&rc_path),
+    )?;
+    Ok(res_path)
+}
+
+fn windows_resource_script(
+    plan: &BuildPlan,
+    resource_kind: WindowsResourceKind,
+) -> CliResult<String> {
     let options = windows_options(plan)?;
     let version = &plan.release.version;
     if [version.major, version.minor, version.patch]
@@ -2147,8 +2261,21 @@ fn compile_windows_icon_resource(plan: &BuildPlan) -> CliResult<PathBuf> {
     }
     let build = plan.release.build_number % (u64::from(u16::MAX) + 1);
     let dotted_version = windows_file_version(version, plan.release.build_number)?;
-    let contents = format!(
-        r#"1 ICON "{}"
+    let (description, internal_name, original_filename) = match resource_kind {
+        WindowsResourceKind::Main => (
+            plan.display_name.clone(),
+            plan.package.clone(),
+            format!("{}.exe", plan.package),
+        ),
+        WindowsResourceKind::Updater => (
+            format!("{} 更新程序", plan.display_name),
+            format!("{}-updater", plan.package),
+            format!("{}-updater.exe", plan.package),
+        ),
+    };
+    Ok(format!(
+        r#"#pragma code_page(65001)
+1 ICON "{}"
 1 VERSIONINFO
 FILEVERSION {},{},{},{}
 PRODUCTVERSION {},{},{},{}
@@ -2157,18 +2284,20 @@ FILETYPE 0x1
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
-    BLOCK "080403A8"
+    BLOCK "080404B0"
     BEGIN
       VALUE "CompanyName", "{}\0"
-      VALUE "FileDescription", "{} 应用程序\0"
+      VALUE "FileDescription", "{}\0"
       VALUE "FileVersion", "{}\0"
+      VALUE "InternalName", "{}\0"
+      VALUE "OriginalFilename", "{}\0"
       VALUE "ProductName", "{}\0"
       VALUE "ProductVersion", "{}\0"
     END
   END
   BLOCK "VarFileInfo"
   BEGIN
-    VALUE "Translation", 0x0804, 936
+    VALUE "Translation", 0x0804, 1200
   END
 END
 "#,
@@ -2182,26 +2311,13 @@ END
         version.patch,
         build,
         escape_rc_string(&options.publisher),
-        escape_rc_string(&plan.display_name),
+        escape_rc_string(&description),
         dotted_version,
+        escape_rc_string(&internal_name),
+        escape_rc_string(&original_filename),
         escape_rc_string(&plan.display_name),
         version,
-    );
-    fs::write(&rc_path, contents).map_err(|error| {
-        CliError::new(format!(
-            "无法写入 Windows resource `{}`: {error}",
-            rc_path.display()
-        ))
-    })?;
-    let rc = windows_sdk_tool("rc.exe")?;
-    run_status(
-        "rc Windows resources",
-        Command::new(rc)
-            .arg("/nologo")
-            .arg(format!("/fo{}", res_path.display()))
-            .arg(&rc_path),
-    )?;
-    Ok(res_path)
+    ))
 }
 
 fn build_windows_binary(plan: &BuildPlan, binary: &str, resource: &Path) -> CliResult<()> {
@@ -3474,7 +3590,7 @@ fn load_release_artifacts(
             let expected_suffix = match artifact.kind {
                 ArtifactKind::MacosAppZip => ".app.zip",
                 ArtifactKind::MacosDmg => ".dmg",
-                ArtifactKind::WindowsSetupExe => ".setup.exe",
+                ArtifactKind::WindowsSetupExe => ".exe",
                 ArtifactKind::WindowsMsi => ".msi",
                 ArtifactKind::WindowsZip => ".windows.zip",
             };
@@ -3485,16 +3601,14 @@ fn load_release_artifacts(
                 )));
             }
             let expected_name = format!(
-                "{}-{}-{}-{}{}",
-                app.package,
-                release.version,
-                release.build_number,
+                "{}-{}{}",
+                app.display_name,
                 target_arch_alias(target)?,
                 expected_suffix
             );
             if artifact.file_name != expected_name {
                 return Err(CliError::new(format!(
-                    "artifact 技术文件名不匹配；期望 `{expected_name}`，实际 `{}`",
+                    "artifact 分发文件名不匹配；期望 `{expected_name}`，实际 `{}`",
                     artifact.file_name
                 )));
             }
@@ -3561,57 +3675,39 @@ fn validate_artifact_identity(
     Ok(())
 }
 
-fn latest_installer_uploads(
+fn channel_artifact_uploads(
     artifacts: &[LocalArtifact],
     channel_prefix: &str,
-    single_target: bool,
 ) -> CliResult<Vec<Upload>> {
-    let installers = artifacts
-        .iter()
-        .filter_map(|artifact| {
-            let (extension, content_type) = match artifact.kind {
-                ArtifactKind::MacosDmg => ("dmg", "application/x-apple-diskimage"),
-                ArtifactKind::WindowsSetupExe => {
-                    ("exe", "application/vnd.microsoft.portable-executable")
-                }
-                ArtifactKind::WindowsMsi => ("msi", "application/x-msi"),
-                ArtifactKind::MacosAppZip | ArtifactKind::WindowsZip => return None,
-            };
-            Some((artifact, extension, content_type))
-        })
-        .collect::<Vec<_>>();
-    let mut uploads = installers
-        .iter()
-        .map(|(artifact, extension, content_type)| {
-            Ok(Upload {
-                key: object_key([
-                    channel_prefix,
-                    format!(
-                        "latest-{}.{}",
-                        target_arch_alias(&artifact.target)?,
-                        extension
-                    )
-                    .as_str(),
-                ]),
-                source: UploadSource::File(artifact.path.clone()),
-                content_type,
-                cache_control: MUTABLE_CACHE,
-                immutable: false,
-            })
-        })
-        .collect::<CliResult<Vec<_>>>()?;
-    if single_target {
-        uploads.extend(
-            installers
-                .into_iter()
-                .map(|(artifact, extension, content_type)| Upload {
-                    key: object_key([channel_prefix, format!("latest.{extension}").as_str()]),
-                    source: UploadSource::File(artifact.path.clone()),
-                    content_type,
-                    cache_control: MUTABLE_CACHE,
-                    immutable: false,
-                }),
-        );
+    let mut keys = BTreeSet::new();
+    let mut uploads = Vec::with_capacity(artifacts.len() * 2);
+    for artifact in artifacts {
+        let key = object_key([channel_prefix, artifact.file_name.as_str()]);
+        if !keys.insert(key.clone()) {
+            return Err(CliError::new(format!(
+                "channel 根目录产物文件名冲突：{}",
+                artifact.file_name
+            )));
+        }
+        uploads.push(Upload {
+            key: key.clone(),
+            source: UploadSource::File(artifact.path.clone()),
+            content_type: artifact_content_type(artifact.kind),
+            cache_control: MUTABLE_CACHE,
+            immutable: false,
+        });
+
+        let checksum_key = format!("{key}.sha256");
+        keys.insert(checksum_key.clone());
+        uploads.push(Upload {
+            key: checksum_key,
+            source: UploadSource::Bytes(
+                sha256_sidecar_contents(&artifact.file_name, &artifact.sha256).into_bytes(),
+            ),
+            content_type: "text/plain; charset=utf-8",
+            cache_control: MUTABLE_CACHE,
+            immutable: false,
+        });
     }
     Ok(uploads)
 }
@@ -3633,7 +3729,7 @@ fn print_publish_summary(plan: &PublishPlan, dry_run: bool) {
     println!("Targets：{}", plan.required_targets.join(", "));
     println!("发布目标：{}", plan.publish_target_name);
     println!("将更新：");
-    for upload in &plan.latest_installer_aliases {
+    for upload in &plan.channel_artifacts {
         println!("  {}", upload.key);
     }
     println!("  {}", plan.latest.key);
@@ -3664,7 +3760,9 @@ fn publish_plan(
     for upload in &plan.immutable_payloads {
         upload_object(client, &plan.target, credentials, upload)?;
     }
-    upload_object(client, &plan.target, credentials, &plan.sequence_manifest)?;
+    for verification in &plan.immutable_verify_urls {
+        verify_public_sha256(client, verification)?;
+    }
 
     let current = read_remote_manifest(client, &plan.latest_url, &plan.trusted_keys)?;
     let current_sequence = current.as_ref().map(|payload| payload.manifest_sequence);
@@ -3675,14 +3773,18 @@ fn publish_plan(
         )));
     }
 
-    for upload in &plan.latest_installer_aliases {
+    for upload in &plan.channel_artifacts {
         upload_object(client, &plan.target, credentials, upload)?;
     }
-    upload_object(client, &plan.target, credentials, &plan.latest)?;
-    verify_public_bytes(client, &plan.latest_url, &plan.latest_json, "latest.json")?;
-    for verification in &plan.verify_urls {
+    for verification in &plan.channel_verify_urls {
         verify_public_sha256(client, verification)?;
     }
+    upload_object(client, &plan.target, credentials, &plan.sequence_manifest)?;
+    let sequence_url = public_object_url(&plan.target, &plan.sequence_manifest.key);
+    let sequence_bytes = plan.sequence_manifest.source.bytes()?;
+    verify_public_bytes(client, &sequence_url, &sequence_bytes, "sequence manifest")?;
+    upload_object(client, &plan.target, credentials, &plan.latest)?;
+    verify_public_bytes(client, &plan.latest_url, &plan.latest_json, "latest.json")?;
     println!(
         "publish: {} sequence {} 发布并完成匿名验证",
         plan.app_key, plan.sequence
@@ -4137,6 +4239,8 @@ fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {
             target.provider
         )));
     }
+    validate_http_url(&target.endpoint, "publish endpoint")?;
+    validate_http_url(&target.public_base_url, "public_base_url")?;
     let endpoint = url::Url::parse(&target.endpoint)
         .map_err(|error| CliError::new(format!("publish endpoint 无效: {error}")))?;
     let public = url::Url::parse(&target.public_base_url)
@@ -4146,7 +4250,24 @@ fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {
             "HTTP endpoint/public_base_url 必须显式设置 allow_insecure_http = true",
         ));
     }
-    validate_safe_component(&target.bucket, "bucket")
+    if target.region.as_deref().is_some_and(str::is_empty) {
+        return Err(CliError::new("publish region 不能为空"));
+    }
+    validate_safe_component(&target.bucket, "bucket")?;
+    validate_credential_env_prefix(&target.credential_env_prefix)
+}
+
+fn validate_credential_env_prefix(value: &str) -> CliResult<()> {
+    let mut bytes = value.bytes();
+    let valid_start = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
+    if !valid_start || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+        return Err(CliError::new(format!(
+            "credential_env_prefix `{value}` 不是安全的环境变量前缀"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_http_url(value: &str, label: &str) -> CliResult<()> {
@@ -4408,22 +4529,41 @@ pub fn inspect_build_datetime_number(
     build_datetime_number(now, previous_build_number)
 }
 
-/// 校验用户可见的 macOS bundle 名称是否能安全作为文件名。
+/// 校验用户可见名称是否能安全进入跨平台分发文件名。
 ///
 /// # Errors
 ///
-/// 名称为空、包含控制字符、路径分隔符、NUL 或路径穿越语义时返回错误。
+/// 名称为空、包含控制字符、路径分隔符、Windows 禁止字符、保留设备名或尾随点/空格时
+/// 返回错误。合法 Unicode、中文、大小写和内部空格会原样保留。
 pub fn validate_display_name(value: &str) -> CliResult<()> {
+    let invalid_windows_character = value.chars().any(|character| {
+        matches!(
+            character,
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+        )
+    });
+    let device_name = value
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved_device = matches!(
+        device_name.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$"
+    ) || device_name
+        .strip_prefix("COM")
+        .or_else(|| device_name.strip_prefix("LPT"))
+        .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'));
     if value.trim().is_empty()
         || matches!(value, "." | "..")
-        || value.contains('/')
-        || value.contains('\\')
-        || value.contains(':')
-        || value.contains('\0')
+        || value.ends_with('.')
+        || value.ends_with(' ')
+        || invalid_windows_character
         || value.chars().any(char::is_control)
+        || reserved_device
     {
         return Err(CliError::new(format!(
-            "display_name `{value}` 不能安全作为 macOS bundle 文件名"
+            "display_name `{value}` 不能安全作为跨平台分发文件名"
         )));
     }
     Ok(())
@@ -4667,6 +4807,10 @@ fn unix_now() -> CliResult<i64> {
 
 fn default_check_interval() -> String {
     "15m".to_owned()
+}
+
+fn default_credential_env_prefix() -> String {
+    DEFAULT_CREDENTIAL_ENV_PREFIX.to_owned()
 }
 
 fn default_check_jitter() -> String {
@@ -4952,26 +5096,62 @@ fn run_status(name: &str, command: &mut Command) -> CliResult<()> {
     }
 }
 
-#[derive(Debug)]
 struct S3Credentials {
+    source_prefix: String,
     access_key_id: String,
     secret_access_key: String,
     session_token: Option<String>,
 }
 
 impl S3Credentials {
-    fn from_env() -> CliResult<Self> {
-        let access_key_id = env::var("AWS_ACCESS_KEY_ID")
-            .or_else(|_| env::var("RUSTFS_ACCESS_KEY_ID"))
-            .map_err(|_| CliError::new("缺少 S3 access key 环境变量"))?;
-        let secret_access_key = env::var("AWS_SECRET_ACCESS_KEY")
-            .or_else(|_| env::var("RUSTFS_SECRET_ACCESS_KEY"))
-            .map_err(|_| CliError::new("缺少 S3 secret key 环境变量"))?;
-        Ok(Self {
+    fn from_env(prefix: &str) -> CliResult<Self> {
+        if let Some(credentials) = credential_group(prefix)? {
+            return Ok(credentials);
+        }
+        if prefix == DEFAULT_CREDENTIAL_ENV_PREFIX {
+            return credential_group("AWS")?.ok_or_else(|| {
+                CliError::new(
+                    "缺少完整的 NEXORA_PUBLISH 或 AWS 发布凭据组；access key 与 secret key 必须来自同一组",
+                )
+            });
+        }
+        Err(CliError::new(format!(
+            "缺少 `{prefix}` 对应的完整发布凭据组；不会回退默认 Nexora 或 AWS 凭据"
+        )))
+    }
+}
+
+fn credential_group(prefix: &str) -> CliResult<Option<S3Credentials>> {
+    let access_name = format!("{prefix}_ACCESS_KEY_ID");
+    let secret_name = format!("{prefix}_SECRET_ACCESS_KEY");
+    let session_name = format!("{prefix}_SESSION_TOKEN");
+    let access_key_id = optional_env_value(&access_name)?;
+    let secret_access_key = optional_env_value(&secret_name)?;
+    let session_token = optional_env_value(&session_name)?;
+    match (access_key_id, secret_access_key, session_token) {
+        (None, None, None) => Ok(None),
+        (Some(access_key_id), Some(secret_access_key), session_token) => Ok(Some(S3Credentials {
+            source_prefix: prefix.to_owned(),
             access_key_id,
             secret_access_key,
-            session_token: env::var("AWS_SESSION_TOKEN").ok(),
-        })
+            session_token,
+        })),
+        _ => Err(CliError::new(format!(
+            "发布凭据组 `{prefix}` 不完整；`{access_name}` 与 `{secret_name}` 必须同时存在，`{session_name}` 只能属于同一组"
+        ))),
+    }
+}
+
+fn optional_env_value(name: &str) -> CliResult<Option<String>> {
+    match env::var(name) {
+        Ok(value) if value.is_empty() => {
+            Err(CliError::new(format!("发布凭据环境变量 `{name}` 不能为空")))
+        }
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(CliError::new(format!(
+            "发布凭据环境变量 `{name}` 不是有效 Unicode"
+        ))),
     }
 }
 
@@ -5505,44 +5685,17 @@ pub fn inspect_release_artifacts_for_channel(
     })
 }
 
-/// 为集成测试返回 publish 将创建的 latest DMG alias key。
+/// 为集成测试返回 publish 将写入 channel 根目录的 branded 产物与 checksum key。
 ///
 /// # Errors
 ///
 /// 配置或本地产物预检失败时返回错误。
 #[allow(dead_code)]
-pub fn inspect_latest_dmg_aliases(
+pub fn inspect_channel_artifact_keys(
     config_path: impl AsRef<Path>,
     app_key: &str,
 ) -> CliResult<Vec<String>> {
-    inspect_latest_installer_aliases(config_path.as_ref(), app_key).map(|aliases| {
-        aliases
-            .into_iter()
-            .filter(|alias| alias.ends_with(".dmg"))
-            .collect()
-    })
-}
-
-/// 为集成测试返回 publish 将创建的 Windows latest EXE/MSI alias key。
-///
-/// # Errors
-///
-/// 配置或本地产物预检失败时返回错误。
-#[allow(dead_code)]
-pub fn inspect_latest_windows_installer_aliases(
-    config_path: impl AsRef<Path>,
-    app_key: &str,
-) -> CliResult<Vec<String>> {
-    inspect_latest_installer_aliases(config_path.as_ref(), app_key).map(|aliases| {
-        aliases
-            .into_iter()
-            .filter(|alias| alias.ends_with(".exe") || alias.ends_with(".msi"))
-            .collect()
-    })
-}
-
-fn inspect_latest_installer_aliases(config_path: &Path, app_key: &str) -> CliResult<Vec<String>> {
-    let project = ProjectDocument::load(config_path.to_path_buf())?;
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
     let app = project
         .config
         .apps
@@ -5556,8 +5709,105 @@ fn inspect_latest_installer_aliases(config_path: &Path, app_key: &str) -> CliRes
         app_key,
         release.channel.as_str(),
     ]);
-    latest_installer_uploads(&artifacts, &prefix, release.targets.len() == 1)
+    channel_artifact_uploads(&artifacts, &prefix)
         .map(|uploads| uploads.into_iter().map(|upload| upload.key).collect())
+}
+
+/// 为集成测试返回某个 channel 按字段合并后的有效发布目标，不访问对象存储。
+///
+/// # Errors
+///
+/// 配置无效、app 不存在或引用的逻辑发布目标不存在时返回错误。
+#[allow(dead_code)]
+pub fn inspect_effective_publish_target(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let target = project
+        .config
+        .publish
+        .targets
+        .get(&app.publish_target)
+        .ok_or_else(|| CliError::new(format!("不存在发布目标 `{}`", app.publish_target)))?
+        .for_channel(channel);
+    validate_publish_target(&target)?;
+    Ok(serde_json::json!({
+        "provider": target.provider,
+        "endpoint": target.endpoint,
+        "bucket": target.bucket,
+        "region": target.region,
+        "force_path_style": target.force_path_style,
+        "public_base_url": target.public_base_url,
+        "allow_insecure_http": target.allow_insecure_http,
+        "credential_env_prefix": target.credential_env_prefix,
+    }))
+}
+
+/// 为集成测试执行原子凭据组选择，并仅返回来源与是否携带 session token。
+///
+/// # Errors
+///
+/// 指定凭据组缺失、不完整或环境变量不是有效 Unicode 时返回错误。
+#[allow(dead_code)]
+pub fn inspect_credential_selection(prefix: &str) -> CliResult<serde_json::Value> {
+    let credentials = S3Credentials::from_env(prefix)?;
+    Ok(serde_json::json!({
+        "source_prefix": credentials.source_prefix,
+        "has_session_token": credentials.session_token.is_some(),
+    }))
+}
+
+/// 为集成测试返回稳定 app_key 对象布局和公开 URL，不访问对象存储。
+///
+/// # Errors
+///
+/// 配置、receipt、target 或 target triple 无效时返回错误。
+#[allow(dead_code)]
+pub fn inspect_publish_object_layout(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    target_triple: &str,
+    artifact_name: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let channel = project.default_release_channel(app_key, app)?;
+    let release = project.release_from_receipt(app_key, app, &channel)?;
+    let target = project.config.publish.targets[&app.publish_target].for_channel(&release.channel);
+    let channel_prefix = object_key([
+        app.object_prefix.as_str(),
+        app_key,
+        release.channel.as_str(),
+    ]);
+    let versioned_key = object_key([
+        channel_prefix.as_str(),
+        release.version.to_string().as_str(),
+        release.build_number.to_string().as_str(),
+        target_arch_alias(target_triple)?,
+        artifact_name,
+    ]);
+    let channel_key = object_key([channel_prefix.as_str(), artifact_name]);
+    let latest_key = object_key([channel_prefix.as_str(), "latest.json"]);
+    let sequence_key = object_key([channel_prefix.as_str(), "manifests", "42.json"]);
+    Ok(serde_json::json!({
+        "latest_key": latest_key,
+        "sequence_key": sequence_key,
+        "channel_key": channel_key,
+        "versioned_key": versioned_key,
+        "channel_url": public_object_url(&target, &channel_key),
+        "versioned_url": public_object_url(&target, &versioned_key),
+    }))
 }
 
 /// 为集成测试读取并校验发布私钥，返回与可信公钥匹配的 key id。
@@ -5623,10 +5873,7 @@ pub fn inspect_windows_installer_sources(
         .join(release.version.to_string())
         .join(release.build_number.to_string())
         .join(&target);
-    let technical_stem = format!(
-        "{}-{}-{}-{arch}",
-        app.package, release.version, release.build_number
-    );
+    let artifact_stem = format!("{}-{arch}", app.display_name);
     let plan = BuildPlan {
         project_root: project.root.clone(),
         app_key: app_key.to_owned(),
@@ -5650,10 +5897,10 @@ pub fn inspect_windows_installer_sources(
         windows_icon: brand_assets.windows_icon,
         windows: Some(windows_build_options(&app.platforms.windows)?),
         app_path: windows_binary_path(&project.root, &target, &app.package),
-        app_zip_path: release_dir.join(format!("{technical_stem}.windows.zip")),
-        dmg_path: release_dir.join(format!("{technical_stem}.dmg")),
-        msi_path: release_dir.join(format!("{technical_stem}.msi")),
-        setup_path: release_dir.join(format!("{technical_stem}.setup.exe")),
+        app_zip_path: release_dir.join(format!("{artifact_stem}.windows.zip")),
+        dmg_path: release_dir.join(format!("{artifact_stem}.dmg")),
+        msi_path: release_dir.join(format!("{artifact_stem}.msi")),
+        setup_path: release_dir.join(format!("{artifact_stem}.exe")),
         artifact_path: release_dir.join("artifact.json"),
         notes_path: project
             .root
@@ -5671,6 +5918,105 @@ pub fn inspect_windows_installer_sources(
         "bundle_wxs": sources.bundle_wxs,
         "updater_config": sources.updater_config,
     }))
+}
+
+/// 为集成测试返回主进程与 updater 独立的 Windows PE 资源脚本。
+///
+/// # Errors
+///
+/// 配置、发布 identity 或 Windows 构建选项无效时返回错误。
+#[allow(dead_code)]
+pub fn inspect_windows_resource_scripts(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let plan = inspection_windows_build_plan(&project, app_key)?;
+    Ok(serde_json::json!({
+        "main": windows_resource_script(&plan, WindowsResourceKind::Main)?,
+        "updater": windows_resource_script(&plan, WindowsResourceKind::Updater)?,
+    }))
+}
+
+fn inspection_windows_build_plan(project: &ProjectDocument, app_key: &str) -> CliResult<BuildPlan> {
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let channel = project.default_release_channel(app_key, app)?;
+    let configured = project.resolved_release(app_key, app, &channel, None)?;
+    let build_number = match configured.build_number {
+        ResolvedBuildNumber::Literal(value) => value,
+        ResolvedBuildNumber::BuildDatetime => {
+            build_datetime_number(Local::now().fixed_offset(), None)?
+        }
+    };
+    let targets = if app.targets.required.is_empty() {
+        vec![rustc_host_target()?]
+    } else {
+        app.targets.required.clone()
+    };
+    let release = configured.validated_release(build_number, targets.clone());
+    let plans = project.build_plans(app_key, &release, &targets, None)?;
+    plans
+        .into_iter()
+        .find(|plan| plan.platform == BuildTargetPlatform::Windows)
+        .ok_or_else(|| CliError::new(format!("app `{app_key}` 没有 Windows target")))
+}
+
+/// 在 Windows 集成测试中把主进程与 updater 的独立资源链接进最小 PE executable。
+///
+/// # Errors
+///
+/// 配置或资源无效、Windows SDK `rc.exe` 不可用，或 `rustc` 无法链接 PE 时返回错误。
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn inspect_compile_windows_resource_executables(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    output_directory: impl AsRef<Path>,
+) -> CliResult<(PathBuf, PathBuf)> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let plan = inspection_windows_build_plan(&project, app_key)?;
+    let output_directory = output_directory.as_ref();
+    fs::create_dir_all(output_directory).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 PE resource smoke 目录 `{}`: {error}",
+            output_directory.display()
+        ))
+    })?;
+    let source = output_directory.join("resource-smoke.rs");
+    fs::write(&source, "fn main() {}\n").map_err(|error| {
+        CliError::new(format!(
+            "无法写入 PE resource smoke 源文件 `{}`: {error}",
+            source.display()
+        ))
+    })?;
+    let outputs = [
+        (
+            WindowsResourceKind::Main,
+            output_directory.join(format!("{}.exe", plan.package)),
+        ),
+        (
+            WindowsResourceKind::Updater,
+            output_directory.join(format!("{}-updater.exe", plan.package)),
+        ),
+    ];
+    for (kind, output) in &outputs {
+        let resource = compile_windows_resource(&plan, *kind)?;
+        run_status(
+            "rustc PE resource smoke executable",
+            Command::new("rustc")
+                .arg(&source)
+                .args(["--target", &plan.target])
+                .arg("-o")
+                .arg(output)
+                .arg("-C")
+                .arg(format!("link-arg={}", resource.display())),
+        )?;
+    }
+    Ok((outputs[0].1.clone(), outputs[1].1.clone()))
 }
 
 /// 为集成测试从 Windows payload staging 生成更新 ZIP。

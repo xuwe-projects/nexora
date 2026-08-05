@@ -7,16 +7,16 @@ order: 2
 
 ## 安装
 
-从 GitHub tag 安装正式发布版本：
+从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.26.0 nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.27.0 cli --locked --force --bin nexora
 ```
 
 从 Nexora 仓库根目录安装当前本地源码：
 
 ```bash
-cargo install --path crates/nexora --locked --force --no-default-features --features cli --bin nexora
+cargo install --path crates/cli --locked --force --bin nexora
 ```
 
 以上命令不使用 Shell 专属的续行或环境变量语法，可直接作为单行命令用于 Unix Shell、
@@ -41,11 +41,12 @@ nexora publish --all --yes
 nexora publish --app <id> yank
 nexora doctor
 nexora lint --workspace . --deny-warnings
+nexora update
 nexora version
 ```
 
 Account 同时需要桌面端与服务端，只支持 workspace 布局。生成项目会固定当前 Nexora Git
-tag；测试本地改动时可先用 `cargo install --path crates/nexora ...` 安装 CLI。
+tag；测试本地改动时可先用 `cargo install --path crates/cli --locked --bin nexora` 安装 CLI。
 
 本地安装只替换 CLI 本身。要让新生成的应用也使用未发布代码，请把生成项目根清单中的
 `nexora` workspace 依赖临时改成当前仓库 `crates/nexora` 的绝对 `path`。
@@ -66,7 +67,11 @@ Skill 文件。生成的 `publish-nexora-release` Skill 负责版本升级、完
 多选菜单并预选 `default_channel`；CI 应显式使用可重复的 `--channel <name>` 或
 `--all-channels`。单通道 `release.channel` 继续兼容。
 `nexora build` 只构建当前宿主的现有产物并写入 `artifact.json`；`nexora publish` 只发布已有
-artifact，不会隐式触发 build。发布命令按更新包和 notes、不可变 manifest、`latest.json` 的顺序
-上传到 RustFS/S3 兼容对象存储，最后通过匿名公开 URL 重新读取并验证 `latest.json`。更新清单
+artifact，不会隐式触发 build。发布命令先上传并验证 versioned 不可变产物，再更新 channel 根
+目录的 branded 文件和 sequence manifest，最后上传并匿名验证签名 `latest.json`。更新清单
 使用 Ed25519 签名信封，公钥写入 app 的 `trusted_public_keys`，私钥只从安全文件或
 `signing_key_env` 指定的环境变量读取。强制更新通过 `--minimum-supported-version` 写入清单。
+
+`nexora update` 只更新 CLI 自身。它读取官方 GitHub Release 的 HTTPS `nexora-update.json`，选择
+当前 target 的预编译资产并校验 size/SHA-256；不支持当前平台时会给出 package 为 `cli`、binary
+为 `nexora` 的手工安装命令，不会回退本地 Cargo 编译，也不会请求 sudo 或 UAC。

@@ -25,13 +25,20 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "http://192.168.1.20:9000/desktop-releases"
 allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH"
+
+[publish.targets.internal.channels.nightly]
+endpoint = "http://192.168.1.30:9000"
+public_base_url = "http://192.168.1.30:9000/desktop-releases"
+allow_insecure_http = true
+credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 
 [apps.console]
 package = "console"
 app_id = "com.example.console"
 display_name = "Console"
 publish_target = "internal"
-object_prefix = "console"
+object_prefix = ""
 
 [apps.console.release]
 channel = "stable"
@@ -42,7 +49,7 @@ signing_key_file = ".secrets/console-update.key"
 
 [apps.console.updater]
 enabled = true
-feed_url = "http://192.168.1.20:9000/desktop-releases/console"
+feed_url = "http://192.168.1.20:9000/desktop-releases/console/stable/latest.json"
 channels = ["stable", "beta"]
 trusted_public_keys = ["2026-main:ed25519:BASE64_PUBLIC_KEY"]
 signing_key_env = "CONSOLE_UPDATE_SIGNING_KEY"
@@ -60,7 +67,10 @@ notarize = false
 Rules:
 
 - `apps` table names are stable CLI app IDs. `package` must exist and be a desktop binary. `app_id` is permanent and globally unique.
-- Multiple apps may share a publish target, but `app_id`, `object_prefix` and output paths must not conflict.
+- Multiple apps may share a publish target. The `apps` table key is the stable remote directory identity; `display_name` is only user-visible metadata and the distribution filename stem. Changing `display_name` must not move the feed root.
+- `object_prefix = ""` means no extra prefix. Non-empty values keep safe-path validation; joining must never create leading/doubled slashes or empty components.
+- `publish.targets.<name>.channels.<channel>` overrides the base target by field. Omitted fields inherit, and the merged provider, URLs, bucket, region, path style, HTTP policy and credential prefix are validated together.
+- Default credentials are the complete `NEXORA_PUBLISH` group. Only when every field is absent may publish fall back to the complete AWS group. Partial groups and all cross-group access/secret/session mixing fail. Custom prefixes never fall back. `RUSTFS_*` is unsupported.
 - A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
 - `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
 - `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression uses the build machine's local timezone and 24-hour `yyMMddHHmmss`, then applies `max(current local value, previous local build number + 1)` after same-second builds, clock rollback, daylight-saving fallback or timezone changes. Unknown strings, zero and overflow are rejected.
@@ -106,6 +116,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 ## Build
 
 - `nexora build` compiles only the selected app main binary and updater sidecar, initial installer artifact, update payload, standard `<artifact>.sha256` sidecars and `artifact.json`.
+- Distribution files use `<display_name>-<arch><suffix>` with normalized `x86_64`/`aarch64`; version, build number, package and full triple do not enter the filename. `display_name` must pass cross-platform filename validation. Internal executable and sidecar names continue to use `package`.
 - It does not access S3 and does not publish.
 - Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.
 - All targets in one build use that receipt. A matching incomplete retry reuses it. After every planned target artifact is complete, another explicit dynamic build creates a strictly higher build number and updates the current receipt without deleting old versioned artifacts. Corrupt/unsupported receipts fail before build and are never reconstructed from directory names.
@@ -119,7 +130,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 Platform outputs:
 
 - macOS: write version, build number, configured ICNS, updater settings and sidecar before signing; create both DMG and `ditto` `.app.zip` from that same signed `.app`. The ICNS is copied to Resources and written to `CFBundleIconFile` for the `.app` only. The DMG file and mounted volume keep their system-default appearance. `artifact.json` describes ZIP and DMG; the updater manifest contains only `.app.zip`.
-- Windows x86_64/ARM64: a Simplified Chinese WiX MSI, a Burn `Setup.exe` that reuses the MSI UI, and an update ZIP. User scope defaults to LocalAppData Programs without UAC while preserving the install-directory chooser; machine scope is rejected until elevation and updater permissions have an explicit design. The UI exposes desktop shortcut, Start menu shortcut, and launch-after-finish checkboxes. Main and sidecar executables use the Windows GUI subsystem. `signing = "none"` still enforces Ed25519, artifact size/SHA-256, ZIP safety and PE architecture checks but skips Authenticode; Authenticode-only TOML fields conflict with that mode. `signing = "authenticode"` signs all Windows artifacts and requires the updater to verify both staged EXEs with Windows trust, certificate thumbprint and publisher. The bundled thumbprint and publisher must be both absent or both present. The Rust ZIP writer must encode archive entry names with `/`; do not use PowerShell `Compress-Archive` or serialize native Windows `Path` separators into the update protocol. User-initiated removal disables MSI rollback only after `InstallInitialize` so a stale cross-volume `Config.Msi` ACL cannot break cleanup; major-upgrade removal retains rollback. The current pinned GPUI floor is Windows 10 1703/build 15063.
+- Windows x86_64/ARM64: a Simplified Chinese WiX MSI, a branded `.exe` installer, and an update ZIP. Generate separate UTF-8 RC files for main/updater with `#pragma code_page(65001)`, string table `080404B0` and Translation `0x0804,1200`. Main `FileDescription` is `display_name`; updater appends “更新程序”; `InternalName`/`OriginalFilename` retain package identities. Link each resource before Authenticode signing. User scope defaults to LocalAppData Programs without UAC while preserving the install-directory chooser; machine scope is rejected until elevation and updater permissions have an explicit design. The UI exposes desktop shortcut, Start menu shortcut, and launch-after-finish checkboxes. Main and sidecar executables use the Windows GUI subsystem. `signing = "none"` still enforces Ed25519, artifact size/SHA-256, ZIP safety and PE architecture checks but skips Authenticode; Authenticode-only TOML fields conflict with that mode. `signing = "authenticode"` signs all Windows artifacts and requires the updater to verify both staged EXEs with Windows trust, certificate thumbprint and publisher. The bundled thumbprint and publisher must be both absent or both present. The Rust ZIP writer must encode archive entry names with `/`; do not use PowerShell `Compress-Archive` or serialize native Windows `Path` separators into the update protocol. User-initiated removal disables MSI rollback only after `InstallInitialize` so a stale cross-volume `Config.Msi` ACL cannot break cleanup; major-upgrade removal retains rollback. The current pinned GPUI floor is Windows 10 1703/build 15063.
 - Linux: AppImage, optionally user-directory portable archive. Update AppImage itself or `tar.zst`; package-manager formats are future work.
 
 ## Publish
@@ -128,17 +139,18 @@ Platform outputs:
 - It reads `nexora.toml`, selects apps, then reads the current release receipt. It validates the receipt against app/package/channel, selected Cargo package version and current sources/configuration; the receipt itself freezes the release targets. It validates each target's `artifact.json`, file existence, size and SHA-256 before upload.
 - Dry-run performs the same receipt, artifact and remote checks without local or remote writes. An available identity must be strictly greater than the remote `(version, build_number)`. Yank uses the receipt identity.
 - Stable publish must include every target frozen in the release receipt.
-- Upload versioned `.app.zip`, DMG, Windows Setup EXE, MSI and update ZIP files with standard `<artifact>.sha256` sidecars, notes, immutable sequence manifest, target-specific latest installers, optional single-target `latest.dmg` / `latest.exe` / `latest.msi`, and finally `latest.json`; then verify mutable objects, checksum sidecars and every updater URL anonymously. Publish derives checksum sidecars from the revalidated artifact digests so builds created before local sidecars were restored remain publishable.
+- Upload and anonymously verify versioned artifacts, checksum sidecars and notes first; after the concurrent-sequence recheck, update channel-root branded artifacts and checksums, then the immutable sequence manifest, and finally signed `latest.json`. Updater URLs always reference immutable versioned payloads. Do not generate installer/update `latest.*` aliases; `latest.json` remains mandatory and last.
 - Read and verify remote `latest.json` before publishing. HTTP 404 means sequence 1; otherwise use remote sequence plus one. Dry-run performs the same read without writes. Re-read before mutable uploads and reject concurrent sequence changes.
 - Use layout:
 
 ```text
-<prefix>/<app>/<channel>/latest.json
-<prefix>/<app>/<channel>/manifests/<sequence>.json
-<prefix>/<app>/<channel>/releases/<version>/<build>/<target>/...
+[<object_prefix>/]<app_key>/<channel>/latest.json
+[<object_prefix>/]<app_key>/<channel>/manifests/<sequence>.json
+[<object_prefix>/]<app_key>/<channel>/<artifact>
+[<object_prefix>/]<app_key>/<channel>/<version>/<build>/<arch>/<artifact>
 ```
 
-Versioned objects should be long cached; `latest.json` should be no-cache or short-cache. Keep `endpoint` and `public_base_url` separate. Support region and path-style S3. Never log secrets.
+Versioned objects should be long cached; `latest.json` and channel-root branded objects should be no-cache or short-cache. There is no `releases` segment and public architecture directories are normalized. Keep `endpoint` and `public_base_url` separate. Support region and path-style S3. Never log secrets. Never delete legacy aliases or immutable objects automatically; administrators may clean old channel-root aliases manually.
 
 ## Emergency Yank
 

@@ -1,5 +1,3 @@
-#![cfg(feature = "cli")]
-
 use std::{
     fs,
     path::PathBuf,

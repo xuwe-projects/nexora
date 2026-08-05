@@ -17,7 +17,7 @@ macro_rules! skill_source {
     ($path:literal) => {
         SkillSource {
             relative_path: concat!(".agents/skills/", $path),
-            contents: include_str!(concat!("../../../templates/skills/", $path)),
+            contents: include_str!(concat!("../templates/skills/", $path)),
         }
     };
 }
