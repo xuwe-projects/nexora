@@ -16,7 +16,7 @@ DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.27.1 cli --locked --force --bin nexora
+  --tag v0.28.0 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```

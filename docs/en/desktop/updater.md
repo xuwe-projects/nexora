@@ -11,7 +11,7 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.27.1 cli --locked --force --bin nexora
+  --tag v0.28.0 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```
