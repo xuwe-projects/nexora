@@ -8,11 +8,9 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "https://example.invalid/desktop-releases"
 allow_insecure_http = false
-credential_env_prefix = "NEXORA_PUBLISH"
 
 # channel target 按字段覆盖；未出现的 bucket/region/path-style 等继承基础 target。
 [publish.targets.default.channels.beta]
-credential_env_prefix = "NEXORA_PUBLISH_BETA"
 
 [apps.{{ project_name }}]
 package = "{{ project_name }}"

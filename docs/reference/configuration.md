@@ -87,24 +87,23 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "http://127.0.0.1:9000/desktop-releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH"
 
 [publish.targets.rustfs.channels.nightly]
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/desktop-releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 ```
 
 `endpoint` 是带签名的 S3 API 地址；`public_base_url` 是客户端匿名读取地址。本地 RustFS 使用
 HTTP 时必须显式开启 `allow_insecure_http`。channel 表按字段覆盖基础 target，未出现的字段继承；
 合并完成后会重新验证 endpoint、公开 URL 与 HTTP 安全开关。
 
-默认凭据组是 `NEXORA_PUBLISH_ACCESS_KEY_ID`、`NEXORA_PUBLISH_SECRET_ACCESS_KEY` 和可选的
-`NEXORA_PUBLISH_SESSION_TOKEN`。只有整组完全不存在时才原子回退完整 AWS 凭据组，字段不会跨组
-混用。自定义 `credential_env_prefix` 只读取自己的完整组，不回退生产凭据。`RUSTFS_*` 不再读取。
-凭据不得写入配置文件。E2E 可以使用唯一非空前缀；`object_prefix = ""` 则表示 app_key 直接位于
-bucket 根目录，不会生成空路径段或双斜杠。
+发布凭据不配置前缀，而是按当前 channel 为每个字段独立解析：先读取
+`NEXORA_PUBLISH_<CHANNEL>_<FIELD>`，再读取 `NEXORA_PUBLISH_<FIELD>`，最后读取
+`AWS_<FIELD>`。例如 beta 的 Access Key 优先使用 `NEXORA_PUBLISH_BETA_ACCESS_KEY_ID`；即使
+Secret Key 来自 `NEXORA_PUBLISH_SECRET_ACCESS_KEY` 也有效。空值继续回退，Access Key 与
+Secret Key 最终必须存在，Session Token 可选。`RUSTFS_*` 不再读取，凭据不得写入配置文件。
+`object_prefix = ""` 表示 app_key 直接位于 bucket 根目录，不会生成空路径段或双斜杠。
 
 每个桌面 app 必须在同一注册记录中声明稳定 app key、bundle identifier 和品牌资源。single 与
 workspace 项目都从 workspace 根目录解析资源，不读取或修改 `[package.metadata.bundle]`：

@@ -11,39 +11,34 @@ DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更�
 
 ## 开发环境第一次准备
 
-先安装 Rust、Xcode Command Line Tools、Homebrew，以及 Nexora CLI：
+先安装 Nexora CLI。`nexora build` 会在交互式终端中检测、自动安装并复检当前构建真正需要的
+依赖；`nexora doctor` 只检查，`nexora doctor --fix` 使用相同修复流程：
 
 ```bash
-xcode-select --install
-rustup target add aarch64-apple-darwin
-cargo install cargo-bundle
-brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
   --tag v0.27.1 cli --locked --force --bin nexora
-```
-
-`nexora doctor` 按当前宿主检查工具链；缺少工具时返回失败。在 macOS 上，`nexora doctor --fix` 会尝试用
-Cargo 安装 `cargo-bundle`、用 Homebrew 安装 `create-dmg`。Xcode Command Line Tools、Rust 与
-Homebrew 本身应由开发者先安装：
-
-```bash
 nexora doctor
 nexora doctor --fix
 ```
 
-Windows 发布机安装 Windows 10/11 SDK Desktop C++ 工具、.NET SDK、支持现代 WiX 的固定
-`cargo-wix` 提交和 WiX 5.0.2：
+macOS 会准备 Rust target、`cargo-bundle`、Homebrew 与 `create-dmg`；缺少 Xcode Command Line
+Tools 时启动 `xcode-select --install`，完成系统安装后重新运行同一条 build。Windows 会准备
+Rust target、固定 revision 的 `cargo-wix`、WiX 5.0.2 与扩展。完全没有 .NET 时，Nexora 通过
+微软官方 `dotnet-install.ps1` 把 .NET 10 LTS SDK 安装到
+`%LOCALAPPDATA%\Nexora\tools\dotnet`，只修改当前构建进程环境。
+
+需要手动排查时，对应官方命令是：
 
 ```powershell
 cargo install cargo-wix --git https://github.com/volks73/cargo-wix `
   --rev 9a8ed9486637e1fb839f209730eda6c95fd12d88 --locked --force
 dotnet tool install --global wix --version 5.0.2
-nexora doctor --fix
+winget install --source winget --exact --id Microsoft.WindowsSDK.10.0.26100
 ```
 
-`doctor --fix` 会安装与 WiX 版本精确匹配的 UI 和 BootstrapperApplications 扩展；不会替用户
-安装 Windows SDK、.NET SDK、WiX 本体或 Rust target。SDK 工具位于标准 Windows Kits 目录即可，
-无需手工把 `rc.exe`、`fxc.exe`、`signtool.exe` 加入 PATH。
+Windows SDK 或 Xcode/CLT 安装需要系统确认、提权或重启时，Nexora 会明确暂停并要求重新运行
+原 build；不会静默提权。非交互/CI 环境不启动安装器，而是返回完整安装命令。Windows SDK
+工具位于标准 Windows Kits 目录即可，无需手工把 `rc.exe`、`fxc.exe`、`signtool.exe` 加入 PATH。
 
 ## 第一次创建项目、构建与安装
 
@@ -59,8 +54,8 @@ nexora icons generate --app desktop
 nexora build --app desktop
 ```
 
-构建默认使用 `rustc -vV` 的 host target，也可重复传入 `--target` 显式覆盖。Nexora 不会在构建中
-联网安装 Rust target；缺失时会提示先执行对应的 `rustup target add <target>`。构建会生成：
+构建默认使用 `rustc -vV` 的 host target，也可重复传入 `--target` 显式覆盖。交互式 build 会
+自动执行缺失的 `rustup target add <target>`；非交互环境返回准确命令并停止。构建会生成：
 
 - `.app`：本地 bundle，包含主程序、ICNS、sidecar 和 `nexora-updater.json`。
 - `.app.zip`：应用内更新负载；sidecar 下载、校验并替换当前 `.app`。
@@ -118,13 +113,11 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "https://downloads.example.com/desktop-releases"
 allow_insecure_http = false
-credential_env_prefix = "NEXORA_PUBLISH"
 
 [publish.targets.rustfs.channels.beta]
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/desktop-releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH_BETA"
 
 [apps.desktop]
 package = "desktop"
@@ -205,15 +198,13 @@ icons = [
 | `force_path_style` | 否 | 使用 `endpoint/bucket/key`，RustFS/MinIO 常设 `true` | `false` | 否 | 错误模式会导致对象地址或签名失败 |
 | `public_base_url` | 是 | 匿名下载 bucket 根 URL，由公开下载配置取得 | 无 | 否 | URL 无效失败；必须能匿名 GET |
 | `allow_insecure_http` | 否 | 仅本地/LAN 测试允许 HTTP | `false` | 否 | HTTP 且未设 `true` 时立即失败 |
-| `credential_env_prefix` | 否 | 发布凭据组前缀 | `NEXORA_PUBLISH` | 否 | 不是安全环境变量前缀时失败 |
 | `channels.<channel>` | 否 | 按字段覆盖该 channel 的 target；省略字段继承基础 target | 无 | 否 | 合并后的完整 target 统一校验 |
 
-发布凭据不写入 TOML。默认先读取完整的 `NEXORA_PUBLISH_ACCESS_KEY_ID` /
-`NEXORA_PUBLISH_SECRET_ACCESS_KEY` / 可选 `NEXORA_PUBLISH_SESSION_TOKEN`；只有三个字段全部不存在
-时才读取完整 AWS 组。任一组只出现 access 或 secret 都立即失败，session token 也不会跨组借用。
-自定义 prefix（例如 `NEXORA_PUBLISH_BETA`）缺失或不完整时不会回退默认 Nexora/AWS 生产组。
-`RUSTFS_*` 已移除。bucket 必须提前创建，并允许 `public_base_url` 下的对象匿名下载；生产 endpoint
-与下载地址都必须使用 HTTPS。
+发布凭据不写入 TOML。每个字段按当前 channel 独立查找
+`NEXORA_PUBLISH_<CHANNEL>_<FIELD>`、`NEXORA_PUBLISH_<FIELD>`、`AWS_<FIELD>`。例如 beta 可用
+`NEXORA_PUBLISH_BETA_ACCESS_KEY_ID` 搭配 `NEXORA_PUBLISH_SECRET_ACCESS_KEY`；空值继续回退。
+Access Key 与 Secret Key 必须最终找到，Session Token 可选。`RUSTFS_*` 已移除。bucket 必须提前
+创建，并允许 `public_base_url` 下的对象匿名下载；生产 endpoint 与下载地址都必须使用 HTTPS。
 
 ### app、品牌与 release
 

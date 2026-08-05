@@ -33,9 +33,17 @@ const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
-const DEFAULT_CREDENTIAL_ENV_PREFIX: &str = "NEXORA_PUBLISH";
 const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
 const CARGO_WIX_MODERN_REVISION: &str = "9a8ed9486637e1fb839f209730eda6c95fd12d88";
+const WIX_VERSION: &str = "5.0.2";
+const DOTNET_SDK_CHANNEL: &str = "10.0";
+const DOTNET_INSTALL_SCRIPT_URL: &str = "https://dot.net/v1/dotnet-install.ps1";
+const HOMEBREW_INSTALL_COMMAND: &str = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
+const RUSTUP_INSTALL_COMMAND: &str =
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y";
+const WINDOWS_SDK_WINGET_PACKAGE: &str = "Microsoft.WindowsSDK.10.0.26100";
+const WINDOWS_SDK_DOWNLOAD_URL: &str =
+    "https://developer.microsoft.com/windows/downloads/windows-sdk/";
 
 /// `nexora build` 的 app/channel 多选参数。
 #[derive(Args, Debug, Clone)]
@@ -116,8 +124,6 @@ struct PublishTarget {
     public_base_url: String,
     #[serde(default)]
     allow_insecure_http: bool,
-    #[serde(default = "default_credential_env_prefix")]
-    credential_env_prefix: String,
     #[serde(default)]
     channels: BTreeMap<String, PublishTargetOverride>,
 }
@@ -139,8 +145,6 @@ struct PublishTargetOverride {
     public_base_url: Option<String>,
     #[serde(default)]
     allow_insecure_http: Option<bool>,
-    #[serde(default)]
-    credential_env_prefix: Option<String>,
 }
 
 impl PublishTarget {
@@ -177,10 +181,6 @@ impl PublishTarget {
             allow_insecure_http: override_target
                 .allow_insecure_http
                 .unwrap_or(self.allow_insecure_http),
-            credential_env_prefix: override_target
-                .credential_env_prefix
-                .clone()
-                .unwrap_or_else(|| self.credential_env_prefix.clone()),
             channels: BTreeMap::new(),
         }
     }
@@ -738,6 +738,7 @@ pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
         config.all_channels,
         terminal_is_interactive(),
     )?;
+    ensure_rust_toolchain(true)?;
     for (app_key, channel) in selections {
         let app = &project.config.apps[&app_key];
         let package_version = cargo_package_version(&project.root, &app.package, false)?;
@@ -810,7 +811,7 @@ pub(super) fn run_publish_command(config: PublishConfig) -> CliResult<()> {
     }
 
     for plan in &plans {
-        let credentials = S3Credentials::from_env(&plan.target.credential_env_prefix)?;
+        let credentials = S3Credentials::from_env(&plan.release.channel)?;
         publish_plan(plan, &client, &credentials)?;
     }
     Ok(())
@@ -1976,31 +1977,13 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
 }
 
 fn ensure_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
-    require_command("cargo")?;
-    require_command("rustup")?;
-    ensure_rust_target_installed(&plan.target)?;
-    if !command_exists("cargo-bundle") {
-        run_status(
-            "cargo install cargo-bundle",
-            Command::new("cargo").args(["install", "cargo-bundle"]),
-        )?;
-    }
-    if !command_exists("create-dmg") {
-        require_command("brew")?;
-        run_status(
-            "brew install create-dmg",
-            Command::new("brew").args(["install", "create-dmg"]),
-        )?;
-    }
-    require_command("ditto")?;
-    require_command("plutil")?;
-    if plan.signing != SigningMode::None {
-        require_command("codesign")?;
-    }
-    if plan.notarize {
-        require_command("xcrun")?;
-    }
-    Ok(())
+    ensure_macos_dependencies(
+        &plan.target,
+        plan.signing != SigningMode::None,
+        plan.signing == SigningMode::DeveloperId,
+        plan.notarize,
+        true,
+    )
 }
 
 fn run_cargo_bundle(plan: &BuildPlan) -> CliResult<()> {
@@ -2174,28 +2157,13 @@ fn ensure_windows_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
     if env::consts::OS != "windows" {
         return Err(CliError::new("当前宿主不能构建 Windows targets"));
     }
-    require_command("cargo")?;
-    require_command("rustup")?;
-    ensure_rust_target_installed(&plan.target)?;
-    let _ = windows_sdk_tool("rc.exe")?;
-    let _ = windows_sdk_tool("fxc.exe")?;
-    ensure_cargo_wix_modern()?;
-    require_command("wix")?;
-    let _ = wix_version()?;
-    for extension in [
-        "WixToolset.UI.wixext",
-        "WixToolset.BootstrapperApplications.wixext",
-    ] {
-        ensure_wix_extension(extension, false)?;
-    }
-    if plan
-        .windows
-        .as_ref()
-        .is_some_and(|options| options.signing == WindowsSigningMode::Authenticode)
-    {
-        let _ = windows_sdk_tool("signtool.exe")?;
-    }
-    Ok(())
+    ensure_windows_dependencies(
+        &plan.target,
+        plan.windows
+            .as_ref()
+            .is_some_and(|options| options.signing == WindowsSigningMode::Authenticode),
+        true,
+    )
 }
 
 fn windows_work_dir(plan: &BuildPlan) -> PathBuf {
@@ -4260,21 +4228,7 @@ fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {
     if target.region.as_deref().is_some_and(str::is_empty) {
         return Err(CliError::new("publish region 不能为空"));
     }
-    validate_safe_component(&target.bucket, "bucket")?;
-    validate_credential_env_prefix(&target.credential_env_prefix)
-}
-
-fn validate_credential_env_prefix(value: &str) -> CliResult<()> {
-    let mut bytes = value.bytes();
-    let valid_start = bytes
-        .next()
-        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
-    if !valid_start || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
-        return Err(CliError::new(format!(
-            "credential_env_prefix `{value}` 不是安全的环境变量前缀"
-        )));
-    }
-    Ok(())
+    validate_safe_component(&target.bucket, "bucket")
 }
 
 fn validate_http_url(value: &str, label: &str) -> CliResult<()> {
@@ -4816,10 +4770,6 @@ fn default_check_interval() -> String {
     "15m".to_owned()
 }
 
-fn default_credential_env_prefix() -> String {
-    DEFAULT_CREDENTIAL_ENV_PREFIX.to_owned()
-}
-
 fn default_check_jitter() -> String {
     "1m".to_owned()
 }
@@ -4867,56 +4817,14 @@ fn default_start_menu_shortcut() -> bool {
 pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
     if env::consts::OS == "macos" {
         ensure_macos()?;
-        for command in ["cargo", "rustup", "ditto", "plutil", "codesign"] {
-            require_command(command)?;
-        }
-        for (command, install) in [
-            ("cargo-bundle", vec!["cargo", "install", "cargo-bundle"]),
-            ("create-dmg", vec!["brew", "install", "create-dmg"]),
-        ] {
-            if command_exists(command) {
-                continue;
-            }
-            if !fix {
-                return Err(CliError::new(format!("缺少 `{command}`")));
-            }
-            let mut process = Command::new(install[0]);
-            process.args(&install[1..]);
-            run_status(&format!("install {command}"), &mut process)?;
-        }
+        ensure_rust_toolchain(fix)?;
+        let target = rustc_host_target()?;
+        ensure_macos_dependencies(&target, true, true, true, fix)?;
         println!("doctor: macOS 构建依赖可用");
     } else if env::consts::OS == "windows" {
-        for command in ["cargo", "rustup"] {
-            require_command(command)?;
-        }
+        ensure_rust_toolchain(fix)?;
         let target = rustc_host_target()?;
-        ensure_rust_target_installed(&target)?;
-        let _ = windows_sdk_tool("rc.exe")?;
-        let _ = windows_sdk_tool("fxc.exe")?;
-        if ensure_cargo_wix_modern().is_err() && fix {
-            run_status(
-                "安装支持现代 WiX 的 cargo-wix",
-                Command::new("cargo").args([
-                    "install",
-                    "cargo-wix",
-                    "--git",
-                    "https://github.com/volks73/cargo-wix",
-                    "--rev",
-                    CARGO_WIX_MODERN_REVISION,
-                    "--locked",
-                    "--force",
-                ]),
-            )?;
-        }
-        ensure_cargo_wix_modern()?;
-        require_command("wix")?;
-        let _ = wix_version()?;
-        for extension in [
-            "WixToolset.UI.wixext",
-            "WixToolset.BootstrapperApplications.wixext",
-        ] {
-            ensure_wix_extension(extension, fix)?;
-        }
+        ensure_windows_dependencies(&target, true, fix)?;
         println!("doctor: Windows SDK、cargo-wix 与 WiX 构建依赖可用");
     } else {
         return Err(CliError::new("当前宿主暂不支持桌面发布构建"));
@@ -4924,7 +4832,75 @@ pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
     Ok(())
 }
 
-fn ensure_rust_target_installed(target: &str) -> CliResult<()> {
+fn ensure_macos_dependencies(
+    target: &str,
+    code_signing: bool,
+    developer_id: bool,
+    notarize: bool,
+    fix: bool,
+) -> CliResult<()> {
+    ensure_macos()?;
+    ensure_rust_toolchain(fix)?;
+    ensure_rust_target_installed(target, fix)?;
+    ensure_xcode_command_line_tools(code_signing, developer_id, notarize, fix)?;
+    ensure_cargo_tool("cargo-bundle", "cargo-bundle", fix)?;
+    ensure_homebrew(fix)?;
+    ensure_brew_formula("create-dmg", fix)
+}
+
+fn ensure_windows_dependencies(target: &str, authenticode: bool, fix: bool) -> CliResult<()> {
+    activate_windows_managed_tools()?;
+    ensure_rust_toolchain(fix)?;
+    ensure_rust_target_installed(target, fix)?;
+    ensure_windows_sdk(authenticode, fix)?;
+    ensure_cargo_wix_modern(fix)?;
+    ensure_dotnet_sdk(fix)?;
+    ensure_wix_tool(fix)?;
+    for extension in [
+        "WixToolset.UI.wixext",
+        "WixToolset.BootstrapperApplications.wixext",
+    ] {
+        ensure_wix_extension(extension, fix)?;
+    }
+    Ok(())
+}
+
+fn ensure_rust_toolchain(fix: bool) -> CliResult<()> {
+    activate_rust_tool_path()?;
+    if command_exists("cargo") && command_exists("rustup") {
+        return Ok(());
+    }
+    let manual = if env::consts::OS == "windows" {
+        "从 https://rustup.rs 下载并运行 rustup-init.exe -y"
+    } else {
+        RUSTUP_INSTALL_COMMAND
+    };
+    require_interactive_repair("Rust 工具链", manual, fix)?;
+    if env::consts::OS == "windows" {
+        let url = format!(
+            "https://static.rust-lang.org/rustup/dist/{}/rustup-init.exe",
+            windows_host_rust_target()
+        );
+        let installer = managed_tools_root()?.join("downloads/rustup-init.exe");
+        download_official_file(&url, &installer, "Rustup 安装器")?;
+        run_status("安装 Rust 工具链", Command::new(&installer).arg("-y"))?;
+    } else {
+        run_status(
+            "安装 Rust 工具链",
+            Command::new("sh").args(["-c", RUSTUP_INSTALL_COMMAND]),
+        )?;
+    }
+    activate_rust_tool_path()?;
+    if command_exists("cargo") && command_exists("rustup") {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "Rust 工具链安装完成后仍无法找到 cargo/rustup；请运行 `{manual}`，然后重新执行 `nexora build`"
+        )))
+    }
+}
+
+fn ensure_rust_target_installed(target: &str, fix: bool) -> CliResult<()> {
     let output = Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
@@ -4939,15 +4915,32 @@ fn ensure_rust_target_installed(target: &str) -> CliResult<()> {
         .lines()
         .any(|installed| installed.trim() == target)
     {
+        return Ok(());
+    }
+    let manual = format!("rustup target add {target}");
+    require_repair("Rust target", &manual, fix)?;
+    run_status(
+        &format!("安装 Rust target {target}"),
+        Command::new("rustup").args(["target", "add", target]),
+    )?;
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法复检 Rust target: {error}")))?;
+    if output.status.success()
+        && String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|installed| installed.trim() == target)
+    {
         Ok(())
     } else {
         Err(CliError::new(format!(
-            "Rust target `{target}` 尚未安装；请先运行 `rustup target add {target}`"
+            "执行 `{manual}` 后仍未检测到 target；请检查输出并重新执行 `nexora build`"
         )))
     }
 }
 
-fn ensure_cargo_wix_modern() -> CliResult<()> {
+fn ensure_cargo_wix_modern(fix: bool) -> CliResult<()> {
     let output = Command::new("cargo")
         .args(["wix", "--help"])
         .output()
@@ -4960,9 +4953,399 @@ fn ensure_cargo_wix_modern() -> CliResult<()> {
     if output.status.success() && help.contains("--toolset") && help.contains("--migrate") {
         return Ok(());
     }
+    let manual = format!(
+        "cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force"
+    );
+    require_repair("支持现代 WiX 的 cargo-wix", &manual, fix)?;
+    run_status(
+        "安装支持现代 WiX 的 cargo-wix",
+        Command::new("cargo").args([
+            "install",
+            "cargo-wix",
+            "--git",
+            "https://github.com/volks73/cargo-wix",
+            "--rev",
+            CARGO_WIX_MODERN_REVISION,
+            "--locked",
+            "--force",
+        ]),
+    )?;
+    let output = Command::new("cargo")
+        .args(["wix", "--help"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法复检 `cargo wix --help`: {error}")))?;
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.status.success() && help.contains("--toolset") && help.contains("--migrate") {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "执行 `{manual}` 后 cargo-wix 仍不支持现代 WiX；请检查安装输出并重新执行 `nexora build`"
+        )))
+    }
+}
+
+fn ensure_cargo_tool(command: &str, crate_name: &str, fix: bool) -> CliResult<()> {
+    if command_exists(command) {
+        return Ok(());
+    }
+    let manual = format!("cargo install {crate_name}");
+    require_repair(command, &manual, fix)?;
+    run_status(
+        &format!("安装 {command}"),
+        Command::new("cargo").args(["install", crate_name]),
+    )?;
+    require_command_with_guidance(command, &manual)
+}
+
+fn ensure_homebrew(fix: bool) -> CliResult<()> {
+    activate_homebrew_path()?;
+    if command_exists("brew") {
+        return Ok(());
+    }
+    require_interactive_repair("Homebrew", HOMEBREW_INSTALL_COMMAND, fix)?;
+    run_status(
+        "安装 Homebrew",
+        Command::new("/bin/bash").args(["-c", HOMEBREW_INSTALL_COMMAND]),
+    )?;
+    activate_homebrew_path()?;
+    require_command_with_guidance("brew", HOMEBREW_INSTALL_COMMAND)
+}
+
+fn ensure_brew_formula(formula: &str, fix: bool) -> CliResult<()> {
+    if command_exists(formula) {
+        return Ok(());
+    }
+    let manual = format!("brew install {formula}");
+    require_repair(formula, &manual, fix)?;
+    run_status(
+        &format!("安装 {formula}"),
+        Command::new("brew").args(["install", formula]),
+    )?;
+    require_command_with_guidance(formula, &manual)
+}
+
+fn ensure_xcode_command_line_tools(
+    code_signing: bool,
+    developer_id: bool,
+    notarize: bool,
+    fix: bool,
+) -> CliResult<()> {
+    let mut commands = vec!["ditto", "plutil"];
+    if code_signing {
+        commands.push("codesign");
+    }
+    if developer_id {
+        commands.push("security");
+    }
+    if notarize {
+        commands.push("xcrun");
+    }
+    let commands_available = commands.iter().all(|command| command_exists(command));
+    let developer_directory_available = Command::new("xcode-select")
+        .arg("-p")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    let notarization_tools_available = !notarize
+        || ["notarytool", "stapler"].iter().all(|tool| {
+            Command::new("xcrun")
+                .args(["--find", tool])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        });
+    if commands_available && developer_directory_available && notarization_tools_available {
+        return Ok(());
+    }
+    let manual = "xcode-select --install";
+    require_interactive_repair("Xcode Command Line Tools", manual, fix)?;
+    let status = Command::new("xcode-select")
+        .arg("--install")
+        .status()
+        .map_err(|error| {
+            CliError::new(format!("无法启动 Xcode Command Line Tools 安装器: {error}"))
+        })?;
     Err(CliError::new(format!(
-        "当前 cargo-wix 不支持现代 WiX；请运行 `cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force`"
+        "已启动 Xcode Command Line Tools 安装器（状态 {status}）；安装完成后重新执行 `nexora build`。如果已安装但缺少 notarytool/stapler，请安装完整 Xcode 并选择其 Developer 目录"
     )))
+}
+
+fn ensure_dotnet_sdk(fix: bool) -> CliResult<()> {
+    activate_windows_managed_tools()?;
+    if dotnet_sdk_available()? {
+        return Ok(());
+    }
+    let root = managed_dotnet_root()?;
+    let manual = format!(
+        "从 {DOTNET_INSTALL_SCRIPT_URL} 运行 dotnet-install.ps1 -Channel {DOTNET_SDK_CHANNEL} -InstallDir \"{}\" -NoPath",
+        root.display()
+    );
+    require_interactive_repair(".NET SDK 6+", &manual, fix)?;
+    let script = managed_tools_root()?.join("downloads/dotnet-install.ps1");
+    download_official_file(DOTNET_INSTALL_SCRIPT_URL, &script, ".NET 安装脚本")?;
+    fs::create_dir_all(&root).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 Nexora .NET SDK 目录 `{}`: {error}",
+            root.display()
+        ))
+    })?;
+    let mut command = Command::new("powershell.exe");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .args(["-Channel", DOTNET_SDK_CHANNEL, "-InstallDir"])
+        .arg(&root)
+        .arg("-NoPath");
+    run_status("安装 Nexora 用户级 .NET SDK", &mut command)?;
+    activate_windows_managed_tools()?;
+    if dotnet_sdk_available()? {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            ".NET SDK 安装完成后仍不可用；请运行 `{manual}`，然后重新执行 `nexora build`"
+        )))
+    }
+}
+
+fn dotnet_sdk_available() -> CliResult<bool> {
+    if !command_exists("dotnet") {
+        return Ok(false);
+    }
+    let output = Command::new("dotnet")
+        .arg("--list-sdks")
+        .output()
+        .map_err(|error| CliError::new(format!("无法查询 .NET SDK: {error}")))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        line.split_once('.')
+            .and_then(|(major, _)| major.parse::<u64>().ok())
+            .is_some_and(|major| major >= 6)
+    }))
+}
+
+fn ensure_wix_tool(fix: bool) -> CliResult<()> {
+    activate_windows_managed_tools()?;
+    let expected = Version::parse(WIX_VERSION)
+        .map_err(|error| CliError::new(format!("内置 WiX 版本无效: {error}")))?;
+    if command_exists("wix") && wix_version().is_ok_and(|version| version == expected) {
+        return Ok(());
+    }
+    let installed = dotnet_global_tool_installed("wix")?;
+    let verb = if installed { "update" } else { "install" };
+    let manual = format!("dotnet tool {verb} --global wix --version {WIX_VERSION}");
+    require_repair("WiX 5.0.2", &manual, fix)?;
+    run_status(
+        "安装 WiX 5.0.2",
+        Command::new("dotnet").args(["tool", verb, "--global", "wix", "--version", WIX_VERSION]),
+    )?;
+    activate_windows_managed_tools()?;
+    let actual = wix_version().map_err(|error| {
+        CliError::new(format!(
+            "执行 `{manual}` 后仍无法运行 wix；{error}。请确认 `%USERPROFILE%\\.dotnet\\tools` 可访问并重新执行 `nexora build`"
+        ))
+    })?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "执行 `{manual}` 后检测到 WiX {actual}，期望 {WIX_VERSION}；请检查安装输出并重新执行 `nexora build`"
+        )))
+    }
+}
+
+fn dotnet_global_tool_installed(package: &str) -> CliResult<bool> {
+    let output = Command::new("dotnet")
+        .args(["tool", "list", "--global"])
+        .output()
+        .map_err(|error| CliError::new(format!("无法查询 .NET 全局工具: {error}")))?;
+    if !output.status.success() {
+        return Err(CliError::new("`dotnet tool list --global` 执行失败"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(2)
+        .any(|line| line.split_whitespace().next() == Some(package)))
+}
+
+fn ensure_windows_sdk(authenticode: bool, fix: bool) -> CliResult<()> {
+    let mut tools = vec!["rc.exe", "fxc.exe"];
+    if authenticode {
+        tools.push("signtool.exe");
+    }
+    if tools.iter().all(|tool| windows_sdk_tool(tool).is_ok()) {
+        return Ok(());
+    }
+    let manual = format!(
+        "winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"
+    );
+    require_interactive_repair("Windows SDK", &manual, fix)?;
+    if command_exists("winget") {
+        run_status(
+            "安装 Windows SDK",
+            Command::new("winget").args([
+                "install",
+                "--source",
+                "winget",
+                "--exact",
+                "--id",
+                WINDOWS_SDK_WINGET_PACKAGE,
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ]),
+        )?;
+        if tools.iter().all(|tool| windows_sdk_tool(tool).is_ok()) {
+            return Ok(());
+        }
+        return Err(CliError::new(
+            "Windows SDK 安装已完成，但所需工具尚不可见；请完成安装器或系统重启，然后重新执行 `nexora build`",
+        ));
+    }
+    let _ = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", WINDOWS_SDK_DOWNLOAD_URL])
+        .status();
+    Err(CliError::new(format!(
+        "系统没有 winget，已尝试打开 Windows SDK 官方下载页；请安装后重新执行 `nexora build`。命令：`{manual}`；官方下载：{WINDOWS_SDK_DOWNLOAD_URL}"
+    )))
+}
+
+fn require_repair(label: &str, manual: &str, fix: bool) -> CliResult<()> {
+    if !fix {
+        return Err(CliError::new(format!(
+            "缺少或不兼容的 {label}；请运行 `{manual}`，或执行 `nexora doctor --fix`"
+        )));
+    }
+    if !terminal_is_interactive() {
+        return Err(CliError::new(format!(
+            "非交互环境缺少或不兼容的 {label}；不会自动安装，请运行 `{manual}` 后重新执行 `nexora build`"
+        )));
+    }
+    Ok(())
+}
+
+fn require_interactive_repair(label: &str, manual: &str, fix: bool) -> CliResult<()> {
+    require_repair(label, manual, fix)
+}
+
+fn require_command_with_guidance(command: &str, manual: &str) -> CliResult<()> {
+    if command_exists(command) {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "执行 `{manual}` 后仍缺少命令 `{command}`；请检查安装输出和当前 PATH，然后重新执行 `nexora build`"
+        )))
+    }
+}
+
+fn download_official_file(url: &str, destination: &Path, label: &str) -> CliResult<()> {
+    create_parent(destination)?;
+    let response = reqwest::blocking::get(url)
+        .map_err(|error| CliError::new(format!("下载{label} `{url}` 失败: {error}")))?;
+    if !response.status().is_success() {
+        return Err(CliError::new(format!(
+            "下载{label} `{url}` 返回 HTTP {}",
+            response.status()
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|error| CliError::new(format!("读取{label}响应失败: {error}")))?;
+    fs::write(destination, bytes).map_err(|error| {
+        CliError::new(format!(
+            "无法写入{label} `{}`: {error}",
+            destination.display()
+        ))
+    })
+}
+
+fn windows_host_rust_target() -> &'static str {
+    if env::consts::ARCH == "aarch64" {
+        "aarch64-pc-windows-msvc"
+    } else {
+        "x86_64-pc-windows-msvc"
+    }
+}
+
+fn managed_tools_root() -> CliResult<PathBuf> {
+    env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| path.join("Nexora/tools"))
+        .ok_or_else(|| CliError::new("Windows 缺少 LOCALAPPDATA，无法定位 Nexora 用户级工具目录"))
+}
+
+fn managed_dotnet_root() -> CliResult<PathBuf> {
+    managed_tools_root().map(|path| path.join("dotnet"))
+}
+
+fn activate_rust_tool_path() -> CliResult<()> {
+    let cargo_home = env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| {
+        let variable = if env::consts::OS == "windows" {
+            "USERPROFILE"
+        } else {
+            "HOME"
+        };
+        env::var_os(variable)
+            .map(PathBuf::from)
+            .map(|path| path.join(".cargo"))
+    });
+    if let Some(path) = cargo_home.map(|path| path.join("bin")) {
+        prepend_process_paths([path])?;
+    }
+    Ok(())
+}
+
+fn activate_homebrew_path() -> CliResult<()> {
+    let paths = [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]
+    .into_iter()
+    .filter(|path| path.is_dir())
+    .collect::<Vec<_>>();
+    prepend_process_paths(paths)
+}
+
+fn activate_windows_managed_tools() -> CliResult<()> {
+    if env::consts::OS != "windows" {
+        return Ok(());
+    }
+    let dotnet = managed_dotnet_root()?;
+    let mut paths = Vec::new();
+    if dotnet.is_dir() {
+        paths.push(dotnet.clone());
+        unsafe { env::set_var("DOTNET_ROOT", &dotnet) };
+    }
+    if let Some(profile) = env::var_os("USERPROFILE") {
+        paths.push(PathBuf::from(profile).join(".dotnet/tools"));
+    }
+    prepend_process_paths(paths)
+}
+
+fn prepend_process_paths(paths: impl IntoIterator<Item = PathBuf>) -> CliResult<()> {
+    let mut combined = paths
+        .into_iter()
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect::<Vec<_>>();
+    if let Some(existing) = env::var_os("PATH") {
+        combined.extend(env::split_paths(&existing));
+    }
+    let mut unique = Vec::new();
+    for path in combined {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    let joined = env::join_paths(unique)
+        .map_err(|error| CliError::new(format!("无法更新当前构建进程 PATH: {error}")))?;
+    unsafe { env::set_var("PATH", joined) };
+    Ok(())
 }
 
 fn windows_sdk_tool(name: &str) -> CliResult<PathBuf> {
@@ -5104,56 +5487,62 @@ fn run_status(name: &str, command: &mut Command) -> CliResult<()> {
 }
 
 struct S3Credentials {
-    source_prefix: String,
     access_key_id: String,
     secret_access_key: String,
     session_token: Option<String>,
+    access_key_source: String,
+    secret_key_source: String,
+    session_token_source: Option<String>,
 }
 
 impl S3Credentials {
-    fn from_env(prefix: &str) -> CliResult<Self> {
-        if let Some(credentials) = credential_group(prefix)? {
-            return Ok(credentials);
-        }
-        if prefix == DEFAULT_CREDENTIAL_ENV_PREFIX {
-            return credential_group("AWS")?.ok_or_else(|| {
-                CliError::new(
-                    "缺少完整的 NEXORA_PUBLISH 或 AWS 发布凭据组；access key 与 secret key 必须来自同一组",
-                )
-            });
-        }
-        Err(CliError::new(format!(
-            "缺少 `{prefix}` 对应的完整发布凭据组；不会回退默认 Nexora 或 AWS 凭据"
-        )))
+    fn from_env(channel: &str) -> CliResult<Self> {
+        let (access_key_id, access_key_source) =
+            required_credential_env_value(channel, "ACCESS_KEY_ID")?;
+        let (secret_access_key, secret_key_source) =
+            required_credential_env_value(channel, "SECRET_ACCESS_KEY")?;
+        let session_token = credential_env_value(channel, "SESSION_TOKEN")?;
+        Ok(Self {
+            access_key_id,
+            secret_access_key,
+            session_token: session_token.as_ref().map(|(value, _)| value.clone()),
+            access_key_source,
+            secret_key_source,
+            session_token_source: session_token.map(|(_, source)| source),
+        })
     }
 }
 
-fn credential_group(prefix: &str) -> CliResult<Option<S3Credentials>> {
-    let access_name = format!("{prefix}_ACCESS_KEY_ID");
-    let secret_name = format!("{prefix}_SECRET_ACCESS_KEY");
-    let session_name = format!("{prefix}_SESSION_TOKEN");
-    let access_key_id = optional_env_value(&access_name)?;
-    let secret_access_key = optional_env_value(&secret_name)?;
-    let session_token = optional_env_value(&session_name)?;
-    match (access_key_id, secret_access_key, session_token) {
-        (None, None, None) => Ok(None),
-        (Some(access_key_id), Some(secret_access_key), session_token) => Ok(Some(S3Credentials {
-            source_prefix: prefix.to_owned(),
-            access_key_id,
-            secret_access_key,
-            session_token,
-        })),
-        _ => Err(CliError::new(format!(
-            "发布凭据组 `{prefix}` 不完整；`{access_name}` 与 `{secret_name}` 必须同时存在，`{session_name}` 只能属于同一组"
-        ))),
+fn required_credential_env_value(channel: &str, field: &str) -> CliResult<(String, String)> {
+    credential_env_value(channel, field)?.ok_or_else(|| {
+        let names = credential_env_names(channel, field);
+        CliError::new(format!(
+            "缺少发布凭据字段 `{field}`；依次检查了 `{}`",
+            names.join("`、`")
+        ))
+    })
+}
+
+fn credential_env_value(channel: &str, field: &str) -> CliResult<Option<(String, String)>> {
+    for name in credential_env_names(channel, field) {
+        if let Some(value) = optional_env_value(&name)? {
+            return Ok(Some((value, name)));
+        }
     }
+    Ok(None)
+}
+
+fn credential_env_names(channel: &str, field: &str) -> [String; 3] {
+    [
+        format!("NEXORA_PUBLISH_{}_{field}", channel.to_ascii_uppercase()),
+        format!("NEXORA_PUBLISH_{field}"),
+        format!("AWS_{field}"),
+    ]
 }
 
 fn optional_env_value(name: &str) -> CliResult<Option<String>> {
     match env::var(name) {
-        Ok(value) if value.is_empty() => {
-            Err(CliError::new(format!("发布凭据环境变量 `{name}` 不能为空")))
-        }
+        Ok(value) if value.is_empty() => Ok(None),
         Ok(value) => Ok(Some(value)),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(env::VarError::NotUnicode(_)) => Err(CliError::new(format!(
@@ -5753,22 +6142,61 @@ pub fn inspect_effective_publish_target(
         "force_path_style": target.force_path_style,
         "public_base_url": target.public_base_url,
         "allow_insecure_http": target.allow_insecure_http,
-        "credential_env_prefix": target.credential_env_prefix,
     }))
 }
 
-/// 为集成测试执行原子凭据组选择，并仅返回来源与是否携带 session token。
+/// 为集成测试执行指定 channel 的逐字段凭据选择，并仅返回来源。
 ///
 /// # Errors
 ///
-/// 指定凭据组缺失、不完整或环境变量不是有效 Unicode 时返回错误。
+/// 任一必填字段缺失或环境变量不是有效 Unicode 时返回错误。
 #[allow(dead_code)]
-pub fn inspect_credential_selection(prefix: &str) -> CliResult<serde_json::Value> {
-    let credentials = S3Credentials::from_env(prefix)?;
+pub fn inspect_credential_selection(channel: &str) -> CliResult<serde_json::Value> {
+    let credentials = S3Credentials::from_env(channel)?;
     Ok(serde_json::json!({
-        "source_prefix": credentials.source_prefix,
+        "access_key_source": credentials.access_key_source,
+        "secret_key_source": credentials.secret_key_source,
+        "session_token_source": credentials.session_token_source,
         "has_session_token": credentials.session_token.is_some(),
     }))
+}
+
+/// 为集成测试返回各宿主缺失构建依赖时使用的官方安装指引。
+///
+/// 返回值只包含公开命令和下载入口，不检测或修改当前机器。
+///
+/// # Errors
+///
+/// `platform` 不是 `macos` 或 `windows` 时返回错误。
+#[allow(dead_code)]
+pub fn inspect_build_dependency_guidance(platform: &str) -> CliResult<serde_json::Value> {
+    match platform {
+        "macos" => Ok(serde_json::json!({
+            "rustup": RUSTUP_INSTALL_COMMAND,
+            "rust_target": "rustup target add <target>",
+            "cargo_bundle": "cargo install cargo-bundle",
+            "homebrew": HOMEBREW_INSTALL_COMMAND,
+            "create_dmg": "brew install create-dmg",
+            "xcode_command_line_tools": "xcode-select --install",
+            "non_interactive": "fail_with_commands",
+        })),
+        "windows" => Ok(serde_json::json!({
+            "rustup": "https://rustup.rs / rustup-init.exe -y",
+            "rust_target": "rustup target add <target>",
+            "cargo_wix": format!(
+                "cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force"
+            ),
+            "dotnet_script": DOTNET_INSTALL_SCRIPT_URL,
+            "dotnet_channel": DOTNET_SDK_CHANNEL,
+            "dotnet_install_root": "%LOCALAPPDATA%\\Nexora\\tools\\dotnet",
+            "wix_install": format!("dotnet tool install --global wix --version {WIX_VERSION}"),
+            "wix_update": format!("dotnet tool update --global wix --version {WIX_VERSION}"),
+            "windows_sdk": format!("winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"),
+            "windows_sdk_download": WINDOWS_SDK_DOWNLOAD_URL,
+            "non_interactive": "fail_with_commands",
+        })),
+        other => Err(CliError::new(format!("不支持构建依赖平台 `{other}`"))),
+    }
 }
 
 /// 为集成测试返回稳定 app_key 对象布局和公开 URL，不访问对象存储。

@@ -25,13 +25,11 @@ region = "us-east-1"
 force_path_style = true
 public_base_url = "http://192.168.1.20:9000/desktop-releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH"
 
 [publish.targets.internal.channels.nightly]
 endpoint = "http://192.168.1.30:9000"
 public_base_url = "http://192.168.1.30:9000/desktop-releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 
 [apps.console]
 package = "console"
@@ -69,8 +67,8 @@ Rules:
 - `apps` table names are stable CLI app IDs. `package` must exist and be a desktop binary. `app_id` is permanent and globally unique.
 - Multiple apps may share a publish target. The `apps` table key is the stable remote directory identity; `display_name` is only user-visible metadata and the distribution filename stem. Changing `display_name` must not move the feed root.
 - `object_prefix = ""` means no extra prefix. Non-empty values keep safe-path validation; joining must never create leading/doubled slashes or empty components.
-- `publish.targets.<name>.channels.<channel>` overrides the base target by field. Omitted fields inherit, and the merged provider, URLs, bucket, region, path style, HTTP policy and credential prefix are validated together.
-- Default credentials are the complete `NEXORA_PUBLISH` group. Only when every field is absent may publish fall back to the complete AWS group. Partial groups and all cross-group access/secret/session mixing fail. Custom prefixes never fall back. `RUSTFS_*` is unsupported.
+- `publish.targets.<name>.channels.<channel>` overrides the base target by field. Omitted fields inherit, and the merged provider, URLs, bucket, region, path style and HTTP policy are validated together.
+- Publish resolves each credential field independently in this order: `NEXORA_PUBLISH_<CHANNEL>_<FIELD>`, `NEXORA_PUBLISH_<FIELD>`, then `AWS_<FIELD>`. Empty values continue fallback, access/secret are required, session token is optional, and `RUSTFS_*` is unsupported.
 - A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
 - `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
 - `release.build_number` accepts a positive integer or the complete `${BUILD_DATETIME}` expression. The expression uses the build machine's local timezone and 24-hour `yyMMddHHmmss`, then applies `max(current local value, previous local build number + 1)` after same-second builds, clock rollback, daylight-saving fallback or timezone changes. Unknown strings, zero and overflow are rejected.
@@ -121,7 +119,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 - Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.
 - All targets in one build use that receipt. A matching incomplete retry reuses it. After every planned target artifact is complete, another explicit dynamic build creates a strictly higher build number and updates the current receipt without deleting old versioned artifacts. Corrupt/unsupported receipts fail before build and are never reconstructed from directory names.
 - Build defaults to the exact host target from `rustc -vV`. Repeated `--target` arguments explicitly override it. `apps.<id>.targets.required` remains an optional legacy compatibility source and is not required in new projects.
-- Build never runs `rustup target add`; a missing target fails with the exact command the developer must run.
+- In an interactive terminal, build repairs missing host dependencies before compiling, including Rust targets, Cargo packaging tools, macOS Homebrew tools, pinned cargo-wix, Nexora-managed user-level .NET SDK, WiX 5.0.2 and matching extensions. System installers such as Xcode Command Line Tools and Windows SDK may pause the build and require rerunning the same command. Non-interactive builds fail with exact installation commands instead of starting installers.
 - Cross-OS pseudo-packaging is forbidden. Complete releases use platform runners.
 - Sidecar locations: macOS `Contents/Helpers/<app>-updater`, Windows `<app>-updater.exe`, Linux `<app>-updater`.
 - Sidecar embeds `app_id`, protocol, trusted public keys and main-program identity. Before applying, it copies itself to a random temp directory.

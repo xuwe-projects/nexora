@@ -15,8 +15,8 @@ pub(super) use release::{BuildConfig, PublishConfig};
 pub use release::inspect_compile_windows_resource_executables;
 #[allow(unused_imports)]
 pub use release::{
-    inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_channel_artifact_keys,
+    inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
+    inspect_build_plans, inspect_build_plans_for_channel, inspect_channel_artifact_keys,
     inspect_create_windows_update_zip, inspect_credential_selection,
     inspect_effective_publish_target, inspect_freeze_release_notes,
     inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,

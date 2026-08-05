@@ -8,10 +8,6 @@
 
 ```powershell
 Copy-Item nexora.toml.example nexora.toml
-rustup target add ((rustc -vV | Select-String '^host: ').Line.Substring(6))
-cargo install cargo-wix --git https://github.com/volks73/cargo-wix `
-  --rev 9a8ed9486637e1fb839f209730eda6c95fd12d88 --locked --force
-dotnet tool install --global wix --version 5.0.2
 nexora doctor --fix
 nexora updater keygen --app updater-windows `
   --private-key-file .secrets/updater-windows.key
@@ -19,7 +15,11 @@ nexora updater keygen --app updater-windows `
 
 把 keygen 输出的公钥写入 `trusted_public_keys`。`.secrets/` 已被 Git 忽略；私钥只由 `nexora publish` 本地读取，不会进入应用安装包。
 
-还需要安装 Windows 10/11 SDK 的 Desktop C++ 工具。Nexora 会从 Windows Kits 标准目录自动定位 `rc.exe`、`fxc.exe` 和 `signtool.exe`，不要求手工修改 PATH。WiX 5.0.2 是当前验证版本；WiX 4 缺少本实现所用的新 BootstrapperApplications 扩展名，WiX 6+ 另有 OSMF 条款，应由使用方自行审查后决定是否升级。
+交互式 `nexora build` / `nexora doctor --fix` 会自动安装 Rust target、固定 revision 的
+`cargo-wix`、WiX 5.0.2 和对应扩展。没有 .NET 时会通过微软官方脚本安装用户级 .NET 10 SDK
+到 `%LOCALAPPDATA%\Nexora\tools\dotnet`。缺少 Windows SDK 时会启动官方安装流程；如果安装器
+要求确认或重启，完成后重新执行相同命令。Nexora 从 Windows Kits 标准目录定位 `rc.exe`、
+`fxc.exe` 和 `signtool.exe`，不永久修改 PATH。非交互环境只输出完整安装命令。
 
 如启用 `signing = "authenticode"`，当前用户证书存储中还需要可用于签名的证书，并配置 `signing_thumbprint` 或环境变量 `WINDOWS_SIGN_CERTIFICATE_SHA1`，同时配置匹配的 `publisher`、`expected_publisher` 和 RFC 3161 `timestamp_url`。
 
@@ -46,7 +46,8 @@ Setup EXE；应用内更新还会对 ZIP 中两个 EXE 执行 `WinVerifyTrust`�
 nexora build --app updater-windows --target aarch64-pc-windows-msvc
 ```
 
-旧配置中的 `targets.required` 仍可读取，但不再是普通项目的必填项。Nexora 不会在 build 中联网执行 `rustup target add`；缺失时会返回应执行的准确命令。
+旧配置中的 `targets.required` 仍可读取，但不再是普通项目的必填项。交互式 build 会自动执行
+缺失的 `rustup target add`；CI/非交互环境会返回准确命令并停止。
 
 ## 构建与发布
 

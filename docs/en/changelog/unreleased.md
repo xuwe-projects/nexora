@@ -45,7 +45,11 @@
   `default_channel`. Interactive `nexora build` shows channel selection, while CI can use
   `--channel` or `--all-channels` explicitly.
 - `apps.<app>.targets.required` is optional. `nexora build` defaults to the `rustc -vV` host target,
-  supports repeated `--target` overrides, and no longer installs Rust targets implicitly.
+  supports repeated `--target` overrides, and repairs missing Rust targets plus macOS/Windows
+  packaging dependencies in interactive terminals. System-installer completion can resume by
+  rerunning the same command; non-interactive environments receive exact installation commands.
+- Publish targets no longer accept `credential_env_prefix`. Access, secret, and session fields each
+  fall back through channel-specific Nexora, base Nexora, and AWS variables independently.
 - `nexora build` again writes standard `.sha256` sidecars for final ZIP and DMG artifacts, publish
   uploads them beside versioned releases, and `${BUILD_DATETIME}` now uses the build machine's local
   timezone with 24-hour `yyMMddHHmmss` formatting.
@@ -59,6 +63,7 @@
 
 - Removed Jenkinsfile, the old desktop build env example, the old raw `latest.json` example, the
   macOS shell updater helper and test, and the macOS-only updater README.
+- Removed `credential_env_prefix` from `nexora.toml`; existing configuration must delete the field.
 
 ## Upgrade Notes
 

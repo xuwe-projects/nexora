@@ -5,8 +5,8 @@ pub mod commands;
 #[cfg(windows)]
 use commands::inspect_compile_windows_resource_executables;
 use commands::{
-    inspect_app_selection, inspect_build_datetime_number, inspect_build_plans,
-    inspect_build_plans_for_channel, inspect_channel_artifact_keys,
+    inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
+    inspect_build_plans, inspect_build_plans_for_channel, inspect_channel_artifact_keys,
     inspect_create_windows_update_zip, inspect_credential_selection,
     inspect_effective_publish_target, inspect_freeze_release_notes,
     inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
@@ -1666,7 +1666,6 @@ fn channel_publish_target_overrides_merge_by_field_and_revalidate_http() {
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/releases"
 allow_insecure_http = true
-credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 
 [apps.one]"#,
         );
@@ -1677,10 +1676,10 @@ credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
     assert_eq!(nightly["region"], "us-east-1");
     assert_eq!(nightly["force_path_style"], true);
     assert_eq!(nightly["allow_insecure_http"], true);
-    assert_eq!(nightly["credential_env_prefix"], "NEXORA_PUBLISH_NIGHTLY");
+    assert!(nightly.get("credential_env_prefix").is_none());
     let stable = inspect_effective_publish_target(fixture.config(), "one", "stable").unwrap();
     assert_eq!(stable["endpoint"], "https://s3.example.com");
-    assert_eq!(stable["credential_env_prefix"], "NEXORA_PUBLISH");
+    assert!(stable.get("credential_env_prefix").is_none());
 
     let invalid = fs::read_to_string(fixture.config()).unwrap().replace(
         "public_base_url = \"http://192.168.0.250:9000/releases\"\nallow_insecure_http = true",
@@ -1696,7 +1695,26 @@ credential_env_prefix = "NEXORA_PUBLISH_NIGHTLY"
 }
 
 #[test]
-fn publish_credentials_select_complete_groups_atomically() {
+fn publish_target_rejects_removed_credential_env_prefix() {
+    let fixture = Fixture::new(
+        "removed-credential-prefix",
+        &app_config("one", "package-one", "iMES"),
+    );
+    let config = fs::read_to_string(fixture.config()).unwrap().replace(
+        "allow_insecure_http = true",
+        "allow_insecure_http = true\ncredential_env_prefix = \"\"",
+    );
+    fs::write(fixture.config(), config).unwrap();
+
+    let error = inspect_effective_publish_target(fixture.config(), "one", "stable")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("credential_env_prefix"));
+    assert!(error.contains("unknown field") || error.contains("未知字段"));
+}
+
+#[test]
+fn publish_credentials_fall_back_independently_by_channel_and_field() {
     let _lock = ENVIRONMENT_LOCK.lock().unwrap();
     let names = [
         "NEXORA_PUBLISH_ACCESS_KEY_ID",
@@ -1705,9 +1723,9 @@ fn publish_credentials_select_complete_groups_atomically() {
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
-        "NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID",
-        "NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY",
-        "NEXORA_PUBLISH_NIGHTLY_SESSION_TOKEN",
+        "NEXORA_PUBLISH_BETA_ACCESS_KEY_ID",
+        "NEXORA_PUBLISH_BETA_SECRET_ACCESS_KEY",
+        "NEXORA_PUBLISH_BETA_SESSION_TOKEN",
         "RUSTFS_ACCESS_KEY_ID",
         "RUSTFS_SECRET_ACCESS_KEY",
     ];
@@ -1718,36 +1736,95 @@ fn publish_credentials_select_complete_groups_atomically() {
     EnvironmentGuard::set("NEXORA_PUBLISH_SESSION_TOKEN", "nexora-session");
     EnvironmentGuard::set("AWS_ACCESS_KEY_ID", "aws-access");
     EnvironmentGuard::set("AWS_SECRET_ACCESS_KEY", "aws-secret");
-    let selected = inspect_credential_selection("NEXORA_PUBLISH").unwrap();
-    assert_eq!(selected["source_prefix"], "NEXORA_PUBLISH");
-    assert_eq!(selected["has_session_token"], true);
-
-    EnvironmentGuard::unset("NEXORA_PUBLISH_SECRET_ACCESS_KEY");
-    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
-    EnvironmentGuard::unset("NEXORA_PUBLISH_ACCESS_KEY_ID");
-    EnvironmentGuard::unset("NEXORA_PUBLISH_SESSION_TOKEN");
     EnvironmentGuard::set("AWS_SESSION_TOKEN", "aws-session");
-    let selected = inspect_credential_selection("NEXORA_PUBLISH").unwrap();
-    assert_eq!(selected["source_prefix"], "AWS");
+    let selected = inspect_credential_selection("stable").unwrap();
+    assert_eq!(
+        selected["access_key_source"],
+        "NEXORA_PUBLISH_ACCESS_KEY_ID"
+    );
+    assert_eq!(
+        selected["secret_key_source"],
+        "NEXORA_PUBLISH_SECRET_ACCESS_KEY"
+    );
+    assert_eq!(
+        selected["session_token_source"],
+        "NEXORA_PUBLISH_SESSION_TOKEN"
+    );
     assert_eq!(selected["has_session_token"], true);
 
-    EnvironmentGuard::unset("AWS_SECRET_ACCESS_KEY");
-    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
-    EnvironmentGuard::set("AWS_SECRET_ACCESS_KEY", "aws-secret");
-    EnvironmentGuard::set("NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID", "nightly-access");
-    EnvironmentGuard::set("NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY", "nightly-secret");
-    let selected = inspect_credential_selection("NEXORA_PUBLISH_NIGHTLY").unwrap();
-    assert_eq!(selected["source_prefix"], "NEXORA_PUBLISH_NIGHTLY");
-    EnvironmentGuard::unset("NEXORA_PUBLISH_NIGHTLY_SECRET_ACCESS_KEY");
-    assert!(inspect_credential_selection("NEXORA_PUBLISH_NIGHTLY").is_err());
+    EnvironmentGuard::set("NEXORA_PUBLISH_BETA_ACCESS_KEY_ID", "beta-access");
+    EnvironmentGuard::set("NEXORA_PUBLISH_BETA_SECRET_ACCESS_KEY", "");
+    EnvironmentGuard::unset("NEXORA_PUBLISH_SESSION_TOKEN");
+    let selected = inspect_credential_selection("beta").unwrap();
+    assert_eq!(
+        selected["access_key_source"],
+        "NEXORA_PUBLISH_BETA_ACCESS_KEY_ID"
+    );
+    assert_eq!(
+        selected["secret_key_source"],
+        "NEXORA_PUBLISH_SECRET_ACCESS_KEY"
+    );
+    assert_eq!(selected["session_token_source"], "AWS_SESSION_TOKEN");
+    assert_eq!(selected["has_session_token"], true);
 
-    EnvironmentGuard::unset("NEXORA_PUBLISH_NIGHTLY_ACCESS_KEY_ID");
+    EnvironmentGuard::set("NEXORA_PUBLISH_SECRET_ACCESS_KEY", "");
+    let selected = inspect_credential_selection("beta").unwrap();
+    assert_eq!(selected["secret_key_source"], "AWS_SECRET_ACCESS_KEY");
+
+    EnvironmentGuard::unset("NEXORA_PUBLISH_BETA_ACCESS_KEY_ID");
+    EnvironmentGuard::unset("NEXORA_PUBLISH_ACCESS_KEY_ID");
     EnvironmentGuard::unset("AWS_ACCESS_KEY_ID");
-    EnvironmentGuard::unset("AWS_SECRET_ACCESS_KEY");
-    EnvironmentGuard::unset("AWS_SESSION_TOKEN");
     EnvironmentGuard::set("RUSTFS_ACCESS_KEY_ID", "legacy-access");
     EnvironmentGuard::set("RUSTFS_SECRET_ACCESS_KEY", "legacy-secret");
-    assert!(inspect_credential_selection("NEXORA_PUBLISH").is_err());
+    let error = inspect_credential_selection("beta")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ACCESS_KEY_ID"));
+    assert!(error.contains("NEXORA_PUBLISH_BETA_ACCESS_KEY_ID"));
+    assert!(!error.contains("RUSTFS"));
+}
+
+#[test]
+fn build_dependency_guidance_uses_pinned_official_installers() {
+    let macos = inspect_build_dependency_guidance("macos").unwrap();
+    assert_eq!(macos["xcode_command_line_tools"], "xcode-select --install");
+    assert_eq!(macos["cargo_bundle"], "cargo install cargo-bundle");
+    assert_eq!(macos["create_dmg"], "brew install create-dmg");
+    assert!(
+        macos["homebrew"]
+            .as_str()
+            .unwrap()
+            .contains("Homebrew/install/HEAD/install.sh")
+    );
+    assert_eq!(macos["non_interactive"], "fail_with_commands");
+
+    let windows = inspect_build_dependency_guidance("windows").unwrap();
+    assert_eq!(
+        windows["dotnet_script"],
+        "https://dot.net/v1/dotnet-install.ps1"
+    );
+    assert_eq!(windows["dotnet_channel"], "10.0");
+    assert_eq!(
+        windows["dotnet_install_root"],
+        "%LOCALAPPDATA%\\Nexora\\tools\\dotnet"
+    );
+    assert_eq!(
+        windows["wix_install"],
+        "dotnet tool install --global wix --version 5.0.2"
+    );
+    assert!(
+        windows["cargo_wix"]
+            .as_str()
+            .unwrap()
+            .contains("--rev 9a8ed9486637e1fb839f209730eda6c95fd12d88")
+    );
+    assert!(
+        windows["windows_sdk"]
+            .as_str()
+            .unwrap()
+            .contains("Microsoft.WindowsSDK.10.0.26100")
+    );
+    assert_eq!(windows["non_interactive"], "fail_with_commands");
 }
 
 #[test]

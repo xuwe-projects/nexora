@@ -39,7 +39,10 @@
 - 默认脚手架与 `examples/updater-windows` 同时声明 `stable`、`beta` 和 `default_channel`；交互式
   `nexora build` 会显示 channel 选择，CI 可显式使用 `--channel` 或 `--all-channels`。
 - `apps.<app>.targets.required` 改为可选；`nexora build` 默认使用 `rustc -vV` 的 host target，
-  也可通过重复 `--target` 显式覆盖。构建不再隐式联网安装 Rust target。
+  也可通过重复 `--target` 显式覆盖。交互式构建会自动安装缺失的 Rust target 及 macOS/Windows
+  打包依赖；系统安装器完成后可重跑原命令续接，非交互环境只返回完整安装命令。
+- 删除发布目标的 `credential_env_prefix`；Access Key、Secret Key 与 Session Token 分别按
+  channel 专用 Nexora 变量、基础 Nexora 变量、AWS 变量逐字段回退，允许不同字段来自不同层级。
 - `nexora build` 恢复为最终 ZIP 与 DMG 生成标准 `.sha256` 旁车，publish 会把旁车上传到版本化
   release 目录；`${BUILD_DATETIME}` 改用构建机器本机时区的 24 小时制 `yyMMddHHmmss`。
 - 更新协议改为 Ed25519 签名信封和 `build_number` 字段，保留 SHA-256 作为负载完整性校验。
@@ -55,6 +58,7 @@
 
 - 删除 Jenkinsfile、旧桌面构建 env 示例、旧裸 `latest.json` 示例、macOS shell updater helper
   及其测试、macOS-only updater README。
+- 删除 `nexora.toml` 的 `credential_env_prefix` 字段；旧配置必须直接移除该字段。
 
 ## Upgrade Notes
 

@@ -14,19 +14,16 @@
 ## 首次安装开发工具
 
 ```bash
-xcode-select --install
-rustup target add aarch64-apple-darwin
-cargo install cargo-bundle
-brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
   --tag v0.27.1 cli --locked --force --bin nexora
 
 nexora doctor
-# 缺 cargo-bundle/create-dmg 时可让 CLI 安装：
 nexora doctor --fix
 ```
 
-`nexora doctor` 不代替 Rust、Xcode Command Line Tools 或 Homebrew 的首次安装。
+交互式 `nexora build` 与 `nexora doctor --fix` 会自动准备 Rust target、`cargo-bundle`、Homebrew
+和 `create-dmg`。缺少 Xcode Command Line Tools 时会启动系统安装器；完成后重新运行原命令。
+`nexora doctor` 只检查，CI/非交互环境只返回完整安装命令。
 
 ## 第一次配置
 

@@ -10,23 +10,21 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 ## First-time prerequisites
 
 ```bash
-xcode-select --install
-rustup target add aarch64-apple-darwin
-cargo install cargo-bundle
-brew install create-dmg
 cargo install --git https://github.com/xuwe-projects/nexora \
   --tag v0.27.1 cli --locked --force --bin nexora
 nexora doctor
-# Installs cargo-bundle/create-dmg if either is missing:
 nexora doctor --fix
 ```
 
-Rust, Xcode Command Line Tools, and Homebrew themselves must be installed before `doctor --fix`.
-On Windows, install the Windows 10/11 SDK Desktop C++ tools and .NET SDK, then install the pinned
-modern cargo-wix revision and WiX 5.0.2. `nexora doctor --fix` installs the matching UI and
-BootstrapperApplications extensions, but it does not install the SDK, WiX itself, or Rust targets.
-SDK tools are discovered from the standard Windows Kits directory and do not need to be added to
-PATH manually.
+In an interactive terminal, `nexora build` detects, installs, and rechecks the dependencies required
+by the selected configuration. `doctor` is read-only and `doctor --fix` uses the same repair path.
+macOS repair covers Rust targets, cargo-bundle, Homebrew, create-dmg, and launches the official
+Xcode Command Line Tools installer when needed. Windows repair covers Rust targets, the pinned
+cargo-wix revision, a Nexora-managed user-level .NET 10 SDK under
+`%LOCALAPPDATA%\Nexora\tools\dotnet`, WiX 5.0.2, matching extensions, and the official Windows SDK
+installer. System installers may require confirmation or a restart; rerun the same build afterward.
+Non-interactive builds never launch installers and instead fail with exact commands. SDK tools are
+discovered from standard locations without requiring a permanent PATH change.
 The complete field-by-field reference, including required status, sources, defaults, secret status,
 examples, and failure behavior, is maintained in the
 [Chinese updater reference](/desktop/updater). The code defaults are `force_path_style = false`,
@@ -77,12 +75,12 @@ first shipping a client that trusts both old and new public keys, then changing 
 key, and only later removing the old public key. S3 credentials authorize uploads, Ed25519 signs
 the update manifest, and Apple Developer ID signs macOS code; these credentials are independent.
 
-Publish first reads the complete `NEXORA_PUBLISH` credential group. It falls back to the complete
-AWS group only when every Nexora field is absent; access, secret, and session token never mix across
-groups. Channel-specific `credential_env_prefix` values read only their own group and never fall
-back. `RUSTFS_*` is no longer read. Channel publish-target overrides inherit omitted fields from the
-base target and the merged URLs and HTTP policy are validated afterward. `object_prefix = ""` means
-that the stable app key starts directly at the bucket root.
+Publish resolves every field independently through `NEXORA_PUBLISH_<CHANNEL>_<FIELD>`,
+`NEXORA_PUBLISH_<FIELD>`, and `AWS_<FIELD>`. Empty values continue fallback, so a beta access key can
+be combined with the base Nexora secret key. Access and secret are required; the session token is
+optional. `RUSTFS_*` is no longer read. Channel publish-target overrides inherit omitted fields from
+the base target and the merged URLs and HTTP policy are validated afterward. `object_prefix = ""`
+means that the stable app key starts directly at the bucket root.
 
 Applications load `UpdateConfig::from_current_bundle()` from
 `.app/Contents/Resources/nexora-updater.json` on macOS or `nexora-updater.json` beside the main
