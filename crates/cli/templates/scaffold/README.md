@@ -21,6 +21,23 @@ cargo run
 cargo run -p server -- config/server.toml
 cargo run -- config/{{ project_name }}.toml
 ```
+
+服务端使用同一个 `PgPool` 依次执行 `nexora::server::migrate(&pool)` 和
+`migrate::migrate(&pool)`；框架历史位于 `nexora._sqlx_migrations`，应用历史位于
+`public._sqlx_migrations`。新增业务迁移只能在 workspace 根目录运行：
+
+```bash
+sqlx migrate add <module>_<description>
+```
+
+根 `sqlx.toml` 会生成可逆 timestamp 迁移。数据库测试必须保留 `#[sqlx::test]`，并使用：
+
+```bash
+bash scripts/run-sqlx-tests.sh config/server.toml cargo test -p application-migrate
+```
+
+包装器只从该配置在当前进程派生 `DATABASE_URL`，允许 SQLx 管理隔离测试数据库，并在失败时
+精确清理本次遗留；不要改用 `.env` 或另一套数据库数据源。
 {% endif %}
 
 ## 品牌定制

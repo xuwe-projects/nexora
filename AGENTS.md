@@ -93,8 +93,8 @@ src/features/users/components/table.rs
 
 - 应用在 composition root 中创建并持有唯一 `PgPool` 和最终 Axum State；不得在
   `Server::new`、handler 或业务模块里隐式创建第二个连接池。
-- 先把 `nexora::server::migrations()` 返回的框架迁移与应用迁移合并，拒绝跨来源版本冲突，
-  再使用唯一 SQLx `Migrator` 执行一次；禁止分别运行框架和应用 Migrator。
+- 先在应用创建的唯一 `PgPool` 上调用 `nexora::server::migrate(&pool)`，再运行应用自己的
+  SQLx `Migrator`；两者使用独立迁移历史，禁止合并、重编号或协调跨来源 checksum。
 - 使用 `server.initialize(&settings, &pool, setup_secret)` 初始化框架模块；该方法只装配
   Account、ZITADEL 与 Router，不执行迁移。
 - 业务 Router 需要复用 Account 认证授权时，在初始化成功后调用 `server.account()`，把返回
@@ -129,6 +129,16 @@ src/features/users/components/table.rs
 
 ## 管理配置、迁移和依赖
 
+- 涉及 DDL、SQLx migration、Migrator、`sqlx.toml` 或数据库测试时必须使用
+  `manage-sqlx-migrations` Skill。
+- 新迁移只能通过 `sqlx migrate add <module>_<description>` 创建；禁止手写文件名或版本号，
+  禁止使用不存在的 `sqlx migrate init`。默认使用根 `sqlx.toml` 配置的可逆 timestamp 迁移。
+- 已提交迁移禁止修改、删除或重命名，历史错误通过新增迁移修复；只有用户明确授权无需兼容
+  旧数据库的受控基线重构时才允许重建历史。
+- 保留全部 `#[sqlx::test]`。运行数据库测试时，当前进程的 `DATABASE_URL` 必须从项目标准
+  `config/server.toml` 派生；禁止使用 `.env` 或另一套数据库地址、账号、密码与 TLS 配置。
+  允许 SQLx 创建和清理隔离测试数据库；失败后必须精确清理本次遗留数据库，禁止手工创建
+  长期存在的 test、e2e 或 codex 数据库。
 - 桌面 API 使用独立 `[api]` 配置；服务端监听 IP 与端口使用独立字段；服务端敏感字段
   必须附用途、格式和安全注释。
 - 数据库升级只依赖 SQLx 迁移历史；不要增加 `initialize_empty_database` 等人工布尔开关。

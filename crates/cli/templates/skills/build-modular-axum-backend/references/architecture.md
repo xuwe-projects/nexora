@@ -163,13 +163,14 @@ REFERENCES account.accounts(id)
 - 每个模块的首个迁移负责 `CREATE SCHEMA IF NOT EXISTS <module>`，后续对象全部创建在该 schema 中。
 - 版本化迁移文件统一平铺在 `crates/migrate/migrations/` 一级目录，并在文件名中包含模块名。
 - SQLx 默认迁移加载器只读取一级目录，禁止在 `migrations/` 下按模块创建子目录。
-- 所有应用模块与外部框架迁移共用全局唯一的迁移版本号和 `_sqlx_migrations` 记录表；宿主
-  在运行前合并两类迁移并拒绝跨来源版本冲突。
+- 所有应用模块共用应用自己的 timestamp 版本和 `public._sqlx_migrations`；Nexora 框架迁移
+  独立记录在 `nexora._sqlx_migrations`，禁止合并或协调跨来源版本。
 - 本地测试数据放在 `crates/migrate/seeds/<module>/`，可以按模块分组，但不得随生产迁移自动写入。
 - 业务模块只负责运行时查询，不拥有迁移文件。
 - 仓库根目录不得创建 `sql/`，也不得在各业务模块下散落建表脚本。
 - 已应用的迁移文件不得修改；后续变更必须新增更高版本的迁移。
-- 迁移只由宿主构造的唯一 SQLx `Migrator` 执行一次；禁止框架初始化和应用迁移分别运行。
+- 宿主在唯一 `PgPool` 上先调用 `nexora::server::migrate(&pool)`，再运行应用自己的 SQLx
+  `Migrator`；两者成功后才能初始化框架和接收流量。
 
 ## 配置与本地敏感信息
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "管理 SQLx 迁移"
+  short_description: "安全创建、审查与验证 Nexora SQLx 迁移"
+  default_prompt: "使用 $manage-sqlx-migrations 创建并验证本次数据库迁移。"

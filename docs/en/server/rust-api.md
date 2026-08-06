@@ -77,12 +77,14 @@ Returns the pending `/setup` URL only before initialization. Wildcard bind addre
 ## Migrations
 
 ```rust
-pub fn migrations() -> Vec<sqlx::migrate::Migration>
+pub async fn migrate(pool: &sqlx::PgPool) -> Result<(), MigrationError>
 ```
 
-Returns cloned embedded migration metadata without database I/O. Merge it with application
-migrations, reject cross-source version collisions, and run exactly one SQLx `Migrator` against the
-host pool.
+Runs Nexora framework migrations against the host-owned pool without creating another pool. It
+creates the `nexora` schema when needed, uses SQLx 0.9's native Migrator, records history in
+`nexora._sqlx_migrations`, and returns `MigrationError` with the SQLx source preserved. Run the
+application Migrator afterwards with its own history; never merge, renumber, or checksum-coordinate
+the two sources.
 
 ## Configuration and dependency helpers
 

@@ -23,10 +23,8 @@ let pool = PgPoolOptions::new()
     .max_connections(settings.database.max_connections)
     .connect(settings.database.url.as_str())
     .await?;
-let migrations = nexora::server::migrations();
-sqlx::migrate::Migrator::with_migrations(migrations)
-    .run(&pool)
-    .await?;
+nexora::server::migrate(&pool).await?;
+application_migrate::migrate(&pool).await?;
 let mut server = Server::new();
 server
     .initialize(&settings, &pool, settings.setup.secret()?)
@@ -48,8 +46,9 @@ axum::serve(listener, app).await?;
 
 `Server::new` 不创建或持有连接池、监听器和 Axum State；连接方式、连接数、监听地址、
 TLS、日志与关闭策略均由应用决定。
-`nexora::server::migrations()` 返回全部框架迁移；应用必须先将其与业务迁移合并，拒绝跨
-来源版本冲突，再构造唯一的 SQLx `Migrator` 执行一次。`server.initialize(..., &pool, ...)`
+`nexora::server::migrate(&pool)` 只管理 Nexora 框架对象，自动创建 `nexora` schema，并把
+历史固定记录在 `nexora._sqlx_migrations`。应用随后使用同一个 `PgPool` 运行自己的 SQLx
+`Migrator` 和独立历史；禁止合并、重编号或协调两类迁移。`server.initialize(..., &pool, ...)`
 随后只装配框架模块，不再隐式迁移数据库。`server.routers()` 只返回 Nexora 自带路由，且
 能适配应用自己的 Axum State；顶层组合顺序和中间件仍由应用决定。不需要 Nexora/Account
 HTTP 路由时，不调用 `.merge(server.routers())` 即可。

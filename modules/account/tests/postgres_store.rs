@@ -1,6 +1,9 @@
 #![cfg(feature = "database-tests")]
 
-use std::sync::{Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
@@ -28,8 +31,14 @@ use contracts::account::{
     UserStatus,
 };
 use contracts::error::ErrorEnvelope;
-use sqlx::PgPool;
+use sqlx::{PgPool, migrate::Migrator};
 use tower::ServiceExt as _;
+
+static NEXORA_MIGRATOR: Migrator = Migrator {
+    table_name: Cow::Borrowed("nexora._sqlx_migrations"),
+    create_schemas: Cow::Borrowed(&[Cow::Borrowed("nexora")]),
+    ..sqlx::migrate!("../../crates/migrate/migrations")
+};
 
 const TEST_IDENTITY_ISSUER: &str = "https://id.example.com/";
 const OTHER_IDENTITY_ISSUER: &str = "https://other-id.example.com/";
@@ -52,7 +61,7 @@ impl RequiredPermission for ReadFactories {
     const KEY: PermissionKey = PermissionKey::from_static("factories:read");
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
     let permissions = create_permissions(
         &pool,
@@ -111,7 +120,7 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
     assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn owner_scoped_roles_crud_permissions_and_generated_keys(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let permissions = account
@@ -215,7 +224,7 @@ async fn owner_scoped_roles_crud_permissions_and_generated_keys(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn replace_user_roles_for_owner_preserves_other_owner_roles(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let grantor = account
@@ -302,7 +311,7 @@ async fn replace_user_roles_for_owner_preserves_other_owner_roles(pool: PgPool) 
     assert!(!assigned.contains(&("customer-a", "customer_a_reader")));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn system_role_sync_and_grant_user_role_are_immutable_and_idempotent(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     create_permissions(
@@ -394,7 +403,7 @@ async fn system_role_sync_and_grant_user_role_are_immutable_and_idempotent(pool:
     assert!(matches!(missing_grantor, AccountError::NotFound("用户")));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn role_permissions_store_expanded_implied_permissions(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let permissions = account
@@ -462,23 +471,23 @@ async fn role_permissions_store_expanded_implied_permissions(pool: PgPool) {
     let loop_permissions = account
         .register_permission_catalog(&[
             PermissionDefinition {
-                key: "loops:a".to_owned(),
+                key: "loops:aa".to_owned(),
                 name: "循环 A".to_owned(),
                 description: None,
             }
-            .with_implies(["loops:b"]),
+            .with_implies(["loops:bb"]),
             PermissionDefinition {
-                key: "loops:b".to_owned(),
+                key: "loops:bb".to_owned(),
                 name: "循环 B".to_owned(),
                 description: None,
             }
-            .with_implies(["loops:a"]),
+            .with_implies(["loops:aa"]),
         ])
         .await
         .expect("循环蕴含关系不应导致注册失败");
     let loop_a_id = loop_permissions
         .iter()
-        .find(|permission| permission.key.as_str() == "loops:a")
+        .find(|permission| permission.key.as_str() == "loops:aa")
         .map(|permission| permission.id)
         .expect("循环测试权限应当存在");
     let loop_role = account
@@ -487,7 +496,7 @@ async fn role_permissions_store_expanded_implied_permissions(pool: PgPool) {
         .expect("循环蕴含关系不应导致权限展开无限递归");
     assert_eq!(
         permission_keys(&loop_role.permissions),
-        ["loops:a", "loops:b"]
+        ["loops:aa", "loops:bb"]
     );
 
     let user = account
@@ -506,7 +515,7 @@ async fn role_permissions_store_expanded_implied_permissions(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn provisioning_with_initial_roles_is_atomic(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let grantor = account
@@ -560,7 +569,7 @@ async fn provisioning_with_initial_roles_is_atomic(pool: PgPool) {
     assert!(!user_exists);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn managed_user_with_initial_password_sets_directory_password(pool: PgPool) {
     let directory = Arc::new(RecordingIdentityDirectory::default());
     let account = test_account_with_directory(pool.clone(), directory.clone()).await;
@@ -591,7 +600,7 @@ async fn managed_user_with_initial_password_sets_directory_password(pool: PgPool
     assert_eq!(created[0].contact_phone, None);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn managed_user_with_contact_phone_passes_phone_to_directory(pool: PgPool) {
     let directory = Arc::new(RecordingIdentityDirectory::default());
     let account = test_account_with_directory(pool.clone(), directory.clone()).await;
@@ -616,7 +625,7 @@ async fn managed_user_with_contact_phone_passes_phone_to_directory(pool: PgPool)
     assert_eq!(created[0].contact_phone.as_deref(), Some("13800000000"));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn managed_user_with_initial_password_compensates_local_binding_failure(pool: PgPool) {
     let directory = Arc::new(RecordingIdentityDirectory::default());
     let account = test_account_with_directory(pool.clone(), directory.clone()).await;
@@ -650,7 +659,7 @@ async fn managed_user_with_initial_password_compensates_local_binding_failure(po
     assert!(!user_exists);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn managed_user_with_initial_password_directory_conflict_does_not_bind_local_user(
     pool: PgPool,
 ) {
@@ -683,7 +692,7 @@ async fn managed_user_with_initial_password_directory_conflict_does_not_bind_loc
     assert!(!user_exists);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn managed_user_with_initial_password_rejects_missing_or_invalid_password(pool: PgPool) {
     let directory = Arc::new(RecordingIdentityDirectory::default());
     let account = test_account_with_directory(pool, directory.clone()).await;
@@ -709,7 +718,7 @@ async fn managed_user_with_initial_password_rejects_missing_or_invalid_password(
     );
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPool) {
     let roles = test_account(pool)
         .await
@@ -731,7 +740,7 @@ async fn system_roles_expose_every_initialized_role_for_provider_sync(pool: PgPo
     );
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn unknown_identity_is_denied_without_creating_local_user(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let response = router(&account)
@@ -758,7 +767,7 @@ async fn unknown_identity_is_denied_without_creating_local_user(pool: PgPool) {
     assert_eq!(user_count, 0);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPool) {
     insert_user("User0001", "ordinary-user", &pool).await;
     let account = test_account(pool).await;
@@ -770,7 +779,7 @@ async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPo
     assert!(profile.permissions.is_empty());
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn host_state_extractors_share_account_authentication_and_authorization(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let user = account
@@ -816,7 +825,7 @@ async fn host_state_extractors_share_account_authentication_and_authorization(po
     assert_eq!(get_without_token(app, "/host/health").await, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn subject_fallback_does_not_overwrite_existing_display_name(pool: PgPool) {
     insert_user("User0002", "identity-without-name", &pool).await;
     sqlx::query("UPDATE account.users SET display_name = '已有展示名' WHERE id = 'User0002'")
@@ -829,7 +838,7 @@ async fn subject_fallback_does_not_overwrite_existing_display_name(pool: PgPool)
     assert_eq!(profile.user.display_name, "已有展示名");
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn initialization_promotes_existing_user_and_removes_all_roles(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     insert_user("Exist001", "existing-super-admin", &pool).await;
@@ -886,7 +895,7 @@ async fn initialization_promotes_existing_user_and_removes_all_roles(pool: PgPoo
     assert!(profile.permissions.is_empty());
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn last_active_administrator_cannot_be_suspended_or_demoted(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     initialize_account(&account, "super-admin").await;
@@ -927,7 +936,7 @@ async fn last_active_administrator_cannot_be_suspended_or_demoted(pool: PgPool) 
     assert_eq!(demote, StatusCode::CONFLICT);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn super_administrator_is_unique_immutable_and_has_no_grants(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     assert!(matches!(
@@ -1031,7 +1040,7 @@ async fn super_administrator_is_unique_immutable_and_has_no_grants(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn concurrent_same_identity_initialization_is_idempotent(pool: PgPool) {
     let account = test_account(pool).await;
     let first_account = account.clone();
@@ -1059,7 +1068,7 @@ async fn concurrent_same_identity_initialization_is_idempotent(pool: PgPool) {
     ));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn deployment_issuer_binding_is_idempotent_and_immutable(pool: PgPool) {
     let first = Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
         .await
@@ -1077,7 +1086,7 @@ async fn deployment_issuer_binding_is_idempotent_and_immutable(pool: PgPool) {
     assert!(matches!(replacement, AccountError::IdentityIssuerMismatch));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn concurrent_different_issuer_binding_has_exactly_one_winner(pool: PgPool) {
     let (first, second) = tokio::join!(
         Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER),
@@ -1096,7 +1105,7 @@ async fn concurrent_different_issuer_binding_has_exactly_one_winner(pool: PgPool
     ));
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn token_from_another_issuer_is_rejected_as_authentication_failure(pool: PgPool) {
     let account = test_account(pool).await;
     account
@@ -1122,7 +1131,7 @@ async fn token_from_another_issuer_is_rejected_as_authentication_failure(pool: P
     assert_eq!(error.error.code, "invalid_identity_issuer");
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     initialize_account(&account, "super-admin").await;
@@ -1233,7 +1242,7 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
     assert_eq!(repeated, StatusCode::CONFLICT);
 }
 
-#[sqlx::test(migrations = "../../crates/migrate/migrations")]
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn provisioning_initial_roles_requires_role_management_permission(pool: PgPool) {
     let account = test_account(pool.clone()).await;
     let provision_permission_id = permission_id("users:provision", &pool).await;

@@ -5,7 +5,7 @@ edition.workspace = true
 
 [package.metadata.nexora]
 allow-mixed-targets = true
-reason = "迁移命令与框架内迁移 API 必须共享同一组嵌入式 SQL 和 fail-closed 安全检查"
+reason = "迁移命令与框架公开 API 必须共享同一组嵌入式 SQLx 迁移和独立历史表配置"
 
 [features]
 default = ["cli"]

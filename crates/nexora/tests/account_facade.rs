@@ -220,7 +220,7 @@ mod server {
             VerifiedOrganizationContext, ZitadelAuthorizationRequest, ZitadelProvisioningClient,
             create_generated_role_for_owner, create_permissions, create_role,
             create_role_for_owner, create_user, create_user_with_roles,
-            ensure_system_role_with_permissions, grant_user_role, migrations, provisioning_client,
+            ensure_system_role_with_permissions, grant_user_role, migrate, provisioning_client,
             replace_role_permissions, replace_role_permissions_for_owner, replace_user_roles,
             replace_user_roles_for_owner, role_for_owner, roles_for_owner,
         },
@@ -445,7 +445,7 @@ mod server {
     }
 
     #[test]
-    fn server_facade_exposes_pool_based_account_management_and_migrations() {
+    fn server_facade_exposes_pool_based_account_management_and_migrate_api() {
         fn assert_management_api(pool: &sqlx::PgPool) {
             let identity = ExternalIdentity {
                 identity_id: "identity-1".to_owned(),
@@ -482,13 +482,11 @@ mod server {
         }
 
         _ = assert_management_api as fn(&sqlx::PgPool);
-        let migrations = migrations();
-        assert!(!migrations.is_empty());
-        assert!(
-            migrations
-                .iter()
-                .any(|migration| migration.migration_type.is_up_migration())
-        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/nexora-api-contract")
+            .expect("有效 PostgreSQL URL 应能创建惰性连接池");
+        let migration = migrate(&pool);
+        drop(migration);
     }
 
     #[cfg(feature = "server")]

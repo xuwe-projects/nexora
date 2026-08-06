@@ -105,21 +105,20 @@ URL 使用 `127.0.0.1`，避免输出不可直接访问的通配地址。该方�
 ## 迁移接口
 
 ```rust
-pub fn migrations() -> Vec<sqlx::migrate::Migration>
+pub async fn migrate(pool: &sqlx::PgPool) -> Result<(), MigrationError>
 ```
 
-返回 Nexora 全部嵌入式 SQLx 迁移的元数据副本，无数据库 I/O。宿主必须先与应用迁移合并并
-拒绝版本号冲突，再构造唯一 `Migrator`：
+借用宿主创建的唯一 `PgPool` 执行 Nexora 框架迁移，不创建第二连接池。函数自动创建
+`nexora` schema，使用 SQLx 0.9 原生 `Migrator`，并把历史固定记录在
+`nexora._sqlx_migrations`；失败返回保留 SQLx source 的 `MigrationError`。
 
 ```rust
-let framework = nexora::server::migrations();
-let migrations = merge_and_reject_duplicate_versions(framework, application_migrations)?;
-sqlx::migrate::Migrator::with_migrations(migrations)
-    .run(&pool)
-    .await?;
+nexora::server::migrate(&pool).await?;
+application_migrate::migrate(&pool).await?;
 ```
 
-不要分别运行框架 Migrator 与应用 Migrator。
+应用 Migrator 使用自己的历史表；按 Nexora、应用的顺序分别运行，不要合并、重编号或协调
+跨来源 checksum。
 
 ## 服务端配置与依赖装配
 

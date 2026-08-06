@@ -1,262 +1,50 @@
-//! Nexora 工作区的 PostgreSQL 迁移清单与维护工具。
+//! Nexora 框架数据库对象的 PostgreSQL 迁移入口。
 //!
-//! 迁移文件由本 crate 统一拥有。框架使用方通过 [`migrations`] 取得所有嵌入式迁移，和
-//! 宿主业务迁移合并为一个 SQLx `Migrator` 后只执行一次；本仓库维护者仍可使用同包的
-//! `migrate` 命令与 [`prepare`] 检查 Nexora 自身数据库。
+//! 本 crate 只拥有 Nexora 自身的 schema 与对象。宿主通过 [`migrate`] 借用自己创建的唯一
+//! `PgPool` 执行框架迁移；应用业务迁移由宿主在其后独立执行。
 
-mod safety;
-
-use std::{collections::HashSet, io};
+use std::borrow::Cow;
 
 use sqlx::{PgPool, migrate::Migrator};
 use thiserror::Error;
 
-use crate::safety::{DatabaseState, validate_migration_safety};
+const MIGRATION_SCHEMA: &str = "nexora";
+const MIGRATION_TABLE: &str = "nexora._sqlx_migrations";
 
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = Migrator {
+    table_name: Cow::Borrowed(MIGRATION_TABLE),
+    create_schemas: Cow::Borrowed(&[Cow::Borrowed(MIGRATION_SCHEMA)]),
+    ..sqlx::migrate!("./migrations")
+};
 
-/// 返回 Nexora 维护的全部嵌入式 SQLx 迁移。
+/// Nexora 框架数据库迁移失败的原因。
 ///
-/// 返回值包含可逆迁移的 up/down 文件，并为每次调用创建独立列表。宿主应在 composition
-/// root 中把该列表与应用迁移合并，检查跨来源版本冲突，再使用同一个 SQLx `Migrator`
-/// 执行；Nexora 的 Account 或 `Server` 初始化不会自行运行这些迁移。
-#[must_use]
-pub fn migrations() -> Vec<sqlx::migrate::Migration> {
-    MIGRATOR.iter().cloned().collect()
-}
-
-/// 已通过 fail-closed 安全检查、可以执行的迁移计划。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MigrationPlan {
-    target: MigrationTarget,
-    applied_count: usize,
-    pending_versions: Vec<i64>,
-}
-
-impl MigrationPlan {
-    /// 返回不包含凭据的数据库目标信息。
-    pub const fn target(&self) -> &MigrationTarget {
-        &self.target
-    }
-
-    /// 返回数据库中已有的成功迁移数量。
-    pub const fn applied_count(&self) -> usize {
-        self.applied_count
-    }
-
-    /// 返回尚待执行的向前迁移版本。
-    pub fn pending_versions(&self) -> &[i64] {
-        self.pending_versions.as_slice()
-    }
-
-    /// 执行计划中的向前迁移。
-    ///
-    /// # Errors
-    ///
-    /// SQLx 无法创建迁移表、获取迁移锁或执行任一迁移时返回错误。
-    pub async fn run(self, pool: &PgPool) -> Result<MigrationReport, MigrationError> {
-        MIGRATOR.run(pool).await.map_err(MigrationError::Apply)?;
-        Ok(MigrationReport {
-            target: self.target,
-            applied_count: self.applied_count,
-            applied_versions: self.pending_versions,
-        })
-    }
-}
-
-/// 一次成功迁移的非敏感结果摘要。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MigrationReport {
-    target: MigrationTarget,
-    applied_count: usize,
-    applied_versions: Vec<i64>,
-}
-
-impl MigrationReport {
-    /// 返回本次迁移连接的数据库目标。
-    pub const fn target(&self) -> &MigrationTarget {
-        &self.target
-    }
-
-    /// 返回执行前已经存在的成功迁移数量。
-    pub const fn previous_applied_count(&self) -> usize {
-        self.applied_count
-    }
-
-    /// 返回本次计划并成功应用的向前迁移版本。
-    pub fn applied_versions(&self) -> &[i64] {
-        self.applied_versions.as_slice()
-    }
-}
-
-/// 不包含连接凭据的数据库目标信息。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MigrationTarget {
-    database: String,
-    server_address: Option<String>,
-    server_port: Option<i32>,
-}
-
-impl MigrationTarget {
-    /// 返回 PostgreSQL 当前数据库名。
-    pub fn database(&self) -> &str {
-        self.database.as_str()
-    }
-
-    /// 返回 PostgreSQL 服务端地址；本地 Unix socket 连接时可能为空。
-    pub fn server_address(&self) -> Option<&str> {
-        self.server_address.as_deref()
-    }
-
-    /// 返回 PostgreSQL 服务端端口；平台无法报告时可能为空。
-    pub const fn server_port(&self) -> Option<i32> {
-        self.server_port
-    }
-}
-
-/// 准备或执行集中式迁移失败的原因。
+/// 该错误保留 SQLx 原始迁移错误作为 source，调用方可以在日志边界输出完整错误链，同时避免
+/// 把数据库内部细节直接暴露给客户端。
 #[derive(Debug, Error)]
 pub enum MigrationError {
-    /// 读取数据库目标或 schema 状态失败。
-    #[error("读取数据库迁移状态失败（{operation}）")]
-    Inspect {
-        /// 失败的稳定操作名称。
-        operation: &'static str,
-        /// SQLx 返回的数据库错误。
-        #[source]
-        source: sqlx::Error,
-    },
-    /// 目标数据库未通过 fail-closed 安全检查。
-    #[error("数据库迁移安全检查失败")]
-    Safety(
-        /// 不包含数据库凭据的安全检查说明。
-        #[source]
-        io::Error,
-    ),
-    /// SQLx 执行向前迁移失败。
-    #[error("应用数据库迁移失败")]
+    /// SQLx 创建迁移 schema、维护迁移历史或执行框架 DDL 时失败。
+    #[error("执行 Nexora 数据库迁移失败")]
     Apply(
-        /// SQLx 迁移运行器返回的错误。
+        /// SQLx 0.9 原生 `Migrator` 返回的底层错误。
         #[source]
         sqlx::migrate::MigrateError,
     ),
 }
 
-/// 检查目标数据库并创建一个可执行的向前迁移计划。
+/// 在宿主提供的连接池上执行全部待处理 Nexora 框架迁移。
 ///
-/// 空数据库会作为首次安装自动执行全部迁移；已有 account schema 却没有迁移历史、
-/// 存在失败记录或核心表缺失时始终拒绝。
+/// 该函数借用宿主在 composition root 中创建的唯一 [`PgPool`]，不会建立第二连接池。迁移使用
+/// SQLx 0.9 原生 [`Migrator`]，自动创建 `nexora` schema，并把独立历史固定记录在
+/// `nexora._sqlx_migrations`。重复调用时 SQLx 只校验已应用迁移并执行仍待处理的版本。
+///
+/// 宿主必须在调用成功后再运行自己的应用 Migrator，随后才能初始化 Account、构造 Router 并
+/// 接收流量。Nexora 迁移与应用迁移拥有独立历史，不应合并、重编号或协调 checksum。
 ///
 /// # Errors
 ///
-/// 无法读取数据库状态，或目标数据库未通过安全检查时返回错误。
-pub async fn prepare(pool: &PgPool) -> Result<MigrationPlan, MigrationError> {
-    let target = migration_target(pool).await?;
-    let state = database_state(pool).await?;
-    validate_migration_safety(&state).map_err(MigrationError::Safety)?;
-
-    let applied = state
-        .applied_migrations
-        .iter()
-        .map(|(version, _)| *version)
-        .collect::<HashSet<_>>();
-    let pending_versions = MIGRATOR
-        .iter()
-        .filter(|migration| migration.migration_type.is_up_migration())
-        .filter(|migration| !applied.contains(&migration.version))
-        .map(|migration| migration.version)
-        .collect();
-
-    Ok(MigrationPlan {
-        target,
-        applied_count: state.applied_migrations.len(),
-        pending_versions,
-    })
-}
-
-async fn migration_target(pool: &PgPool) -> Result<MigrationTarget, MigrationError> {
-    let (database, server_address, server_port) =
-        sqlx::query_as::<_, (String, Option<String>, Option<i32>)>(
-            r#"
-            SELECT current_database(), inet_server_addr()::TEXT, inet_server_port()
-            "#,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(|source| MigrationError::Inspect {
-            operation: "migration_target",
-            source,
-        })?;
-    Ok(MigrationTarget {
-        database,
-        server_address,
-        server_port,
-    })
-}
-
-async fn database_state(pool: &PgPool) -> Result<DatabaseState, MigrationError> {
-    let migrations_table_exists =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
-            .await
-            .map_err(|source| MigrationError::Inspect {
-                operation: "migration_history_exists",
-                source,
-            })?;
-    let applied_migrations = if migrations_table_exists {
-        sqlx::query_as::<_, (i64, bool)>(
-            "SELECT version, success FROM public._sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(|source| MigrationError::Inspect {
-            operation: "migration_history",
-            source,
-        })?
-    } else {
-        Vec::new()
-    };
-    let account_schema_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'account')",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|source| MigrationError::Inspect {
-        operation: "account_schema",
-        source,
-    })?;
-    let (
-        users_exists,
-        roles_exists,
-        permissions_exists,
-        role_permissions_exists,
-        user_roles_exists,
-        system_initialization_exists,
-    ) = sqlx::query_as::<_, (bool, bool, bool, bool, bool, bool)>(
-        r#"
-        SELECT
-            to_regclass('account.users') IS NOT NULL,
-            to_regclass('account.roles') IS NOT NULL,
-            to_regclass('account.permissions') IS NOT NULL,
-            to_regclass('account.role_permissions') IS NOT NULL,
-            to_regclass('account.user_roles') IS NOT NULL,
-            to_regclass('account.system_initialization') IS NOT NULL
-        "#,
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|source| MigrationError::Inspect {
-        operation: "account_tables",
-        source,
-    })?;
-    Ok(DatabaseState {
-        applied_migrations,
-        account_schema_exists,
-        users_exists,
-        roles_exists,
-        permissions_exists,
-        role_permissions_exists,
-        user_roles_exists,
-        system_initialization_exists,
-    })
+/// 无法创建 `nexora` schema 或迁移历史表、无法获取迁移锁、已应用迁移 checksum 不一致，或
+/// 任一框架迁移执行失败时返回 [`MigrationError`]，并保留 SQLx 原始错误作为 source。
+pub async fn migrate(pool: &PgPool) -> Result<(), MigrationError> {
+    MIGRATOR.run(pool).await.map_err(MigrationError::Apply)
 }

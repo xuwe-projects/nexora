@@ -70,8 +70,9 @@ system roles. Inject the service-account PAT through `OIDC__PERSONAL_ACCESS_TOKE
 Environment variables use `__` for nesting. An explicit path wins; otherwise Nexora finds
 `config/<package>.toml`. Inject secrets through environment variables or a secret manager.
 
-The Setup secret is only useful before initialization. `_sqlx_migrations` records applied versions,
-so upgrades must not depend on an `initialize_empty_database` boolean switch.
+The Setup secret is only useful before initialization. Nexora records framework history in
+`nexora._sqlx_migrations`, while the application owns an independent history. Both borrow the same
+`PgPool`; upgrades must not depend on an `initialize_empty_database` boolean switch.
 
 ## Updater Publish Configuration
 

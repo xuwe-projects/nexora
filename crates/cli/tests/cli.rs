@@ -35,6 +35,15 @@ const SERVER_CONFIG_TEMPLATE: &str =
     include_str!("../templates/scaffold/workspace/apps/server/config.rs");
 const SERVER_ROUTES_TEMPLATE: &str =
     include_str!("../templates/scaffold/workspace/apps/server/routes.rs");
+const MIGRATE_MANIFEST_TEMPLATE: &str =
+    include_str!("../templates/scaffold/workspace/crates/migrate/Cargo.toml.askama");
+const MIGRATE_LIBRARY_TEMPLATE: &str =
+    include_str!("../templates/scaffold/workspace/crates/migrate/src/lib.rs");
+const MIGRATE_TESTS_TEMPLATE: &str =
+    include_str!("../templates/scaffold/workspace/crates/migrate/tests/migrations.rs");
+const SQLX_CONFIG_TEMPLATE: &str = include_str!("../templates/scaffold/workspace/sqlx.toml");
+const SQLX_TEST_SCRIPT_TEMPLATE: &str =
+    include_str!("../templates/scaffold/workspace/scripts/run-sqlx-tests.sh");
 const EXAMPLE_SERVER_CONFIG_TEMPLATE: &str =
     include_str!("../templates/scaffold/workspace/config/example.server.toml");
 const EXAMPLE_DESKTOP_CONFIG_TEMPLATE: &str =
@@ -641,6 +650,10 @@ fn assert_generated_skills(project: &Path) {
     assert!(
         generated_files.contains(&PathBuf::from("refine-implementation-spec/SKILL.md")),
         "生成项目应包含需求澄清与实施规格 Skill"
+    );
+    assert!(
+        generated_files.contains(&PathBuf::from("manage-sqlx-migrations/SKILL.md")),
+        "生成项目应包含 SQLx 迁移治理 Skill"
     );
     for relative_path in template_files {
         assert_eq!(
@@ -1704,6 +1717,28 @@ fn workspace_account_feature_generates_a_composable_server() {
         fs::read_to_string(project.join("apps/server/src/routes.rs")).unwrap(),
         askama_source(SERVER_ROUTES_TEMPLATE)
     );
+    assert_valid_manifest(&project.join("crates/migrate/Cargo.toml"));
+    assert_eq!(
+        fs::read_to_string(project.join("crates/migrate/Cargo.toml")).unwrap(),
+        askama_source(MIGRATE_MANIFEST_TEMPLATE)
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("crates/migrate/src/lib.rs")).unwrap(),
+        askama_source(MIGRATE_LIBRARY_TEMPLATE)
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("crates/migrate/tests/migrations.rs")).unwrap(),
+        askama_source(MIGRATE_TESTS_TEMPLATE)
+    );
+    assert!(project.join("crates/migrate/migrations").is_dir());
+    assert_eq!(
+        fs::read_to_string(project.join("sqlx.toml")).unwrap(),
+        askama_source(SQLX_CONFIG_TEMPLATE)
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("scripts/run-sqlx-tests.sh")).unwrap(),
+        askama_source(SQLX_TEST_SCRIPT_TEMPLATE)
+    );
     assert_eq!(
         fs::read_to_string(project.join("config/server.toml")).unwrap(),
         askama_source(EXAMPLE_SERVER_CONFIG_TEMPLATE)
@@ -1742,14 +1777,23 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(server_main.contains("use nexora::Server;"));
     assert!(server_main.contains("Server::new()"));
     assert!(server_main.contains("PgPoolOptions::new()"));
-    assert!(server_main.contains("nexora::server::migrations()"));
-    assert!(server_main.contains("Migrator::with_migrations(framework_migrations)"));
-    assert!(server_main.contains(".run(&pool)"));
+    assert!(server_main.contains("nexora::server::migrate(&pool).await?"));
+    assert!(server_main.contains("migrate::migrate(&pool).await?"));
+    assert!(!server_main.contains("nexora::server::migrations()"));
+    assert!(!server_main.contains("Migrator::with_migrations"));
     assert!(server_main.contains("server.initialize(&settings, &pool, setup_secret)"));
     assert!(
         server_main
-            .find("Migrator::with_migrations")
-            .expect("生成入口必须组合迁移")
+            .find("nexora::server::migrate")
+            .expect("生成入口必须先执行 Nexora 迁移")
+            < server_main
+                .find("migrate::migrate")
+                .expect("生成入口必须随后执行应用迁移")
+    );
+    assert!(
+        server_main
+            .find("migrate::migrate")
+            .expect("生成入口必须执行应用迁移")
             < server_main
                 .find("server.initialize")
                 .expect("生成入口必须初始化 Server")
@@ -1793,8 +1837,14 @@ fn workspace_account_feature_generates_a_composable_server() {
     assert!(!desktop_manifest.contains("account-client"));
     let server_manifest = fs::read_to_string(project.join("apps/server/Cargo.toml")).unwrap();
     assert!(server_manifest.contains("features = [\"server\", \"derive\"]"));
+    assert!(server_manifest.contains("migrate = { workspace = true }"));
     assert!(server_manifest.contains("sqlx = { workspace = true }"));
     let workspace_manifest = fs::read_to_string(project.join("Cargo.toml")).unwrap();
+    assert!(workspace_manifest.contains("\"crates/migrate\""));
+    assert!(
+        workspace_manifest
+            .contains("migrate = { package = \"application-migrate\", path = \"crates/migrate\" }")
+    );
     assert!(workspace_manifest.contains("rust-embed = { version = \"8.7.2\""));
     assert!(workspace_manifest.contains("features = [\"migrate\", \"postgres\""));
     assert!(!server_manifest.contains("account-server"));

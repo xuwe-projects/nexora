@@ -12,6 +12,8 @@ use axum::Router;
 use sqlx::PgPool;
 use thiserror::Error;
 
+pub use ::migrate::MigrationError;
+
 pub use crate::account::server::{
     AccountServerInitializationError, CreateZitadelOrganizationRequest, DefaultSetup,
     DefaultSetupCompletionRequest, DefaultSetupUnlockRequest, DirectoryError, DirectoryUser,
@@ -38,8 +40,8 @@ pub use crate::account::{
 
 /// 可组合 Nexora 默认模块与应用 Router 的服务端实例。
 ///
-/// 应用创建自己的 [`PgPool`] 与 Axum State，在调用 [`Self::initialize`] 前先把
-/// [`migrations`] 返回的框架迁移与业务迁移组合为一个 SQLx `Migrator` 并执行。随后通过
+/// 应用创建自己的 [`PgPool`] 与 Axum State，在调用 [`Self::initialize`] 前先调用
+/// [`migrate`] 执行 Nexora 框架迁移，再运行应用自己的 Migrator。随后通过
 /// `Router::new().merge(server.routers())` 组合最终 Router，并使用标准 `axum::serve` 启动。
 pub struct Server {
     account_routes: Option<AccountRoutes>,
@@ -64,10 +66,9 @@ impl Server {
 
     /// 使用应用提供的资源初始化 Nexora 服务端模块。
     ///
-    /// 当前默认初始化只装配 Account、ZITADEL 与 Setup 路由，不执行数据库迁移。宿主必须
-    /// 先把 [`migrations`] 与应用迁移组合成一个 SQLx `Migrator`，再使用同一个 `pool`
-    /// 执行迁移并调用本方法。未来 OSS、缓存等框架模块也应收口在这一生命周期，而不是
-    /// 重新塞回 [`Self::new`]。
+    /// 当前默认初始化只装配 Account、ZITADEL 与 Setup 路由，不执行数据库迁移。宿主必须先
+    /// 使用同一个 `pool` 调用 [`migrate`]，再运行应用自己的 Migrator 并调用本方法。未来
+    /// OSS、缓存等框架模块也应收口在这一生命周期，而不是重新塞回 [`Self::new`]。
     ///
     /// 初始化已经完成时会同步 ZITADEL Project 系统角色；未完成时记录等待 Setup 的状态，
     /// 供宿主在监听成功后通过 [`Self::setup_url`] 输出可访问的 `/setup` 地址。
@@ -222,13 +223,18 @@ pub enum ServerError {
     ),
 }
 
-/// 返回 Nexora 服务端模块维护的全部嵌入式 SQLx 迁移。
+/// 在宿主创建的唯一连接池上执行 Nexora 框架数据库迁移。
 ///
-/// 宿主应把返回列表与自己的业务迁移合并，拒绝跨来源版本冲突，并构造唯一的 SQLx
-/// `Migrator` 执行一次。该函数只克隆内嵌迁移元数据，不访问数据库，也不创建连接池。
-#[must_use]
-pub fn migrations() -> Vec<sqlx::migrate::Migration> {
-    ::migrate::migrations()
+/// 该函数借用 `pool`，不会创建第二连接池。Nexora 使用 SQLx 0.9 原生 Migrator，自动创建
+/// `nexora` schema，并把框架迁移历史独立记录在 `nexora._sqlx_migrations`。宿主应在本函数
+/// 成功后再运行自己的应用 Migrator，之后才能调用 [`Server::initialize`] 并开始接收流量。
+///
+/// # Errors
+///
+/// SQLx 无法创建迁移 schema 或历史表、获取迁移锁、校验已应用迁移，或执行任一 Nexora
+/// 框架迁移时返回 [`MigrationError`]；返回值保留底层 SQLx 错误作为 source。
+pub async fn migrate(pool: &PgPool) -> Result<(), MigrationError> {
+    ::migrate::migrate(pool).await
 }
 
 fn setup_url(address: SocketAddr) -> String {

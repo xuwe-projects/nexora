@@ -160,6 +160,32 @@ struct ServerRoutesTemplate;
 
 #[derive(askama::Template)]
 #[template(
+    path = "scaffold/workspace/crates/migrate/Cargo.toml.askama",
+    escape = "none"
+)]
+struct MigrateManifestTemplate;
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/workspace/crates/migrate/src/lib.rs", escape = "none")]
+struct MigrateLibraryTemplate;
+
+#[derive(askama::Template)]
+#[template(
+    path = "scaffold/workspace/crates/migrate/tests/migrations.rs",
+    escape = "none"
+)]
+struct MigrateTestsTemplate;
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/workspace/sqlx.toml", escape = "none")]
+struct SqlxConfigTemplate;
+
+#[derive(askama::Template)]
+#[template(path = "scaffold/workspace/scripts/run-sqlx-tests.sh", escape = "none")]
+struct SqlxTestScriptTemplate;
+
+#[derive(askama::Template)]
+#[template(
     path = "scaffold/workspace/config/example.server.toml",
     escape = "none"
 )]
@@ -553,7 +579,20 @@ fn scaffold(target: &Path, project_name: &str, options: ScaffoldOptions) -> Resu
             append_file_if_missing(target, &mut files, "nexora.toml", nexora_config)?;
 
             if account_enabled {
-                directories.extend(["apps/server", "apps/server/src", "config"].map(str::to_owned));
+                directories.extend(
+                    [
+                        "apps/server",
+                        "apps/server/src",
+                        "config",
+                        "crates",
+                        "crates/migrate",
+                        "crates/migrate/migrations",
+                        "crates/migrate/src",
+                        "crates/migrate/tests",
+                        "scripts",
+                    ]
+                    .map(str::to_owned),
+                );
                 files.extend(render_account_workspace_templates(project_name)?);
             }
 
@@ -652,6 +691,46 @@ fn render_account_workspace_templates(project_name: &str) -> Result<Vec<(String,
                 ServerRoutesTemplate
                     .render()
                     .map_err(|error| format!("无法渲染服务端 routes.rs 模板：{error}"))?,
+            ),
+        ),
+        (
+            "crates/migrate/Cargo.toml".to_owned(),
+            normalize_template_output(
+                MigrateManifestTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染迁移 Cargo.toml 模板：{error}"))?,
+            ),
+        ),
+        (
+            "crates/migrate/src/lib.rs".to_owned(),
+            normalize_template_output(
+                MigrateLibraryTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染迁移 lib.rs 模板：{error}"))?,
+            ),
+        ),
+        (
+            "crates/migrate/tests/migrations.rs".to_owned(),
+            normalize_template_output(
+                MigrateTestsTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染迁移测试模板：{error}"))?,
+            ),
+        ),
+        (
+            "sqlx.toml".to_owned(),
+            normalize_template_output(
+                SqlxConfigTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染 sqlx.toml 模板：{error}"))?,
+            ),
+        ),
+        (
+            "scripts/run-sqlx-tests.sh".to_owned(),
+            normalize_template_output(
+                SqlxTestScriptTemplate
+                    .render()
+                    .map_err(|error| format!("无法渲染 SQLx 测试脚本模板：{error}"))?,
             ),
         ),
         (

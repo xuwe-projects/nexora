@@ -1,0 +1,14 @@
+[package]
+name = "application-migrate"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "migrate"
+
+[dependencies]
+sqlx = { workspace = true }
+
+[dev-dependencies]
+nexora = { workspace = true, features = ["server"] }
+sqlx = { workspace = true, features = ["macros"] }

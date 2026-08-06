@@ -1,0 +1,8 @@
+[migrate]
+migrations-dir = "crates/migrate/migrations"
+create-schemas = ["nexora"]
+table-name = "nexora._sqlx_migrations"
+
+[migrate.defaults]
+migration-type = "reversible"
+migration-versioning = "timestamp"

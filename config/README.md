@@ -11,11 +11,11 @@
 cp config/example.server.toml config/server.toml
 ```
 
-服务端和迁移程序默认读取该文件，也可以把其他配置路径作为位置参数传入。首次安装空数据库
-必须显式添加 `--initialize-empty-database`：
+服务端和迁移程序默认读取该文件，也可以把其他配置路径作为位置参数传入。Nexora 迁移程序
+借用自己创建的单个连接池，使用独立历史表向前迁移框架对象：
 
 ```bash
-cargo run -p migrate -- --initialize-empty-database /path/to/server.toml
+cargo run -p migrate -- /path/to/server.toml
 cargo run -p server -- /path/to/server.toml
 ```
 
@@ -56,11 +56,11 @@ PostgreSQL 保存用户、角色、权限及关联关系。API 只接受 `Author
 HTTPS，仅 `localhost`、loopback IPv4/IPv6 开发地址允许 HTTP。Provider 必须签发可通过 JWKS
 验证的 JWT access token；当前实现不接受 opaque token。
 
-数据库迁移与服务启动相互独立。首次安装使用显式空库初始化参数；后续部署只运行普通向前
-升级命令。普通升级遇到空库、缺失迁移历史或核心表丢失会失败，不会自动重建 schema：
+数据库迁移与服务启动相互独立。Nexora 自动创建 `nexora` schema，把框架历史固定记录在
+`nexora._sqlx_migrations`；应用业务迁移使用自己的 SQLx Migrator 和独立历史。服务端必须按
+Nexora、应用、`Server::initialize` 的顺序启动，不合并或重编号两类迁移：
 
 ```bash
-cargo run -p migrate -- --initialize-empty-database config/server.toml # 仅首次安装
 cargo run -p migrate -- config/server.toml
 cargo run -p server -- config/server.toml
 ```
@@ -137,12 +137,15 @@ setup 会先幂等确保 `admin`、`auditor`、`member` 等全部本地系统角
 
 REST 契约位于 [`docs/public/openapi.yaml`](../docs/public/openapi.yaml)。除 `/health` 外均需要 Bearer token；
 认证失败返回 `401`，权限不足返回 `403`，字段校验失败返回 `422`，资源冲突返回 `409`。
-数据库集成测试默认不要求本机 PostgreSQL；可用测试实例准备好后运行：
+数据库集成测试保留全部 `#[sqlx::test]`，并只从项目标准 `config/server.toml` 在当前进程派生
+`DATABASE_URL`。SQLx 可以自动创建和清理隔离数据库；命令失败时包装器只删除本次遗留数据库：
 
 ```bash
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
+bash scripts/run-sqlx-tests.sh config/server.toml \
   cargo test -p account --features database-tests
 ```
+
+不要改用 `.env`、另一套数据库地址或手工创建长期存在的 test、e2e、codex 数据库。
 
 ## 当前样例
 

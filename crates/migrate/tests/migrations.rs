@@ -1,62 +1,69 @@
 use std::collections::BTreeSet;
 
-const CURRENT_IMES_SYSTEM_DICTIONARY_SEED_VERSION: i64 = 202607180006;
-const ACCOUNT_AVATAR_REMOVAL_VERSION: i64 = 202607290001;
+const SQLX_CONFIG: &str = include_str!("../../../sqlx.toml");
+const IDENTITY_UP: &str =
+    include_str!("../migrations/20260806042552_account_identity_baseline.up.sql");
+const AUTHORIZATION_UP: &str =
+    include_str!("../migrations/20260806042557_account_authorization_baseline.up.sql");
+const PROTECTION_UP: &str =
+    include_str!("../migrations/20260806042602_account_protection_baseline.up.sql");
+const CATALOG_UP: &str =
+    include_str!("../migrations/20260806042607_account_catalog_baseline.up.sql");
 
 #[test]
-fn exported_migrations_include_all_framework_versions_and_are_independent() {
-    let mut first = migrate::migrations();
-    let second = migrate::migrations();
-
-    assert_eq!(first.len(), second.len());
-    assert_eq!(
-        second
-            .iter()
-            .filter(|migration| migration.migration_type.is_up_migration())
-            .map(|migration| migration.version)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-            8,
-            9,
-            10,
-            ACCOUNT_AVATAR_REMOVAL_VERSION,
-        ])
-    );
-
-    first.pop();
-    assert_eq!(first.len() + 1, second.len());
-}
-
-#[test]
-fn account_avatar_removal_migration_runs_after_current_imes_seed_migration() {
-    let versions = migrate::migrations()
-        .iter()
-        .filter(|migration| migration.migration_type.is_up_migration())
-        .map(|migration| migration.version)
+fn baseline_contains_four_reversible_timestamp_migrations() {
+    let migration_names = std::fs::read_dir(format!("{}/migrations", env!("CARGO_MANIFEST_DIR")))
+        .expect("迁移目录应当存在")
+        .map(|entry| {
+            entry
+                .expect("迁移目录项应当可读取")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect::<BTreeSet<_>>();
 
-    let avatar_removal_version = versions
-        .iter()
-        .copied()
-        .find(|version| *version == ACCOUNT_AVATAR_REMOVAL_VERSION)
-        .expect("Account 头像移除迁移必须导出");
-    assert!(avatar_removal_version > CURRENT_IMES_SYSTEM_DICTIONARY_SEED_VERSION);
+    assert_eq!(migration_names.len(), 8);
+    for version in [
+        "20260806042552_account_identity_baseline",
+        "20260806042557_account_authorization_baseline",
+        "20260806042602_account_protection_baseline",
+        "20260806042607_account_catalog_baseline",
+    ] {
+        assert!(migration_names.contains(&format!("{version}.up.sql")));
+        assert!(migration_names.contains(&format!("{version}.down.sql")));
+    }
 }
 
 #[test]
-fn account_avatar_removal_migration_drops_column_and_permission_without_checksum_repairs() {
-    let up_sql = include_str!("../migrations/202607290001_account_remove_avatar_capability.up.sql");
+fn sqlx_configuration_uses_framework_history_and_reversible_timestamps() {
+    assert!(SQLX_CONFIG.contains("migrations-dir = \"crates/migrate/migrations\""));
+    assert!(SQLX_CONFIG.contains("create-schemas = [\"nexora\"]"));
+    assert!(SQLX_CONFIG.contains("table-name = \"nexora._sqlx_migrations\""));
+    assert!(SQLX_CONFIG.contains("migration-type = \"reversible\""));
+    assert!(SQLX_CONFIG.contains("migration-versioning = \"timestamp\""));
+}
 
-    assert!(up_sql.contains("DROP COLUMN IF EXISTS avatar_url"));
-    assert!(up_sql.contains("users:avatar.write"));
-    assert!(up_sql.contains("DELETE FROM account.role_permissions"));
-    assert!(up_sql.contains("DELETE FROM account.permissions"));
-    assert!(!up_sql.contains("_sqlx_migrations"));
+#[test]
+fn baseline_describes_only_the_current_account_structure() {
+    assert!(
+        IDENTITY_UP.contains("identity_id TEXT CONSTRAINT users_identity_id_not_null NOT NULL")
+    );
+    assert!(IDENTITY_UP.contains("username TEXT"));
+    assert!(!IDENTITY_UP.contains("avatar_url"));
+    assert!(!IDENTITY_UP.contains("subject TEXT"));
+
+    assert!(AUTHORIZATION_UP.contains("id BIGSERIAL CONSTRAINT roles_id_not_null NOT NULL"));
+    assert!(
+        AUTHORIZATION_UP
+            .contains("owner TEXT CONSTRAINT roles_owner_not_null NOT NULL DEFAULT 'IMES'")
+    );
+    assert!(PROTECTION_UP.contains("CREATE FUNCTION account.protect_system_initialization()"));
+    assert!(CATALOG_UP.contains("'users:provision'"));
+    assert!(!CATALOG_UP.contains("users:avatar.write"));
+
+    for sql in [IDENTITY_UP, AUTHORIZATION_UP, PROTECTION_UP, CATALOG_UP] {
+        assert!(!sql.contains("_sqlx_migrations"));
+        assert!(!sql.contains("ALTER TABLE"));
+    }
 }

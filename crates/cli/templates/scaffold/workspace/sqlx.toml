@@ -1,0 +1,7 @@
+[migrate]
+migrations-dir = "crates/migrate/migrations"
+table-name = "public._sqlx_migrations"
+
+[migrate.defaults]
+migration-type = "reversible"
+migration-versioning = "timestamp"

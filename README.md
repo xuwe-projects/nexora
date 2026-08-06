@@ -12,7 +12,7 @@ Feature、桌面 Shell、Account 认证授权、默认用户与角色管理，�
 从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.28.0 cli --locked --force --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.29.0 cli --locked --force --bin nexora
 ```
 
 在 Nexora 仓库根目录安装本地源码：
@@ -60,9 +60,10 @@ cargo run -p server -- config/server.toml
 cargo run -- config/my-app.toml
 ```
 
-服务端尚未初始化时会在日志中输出 `/setup` 地址。宿主先把
-`nexora::server::migrations()` 与业务迁移合并成唯一 SQLx `Migrator`，数据库升级继续由
-`_sqlx_migrations` 自动管理，不需要 `initialize_empty_database` 开关。
+服务端尚未初始化时会在日志中输出 `/setup` 地址。宿主先调用
+`nexora::server::migrate(&pool)`，再运行应用自己的 SQLx `Migrator`；两者借用宿主唯一
+`PgPool`，迁移历史分别记录在 `nexora._sqlx_migrations` 与应用配置的历史表中，不需要
+`initialize_empty_database` 开关。
 
 生成项目自带 `publish-nexora-release` Skill，用于整理完整改动、标注处理人、编写上一版本到
 当前版本的升级说明，并在验证通过后发布 tag 与 GitHub Release。

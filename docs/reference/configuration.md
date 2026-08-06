@@ -70,8 +70,9 @@ personal_access_token = "replace-through-secret-injection"
 环境变量以 `__` 表示嵌套字段。显式路径优先；未传路径时根据当前 package 名查找
 `config/<package>.toml`。敏感值应由环境变量或密钥系统注入。
 
-服务端 Setup secret 只在未初始化时有效。迁移记录由 `_sqlx_migrations` 管理，不需要也不
-允许通过 `initialize_empty_database` 之类的人工布尔开关控制升级。
+服务端 Setup secret 只在未初始化时有效。Nexora 框架迁移历史固定为
+`nexora._sqlx_migrations`，应用迁移使用独立历史；两者借用同一个 `PgPool`，不需要也不允许
+通过 `initialize_empty_database` 之类的人工布尔开关控制升级。
 
 ## 自动更新发布配置
 

@@ -1,12 +1,12 @@
 //! PostgreSQL 数据库结构迁移程序。
 //!
-//! 该程序复用同包迁移库的安全检查与执行能力，不包含业务查询或 HTTP 路由。
+//! 该程序复用同包的 Nexora 框架迁移入口，不包含业务查询或 HTTP 路由。
 
 use std::{error::Error, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use configuration::LayeredConfigLoader;
-use migrate::prepare;
+use migrate::migrate;
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 
@@ -50,20 +50,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .with_required_file(config_path)
         .load()?;
     let pool = PgPoolOptions::new().connect(&config.database.url).await?;
-    let plan = prepare(&pool).await?;
-    let target = plan.target();
-    eprintln!(
-        "数据库迁移目标: database={}, server={}:{}, 已应用={}，待应用={:?}",
-        target.database(),
-        target.server_address().unwrap_or("local"),
-        target
-            .server_port()
-            .map_or_else(|| "default".to_owned(), |port| port.to_string()),
-        plan.applied_count(),
-        plan.pending_versions(),
-    );
-
-    let report = plan.run(&pool).await?;
-    eprintln!("数据库迁移完成: database={}", report.target().database());
+    migrate(&pool).await?;
+    eprintln!("Nexora 数据库迁移完成");
     Ok(())
 }

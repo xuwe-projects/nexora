@@ -70,14 +70,18 @@ description: 审查 Nexora workspace 中使用 SQLx 与 PostgreSQL 的数据库�
 ## 审查迁移
 
 - SQLx 同时接受顺序版本和时间戳版本；两者都有效，不要把其中一种报告为错误。
-- Nexora 统一使用顺序版本并集中到 `crates/migrate/migrations`，例如 `0003_accounts_add_email.up.sql`。
+- 新迁移必须由 `sqlx migrate add <module>_<description>` 创建，使用根 `sqlx.toml` 配置的可逆
+  timestamp 版本并集中到 `crates/migrate/migrations`；禁止手写版本或文件名。
 - 可逆迁移使用同版本成对的 `.up.sql`/`.down.sql`，不要把 down SQL 只写成 up 文件里的注释。
 - 不修改已进入共享环境的迁移；通过后续迁移修正。
 - 每个新表必须有 `COMMENT ON TABLE`，每个列必须有 `COMMENT ON COLUMN`；类型、具名约束、索引、函数和触发器也应记录用途。
 - PostgreSQL ENUM 使用 `COMMENT ON TYPE` 描述类型，并在 `CREATE TYPE` 中逐项注明每个标签的中文含义。
 - 检查扩展、约束、索引、锁影响、数据回填、回滚数据损失和多版本应用兼容窗口。
-- `crates/migrate` 将框架与应用迁移合并、检查跨来源版本冲突后，由唯一 SQLx `Migrator`
-  执行一次；业务 crate、HTTP handler 和框架初始化不自行运行迁移。
+- 宿主先调用 `nexora::server::migrate(&pool)`，再运行应用自己的 SQLx `Migrator`。两者借用
+  同一个 `PgPool` 并使用独立迁移历史；禁止合并、重编号或协调跨来源 checksum。业务 crate、
+  HTTP handler 和框架初始化不自行运行迁移。
+- 保留全部 `#[sqlx::test]`；确认当前测试进程的 `DATABASE_URL` 从项目标准
+  `config/server.toml` 派生，失败后只清理本次 SQLx 测试遗留数据库。
 
 详细规则见 [迁移与连接池参考](references/migrations.md)。
 

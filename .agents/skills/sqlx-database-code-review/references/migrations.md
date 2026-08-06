@@ -80,14 +80,15 @@ SQLx 支持顺序版本和时间戳版本，两者都有效：
 20260715103000_create_users.sql
 ```
 
-Nexora 采用顺序版本，并将所有迁移集中到 `crates/migrate/migrations`。业务名称写入描述，便于识别归属：
+项目使用根 `sqlx.toml` 中的 timestamp 版本，并将应用迁移集中到
+`crates/migrate/migrations`。新文件只能由 `sqlx migrate add <module>_<description>` 创建：
 
 ```text
 crates/migrate/migrations/
-├── 0001_accounts_create_rbac.up.sql
-├── 0001_accounts_create_rbac.down.sql
-├── 0002_accounts_add_super_admin.up.sql
-└── 0002_accounts_add_super_admin.down.sql
+├── 20260806103000_accounts_create_rbac.up.sql
+├── 20260806103000_accounts_create_rbac.down.sql
+├── 20260806104500_accounts_add_status.up.sql
+└── 20260806104500_accounts_add_status.down.sql
 ```
 
 不要把迁移散落在 `modules/accounts`、`crates/database` 或宿主服务端入口。`crates/migrate` 是唯一迁移执行边界。
@@ -137,7 +138,7 @@ ALTER TABLE account.users DROP COLUMN email;
 2. 连接预算是否考虑数据库上限、应用副本和管理预留？
 3. 是否存在 `LazyLock + Handle::block_on` 或每请求建池？
 4. 原子操作的全部查询是否都在同一事务中？
-5. 迁移是否集中在 `crates/migrate/migrations`？
+5. 迁移是否由 `sqlx migrate add` 创建并集中在 `crates/migrate/migrations`？
 6. 顺序或时间戳命名是否保持唯一、单调且符合项目约定？
 7. reversible migration 是否真的成对提供 `.up.sql`/`.down.sql`？
 8. 破坏性迁移是否有锁、数据和多版本兼容方案？

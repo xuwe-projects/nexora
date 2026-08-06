@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 axum = { workspace = true }
+migrate = { workspace = true }
 nexora = { workspace = true, features = ["server", "derive"] }
 serde = { workspace = true }
 sqlx = { workspace = true }

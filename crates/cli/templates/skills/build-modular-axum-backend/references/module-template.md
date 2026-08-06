@@ -240,7 +240,9 @@ pub(crate) fn initialize() -> Router<<Module>State> {
 
 业务模块目录只保存运行时代码，不保存建表或测试数据 SQL。新增模块需要数据库结构时：
 
-1. 在 `crates/migrate/migrations/` 一级目录新增版本化迁移，文件名包含 `<module>`；
+1. 在 workspace 根目录执行 `sqlx migrate add <module>_<description>`，由根
+   `sqlx.toml` 在 `crates/migrate/migrations/` 一级目录生成可逆 timestamp 迁移；禁止手写
+   文件名或版本号；
 2. 首个迁移创建 `<schema>`，并把模块表、序列和索引创建在该 schema 中；
 3. 为新表和全部字段添加 `COMMENT ON`；稳定封闭的有限集合使用带类型和值说明的 PostgreSQL ENUM，并提供对应 Rust `enum`；
 4. 在 `crates/migrate/seeds/<module>/` 按需新增本地测试数据，SQL 使用 `<schema>.<modules>`；

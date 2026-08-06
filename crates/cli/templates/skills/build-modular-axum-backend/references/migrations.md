@@ -34,13 +34,13 @@ migrations/202607150002_warehouse_create_warehouses.sql
 migrations/account/202607150001_create_accounts.sql
 ```
 
-所有应用模块与 `nexora::server::migrations()` 返回的框架迁移共用一套全局版本顺序和
-`_sqlx_migrations` 表。通过文件名中的模块名实现归类，不要给不同模块或框架分配独立
-迁移记录表。宿主组合迁移时必须拒绝跨来源版本冲突。
+所有应用模块共用应用自己的 `public._sqlx_migrations` 表。Nexora 框架迁移独立记录在
+`nexora._sqlx_migrations`；宿主禁止合并、重编号或协调两类迁移的 checksum。
 
 ## 迁移文件规则
 
-- 使用 `<版本>_<模块>_<说明>.sql` 命名，版本采用可排序时间戳或项目既有连续编号。
+- 只能使用 `sqlx migrate add <module>_<description>` 创建新迁移，由根 `sqlx.toml` 生成
+  `<timestamp>_<module>_<description>.up.sql/.down.sql`；禁止手写文件名和版本号。
 - 版本号在整个项目中必须全局唯一，并按跨模块依赖顺序排列。
 - 每个迁移只表达一个清晰的结构变更。
 - 已应用的迁移文件禁止修改或重新排序；后续修正必须新增迁移。
@@ -135,7 +135,8 @@ ON CONFLICT DO NOTHING;
 REFERENCES account.accounts(id)
 ```
 
-迁移版本必须保证被引用的 schema 和表先创建。所有模块仍使用同一套 `_sqlx_migrations` 表，不为不同 schema 创建独立迁移记录表。
+迁移版本必须保证被引用的 schema 和表先创建。所有应用模块使用应用
+`public._sqlx_migrations`，与 Nexora 的 `nexora._sqlx_migrations` 保持独立。
 
 ## migrate crate
 
@@ -144,9 +145,12 @@ REFERENCES account.accounts(id)
 
 ```toml
 [package]
-name = "migrate"
+name = "application-migrate"
 version.workspace = true
 edition.workspace = true
+
+[lib]
+name = "migrate"
 
 [dependencies]
 configuration.workspace = true
@@ -155,25 +159,18 @@ sqlx.workspace = true
 tokio.workspace = true
 ```
 
-library 入口接收由 composition root 传入的框架迁移，和内嵌应用迁移合并；先按来源检查
-版本冲突，再只构造并运行一个 SQLx `Migrator`：
+library 入口只内嵌应用迁移，并借用 composition root 创建的唯一 `PgPool`：
 
 ```rust
 static APPLICATION_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-pub async fn run(
-    pool: &PgPool,
-    mut framework_migrations: Vec<Migration>,
-) -> Result<(), MigrationError> {
-    let application_migrations = APPLICATION_MIGRATOR.iter().cloned().collect::<Vec<_>>();
-    reject_cross_source_version_conflicts(&framework_migrations, &application_migrations)?;
-    framework_migrations.extend(application_migrations);
-    Migrator::with_migrations(framework_migrations).run(pool).await?;
-    Ok(())
+pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
+    APPLICATION_MIGRATOR.run(pool).await
 }
 ```
 
-`migrate` crate 不读取 Account 配置，也不依赖后端应用类型；连接池和框架迁移均由宿主传入。
+宿主启动时先调用 `nexora::server::migrate(&pool)`，再调用应用的 `migrate::migrate(&pool)`。
+`migrate` crate 不读取 Account 配置，也不依赖后端应用类型。
 
 ## 执行和验证
 
@@ -184,6 +181,10 @@ cargo run -p server -- config/server.toml
 ```
 
 测试数据必须通过独立、显式的命令导入，不能由生产迁移程序自动执行。执行前说明目标数据库以及写入影响。
+
+数据库测试必须保留 `#[sqlx::test]`，并在当前测试进程中从项目标准
+`config/server.toml` 派生 `DATABASE_URL`。禁止使用 `.env` 或另一套数据源；SQLx 可创建隔离
+数据库，失败后必须精确清理本次遗留数据库。
 
 完成后运行：
 

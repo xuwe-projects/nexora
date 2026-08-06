@@ -24,10 +24,8 @@ let pool = PgPoolOptions::new()
     .max_connections(settings.database.max_connections)
     .connect(settings.database.url.as_str())
     .await?;
-let migrations = nexora::server::migrations();
-sqlx::migrate::Migrator::with_migrations(migrations)
-    .run(&pool)
-    .await?;
+nexora::server::migrate(&pool).await?;
+application_migrate::migrate(&pool).await?;
 let mut server = Server::new();
 server
     .initialize(&settings, &pool, settings.setup.secret()?)
@@ -46,10 +44,12 @@ axum::serve(listener, app).await?;
 database migrations.
 
 `Server::new` owns neither a pool, listener, nor Axum State. The application owns connection policy,
-listen address, TLS, logging, and shutdown behavior. `nexora::server::migrations()` returns all
-framework migrations. The application combines them with its own migrations, rejects version
-collisions across sources, and runs one SQLx `Migrator` before calling
-`server.initialize(..., &pool, ...)`. `server.routers()` returns only Nexora's routes and adapts to
+listen address, TLS, logging, and shutdown behavior. `nexora::server::migrate(&pool)` manages only
+Nexora framework objects, creates the `nexora` schema when needed, and records history in
+`nexora._sqlx_migrations`. The application then runs its own SQLx Migrator and independent history
+against the same pool; the two migration sources must not be merged, renumbered, or checksum-
+coordinated. Call `server.initialize(..., &pool, ...)` only after both migration steps.
+`server.routers()` returns only Nexora's routes and adapts to
 the application's own Axum State, so the application owns merge order and middleware boundaries.
 Omit `.merge(server.routers())` when Nexora/Account HTTP routes are not needed.
 

@@ -65,16 +65,19 @@ description: 使用 Cargo 工作区、Axum 0.8、SQLx/PostgreSQL、模块独立 
    - 只在服务端边界调用最终的 `.with_state(app_state)`。
 
 7. 通过 `crates/migrate` 管理数据库变更。
-   - 把表结构、索引和约束变更添加到 `crates/migrate/migrations/` 一级目录，文件名包含模块名。
+   - 使用 `sqlx migrate add <module>_<description>` 在 `crates/migrate/migrations/` 创建迁移；
+     禁止手写文件名、版本号或使用 `sqlx migrate init`。
    - 首个模块迁移必须创建对应 schema，并在该 schema 中创建模块表、序列和索引。
    - 每个新表必须使用 `COMMENT ON TABLE` 和 `COMMENT ON COLUMN` 完整记录表与全部字段语义；类型、约束、索引、函数和触发器也要记录用途。
    - PostgreSQL ENUM 必须创建在模块 schema 中，使用 `COMMENT ON TYPE` 描述类型，并在 DDL 中逐项注明每个枚举值的中文含义。
    - 迁移版本号必须全局唯一；禁止在 `migrations/` 下按模块建立子目录，因为 SQLx 默认不会递归扫描。
-   - `crates/migrate` 的执行入口接收 `nexora::server::migrations()` 返回的框架迁移，与应用
-     迁移合并并拒绝版本冲突，再构造唯一 SQLx `Migrator`；禁止依次运行两个 Migrator。
+   - 宿主在唯一 `PgPool` 上先调用 `nexora::server::migrate(&pool)`，再调用应用
+     `crates/migrate` 的 Migrator。两者使用独立迁移历史，禁止合并或协调跨来源版本。
    - 把仅用于本地验证的测试数据放在 `crates/migrate/seeds/<module>/`，禁止混入生产迁移。
    - 业务模块和仓库根目录不得保存零散建表 SQL，也不得创建根目录 `sql/`。
    - 正常迁移只允许向前追加，禁止使用 `DROP TABLE` 重置已有结构。
+   - 保留 `#[sqlx::test]`，并从项目标准 `config/server.toml` 为当前测试进程派生
+     `DATABASE_URL`；禁止改用 `.env` 或另一套数据库，失败后精确清理本次遗留数据库。
 
 8. 完成验证。
    - 检查每个 `CREATE TABLE` 都有表注释和全部列注释，每个 `CREATE TYPE ... AS ENUM` 都有类型注释和值含义，并存在对应 Rust `enum`。

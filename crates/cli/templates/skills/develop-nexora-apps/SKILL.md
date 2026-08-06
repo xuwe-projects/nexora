@@ -243,9 +243,10 @@ impl nexora::Application for DesktopApplication {
 
 - `initialize(None)` 依次尝试进程第一个参数、当前目录及 package 清单目录祖先中的 `config/<package>.toml`；显式路径使用 `initialize(Some(path))`。
 - 桌面端标记 `#[nexora(account_client)]`，服务端标记 `#[nexora(account_server)]`；不要在一个根配置中混用两端配置。
-- 应用自行创建并持有唯一 `PgPool`；`Server::new()` 不连接数据库。先取得
-  `nexora::server::migrations()`，与应用迁移合并并拒绝跨来源版本冲突，再构造唯一 SQLx
-  `Migrator` 执行一次。随后调用 `server.initialize(&settings, &pool, setup_secret).await?`
+- 应用自行创建并持有唯一 `PgPool`；`Server::new()` 不连接数据库。先调用
+  `nexora::server::migrate(&pool)` 执行框架迁移，再运行应用自己的 SQLx `Migrator`；两者使用
+  独立迁移历史，禁止合并或协调版本。随后调用
+  `server.initialize(&settings, &pool, setup_secret).await?`
   装配 Account/ZITADEL；该初始化不执行迁移。应用再用
   `Router::new().merge(server.routers()).merge(application_routers).with_state(application_state)`
   组合最终 Router，自行创建 `TcpListener` 并调用 `axum::serve(listener, app)`。`Server` 只
@@ -258,7 +259,9 @@ impl nexora::Application for DesktopApplication {
   `server.setup_url(listener.local_addr()?)` 输出 `/setup` URL。
 - 默认初始化页面使用 `nexora::server::setup_routes`；需要自定义请求字段与响应时实现 `nexora::server::Setup`，再调用 `setup_routes_with`。关联请求类型必须分别实现 `SetupUnlockRequest` 与 `SetupCompletionRequest`，框架固定校验 secret、一次性 token 和超级管理员 identity ID。
 - 可信宿主通过 `nexora::server::{create_user, create_user_with_roles, create_permissions, create_role, replace_role_permissions, replace_user_roles}` 和唯一 `PgPool` 管理 Account 数据；两个用户创建函数都接收已确认的 `ExternalIdentity`，不创建本地密码。`create_user_with_roles` 还接收初始业务角色与本地 `granted_by` 用户 ID，并原子写入用户及角色关系。从 HTTP 调用这些管理函数前必须自行完成授权。
-- SQLx 会让空数据库执行全部迁移，并根据 `_sqlx_migrations` 只升级待执行版本；不要增加需要人工切换的首次初始化布尔配置。
+- Nexora 历史固定在 `nexora._sqlx_migrations`，应用历史由应用 Migrator 独立维护；不要增加
+  需要人工切换的首次初始化布尔配置。数据库测试必须保留 `#[sqlx::test]`，并从项目标准
+  `config/server.toml` 为当前测试进程派生 `DATABASE_URL`。
 
 ## 使用 CLI 和验证
 

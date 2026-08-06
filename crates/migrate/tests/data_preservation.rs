@@ -2,179 +2,97 @@
 
 use sqlx::PgPool;
 
-const MIGRATION_1: &str = include_str!("../migrations/0001_account_create_rbac.up.sql");
-const MIGRATION_2: &str = include_str!("../migrations/0002_account_add_super_admin.up.sql");
-const MIGRATION_3: &str =
-    include_str!("../migrations/0003_account_rework_system_initialization.up.sql");
-const MIGRATION_4: &str = include_str!("../migrations/0004_account_change_identifier_types.up.sql");
-const MIGRATION_5: &str = include_str!("../migrations/0005_account_bind_identity_issuer.up.sql");
-const MIGRATION_6: &str = include_str!("../migrations/0006_account_add_username.up.sql");
-
 #[sqlx::test(migrations = false)]
-async fn username_upgrade_preserves_existing_users_and_allows_binding(pool: PgPool) {
-    apply(&pool, MIGRATION_1).await;
-    apply(&pool, MIGRATION_2).await;
-    apply(&pool, MIGRATION_3).await;
-    apply(&pool, MIGRATION_4).await;
-    apply(&pool, MIGRATION_5).await;
+async fn account_baseline_allows_optional_username_binding(pool: PgPool) {
+    migrate::migrate(&pool)
+        .await
+        .expect("Account 基线迁移应当成功");
     sqlx::query(
         r#"
         INSERT INTO account.users (id, identity_id, display_name)
-        VALUES ('Legacy01', 'legacy-subject', '遗留用户')
+        VALUES ('Member01', 'member-subject', '测试用户')
         "#,
     )
     .execute(&pool)
     .await
-    .expect("应当可以准备没有用户名的遗留用户");
-
-    apply(&pool, MIGRATION_6).await;
+    .expect("应当可以创建没有用户名的用户");
 
     let username = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT username FROM account.users WHERE id = 'Legacy01'",
+        "SELECT username FROM account.users WHERE id = 'Member01'",
     )
     .fetch_one(&pool)
     .await
-    .expect("新增用户名列后应当可以读取遗留用户");
+    .expect("应当可以读取可选用户名");
     assert_eq!(username, None);
 
-    sqlx::query("UPDATE account.users SET username = 'legacy-user' WHERE id = 'Legacy01'")
+    sqlx::query("UPDATE account.users SET username = 'member-user' WHERE id = 'Member01'")
         .execute(&pool)
         .await
-        .expect("迁移后应当可以绑定登录用户名");
+        .expect("应当可以绑定登录用户名");
     let username = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT username FROM account.users WHERE id = 'Legacy01'",
+        "SELECT username FROM account.users WHERE id = 'Member01'",
     )
     .fetch_one(&pool)
     .await
-    .expect("绑定后应当可以读取登录用户名");
-    assert_eq!(username.as_deref(), Some("legacy-user"));
+    .expect("应当可以读取已绑定用户名");
+    assert_eq!(username.as_deref(), Some("member-user"));
 }
 
 #[sqlx::test(migrations = false)]
-async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) {
-    apply(&pool, MIGRATION_1).await;
-    apply(&pool, MIGRATION_2).await;
-    apply(&pool, MIGRATION_3).await;
-
+async fn account_baseline_supports_final_identifiers_and_relations(pool: PgPool) {
+    migrate::migrate(&pool)
+        .await
+        .expect("Account 基线迁移应当成功");
     sqlx::query(
         r#"
-        INSERT INTO account.users (
-            identity_id,
-            email,
-            display_name,
-            is_super_admin
-        )
+        INSERT INTO account.users (id, identity_id, email, display_name, is_super_admin)
         VALUES
-            ('identity-super-admin', 'owner@example.com', '超级管理员', TRUE),
-            ('identity-member', 'member@example.com', '普通成员', FALSE)
+            ('Admin001', 'identity-super-admin', 'owner@example.com', '超级管理员', TRUE),
+            ('Member01', 'identity-member', 'member@example.com', '普通成员', FALSE)
         "#,
     )
     .execute(&pool)
     .await
-    .expect("应当可以准备迁移前用户");
+    .expect("应当可以创建最终标识符类型的用户");
     sqlx::query(
         r#"
         INSERT INTO account.user_roles (user_id, role_id, granted_by)
-        SELECT member.id, roles.id, super_admin.id
-        FROM account.users AS member
-        CROSS JOIN account.roles AS roles
-        CROSS JOIN account.users AS super_admin
-        WHERE member.identity_id = 'identity-member'
-          AND roles.key = 'member'
-          AND super_admin.identity_id = 'identity-super-admin'
+        SELECT 'Member01', roles.id, 'Admin001'
+        FROM account.roles AS roles
+        WHERE roles.key = 'member'
         "#,
     )
     .execute(&pool)
     .await
-    .expect("应当可以准备迁移前角色关系");
+    .expect("应当可以创建用户角色关系");
     sqlx::query(
         r#"
         UPDATE account.system_initialization
-        SET is_initialized = TRUE,
-            super_admin_user_id = users.id,
+        SET identity_issuer = 'https://id.example.com/',
+            is_initialized = TRUE,
+            super_admin_user_id = 'Admin001',
             initialized_at = NOW()
-        FROM account.users AS users
-        WHERE account.system_initialization.id = 1
-          AND users.identity_id = 'identity-super-admin'
+        WHERE id = 1
         "#,
     )
     .execute(&pool)
     .await
-    .expect("应当可以准备迁移前初始化状态");
-
-    let before_counts = business_counts(&pool).await;
-    apply(&pool, MIGRATION_4).await;
-    let after_counts = business_counts(&pool).await;
-
-    assert_eq!(after_counts, before_counts);
-
-    let users = sqlx::query_as::<_, (String, String, bool, i32, bool)>(
-        r#"
-        SELECT
-            identity_id,
-            display_name,
-            is_super_admin,
-            LENGTH(id)::INTEGER,
-            id ~ '^[A-Za-z0-9]{8}$'
-        FROM account.users
-        ORDER BY identity_id
-        "#,
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("迁移后应当可以读取用户");
-    assert_eq!(
-        users,
-        vec![
-            (
-                "identity-member".to_owned(),
-                "普通成员".to_owned(),
-                false,
-                8,
-                true,
-            ),
-            (
-                "identity-super-admin".to_owned(),
-                "超级管理员".to_owned(),
-                true,
-                8,
-                true,
-            ),
-        ]
-    );
+    .expect("应当可以完成系统初始化");
 
     let assignment = sqlx::query_as::<_, (String, Option<String>)>(
         r#"
-        SELECT roles.key, grantor.identity_id
-        FROM account.user_roles AS user_roles
-        JOIN account.users AS users ON users.id = user_roles.user_id
-        JOIN account.roles AS roles ON roles.id = user_roles.role_id
-        LEFT JOIN account.users AS grantor ON grantor.id = user_roles.granted_by
-        WHERE users.identity_id = 'identity-member'
+        SELECT roles.key, user_roles.granted_by
+        FROM account.user_roles
+        JOIN account.roles ON account.roles.id = account.user_roles.role_id
+        WHERE account.user_roles.user_id = 'Member01'
         "#,
     )
     .fetch_one(&pool)
     .await
-    .expect("迁移后用户角色关系应当保留");
+    .expect("应当可以读取用户角色关系");
     assert_eq!(
         assignment,
-        ("member".to_owned(), Some("identity-super-admin".to_owned()))
-    );
-
-    let initialization = sqlx::query_as::<_, (bool, Option<String>)>(
-        r#"
-        SELECT initialization.is_initialized, users.identity_id
-        FROM account.system_initialization AS initialization
-        LEFT JOIN account.users AS users ON users.id = initialization.super_admin_user_id
-        WHERE initialization.id = 1
-        "#,
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("迁移后初始化引用应当保留");
-    assert_eq!(
-        initialization,
-        (true, Some("identity-super-admin".to_owned()))
+        ("member".to_owned(), Some("Admin001".to_owned()))
     );
 
     let id_types = sqlx::query_as::<_, (String, String, String)>(
@@ -196,7 +114,7 @@ async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) 
     )
     .fetch_one(&pool)
     .await
-    .expect("迁移后应当可以读取主键类型");
+    .expect("应当可以读取最终主键类型");
     assert_eq!(
         id_types,
         (
@@ -208,53 +126,21 @@ async fn identifier_type_upgrade_preserves_existing_business_data(pool: PgPool) 
 }
 
 #[sqlx::test(migrations = false)]
-async fn initialized_deployment_can_bind_issuer_once_after_upgrade(pool: PgPool) {
-    apply(&pool, MIGRATION_1).await;
-    apply(&pool, MIGRATION_2).await;
-    apply(&pool, MIGRATION_3).await;
-    apply(&pool, MIGRATION_4).await;
-    sqlx::query(
-        r#"
-        INSERT INTO account.users (id, identity_id, display_name, is_super_admin)
-        VALUES ('Legacy01', 'legacy-super-admin', '遗留超级管理员', TRUE)
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .expect("应当可以准备遗留超级管理员");
-    sqlx::query(
-        r#"
-        UPDATE account.system_initialization
-        SET is_initialized = TRUE,
-            super_admin_user_id = 'Legacy01',
-            initialized_at = NOW()
-        WHERE id = 1
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .expect("应当可以准备已完成初始化的旧部署");
-
-    apply(&pool, MIGRATION_5).await;
-
-    let unbound = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT identity_issuer FROM account.system_initialization WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("迁移后应当可以读取部署 issuer");
-    assert_eq!(unbound, None);
+async fn deployment_issuer_can_only_be_bound_once(pool: PgPool) {
+    migrate::migrate(&pool)
+        .await
+        .expect("Account 基线迁移应当成功");
 
     sqlx::query(
         r#"
         UPDATE account.system_initialization
-        SET identity_issuer = 'https://recovered.example.com/'
+        SET identity_issuer = 'https://id.example.com/'
         WHERE id = 1 AND identity_issuer IS NULL
         "#,
     )
     .execute(&pool)
     .await
-    .expect("已初始化旧部署也应当可以首次绑定 issuer");
+    .expect("应当可以首次绑定部署 issuer");
     let second_rebind = sqlx::query(
         r#"
         UPDATE account.system_initialization
@@ -264,17 +150,15 @@ async fn initialized_deployment_can_bind_issuer_once_after_upgrade(pool: PgPool)
     )
     .execute(&pool)
     .await;
+
     assert!(second_rebind.is_err(), "部署 issuer 首次绑定后必须冻结");
 }
 
 #[sqlx::test(migrations = false)]
-async fn deployment_issuer_is_required_and_user_subject_stays_globally_unique(pool: PgPool) {
-    apply(&pool, MIGRATION_1).await;
-    apply(&pool, MIGRATION_2).await;
-    apply(&pool, MIGRATION_3).await;
-    apply(&pool, MIGRATION_4).await;
-    apply(&pool, MIGRATION_5).await;
-
+async fn deployment_issuer_is_required_and_identity_id_stays_globally_unique(pool: PgPool) {
+    migrate::migrate(&pool)
+        .await
+        .expect("Account 基线迁移应当成功");
     sqlx::query(
         r#"
         INSERT INTO account.users (id, identity_id, display_name, is_super_admin)
@@ -302,24 +186,13 @@ async fn deployment_issuer_is_required_and_user_subject_stays_globally_unique(po
 
     sqlx::query(
         r#"
-        UPDATE account.system_initialization
-        SET identity_issuer = 'https://id.example.com/'
-        WHERE id = 1
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .expect("应当可以首次绑定部署 issuer");
-
-    sqlx::query(
-        r#"
         INSERT INTO account.users (id, identity_id, display_name)
         VALUES ('Member01', 'shared-subject', '第一个用户')
         "#,
     )
     .execute(&pool)
     .await
-    .expect("应当可以创建第一个 subject");
+    .expect("应当可以创建第一个 identity ID");
     let duplicate = sqlx::query(
         r#"
         INSERT INTO account.users (id, identity_id, display_name)
@@ -345,27 +218,4 @@ async fn deployment_issuer_is_required_and_user_subject_stays_globally_unique(po
     .await
     .expect("应当可以检查新开通权限");
     assert!(administrator_can_provision);
-}
-
-async fn apply(pool: &PgPool, sql: &'static str) {
-    sqlx::raw_sql(sql)
-        .execute(pool)
-        .await
-        .expect("迁移脚本应当执行成功");
-}
-
-async fn business_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64) {
-    sqlx::query_as(
-        r#"
-        SELECT
-            (SELECT COUNT(*) FROM account.users),
-            (SELECT COUNT(*) FROM account.roles),
-            (SELECT COUNT(*) FROM account.permissions),
-            (SELECT COUNT(*) FROM account.user_roles),
-            (SELECT COUNT(*) FROM account.role_permissions)
-        "#,
-    )
-    .fetch_one(pool)
-    .await
-    .expect("应当可以读取业务数据计数")
 }

@@ -13,8 +13,9 @@ Nexora 是一个 Rust 桌面全栈框架。它不替代 GPUI、gpui-component、
 - 应用直接依赖并导入 `gpui` 与 `gpui_component`，可以自行选择和使用组件能力。
 - `nexora` 提供 Feature、Window、Application、Server、配置和 Account 契约。
 - 服务端只创建一个 `PgPool`，Nexora 模块与应用 Router 共享其廉价克隆句柄。
-- Nexora 通过 `server::migrations()` 提供框架迁移；宿主与业务迁移合并成唯一
-  SQLx `Migrator`，并在接收流量前执行一次。
+- Nexora 通过 `server::migrate(&PgPool)` 管理框架对象，历史固定为
+  `nexora._sqlx_migrations`；宿主随后运行应用自己的 SQLx `Migrator`，两者共享唯一连接池
+  但不合并历史。
 
 ## 公开 feature
 

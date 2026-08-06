@@ -43,18 +43,21 @@ description: 用于设计、实现或审查 Nexora workspace 的数据库访问�
 - 原子多语句操作使用 `pool.begin()`，所有查询通过 `&mut *tx` 执行，成功路径显式 `commit()`。
 - 事务 drop 会回滚，但仍要保留可诊断的错误 source 和操作上下文。
 - store 将约束冲突、未找到和数据库不可用等情况映射为稳定业务/存储错误；HTTP 层再统一映射为 `404`、`409` 或 `5xx`，不要让 SQLx 错误直接成为公开响应。
-- 需要数据库集成测试时优先使用 `#[sqlx::test]` 或项目现有测试数据库工具，隔离数据库并运行指定迁移。
+- 需要数据库集成测试时保留并使用 `#[sqlx::test]`。当前测试进程的 `DATABASE_URL` 必须从
+  项目标准 `config/server.toml` 派生，由 SQLx 创建和清理隔离数据库；禁止改用 `.env` 或
+  另一套数据库数据源，失败后精确清理本次遗留数据库。
 
 ## 数据库迁移
 
 - 所有结构和版本变更由 `sqlx migrate` 管理，SQL 文件集中在 `crates/migrate/migrations`。
-- Nexora 使用顺序版本；SQLx 同时接受顺序和时间戳版本，不能把另一种格式视为无效。
+- 新迁移只能由 `sqlx migrate add <module>_<description>` 创建，并使用根 `sqlx.toml` 配置的
+  可逆 timestamp 版本；禁止手写文件名、版本号或使用 `sqlx migrate init`。
 - 可逆迁移用同版本 `.up.sql`/`.down.sql` 成对维护。
 - 已进入共享环境的迁移不直接修改，通过后续迁移修正。
 - `crates/migrate` 只负责版本演进，不承载业务查询、HTTP 路由或 application。
-- 迁移由宿主启动流程在接收流量前执行；Nexora 框架迁移与应用迁移必须先合并并检查版本
-  冲突，再由唯一 SQLx `Migrator` 执行一次。业务 crate、handler 和 `Server::initialize`
-  不运行迁移。
+- 迁移由宿主启动流程在接收流量前执行：先调用 `nexora::server::migrate(&pool)`，再运行应用
+  自己的 SQLx `Migrator`。两者共享宿主唯一 `PgPool`，但使用独立迁移历史；禁止合并迁移、
+  重编号或协调跨来源 checksum。业务 crate、handler 和 `Server::initialize` 不运行迁移。
 
 ## Axum 与 Tokio
 

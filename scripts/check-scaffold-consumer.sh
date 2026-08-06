@@ -20,6 +20,7 @@ fi
 (
     cd "$temporary"
     "$nexora_bin" create consumer --layout single
+    "$nexora_bin" create fullstack-consumer --layout workspace --features account
 )
 
 manifest="$temporary/consumer/Cargo.toml"
@@ -30,3 +31,14 @@ rm -f "$manifest.bak" "$temporary/consumer/Cargo.lock"
 
 CARGO_TARGET_DIR="$target_dir/scaffold-consumer" \
     cargo check --manifest-path "$manifest"
+
+fullstack_manifest="$temporary/fullstack-consumer/Cargo.toml"
+sed -i.bak -E \
+    "s#nexora = \{[^}]*\}#nexora = { path = \"$manifest_root/crates/nexora\", default-features = false }#" \
+    "$fullstack_manifest"
+rm -f "$fullstack_manifest.bak" "$temporary/fullstack-consumer/Cargo.lock"
+
+CARGO_TARGET_DIR="$target_dir/scaffold-consumer" \
+    cargo check --manifest-path "$fullstack_manifest" -p server
+CARGO_TARGET_DIR="$target_dir/scaffold-consumer" \
+    cargo test --manifest-path "$fullstack_manifest" -p application-migrate --no-run
