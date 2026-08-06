@@ -1,9 +1,9 @@
 # Desktop updater
 
-Nexora uses a signed `latest.json`, platform update archives, and an independent sidecar for in-app updates. First installation uses a macOS DMG or a Windows MSI/Setup EXE. Signing keys and S3/RustFS credentials remain in the developer's publish environment; end users configure no updater environment variables.
+Nexora uses a signed `latest.json`, platform update archives, and an independent sidecar for in-app updates. First installation uses a macOS DMG or a Windows Inno Setup EXE. Signing keys and S3/RustFS credentials remain in the developer's publish environment; end users configure no updater environment variables.
 
 The production path supports macOS and Windows x86_64/ARM64. Windows builds create a Simplified
-Chinese WiX MSI and a Burn Setup EXE while in-app updates consume only `windows.zip`. The default
+Chinese Inno Setup EXE while in-app updates consume only `windows.zip`. The default
 Windows floor follows the pinned GPUI baseline: Windows 10 1703, build 15063. Linux release
 resources follow the same metadata contract, but Linux auto-installation is not documented here.
 
@@ -11,7 +11,7 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.29.0 cli --locked --force --bin nexora
+  --tag v0.30.0 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```
@@ -19,10 +19,9 @@ nexora doctor --fix
 In an interactive terminal, `nexora build` detects, installs, and rechecks the dependencies required
 by the selected configuration. `doctor` is read-only and `doctor --fix` uses the same repair path.
 macOS repair covers Rust targets, cargo-bundle, Homebrew, create-dmg, and launches the official
-Xcode Command Line Tools installer when needed. Windows repair covers Rust targets, the pinned
-cargo-wix revision, a Nexora-managed user-level .NET 10 SDK under
-`%LOCALAPPDATA%\Nexora\tools\dotnet`, WiX 5.0.2, matching extensions, and the official Windows SDK
-installer. System installers may require confirmation or a restart; rerun the same build afterward.
+Xcode Command Line Tools installer when needed. Windows repair covers Rust targets, pinned Inno
+Setup 6.7.3, and the official Windows SDK installer. System installers may require confirmation or
+a restart; rerun the same build afterward.
 Non-interactive builds never launch installers and instead fail with exact commands. SDK tools are
 discovered from standard locations without requiring a permanent PATH change.
 The complete field-by-field reference, including required status, sources, defaults, secret status,
@@ -130,7 +129,7 @@ Before building any target, build atomically freezes the resolved identity in `d
 
 Build never accesses object storage and never installs a missing Rust target implicitly. It builds
 the selected host-compatible target, main binary, and `<executable>-updater` sidecar. macOS produces
-branded `.app.zip` and DMG files. Windows produces branded `.exe`, MSI, and `windows.zip`; only the
+branded `.app.zip` and DMG files. Windows produces a branded Inno Setup `.exe` and `windows.zip`; only the
 ZIP enters the updater manifest. Every release artifact receives a standard SHA-256 sidecar using
 the complete branded filename and is indexed by `artifact.json`.
 
@@ -163,7 +162,7 @@ timestamp_url = "https://timestamp.example.com"
 
 The thumbprint may instead come from `WINDOWS_SIGN_CERTIFICATE_SHA1`.
 `expected_publisher` defaults to `publisher`. Build signs and verifies the main executable, updater,
-MSI, and Setup EXE. In-app update staging rejects an unsigned executable, an invalid Windows trust
+and Setup EXE. In-app update staging rejects an unsigned executable, an invalid Windows trust
 chain, a mismatched certificate thumbprint, or a mismatched publisher for either the main executable
 or updater. A self-signed certificate is suitable only for controlled testing unless every target
 device explicitly trusts its root.
@@ -208,7 +207,7 @@ point at versioned immutable payloads. The layout is:
 
 Architecture directories are `x86_64` or `aarch64`, never full Rust triples, and there is no
 `releases` path segment. Signed `latest.json` remains; installer/update aliases such as
-`latest.dmg`, `latest-<arch>.dmg`, `latest.exe`, `latest.msi`, and `latest.zip` are no longer
+`latest.dmg`, `latest-<arch>.dmg`, `latest.exe`, and `latest.zip` are no longer
 generated. Nexora never deletes old remote aliases or immutable objects. Administrators may remove
 legacy channel-root aliases manually, but old immutable versioned objects must remain available.
 

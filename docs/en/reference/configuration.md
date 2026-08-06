@@ -130,8 +130,6 @@ notarize = false
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "Example Publisher"
 signing = "none"
 start_menu_shortcut_default = true
@@ -145,7 +143,7 @@ icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-ico
 Paths must be workspace-relative and remain inside the workspace. `targets.required` is optional;
 build defaults to the host from `rustc -vV`, while `nexora build --target <triple>` overrides it.
 The production packaging path covers macOS `.app`/DMG and Windows x86_64/ARM64 Simplified Chinese
-WiX MSI, Burn Setup EXE, and update ZIP artifacts.
+Inno Setup EXE and update ZIP artifacts.
 
 Windows `publisher` remains required installer metadata in every signing mode. `signing = "none"`
 retains Ed25519 manifest verification, artifact SHA-256, ZIP safety, and PE architecture checks, but

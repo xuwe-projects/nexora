@@ -17,30 +17,19 @@
 
 ## Changed
 
-- Windows first-install packaging now uses cargo-wix and WiX 5 to produce both a Simplified Chinese
-  MSI and a Burn Setup EXE. The wizard exposes desktop shortcut, Start menu shortcut, and
-  launch-after-finish options. Windows x86_64/ARM64 defaults to the pinned GPUI floor, Windows 10
-  1703 (build 15063). The launch condition reads the real Windows build and does not use MSI's
-  compatibility-reported `VersionNT64`, which is fixed at `603` on Windows 10. Windows startup now
-  loads `nexora-updater.json` beside the main EXE instead of incorrectly searching for a macOS
-  `.app`; builds without updater configuration may explicitly return no updater while existing
-  invalid configuration remains a startup error. Windows GUI apps and sidecars no longer create a
-  console window. The install-directory chooser remains available, while user-initiated removal no
-  longer reports 1926 when another installer left an inaccessible cross-volume `Config.Msi`;
-  major-upgrade removal keeps rollback enabled. Windows update ZIPs are now written directly in
-  Rust with `/` archive separators, so PowerShell cannot introduce backslashes rejected by the
-  safe extractor. Windows `signing = "none"` now retains Ed25519, SHA-256, ZIP safety, and PE
-  architecture checks while correctly skipping Authenticode. `signing = "authenticode"` continues
-  to enforce the Windows trust chain, certificate thumbprint, and publisher. Authenticode-only
-  fields left in `none` mode now fail during build configuration validation.
-  Windows in-app update transactions now use a hidden sibling directory on the installation volume
-  and preflight replacement permission before exit. `pending.json` uses overwrite-capable atomic
-  publication instead of opening a directory as a file for synchronization. The temporary sidecar
-  no longer inherits and holds the installation directory as its working directory, while launched
-  old and new apps still use that directory explicitly. Failed replacement restores and relaunches
-  the old version, then reports the durable failure result on the next launch. Windows publish now
-  emits architecture-specific `latest-<arch>.exe` / `latest-<arch>.msi` aliases and also emits
-  `latest.exe` / `latest.msi` for a single-target release.
+- Windows first-install packaging now uses pinned Inno Setup 6.7.3 and produces only a Simplified
+  Chinese Setup EXE plus the sidecar update ZIP; MSI and Burn bundles are no longer generated. Build
+  and doctor detect or repair ISCC through winget, and no longer require cargo-wix, WiX extensions,
+  or a Nexora-managed .NET SDK. Installation is fixed to the unelevated current-user scope under
+  `%LOCALAPPDATA%\Programs\<app_id>` by default, with directory selection, desktop/Start menu
+  shortcuts, and launch-after-finish options preserved. Setup and the update ZIP share one staging
+  directory. Publish uploads both artifacts and checksums while signed `latest.json` references only
+  `windows_update_zip`. Windows startup loads `nexora-updater.json` beside the main EXE; GUI apps
+  and sidecars do not create console windows. Rust writes update ZIP entries with `/` separators.
+  `signing = "none"` retains Ed25519, SHA-256, ZIP safety, and PE architecture checks, while
+  `authenticode` continues to enforce the Windows trust chain, certificate thumbprint, and publisher.
+  In-app transactions still use a hidden sibling directory on the installation volume, preflight
+  replacement permission before exit, and restore/relaunch the old version on failure.
 - The default scaffold and `examples/updater-windows` now declare `stable`, `beta`, and a
   `default_channel`. Interactive `nexora build` shows channel selection, while CI can use
   `--channel` or `--all-channels` explicitly.

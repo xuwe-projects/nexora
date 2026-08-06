@@ -34,10 +34,9 @@ const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
 const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
-const CARGO_WIX_MODERN_REVISION: &str = "9a8ed9486637e1fb839f209730eda6c95fd12d88";
-const WIX_VERSION: &str = "5.0.2";
-const DOTNET_SDK_CHANNEL: &str = "10.0";
-const DOTNET_INSTALL_SCRIPT_URL: &str = "https://dot.net/v1/dotnet-install.ps1";
+const INNO_SETUP_VERSION: &str = "6.7.3";
+const INNO_SETUP_WINGET_PACKAGE: &str = "JRSoftware.InnoSetup";
+const WINDOWS_INSTALLER_TEMPLATE: &str = include_str!("../../templates/windows/installer.iss");
 const HOMEBREW_INSTALL_COMMAND: &str = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
 const RUSTUP_INSTALL_COMMAND: &str =
     "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y";
@@ -312,10 +311,6 @@ struct MacOsConfig {
 struct WindowsConfig {
     icon: String,
     #[serde(default)]
-    installer: WindowsInstaller,
-    #[serde(default)]
-    install_scope: WindowsInstallScope,
-    #[serde(default)]
     publisher: Option<String>,
     #[serde(default)]
     signing: WindowsSigningMode,
@@ -347,21 +342,6 @@ enum SigningMode {
     DeveloperId,
     AdHoc,
     None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-enum WindowsInstaller {
-    #[default]
-    Wix,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-enum WindowsInstallScope {
-    #[default]
-    User,
-    Machine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -476,7 +456,6 @@ struct BuildPlan {
     app_path: PathBuf,
     app_zip_path: PathBuf,
     dmg_path: PathBuf,
-    msi_path: PathBuf,
     setup_path: PathBuf,
     artifact_path: PathBuf,
     notes_path: PathBuf,
@@ -491,7 +470,6 @@ struct FrozenReleaseNotes {
 
 #[derive(Debug, Clone)]
 struct WindowsBuildOptions {
-    install_scope: WindowsInstallScope,
     publisher: String,
     signing: WindowsSigningMode,
     signing_thumbprint: Option<String>,
@@ -555,7 +533,6 @@ enum ArtifactKind {
     MacosAppZip,
     MacosDmg,
     WindowsSetupExe,
-    WindowsMsi,
     #[serde(rename = "windows_update_zip")]
     WindowsZip,
 }
@@ -1543,7 +1520,6 @@ impl ProjectDocument {
                         }
                     },
                     dmg_path: release_dir.join(format!("{artifact_stem}.dmg")),
-                    msi_path: release_dir.join(format!("{artifact_stem}.msi")),
                     setup_path: release_dir.join(format!("{artifact_stem}.exe")),
                     artifact_path: release_dir.join("artifact.json"),
                     notes_path: frozen_notes
@@ -1622,7 +1598,6 @@ impl ProjectDocument {
                 ArtifactKind::MacosAppZip,
                 ArtifactKind::MacosDmg,
                 ArtifactKind::WindowsSetupExe,
-                ArtifactKind::WindowsMsi,
                 ArtifactKind::WindowsZip,
             ] {
                 for artifact in local_artifacts.iter().filter(|item| item.kind == kind) {
@@ -1940,6 +1915,7 @@ fn write_runtime_config_to_directory(plan: &BuildPlan, config_directory: &Path) 
 
 fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     println!("build: {} ({})", plan.display_name, plan.app_key);
+    remove_existing_file(&plan.artifact_path)?;
     ensure_windows_build_dependencies(plan)?;
     let main_resource = compile_windows_resource(plan, WindowsResourceKind::Main)?;
     build_windows_binary(plan, &plan.package, &main_resource)?;
@@ -1961,16 +1937,12 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     }
     let staging = stage_windows_update_payload(plan, updater_path.as_deref())?;
     create_windows_update_zip(plan, &staging)?;
-    let product_source = write_windows_product_source(plan, &staging)?;
-    build_windows_msi(plan, &staging, &product_source)?;
-    sign_windows_file(plan, &plan.msi_path)?;
-    let bundle_source = write_windows_bundle_source(plan, &staging)?;
-    build_windows_setup(plan, &staging, &bundle_source)?;
+    let installer_source = write_windows_installer_source(plan)?;
+    build_windows_setup(plan, &staging, &installer_source)?;
     sign_windows_file(plan, &plan.setup_path)?;
     write_artifact_manifest(plan)?;
     println!("EXE: {}", plan.app_path.display());
     println!("WINDOWS ZIP: {}", plan.app_zip_path.display());
-    println!("MSI: {}", plan.msi_path.display());
     println!("SETUP: {}", plan.setup_path.display());
     println!("ARTIFACT: {}", plan.artifact_path.display());
     Ok(())
@@ -2439,357 +2411,152 @@ fn create_windows_update_zip_at(staging: &Path, destination: &Path) -> CliResult
     Ok(())
 }
 
-struct WindowsInstallerSources {
-    product_wxs: String,
-    bundle_wxs: String,
+struct WindowsInstallerSource {
+    iss: &'static str,
+    arguments: Vec<String>,
     updater_config: Option<BundledUpdaterConfig>,
     file_version: String,
-    msi_version: String,
 }
 
-fn write_windows_product_source(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
-    let sources = windows_installer_sources(plan, staging)?;
-    let source_path = windows_work_dir(plan).join("product.wxs");
-    fs::write(&source_path, sources.product_wxs).map_err(|error| {
+fn write_windows_installer_source(plan: &BuildPlan) -> CliResult<PathBuf> {
+    let work_dir = windows_work_dir(plan);
+    fs::create_dir_all(&work_dir)
+        .map_err(|error| CliError::new(format!("无法创建 {}: {error}", work_dir.display())))?;
+    let source_path = work_dir.join("installer.iss");
+    fs::write(&source_path, WINDOWS_INSTALLER_TEMPLATE).map_err(|error| {
         CliError::new(format!(
-            "无法写入 WiX MSI 源文件 `{}`: {error}",
+            "无法写入 Inno Setup 源文件 {}: {error}",
             source_path.display()
         ))
     })?;
     Ok(source_path)
-}
-
-fn write_windows_bundle_source(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
-    let sources = windows_installer_sources(plan, staging)?;
-    let source_path = windows_work_dir(plan).join("bundle.wxs");
-    fs::write(&source_path, sources.bundle_wxs).map_err(|error| {
-        CliError::new(format!(
-            "无法写入 WiX Bundle 源文件 `{}`: {error}",
-            source_path.display()
-        ))
-    })?;
-    Ok(source_path)
-}
-
-fn build_windows_msi(plan: &BuildPlan, staging: &Path, source: &Path) -> CliResult<()> {
-    run_cargo_wix(
-        plan,
-        staging,
-        source,
-        &plan.msi_path,
-        "cargo-wix Windows MSI",
-    )
 }
 
 fn build_windows_setup(plan: &BuildPlan, staging: &Path, source: &Path) -> CliResult<()> {
-    run_cargo_wix(
-        plan,
-        staging,
-        source,
-        &plan.setup_path,
-        "cargo-wix Windows Setup.exe",
-    )
-}
-
-fn run_cargo_wix(
-    plan: &BuildPlan,
-    staging: &Path,
-    source: &Path,
-    output: &Path,
-    label: &str,
-) -> CliResult<()> {
-    create_parent(output)?;
-    remove_existing_file(output)?;
-    let extension = if output.extension().and_then(|value| value.to_str()) == Some("msi") {
-        "WixToolset.UI.wixext"
+    create_parent(&plan.setup_path)?;
+    remove_existing_file(&plan.setup_path)?;
+    let compiler = compatible_inno_setup_compiler()?;
+    let arguments = windows_inno_compiler_arguments(plan, staging)?;
+    let mut command = Command::new(compiler);
+    command.arg(source).args(arguments);
+    run_status("ISCC Inno Setup", &mut command)?;
+    if plan.setup_path.is_file() {
+        Ok(())
     } else {
-        "WixToolset.BootstrapperApplications.wixext"
-    };
-    ensure_wix_extension(extension, false)?;
-    let cargo_wix_version = plan.release.version.to_string();
-    let mut command = Command::new("cargo");
-    command
-        .current_dir(windows_work_dir(plan))
-        .args(["wix", "--toolset", "modern"])
-        .args(["--no-build", "--nocapture", "--culture", "zh-CN"])
-        .args(["--package", &plan.package, "--target", &plan.target])
-        .arg("--target-bin-dir")
-        .arg(staging)
-        .args([
-            "--install-version",
-            &cargo_wix_version,
-            "--name",
-            &plan.display_name,
-        ])
-        .arg("--include")
-        .arg(source)
-        .arg("--output")
-        .arg(output)
-        .arg(plan.project_root.join("Cargo.toml"));
-    run_status(label, &mut command)
+        Err(CliError::new(format!(
+            "ISCC 未生成预期安装程序：{}",
+            plan.setup_path.display()
+        )))
+    }
 }
 
-fn ensure_wix_extension(package: &str, install: bool) -> CliResult<()> {
-    let version = wix_version()?.to_string();
-    let listed = Command::new("wix")
-        .args(["extension", "list", "--global"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法查询 WiX 扩展: {error}")))?;
-    let expected = format!("{package} {version}");
-    if listed.status.success()
-        && String::from_utf8_lossy(&listed.stdout)
-            .lines()
-            .any(|line| line.trim() == expected)
-    {
-        return Ok(());
-    }
-    if !install {
-        return Err(CliError::new(format!(
-            "缺少 WiX 扩展 `{package}/{version}`；请运行 `wix extension add --global {package}/{version}`，或执行 `nexora doctor --fix`"
-        )));
-    }
-    run_status(
-        &format!("安装 WiX 扩展 {package}/{version}"),
-        Command::new("wix").args([
-            "extension",
-            "add",
-            "--global",
-            &format!("{package}/{version}"),
-        ]),
-    )
-}
-
-fn wix_version() -> CliResult<Version> {
-    let version_output = Command::new("wix")
-        .arg("--version")
-        .output()
-        .map_err(|error| CliError::new(format!("无法读取 WiX 版本: {error}")))?;
-    if !version_output.status.success() {
-        return Err(CliError::new("`wix --version` 执行失败"));
-    }
-    let raw_version = String::from_utf8_lossy(&version_output.stdout);
-    let version = raw_version
-        .trim()
-        .split_once('+')
-        .map_or(raw_version.trim(), |(version, _)| version);
-    let parsed = Version::parse(version)
-        .map_err(|error| CliError::new(format!("WiX 版本 `{version}` 非法: {error}")))?;
-    if parsed.major < 5 {
-        return Err(CliError::new(format!(
-            "WiX `{version}` 过旧；当前 cargo-wix 的安装 EXE 需要 WiX 5 或更高版本，推荐安装 WiX 5.0.2"
-        )));
-    }
-    Ok(parsed)
-}
-
-fn windows_installer_sources(
-    plan: &BuildPlan,
-    staging: &Path,
-) -> CliResult<WindowsInstallerSources> {
-    let options = windows_options(plan)?;
-    if options.install_scope != WindowsInstallScope::User {
-        return Err(CliError::new("WiX 安装器当前仅支持当前用户安装"));
-    }
-    let file_version = windows_file_version(&plan.release.version, plan.release.build_number)?;
-    let msi_version = windows_msi_version(&plan.release.version, plan.release.build_number)?;
-    let display_name = wix_attribute(&plan.display_name);
-    let publisher = wix_attribute(&options.publisher);
-    let app_id = wix_attribute(&plan.app_id);
-    let main_exe = wix_attribute(&safe_file_name(&plan.app_path)?);
-    let (payload_xml, payload_refs) = windows_payload_xml(plan, staging)?;
-    let desktop_default = u8::from(options.desktop_shortcut_default);
-    let start_menu_default = u8::from(options.start_menu_shortcut_default);
-    let launch_default = u8::from(options.launch_after_install_default);
-    let upgrade_code = stable_wix_guid(&format!("{}:msi-upgrade", plan.app_id));
-    let desktop_guid = stable_wix_guid(&format!("{}:desktop-shortcut", plan.app_id));
-    let start_menu_guid = stable_wix_guid(&format!("{}:start-menu-shortcut", plan.app_id));
-    let registry_guid = stable_wix_guid(&format!("{}:install-registry", plan.app_id));
-    let product_wxs = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="{display_name}" Manufacturer="{publisher}" Version="{msi_version}" UpgradeCode="{upgrade_code}" Language="2052" Scope="perUser" InstallerVersion="500" Compressed="yes">
-    <SummaryInformation Codepage="936" />
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="已安装更高版本的 {display_name}，不能执行降级安装。" />
-    <MediaTemplate EmbedCab="yes" />
-
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-    <Property Id="CREATE_DESKTOP_SHORTCUT" Value="{desktop_default}" Secure="yes" />
-    <Property Id="CREATE_START_MENU_SHORTCUT" Value="{start_menu_default}" Secure="yes" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="{launch_default}" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="安装完成后运行 {display_name}" />
-    <Property Id="WINDOWS_BUILD_NUMBER">
-      <RegistrySearch Id="WindowsBuildNumberSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
-    </Property>
-    <Launch Condition="Installed OR WINDOWS_BUILD_NUMBER &gt;= {minimum_build}" Message="{display_name} 需要 Windows 10 1703（build {minimum_build}）或更高版本。" />
-    <InstallExecuteSequence>
-      <DisableRollback After="InstallInitialize" Condition="REMOVE AND NOT UPGRADINGPRODUCTCODE" />
-    </InstallExecuteSequence>
-
-    <StandardDirectory Id="LocalAppDataFolder">
-      <Directory Id="LocalProgramsFolder" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="{app_id}">
-{payload_xml}
-          <Component Id="InstallRegistryComponent" Guid="{registry_guid}">
-            <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" />
-            <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="BuildNumber" Type="string" Value="{build_number}" KeyPath="yes" />
-          </Component>
-        </Directory>
-      </Directory>
-    </StandardDirectory>
-
-    <StandardDirectory Id="DesktopFolder">
-      <Component Id="DesktopShortcutComponent" Guid="{desktop_guid}" Condition="CREATE_DESKTOP_SHORTCUT = 1">
-        <Shortcut Id="DesktopShortcut" Name="{display_name}" Description="启动 {display_name}" Target="[INSTALLFOLDER]{main_exe}" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
-      </Component>
-    </StandardDirectory>
-
-    <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ApplicationProgramsFolder" Name="{display_name}">
-        <Component Id="StartMenuShortcutComponent" Guid="{start_menu_guid}" Condition="CREATE_START_MENU_SHORTCUT = 1">
-          <Shortcut Id="StartMenuShortcut" Name="{display_name}" Description="启动 {display_name}" Target="[INSTALLFOLDER]{main_exe}" WorkingDirectory="INSTALLFOLDER" />
-          <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
-          <RegistryValue Root="HKCU" Key="Software\{app_id}" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
-        </Component>
-      </Directory>
-    </StandardDirectory>
-
-    <Feature Id="MainFeature" Title="{display_name}" Level="1">
-{payload_refs}
-      <ComponentRef Id="InstallRegistryComponent" />
-      <ComponentRef Id="DesktopShortcutComponent" />
-      <ComponentRef Id="StartMenuShortcutComponent" />
-    </Feature>
-
-    <CustomAction Id="LaunchApplication" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]{main_exe}&quot;" Execute="immediate" Return="asyncNoWait" Impersonate="yes" />
-    <UI>
-      <TextStyle Id="WixUI_Font_Normal" FaceName="Microsoft YaHei UI" Size="9" />
-      <TextStyle Id="WixUI_Font_Bigger" FaceName="Microsoft YaHei UI" Size="12" />
-      <TextStyle Id="WixUI_Font_Title" FaceName="Microsoft YaHei UI" Size="9" Bold="yes" />
-      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
-
-      <DialogRef Id="BrowseDlg" />
-      <DialogRef Id="DiskCostDlg" />
-      <DialogRef Id="ErrorDlg" />
-      <DialogRef Id="FatalError" />
-      <DialogRef Id="FilesInUse" />
-      <DialogRef Id="MsiRMFilesInUse" />
-      <DialogRef Id="PrepareDlg" />
-      <DialogRef Id="ProgressDlg" />
-      <DialogRef Id="ResumeDlg" />
-      <DialogRef Id="UserExit" />
-
-      <Dialog Id="NexoraOptionsDlg" Width="370" Height="270" Title="[ProductName] 安装程序">
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="18" Transparent="yes" NoPrefix="yes" Text="{{\WixUI_Font_Title}}选择安装选项" />
-        <Control Id="Description" Type="Text" X="25" Y="45" Width="320" Height="25" Text="请选择要为当前用户创建的快捷入口。" />
-        <Control Id="DesktopShortcutCheckBox" Type="CheckBox" X="25" Y="82" Width="315" Height="18" Property="CREATE_DESKTOP_SHORTCUT" CheckBoxValue="1" Text="创建桌面快捷方式" />
-        <Control Id="StartMenuShortcutCheckBox" Type="CheckBox" X="25" Y="108" Width="315" Height="18" Property="CREATE_START_MENU_SHORTCUT" CheckBoxValue="1" Text="创建开始菜单快捷方式" />
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="上一步" />
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="下一步" />
-        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="取消">
-          <Publish Event="SpawnDialog" Value="CancelDlg" />
-        </Control>
-      </Dialog>
-
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="1" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
-      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
-      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="3" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="NexoraOptionsDlg" Order="4" />
-      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
-      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
-      <Publish Dialog="BrowseDlg" Control="OK" Event="CheckTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
-      <Publish Dialog="NexoraOptionsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
-      <Publish Dialog="NexoraOptionsDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="NexoraOptionsDlg" Order="1" Condition="NOT Installed" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
-      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
-      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
-      <Property Id="ARPNOMODIFY" Value="1" />
-    </UI>
-    <UIRef Id="WixUI_Common" />
-  </Package>
-</Wix>
-"#,
-        minimum_build = options.minimum_windows_build,
-        build_number = plan.release.build_number,
-    );
-    let bundle_upgrade_code = stable_wix_guid(&format!("{}:bundle-upgrade", plan.app_id));
-    let msi_source = wix_attribute(&plan.msi_path.to_string_lossy());
-    let icon_source = wix_attribute(&plan.windows_icon.to_string_lossy());
-    let bundle_wxs = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-  <Bundle Name="{display_name}" Manufacturer="{publisher}" Version="{msi_version}" UpgradeCode="{bundle_upgrade_code}" IconSourceFile="{icon_source}" Compressed="yes">
-    <BootstrapperApplication>
-      <bal:WixInternalUIBootstrapperApplication />
-    </BootstrapperApplication>
-    <Chain>
-      <MsiPackage SourceFile="{msi_source}" Compressed="yes" />
-    </Chain>
-  </Bundle>
-</Wix>
-"#,
-    );
-    Ok(WindowsInstallerSources {
-        product_wxs,
-        bundle_wxs,
+fn windows_installer_source(plan: &BuildPlan, staging: &Path) -> CliResult<WindowsInstallerSource> {
+    Ok(WindowsInstallerSource {
+        iss: WINDOWS_INSTALLER_TEMPLATE,
+        arguments: windows_inno_compiler_arguments(plan, staging)?,
         updater_config: plan
             .updater
             .as_ref()
             .map(|_| bundled_updater_config(plan))
             .transpose()?,
-        file_version,
-        msi_version,
+        file_version: windows_file_version(&plan.release.version, plan.release.build_number)?,
     })
 }
 
-fn windows_payload_xml(plan: &BuildPlan, staging: &Path) -> CliResult<(String, String)> {
-    let relative_files = if staging.is_dir() {
-        collect_relative_files(staging, staging)?
-    } else {
-        let mut files = vec![PathBuf::from(safe_file_name(&plan.app_path)?)];
-        if plan.updater.is_some() {
-            files.push(PathBuf::from(format!("{}-updater.exe", plan.package)));
-            files.push(PathBuf::from("nexora-updater.json"));
-        }
-        files.push(PathBuf::from("config").join(format!("{}.toml", plan.package)));
-        files
-    };
-    let main_exe = safe_file_name(&plan.app_path)?;
-    let mut components = BTreeMap::<PathBuf, Vec<PathBuf>>::new();
-    for relative in relative_files {
-        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-        components
-            .entry(parent.to_path_buf())
-            .or_default()
-            .push(relative);
+fn windows_inno_compiler_arguments(plan: &BuildPlan, staging: &Path) -> CliResult<Vec<String>> {
+    let options = windows_options(plan)?;
+    if plan.app_id.len() > 127 {
+        return Err(CliError::new(
+            "Windows Inno Setup AppId 不能超过 127 个 ASCII 字符",
+        ));
     }
-    let mut component_refs = Vec::new();
-    let payload = render_wix_payload_directory(
-        staging,
-        Path::new(""),
-        &components,
-        &main_exe,
-        5,
-        &mut component_refs,
-    )?;
-    let refs = component_refs
-        .into_iter()
-        .map(|id| format!("      <ComponentRef Id=\"{id}\" />\n"))
-        .collect();
-    Ok((payload, refs))
+    let output_directory = plan
+        .setup_path
+        .parent()
+        .ok_or_else(|| CliError::new("Windows 安装程序输出路径缺少父目录"))?;
+    let output_base_filename = plan
+        .setup_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CliError::new("Windows 安装程序输出文件名不是 UTF-8"))?;
+    validate_file_name(&format!("{output_base_filename}.exe"))?;
+    let (architecture_allowed, architecture_install_mode) = inno_architecture(&plan.target)?;
+    let file_version = windows_file_version(&plan.release.version, plan.release.build_number)?;
+    Ok(vec![
+        inno_string_definition("AppId", &plan.app_id)?,
+        inno_string_definition("AppName", &plan.display_name)?,
+        inno_string_definition("AppPublisher", &options.publisher)?,
+        inno_string_definition("AppVersion", &plan.release.version.to_string())?,
+        inno_string_definition("FileVersion", &file_version)?,
+        inno_number_definition("BuildNumber", plan.release.build_number),
+        inno_path_definition("SourceDir", staging, "Windows payload staging")?,
+        inno_path_definition("OutputDir", output_directory, "Windows 安装程序输出目录")?,
+        inno_string_definition("OutputBaseFilename", output_base_filename)?,
+        inno_string_definition("MainExeName", &safe_file_name(&plan.app_path)?)?,
+        inno_path_definition("IconPath", &plan.windows_icon, "Windows 安装程序图标")?,
+        inno_string_definition("ArchitectureAllowed", architecture_allowed)?,
+        inno_string_definition("ArchitectureInstallMode", architecture_install_mode)?,
+        inno_number_definition(
+            "DesktopShortcutDefault",
+            u64::from(options.desktop_shortcut_default),
+        ),
+        inno_number_definition(
+            "StartMenuShortcutDefault",
+            u64::from(options.start_menu_shortcut_default),
+        ),
+        inno_number_definition(
+            "LaunchAfterInstallDefault",
+            u64::from(options.launch_after_install_default),
+        ),
+        inno_number_definition(
+            "MinimumWindowsBuild",
+            u64::from(options.minimum_windows_build),
+        ),
+    ])
+}
+
+fn inno_architecture(target: &str) -> CliResult<(&'static str, &'static str)> {
+    match target {
+        "x86_64-pc-windows-msvc" => Ok(("x64compatible and not arm64", "x64compatible")),
+        "aarch64-pc-windows-msvc" => Ok(("arm64", "arm64")),
+        _ => Err(CliError::new(format!(
+            "target {target} 不是 Inno Setup 支持的 Windows 架构"
+        ))),
+    }
+}
+
+fn inno_string_definition(name: &str, value: &str) -> CliResult<String> {
+    if value.chars().any(char::is_control) {
+        return Err(CliError::new(format!(
+            "Inno Setup 定义 {name} 不能包含控制字符"
+        )));
+    }
+    let escaped = value.replace('{', "{{").replace('"', "\"\"");
+    Ok(format!("/D{name}=\"{escaped}\""))
+}
+
+fn inno_path_definition(name: &str, path: &Path, label: &str) -> CliResult<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| CliError::new(format!("{label} 不是 UTF-8 路径：{}", path.display())))?;
+    if value.chars().any(|character| {
+        matches!(character, '"' | '<' | '>' | '|' | '?' | '*') || character.is_control()
+    }) {
+        return Err(CliError::new(format!(
+            "{label} 包含 Windows 路径不允许的字符：{}",
+            path.display()
+        )));
+    }
+    inno_string_definition(name, value)
+}
+
+fn inno_number_definition(name: &str, value: u64) -> String {
+    format!("/D{name}={value}")
 }
 
 fn collect_relative_files(root: &Path, directory: &Path) -> CliResult<Vec<PathBuf>> {
     let mut entries = fs::read_dir(directory)
-        .map_err(|error| CliError::new(format!("无法读取 `{}`: {error}", directory.display())))?
+        .map_err(|error| CliError::new(format!("无法读取 {}: {error}", directory.display())))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| CliError::new(format!("无法读取 Windows payload: {error}")))?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -2810,123 +2577,6 @@ fn collect_relative_files(root: &Path, directory: &Path) -> CliResult<Vec<PathBu
     }
     Ok(files)
 }
-
-fn render_wix_payload_directory(
-    staging: &Path,
-    relative: &Path,
-    components: &BTreeMap<PathBuf, Vec<PathBuf>>,
-    main_exe: &str,
-    depth: usize,
-    component_refs: &mut Vec<String>,
-) -> CliResult<String> {
-    let indent = "  ".repeat(depth);
-    let mut xml = String::new();
-    if let Some(files) = components.get(relative) {
-        for file in files {
-            let key = file.to_string_lossy().replace('\\', "/");
-            let component_id = wix_identifier("PayloadComponent", &key);
-            let file_id = if file.file_name().and_then(|name| name.to_str()) == Some(main_exe) {
-                "MainExecutable".to_owned()
-            } else {
-                wix_identifier("PayloadFile", &key)
-            };
-            let source = wix_attribute(&staging.join(file).to_string_lossy());
-            let guid = stable_wix_guid(&format!("payload:{key}"));
-            xml.push_str(&format!(
-                "{indent}<Component Id=\"{component_id}\" Guid=\"{guid}\"><File Id=\"{file_id}\" Source=\"{source}\" KeyPath=\"yes\" /></Component>\n"
-            ));
-            component_refs.push(component_id);
-        }
-    }
-    let child_directories = components
-        .keys()
-        .filter_map(|path| {
-            path.strip_prefix(relative).ok().and_then(|suffix| {
-                let mut parts = suffix.components();
-                let child = parts.next()?;
-                (parts.next().is_none() && !suffix.as_os_str().is_empty())
-                    .then(|| child.as_os_str().to_owned())
-            })
-        })
-        .collect::<BTreeSet<_>>();
-    for child in child_directories {
-        let name = child
-            .to_str()
-            .ok_or_else(|| CliError::new("Windows payload 目录名不是 UTF-8"))?;
-        let child_relative = relative.join(&child);
-        let key = child_relative.to_string_lossy().replace('\\', "/");
-        let directory_id = wix_identifier("PayloadDirectory", &key);
-        xml.push_str(&format!(
-            "{indent}<Directory Id=\"{directory_id}\" Name=\"{}\">\n",
-            wix_attribute(name)
-        ));
-        xml.push_str(&render_wix_payload_directory(
-            staging,
-            &child_relative,
-            components,
-            main_exe,
-            depth + 1,
-            component_refs,
-        )?);
-        xml.push_str(&format!("{indent}</Directory>\n"));
-    }
-    Ok(xml)
-}
-
-fn wix_identifier(prefix: &str, value: &str) -> String {
-    let digest = sha256_hex(value.as_bytes());
-    format!("{prefix}_{}", &digest[..16])
-}
-
-fn stable_wix_guid(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    format!(
-        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    )
-}
-
-fn wix_attribute(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-fn windows_msi_version(version: &Version, build_number: u64) -> CliResult<String> {
-    if version.major > 255 || version.minor > 255 || version.patch > 65_534 {
-        return Err(CliError::new(format!(
-            "版本 `{version}` 超出 MSI ProductVersion 范围（major/minor 最大 255，patch 最大 65534）"
-        )));
-    }
-    let fourth = build_number % 65_535;
-    Ok(format!(
-        "{}.{}.{}.{}",
-        version.major, version.minor, version.patch, fourth
-    ))
-}
-
 fn windows_file_version(version: &Version, build_number: u64) -> CliResult<String> {
     let build = build_number % (u64::from(u16::MAX) + 1);
     Ok(format!(
@@ -2942,14 +2592,6 @@ fn windows_options(plan: &BuildPlan) -> CliResult<&WindowsBuildOptions> {
 }
 
 fn windows_build_options(config: &WindowsConfig) -> CliResult<WindowsBuildOptions> {
-    if config.installer != WindowsInstaller::Wix {
-        return Err(CliError::new("Windows 当前只支持 WiX MSI 与 Setup.exe"));
-    }
-    if config.install_scope != WindowsInstallScope::User {
-        return Err(CliError::new(
-            "Windows 安装器当前仅支持 install_scope = \"user\"；machine 模式需要单独的提权与更新权限设计",
-        ));
-    }
     let publisher = config
         .publisher
         .clone()
@@ -3015,7 +2657,6 @@ fn windows_build_options(config: &WindowsConfig) -> CliResult<WindowsBuildOption
         )));
     }
     Ok(WindowsBuildOptions {
-        install_scope: config.install_scope,
         publisher,
         signing: config.signing,
         signing_thumbprint,
@@ -3459,7 +3100,6 @@ fn write_artifact_manifest(plan: &BuildPlan) -> CliResult<()> {
         ],
         BuildTargetPlatform::Windows => vec![
             (ArtifactKind::WindowsSetupExe, &plan.setup_path),
-            (ArtifactKind::WindowsMsi, &plan.msi_path),
             (ArtifactKind::WindowsZip, &plan.app_zip_path),
         ],
     };
@@ -3566,7 +3206,6 @@ fn load_release_artifacts(
                 ArtifactKind::MacosAppZip => ".app.zip",
                 ArtifactKind::MacosDmg => ".dmg",
                 ArtifactKind::WindowsSetupExe => ".exe",
-                ArtifactKind::WindowsMsi => ".msi",
                 ArtifactKind::WindowsZip => ".windows.zip",
             };
             if !artifact.file_name.ends_with(expected_suffix) {
@@ -4590,7 +4229,6 @@ fn required_artifact_kinds(target: &str) -> CliResult<Vec<ArtifactKind>> {
         BuildTargetPlatform::MacOs => Ok(vec![ArtifactKind::MacosAppZip, ArtifactKind::MacosDmg]),
         BuildTargetPlatform::Windows => Ok(vec![
             ArtifactKind::WindowsSetupExe,
-            ArtifactKind::WindowsMsi,
             ArtifactKind::WindowsZip,
         ]),
     }
@@ -4600,7 +4238,7 @@ fn updater_manifest_artifact_kind(kind: ArtifactKind) -> Option<&'static str> {
     match kind {
         ArtifactKind::MacosAppZip => Some("macos_app_zip"),
         ArtifactKind::WindowsZip => Some("windows_update_zip"),
-        ArtifactKind::MacosDmg | ArtifactKind::WindowsSetupExe | ArtifactKind::WindowsMsi => None,
+        ArtifactKind::MacosDmg | ArtifactKind::WindowsSetupExe => None,
     }
 }
 
@@ -4655,7 +4293,6 @@ fn artifact_kind_name(kind: ArtifactKind) -> &'static str {
         ArtifactKind::MacosAppZip => "macos_app_zip",
         ArtifactKind::MacosDmg => "macos_dmg",
         ArtifactKind::WindowsSetupExe => "windows_setup_exe",
-        ArtifactKind::WindowsMsi => "windows_msi",
         ArtifactKind::WindowsZip => "windows_update_zip",
     }
 }
@@ -4665,7 +4302,6 @@ fn artifact_content_type(kind: ArtifactKind) -> &'static str {
         ArtifactKind::MacosAppZip => "application/zip",
         ArtifactKind::MacosDmg => "application/x-apple-diskimage",
         ArtifactKind::WindowsSetupExe => "application/vnd.microsoft.portable-executable",
-        ArtifactKind::WindowsMsi => "application/x-msi",
         ArtifactKind::WindowsZip => "application/zip",
     }
 }
@@ -4825,7 +4461,7 @@ pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
         ensure_rust_toolchain(fix)?;
         let target = rustc_host_target()?;
         ensure_windows_dependencies(&target, true, fix)?;
-        println!("doctor: Windows SDK、cargo-wix 与 WiX 构建依赖可用");
+        println!("doctor: Windows SDK 与 Inno Setup 构建依赖可用");
     } else {
         return Err(CliError::new("当前宿主暂不支持桌面发布构建"));
     }
@@ -4849,20 +4485,10 @@ fn ensure_macos_dependencies(
 }
 
 fn ensure_windows_dependencies(target: &str, authenticode: bool, fix: bool) -> CliResult<()> {
-    activate_windows_managed_tools()?;
     ensure_rust_toolchain(fix)?;
     ensure_rust_target_installed(target, fix)?;
     ensure_windows_sdk(authenticode, fix)?;
-    ensure_cargo_wix_modern(fix)?;
-    ensure_dotnet_sdk(fix)?;
-    ensure_wix_tool(fix)?;
-    for extension in [
-        "WixToolset.UI.wixext",
-        "WixToolset.BootstrapperApplications.wixext",
-    ] {
-        ensure_wix_extension(extension, fix)?;
-    }
-    Ok(())
+    ensure_inno_setup(fix)
 }
 
 fn ensure_rust_toolchain(fix: bool) -> CliResult<()> {
@@ -4936,54 +4562,6 @@ fn ensure_rust_target_installed(target: &str, fix: bool) -> CliResult<()> {
     } else {
         Err(CliError::new(format!(
             "执行 `{manual}` 后仍未检测到 target；请检查输出并重新执行 `nexora build`"
-        )))
-    }
-}
-
-fn ensure_cargo_wix_modern(fix: bool) -> CliResult<()> {
-    let output = Command::new("cargo")
-        .args(["wix", "--help"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法执行 `cargo wix --help`: {error}")))?;
-    let help = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if output.status.success() && help.contains("--toolset") && help.contains("--migrate") {
-        return Ok(());
-    }
-    let manual = format!(
-        "cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force"
-    );
-    require_repair("支持现代 WiX 的 cargo-wix", &manual, fix)?;
-    run_status(
-        "安装支持现代 WiX 的 cargo-wix",
-        Command::new("cargo").args([
-            "install",
-            "cargo-wix",
-            "--git",
-            "https://github.com/volks73/cargo-wix",
-            "--rev",
-            CARGO_WIX_MODERN_REVISION,
-            "--locked",
-            "--force",
-        ]),
-    )?;
-    let output = Command::new("cargo")
-        .args(["wix", "--help"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法复检 `cargo wix --help`: {error}")))?;
-    let help = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if output.status.success() && help.contains("--toolset") && help.contains("--migrate") {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            "执行 `{manual}` 后 cargo-wix 仍不支持现代 WiX；请检查安装输出并重新执行 `nexora build`"
         )))
     }
 }
@@ -5076,105 +4654,121 @@ fn ensure_xcode_command_line_tools(
     )))
 }
 
-fn ensure_dotnet_sdk(fix: bool) -> CliResult<()> {
-    activate_windows_managed_tools()?;
-    if dotnet_sdk_available()? {
+fn ensure_inno_setup(fix: bool) -> CliResult<()> {
+    if compatible_inno_setup_compiler().is_ok() {
         return Ok(());
     }
-    let root = managed_dotnet_root()?;
-    let manual = format!(
-        "从 {DOTNET_INSTALL_SCRIPT_URL} 运行 dotnet-install.ps1 -Channel {DOTNET_SDK_CHANNEL} -InstallDir \"{}\" -NoPath",
-        root.display()
-    );
-    require_interactive_repair(".NET SDK 6+", &manual, fix)?;
-    let script = managed_tools_root()?.join("downloads/dotnet-install.ps1");
-    download_official_file(DOTNET_INSTALL_SCRIPT_URL, &script, ".NET 安装脚本")?;
-    fs::create_dir_all(&root).map_err(|error| {
-        CliError::new(format!(
-            "无法创建 Nexora .NET SDK 目录 `{}`: {error}",
-            root.display()
-        ))
-    })?;
-    let mut command = Command::new("powershell.exe");
-    command
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script)
-        .args(["-Channel", DOTNET_SDK_CHANNEL, "-InstallDir"])
-        .arg(&root)
-        .arg("-NoPath");
-    run_status("安装 Nexora 用户级 .NET SDK", &mut command)?;
-    activate_windows_managed_tools()?;
-    if dotnet_sdk_available()? {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            ".NET SDK 安装完成后仍不可用；请运行 `{manual}`，然后重新执行 `nexora build`"
-        )))
+    let manual = inno_setup_install_command();
+    require_repair(&format!("Inno Setup {INNO_SETUP_VERSION}"), &manual, fix)?;
+    if !command_exists("winget") {
+        return Err(CliError::new(format!(
+            "系统没有 winget；请安装后运行 {manual}，再重新执行 nexora build"
+        )));
     }
-}
-
-fn dotnet_sdk_available() -> CliResult<bool> {
-    if !command_exists("dotnet") {
-        return Ok(false);
-    }
-    let output = Command::new("dotnet")
-        .arg("--list-sdks")
-        .output()
-        .map_err(|error| CliError::new(format!("无法查询 .NET SDK: {error}")))?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-        line.split_once('.')
-            .and_then(|(major, _)| major.parse::<u64>().ok())
-            .is_some_and(|major| major >= 6)
-    }))
-}
-
-fn ensure_wix_tool(fix: bool) -> CliResult<()> {
-    activate_windows_managed_tools()?;
-    let expected = Version::parse(WIX_VERSION)
-        .map_err(|error| CliError::new(format!("内置 WiX 版本无效: {error}")))?;
-    if command_exists("wix") && wix_version().is_ok_and(|version| version == expected) {
-        return Ok(());
-    }
-    let installed = dotnet_global_tool_installed("wix")?;
-    let verb = if installed { "update" } else { "install" };
-    let manual = format!("dotnet tool {verb} --global wix --version {WIX_VERSION}");
-    require_repair("WiX 5.0.2", &manual, fix)?;
     run_status(
-        "安装 WiX 5.0.2",
-        Command::new("dotnet").args(["tool", verb, "--global", "wix", "--version", WIX_VERSION]),
+        &format!("安装 Inno Setup {INNO_SETUP_VERSION}"),
+        Command::new("winget").args([
+            "install",
+            "--source",
+            "winget",
+            "--exact",
+            "--id",
+            INNO_SETUP_WINGET_PACKAGE,
+            "--version",
+            INNO_SETUP_VERSION,
+            "--scope",
+            "user",
+            "--silent",
+            "--force",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ]),
     )?;
-    activate_windows_managed_tools()?;
-    let actual = wix_version().map_err(|error| {
+    compatible_inno_setup_compiler().map(|_| ()).map_err(|error| {
         CliError::new(format!(
-            "执行 `{manual}` 后仍无法运行 wix；{error}。请确认 `%USERPROFILE%\\.dotnet\\tools` 可访问并重新执行 `nexora build`"
+            "执行 {manual} 后 Inno Setup 仍不可用：{error}；请检查安装输出并重新执行 nexora build"
+        ))
+    })
+}
+
+fn compatible_inno_setup_compiler() -> CliResult<PathBuf> {
+    let candidates = inno_setup_compiler_candidates();
+    if candidates.is_empty() {
+        return Err(CliError::new(format!(
+            "没有找到 Inno Setup {INNO_SETUP_VERSION} 的 ISCC.exe；请运行 {}",
+            inno_setup_install_command()
+        )));
+    }
+    let expected = Version::parse(INNO_SETUP_VERSION)
+        .map_err(|error| CliError::new(format!("内置 Inno Setup 版本无效: {error}")))?;
+    let mut detected = Vec::new();
+    for path in candidates {
+        match inno_setup_compiler_version(&path) {
+            Ok(actual) if actual == expected => return Ok(path),
+            Ok(actual) => detected.push(format!("{} ({actual})", path.display())),
+            Err(error) => detected.push(format!("{} ({error})", path.display())),
+        }
+    }
+    Err(CliError::new(format!(
+        "找到 ISCC.exe，但没有精确版本 {expected}：{}；请运行 {}",
+        detected.join("、"),
+        inno_setup_install_command()
+    )))
+}
+
+fn inno_setup_compiler_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if command_exists("ISCC.exe") {
+        candidates.push(PathBuf::from("ISCC.exe"));
+    }
+    for (variable, suffix) in [
+        ("LOCALAPPDATA", "Programs/Inno Setup 6/ISCC.exe"),
+        ("ProgramFiles(x86)", "Inno Setup 6/ISCC.exe"),
+        ("ProgramFiles", "Inno Setup 6/ISCC.exe"),
+    ] {
+        if let Some(root) = env::var_os(variable) {
+            let candidate = PathBuf::from(root).join(suffix);
+            if candidate.is_file() && !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+fn inno_setup_compiler_version(path: &Path) -> CliResult<Version> {
+    let output = Command::new(path).arg("/?").output().map_err(|error| {
+        CliError::new(format!(
+            "无法读取 Inno Setup 编译器版本 {}: {error}",
+            path.display()
         ))
     })?;
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            "执行 `{manual}` 后检测到 WiX {actual}，期望 {WIX_VERSION}；请检查安装输出并重新执行 `nexora build`"
-        )))
-    }
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_inno_setup_version(&text).ok_or_else(|| {
+        CliError::new(format!(
+            "无法从 ISCC.exe 输出解析 Inno Setup 版本：{}",
+            path.display()
+        ))
+    })
 }
 
-fn dotnet_global_tool_installed(package: &str) -> CliResult<bool> {
-    let output = Command::new("dotnet")
-        .args(["tool", "list", "--global"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法查询 .NET 全局工具: {error}")))?;
-    if !output.status.success() {
-        return Err(CliError::new("`dotnet tool list --global` 执行失败"));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .skip(2)
-        .any(|line| line.split_whitespace().next() == Some(package)))
+fn parse_inno_setup_version(output: &str) -> Option<Version> {
+    output.split_whitespace().find_map(|part| {
+        let candidate =
+            part.trim_matches(|character: char| !character.is_ascii_digit() && character != '.');
+        Version::parse(candidate).ok()
+    })
 }
 
+fn inno_setup_install_command() -> String {
+    format!(
+        "winget install --source winget --exact --id {INNO_SETUP_WINGET_PACKAGE} --version {INNO_SETUP_VERSION} --scope user --silent --force --accept-package-agreements --accept-source-agreements"
+    )
+}
 fn ensure_windows_sdk(authenticode: bool, fix: bool) -> CliResult<()> {
     let mut tools = vec!["rc.exe", "fxc.exe"];
     if authenticode {
@@ -5217,12 +4811,21 @@ fn ensure_windows_sdk(authenticode: bool, fix: bool) -> CliResult<()> {
 }
 
 fn require_repair(label: &str, manual: &str, fix: bool) -> CliResult<()> {
+    require_repair_for_terminal(label, manual, fix, terminal_is_interactive())
+}
+
+fn require_repair_for_terminal(
+    label: &str,
+    manual: &str,
+    fix: bool,
+    interactive: bool,
+) -> CliResult<()> {
     if !fix {
         return Err(CliError::new(format!(
             "缺少或不兼容的 {label}；请运行 `{manual}`，或执行 `nexora doctor --fix`"
         )));
     }
-    if !terminal_is_interactive() {
+    if !interactive {
         return Err(CliError::new(format!(
             "非交互环境缺少或不兼容的 {label}；不会自动安装，请运行 `{manual}` 后重新执行 `nexora build`"
         )));
@@ -5280,10 +4883,6 @@ fn managed_tools_root() -> CliResult<PathBuf> {
         .ok_or_else(|| CliError::new("Windows 缺少 LOCALAPPDATA，无法定位 Nexora 用户级工具目录"))
 }
 
-fn managed_dotnet_root() -> CliResult<PathBuf> {
-    managed_tools_root().map(|path| path.join("dotnet"))
-}
-
 fn activate_rust_tool_path() -> CliResult<()> {
     let cargo_home = env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| {
         let variable = if env::consts::OS == "windows" {
@@ -5309,22 +4908,6 @@ fn activate_homebrew_path() -> CliResult<()> {
     .into_iter()
     .filter(|path| path.is_dir())
     .collect::<Vec<_>>();
-    prepend_process_paths(paths)
-}
-
-fn activate_windows_managed_tools() -> CliResult<()> {
-    if env::consts::OS != "windows" {
-        return Ok(());
-    }
-    let dotnet = managed_dotnet_root()?;
-    let mut paths = Vec::new();
-    if dotnet.is_dir() {
-        paths.push(dotnet.clone());
-        unsafe { env::set_var("DOTNET_ROOT", &dotnet) };
-    }
-    if let Some(profile) = env::var_os("USERPROFILE") {
-        paths.push(PathBuf::from(profile).join(".dotnet/tools"));
-    }
     prepend_process_paths(paths)
 }
 
@@ -5794,7 +5377,6 @@ pub fn inspect_build_plans_for_channel(
                 "app_path": inspect_path(&plan.app_path),
                 "app_zip_path": inspect_path(&plan.app_zip_path),
                 "dmg_path": inspect_path(&plan.dmg_path),
-                "msi_path": inspect_path(&plan.msi_path),
                 "setup_path": inspect_path(&plan.setup_path),
                 "artifact_path": inspect_path(&plan.artifact_path),
                 "target": plan.target,
@@ -6183,20 +5765,46 @@ pub fn inspect_build_dependency_guidance(platform: &str) -> CliResult<serde_json
         "windows" => Ok(serde_json::json!({
             "rustup": "https://rustup.rs / rustup-init.exe -y",
             "rust_target": "rustup target add <target>",
-            "cargo_wix": format!(
-                "cargo install cargo-wix --git https://github.com/volks73/cargo-wix --rev {CARGO_WIX_MODERN_REVISION} --locked --force"
-            ),
-            "dotnet_script": DOTNET_INSTALL_SCRIPT_URL,
-            "dotnet_channel": DOTNET_SDK_CHANNEL,
-            "dotnet_install_root": "%LOCALAPPDATA%\\Nexora\\tools\\dotnet",
-            "wix_install": format!("dotnet tool install --global wix --version {WIX_VERSION}"),
-            "wix_update": format!("dotnet tool update --global wix --version {WIX_VERSION}"),
+            "inno_setup_version": INNO_SETUP_VERSION,
+            "inno_setup_install": inno_setup_install_command(),
             "windows_sdk": format!("winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"),
             "windows_sdk_download": WINDOWS_SDK_DOWNLOAD_URL,
             "non_interactive": "fail_with_commands",
         })),
         other => Err(CliError::new(format!("不支持构建依赖平台 `{other}`"))),
     }
+}
+
+/// 为集成测试评估 ISCC 版本与当前终端修复策略，不执行任何外部命令。
+///
+/// 返回 `ready` 表示输出中的版本与框架固定版本一致；返回 `install` 表示交互式
+/// `--fix` 可以继续执行 winget 安装。
+///
+/// # Errors
+///
+/// 输出缺少版本、版本不匹配且未启用修复，或非交互环境请求自动修复时返回精确安装指引。
+#[allow(dead_code)]
+pub fn inspect_inno_setup_requirement(
+    version_output: Option<&str>,
+    fix: bool,
+    interactive: bool,
+) -> CliResult<String> {
+    let expected = Version::parse(INNO_SETUP_VERSION)
+        .map_err(|error| CliError::new(format!("内置 Inno Setup 版本无效: {error}")))?;
+    if version_output
+        .and_then(parse_inno_setup_version)
+        .is_some_and(|actual| actual == expected)
+    {
+        return Ok("ready".to_owned());
+    }
+    let manual = inno_setup_install_command();
+    require_repair_for_terminal(
+        &format!("Inno Setup {INNO_SETUP_VERSION}"),
+        &manual,
+        fix,
+        interactive,
+    )?;
+    Ok("install".to_owned())
 }
 
 /// 为集成测试返回稳定 app_key 对象布局和公开 URL，不访问对象存储。
@@ -6262,7 +5870,7 @@ pub fn inspect_signing_key(config_path: impl AsRef<Path>, app_key: &str) -> CliR
     read_signing_key(&project, app_key, app, &trusted).map(|(key_id, _)| key_id)
 }
 
-/// 为集成测试返回 Windows 安装器源文件快照，不执行 cargo-wix 或签名命令。
+/// 为集成测试返回 Windows Inno Setup 脚本和 ISCC 参数快照，不执行编译或签名命令。
 ///
 /// # Errors
 ///
@@ -6334,7 +5942,6 @@ pub fn inspect_windows_installer_sources(
         app_path: windows_binary_path(&project.root, &target, &app.package),
         app_zip_path: release_dir.join(format!("{artifact_stem}.windows.zip")),
         dmg_path: release_dir.join(format!("{artifact_stem}.dmg")),
-        msi_path: release_dir.join(format!("{artifact_stem}.msi")),
         setup_path: release_dir.join(format!("{artifact_stem}.exe")),
         artifact_path: release_dir.join("artifact.json"),
         notes_path: project
@@ -6345,13 +5952,12 @@ pub fn inspect_windows_installer_sources(
         notes: None,
     };
     let staging = windows_work_dir(&plan).join("payload");
-    let sources = windows_installer_sources(&plan, &staging)?;
+    let source = windows_installer_source(&plan, &staging)?;
     Ok(serde_json::json!({
-        "file_version": sources.file_version,
-        "msi_version": sources.msi_version,
-        "product_wxs": sources.product_wxs,
-        "bundle_wxs": sources.bundle_wxs,
-        "updater_config": sources.updater_config,
+        "file_version": source.file_version,
+        "iss": source.iss,
+        "arguments": source.arguments,
+        "updater_config": source.updater_config,
     }))
 }
 

@@ -19,23 +19,16 @@
 
 ## Changed
 
-- Windows 首次安装改用 cargo-wix 与 WiX 5，同时生成简体中文 MSI 和 Burn Setup EXE；安装向导
-  提供桌面快捷方式、开始菜单快捷方式和完成后运行选项。Windows x86_64/ARM64 最低版本默认
-  跟随当前锁定 GPUI，为 Windows 10 1703（build 15063）；安装检查读取真实 Windows build，
-  不使用 Windows 10 上为兼容性固定报告为 `603` 的 MSI `VersionNT64`。Windows 应用启动时
-  从主 EXE 同级加载 `nexora-updater.json`，不再误走 macOS `.app` 定位而闪退；未启用
-  updater 的构建可显式返回无配置，但仍拒绝已存在的无效配置。Windows GUI 主程序与 sidecar
-  不再创建命令行窗口；安装目录选择继续保留，用户主动卸载不再因其他安装器遗留的跨卷
-  `Config.Msi` ACL 触发 1926，重大升级仍保留回滚。Windows 更新 ZIP 改由 Rust 直接生成，
-  归档条目固定使用 `/`，不再因 PowerShell 写入反斜杠而被安全解压器拒绝。Windows
-  `signing = "none"` 现在保留 Ed25519、SHA-256、ZIP 安全和 PE 架构校验，同时正确跳过
-  Authenticode；`signing = "authenticode"` 仍严格校验证书链、thumbprint 与 publisher。`none`
-  模式残留 Authenticode 专属字段会在构建阶段立即失败。Windows 应用内更新事务目录改为安装
-  目录同卷的隐藏兄弟目录，退出前预检替换权限；`pending.json` 使用可覆盖旧记录的原子提交，
-  不再因对目录调用文件同步而报拒绝访问。临时 sidecar 不再继承并占用安装目录作为工作目录，
-  避免主程序退出后备份旧目录仍报拒绝访问；新旧应用启动时仍显式使用安装目录。替换失败会恢复
-  并重新打开旧版本，并在下次启动显示持久化的失败结果。Windows publish 现在同时生成架构专用
-  `latest-<arch>.exe` / `latest-<arch>.msi`，单 target 发布还生成 `latest.exe` / `latest.msi`。
+- Windows 首次安装改用固定版本 Inno Setup 6.7.3，只生成简体中文 Setup EXE 与 sidecar
+  更新 ZIP，不再生成 MSI 或 Burn bundle；构建和 doctor 通过 winget 检测/修复 ISCC，并移除
+  cargo-wix、WiX 扩展与 Nexora 管理的 .NET SDK。安装固定为无需提权的当前用户范围，默认位于
+  `%LOCALAPPDATA%\Programs\<app_id>`，保留目录选择、桌面/开始菜单快捷方式与完成后运行选项。
+  Setup EXE 和更新 ZIP 复用同一 staging，发布仍上传两者及校验文件，但签名 `latest.json` 只
+  引用 `windows_update_zip`。Windows 应用启动时从主 EXE 同级加载 `nexora-updater.json`；
+  GUI 主程序与 sidecar 不创建命令行窗口。Windows 更新 ZIP 由 Rust 直接生成并固定使用 `/`
+  条目分隔符。`signing = "none"` 保留 Ed25519、SHA-256、ZIP 安全和 PE 架构校验；
+  `authenticode` 仍校验证书链、thumbprint 与 publisher。应用内更新事务继续使用安装目录同卷的
+  隐藏兄弟目录，退出前预检替换权限；失败时恢复并重启旧版本，并在下次启动显示持久化结果。
 - 默认脚手架与 `examples/updater-windows` 同时声明 `stable`、`beta` 和 `default_channel`；交互式
   `nexora build` 会显示 channel 选择，CI 可显式使用 `--channel` 或 `--all-channels`。
 - `apps.<app>.targets.required` 改为可选；`nexora build` 默认使用 `rustc -vV` 的 host target，

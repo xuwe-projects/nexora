@@ -129,8 +129,6 @@ notarize = false
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "Example Publisher"
 signing = "none"
 start_menu_shortcut_default = true
@@ -143,7 +141,7 @@ icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-ico
 
 路径必须是 workspace 内的相对路径。`targets.required` 可省略，构建会使用 `rustc -vV` 返回的
 本机 target；需要显式覆盖时使用 `nexora build --target <triple>`。当前生产打包链路实现 macOS
-`.app`/DMG，以及 Windows x86_64/ARM64 的中文 WiX MSI、Burn Setup EXE 和更新 ZIP。
+`.app`/DMG，以及 Windows x86_64/ARM64 的简体中文 Inno Setup EXE 和更新 ZIP。
 
 Windows 的 `publisher` 在所有签名模式下都是安装器元数据。`signing = "none"` 仍保留
 Ed25519 manifest、artifact SHA-256、ZIP 安全和 PE 架构校验，但不得同时配置

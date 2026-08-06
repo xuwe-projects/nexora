@@ -8,7 +8,7 @@ use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
     inspect_build_plans, inspect_build_plans_for_channel, inspect_channel_artifact_keys,
     inspect_create_windows_update_zip, inspect_credential_selection,
-    inspect_effective_publish_target, inspect_freeze_release_notes,
+    inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_setup_requirement,
     inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
     inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
     inspect_signing_key, inspect_windows_binary_link_args, inspect_windows_installer_sources,
@@ -406,7 +406,6 @@ fn write_windows_artifacts(
     fixture: &Fixture,
     display_name: &str,
     include_setup: bool,
-    include_msi: bool,
     include_zip: bool,
 ) {
     use sha2::{Digest as _, Sha256};
@@ -421,12 +420,6 @@ fn write_windows_artifacts(
             "windows_setup_exe",
             format!("{display_name}-x86_64.exe"),
             b"setup".as_slice(),
-        ),
-        (
-            include_msi,
-            "windows_msi",
-            format!("{display_name}-x86_64.msi"),
-            b"msi".as_slice(),
         ),
         (
             include_zip,
@@ -491,8 +484,6 @@ fn with_windows_target(config: String) -> String {
         .replace(
             "icon = \"assets/logos/one/logo-icon.ico\"",
             r#"icon = "assets/logos/one/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "Nexora Test Publisher"
 signing = "authenticode"
 signing_thumbprint = "00112233445566778899AABBCCDDEEFF00112233"
@@ -764,7 +755,7 @@ fn runtime_config_change_invalidates_existing_receipt() {
 }
 
 #[test]
-fn windows_build_plan_uses_branded_exe_msi_and_update_zip() {
+fn windows_build_plan_uses_branded_setup_exe_and_update_zip() {
     let fixture = Fixture::new(
         "windows-plan",
         &with_windows_target(app_config("one", "package-one", "Application One")),
@@ -785,12 +776,7 @@ fn windows_build_plan_uses_branded_exe_msi_and_update_zip() {
             .unwrap()
             .ends_with("Application One-x86_64.exe")
     );
-    assert!(
-        plan["msi_path"]
-            .as_str()
-            .unwrap()
-            .ends_with("Application One-x86_64.msi")
-    );
+    assert!(plan.get("msi_path").is_none());
 }
 
 #[test]
@@ -827,10 +813,10 @@ fn windows_arm64_build_plan_uses_aarch64_artifact_suffix() {
 
     assert_eq!(plans[0]["target"], "aarch64-pc-windows-msvc");
     assert!(
-        plans[0]["msi_path"]
+        plans[0]["setup_path"]
             .as_str()
             .unwrap()
-            .ends_with("Application One-aarch64.msi")
+            .ends_with("Application One-aarch64.exe")
     );
 }
 
@@ -847,36 +833,37 @@ fn windows_binary_uses_gui_subsystem_with_rust_main_entrypoint() {
 }
 
 #[test]
-fn windows_installer_sources_define_chinese_wix_flow() {
+fn windows_installer_source_defines_chinese_inno_flow() {
     let fixture = Fixture::new(
-        "windows-installer-source",
+        "windows installer 中文",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
-    let product = sources["product_wxs"].as_str().unwrap();
-    let bundle = sources["bundle_wxs"].as_str().unwrap();
+    let script = sources["iss"].as_str().unwrap();
+    let arguments = sources["arguments"].as_array().unwrap();
     let updater_config = &sources["updater_config"];
 
     assert_eq!(sources["file_version"], "1.2.3.7");
-    assert_eq!(sources["msi_version"], "1.2.3.7");
-    assert!(product.contains("Language=\"2052\""));
-    assert!(product.contains("Scope=\"perUser\""));
-    assert!(product.contains("WIXUI_INSTALLDIR"));
-    assert!(product.contains("InstallDirDlg"));
-    assert!(product.contains("BrowseDlg"));
-    assert!(product.contains(
-        "<DisableRollback After=\"InstallInitialize\" Condition=\"REMOVE AND NOT UPGRADINGPRODUCTCODE\" />"
-    ));
-    assert!(product.contains("WINDOWS_BUILD_NUMBER &gt;= 15063"));
-    assert!(!product.contains("VersionNT64"));
-    assert!(product.contains("创建桌面快捷方式"));
-    assert!(product.contains("创建开始菜单快捷方式"));
-    assert!(product.contains("安装完成后运行 Application One"));
-    assert!(product.contains("package-one-updater.exe"));
-    assert!(product.contains("nexora-updater.json"));
-    assert!(!product.contains(".windows.zip"));
-    assert!(bundle.contains("WixInternalUIBootstrapperApplication"));
-    assert!(bundle.contains("<MsiPackage"));
+    assert!(script.contains("WizardStyle=modern"));
+    assert!(script.contains("PrivilegesRequired=lowest"));
+    assert!(script.contains("DefaultDirName={localappdata}\\Programs\\{#AppId}"));
+    assert!(script.contains("DisableDirPage=no"));
+    assert!(script.contains("ChineseSimplified.isl"));
+    assert!(script.contains("CloseApplications=force"));
+    assert!(script.contains("Source: \"*\""));
+    assert!(script.contains("recursesubdirs createallsubdirs"));
+    assert!(script.contains("skipifsilent"));
+    assert!(arguments.contains(&serde_json::json!("/DAppId=\"com.example.one\"")));
+    assert!(arguments.contains(&serde_json::json!("/DAppName=\"Application One\"")));
+    assert!(arguments.contains(&serde_json::json!(
+        "/DArchitectureAllowed=\"x64compatible and not arm64\""
+    )));
+    assert!(arguments.contains(&serde_json::json!("/DMinimumWindowsBuild=15063")));
+    assert!(arguments.iter().any(|argument| {
+        argument.as_str().is_some_and(|argument| {
+            argument.starts_with("/DSourceDir=\"") && argument.contains("windows installer 中文")
+        })
+    }));
     assert_eq!(
         updater_config["expected_windows_signer_thumbprint"],
         "00112233445566778899AABBCCDDEEFF00112233"
@@ -885,6 +872,75 @@ fn windows_installer_sources_define_chinese_wix_flow() {
         updater_config["expected_windows_publisher"],
         "Nexora Test Publisher"
     );
+}
+
+#[test]
+fn inno_definitions_escape_quotes_and_select_arm64_architecture() {
+    let config = with_windows_target(app_config("one", "package-one", "Application One"))
+        .replace(
+            "publisher = \"Nexora Test Publisher\"",
+            r#"publisher = "Nexora \"Quoted\" 发布者""#,
+        )
+        .replace(
+            "required = [\"x86_64-pc-windows-msvc\"]",
+            "required = [\"aarch64-pc-windows-msvc\"]",
+        );
+    let fixture = Fixture::new("inno quoted 中文", &config);
+    let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
+    let arguments = sources["arguments"].as_array().unwrap();
+
+    assert!(arguments.contains(&serde_json::json!(
+        "/DAppPublisher=\"Nexora \"\"Quoted\"\" 发布者\""
+    )));
+    assert!(arguments.contains(&serde_json::json!("/DArchitectureAllowed=\"arm64\"")));
+    assert!(arguments.contains(&serde_json::json!("/DArchitectureInstallMode=\"arm64\"")));
+}
+
+#[test]
+fn inno_definitions_reject_windows_invalid_path_characters() {
+    let fixture = Fixture::new(
+        "inno-invalid?path",
+        &with_windows_target(app_config("one", "package-one", "Application One")),
+    );
+    let error = inspect_windows_installer_sources(fixture.config(), "one")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("Windows 路径不允许的字符"));
+}
+
+#[test]
+fn inno_definitions_reject_app_ids_longer_than_inno_supports() {
+    let app_id = "a".repeat(128);
+    let config = with_windows_target(app_config("one", "package-one", "Application One")).replace(
+        "app_id = \"com.example.one\"",
+        &format!("app_id = \"{app_id}\""),
+    );
+    let fixture = Fixture::new("inno-app-id-limit", &config);
+    let error = inspect_windows_installer_sources(fixture.config(), "one")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("AppId"));
+    assert!(error.contains("127"));
+}
+
+#[test]
+fn removed_windows_installer_and_scope_fields_are_rejected() {
+    for field in ["installer = \"wix\"", "install_scope = \"user\""] {
+        let config = with_windows_target(app_config("one", "package-one", "Application One"))
+            .replace(
+                "publisher = \"Nexora Test Publisher\"",
+                &format!("{field}\npublisher = \"Nexora Test Publisher\""),
+            );
+        let fixture = Fixture::new("removed-windows-field", &config);
+        let error = inspect_windows_installer_sources(fixture.config(), "one")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(field.split_once(' ').unwrap().0));
+        assert!(error.contains("unknown field") || error.contains("未知字段"));
+    }
 }
 
 #[test]
@@ -1015,12 +1071,11 @@ fn windows_file_version_accepts_large_release_build_number() {
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
 
     assert_eq!(sources["file_version"], "1.2.3.54236");
-    assert_eq!(sources["msi_version"], "1.2.3.36140");
     assert!(
-        sources["product_wxs"]
-            .as_str()
+        sources["arguments"]
+            .as_array()
             .unwrap()
-            .contains("Version=\"1.2.3.36140\"")
+            .contains(&serde_json::json!("/DFileVersion=\"1.2.3.54236\""))
     );
 }
 
@@ -1485,18 +1540,18 @@ fn publish_artifact_validation_requires_zip_and_dmg() {
 }
 
 #[test]
-fn publish_artifact_validation_accepts_windows_msi_setup_and_update_zip() {
+fn publish_artifact_validation_accepts_windows_setup_and_update_zip() {
     let fixture = Fixture::new(
         "windows-artifact-validation",
         &with_windows_target(app_config("one", "package-one", "Application One")),
     );
-    write_windows_artifacts(&fixture, "Application One", true, true, true);
+    write_windows_artifacts(&fixture, "Application One", true, true);
     assert_eq!(
         inspect_release_artifacts(fixture.config(), "one").unwrap(),
-        vec!["windows_setup_exe", "windows_msi", "windows_update_zip"]
+        vec!["windows_setup_exe", "windows_update_zip"]
     );
 
-    write_windows_artifacts(&fixture, "Application One", true, true, false);
+    write_windows_artifacts(&fixture, "Application One", true, false);
     assert!(
         inspect_release_artifacts(fixture.config(), "one")
             .unwrap_err()
@@ -1571,15 +1626,13 @@ fn channel_root_uses_branded_windows_names_without_latest_aliases() {
         "windows-latest-aliases",
         &with_windows_target(app_config("one", "package-one", "应用一")),
     );
-    write_windows_artifacts(&fixture, "应用一", true, true, true);
+    write_windows_artifacts(&fixture, "应用一", true, true);
 
     assert_eq!(
         inspect_channel_artifact_keys(fixture.config(), "one").unwrap(),
         vec![
             "e2e/one/stable/应用一-x86_64.exe",
             "e2e/one/stable/应用一-x86_64.exe.sha256",
-            "e2e/one/stable/应用一-x86_64.msi",
-            "e2e/one/stable/应用一-x86_64.msi.sha256",
             "e2e/one/stable/应用一-x86_64.windows.zip",
             "e2e/one/stable/应用一-x86_64.windows.zip.sha256",
         ]
@@ -1799,24 +1852,14 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
     assert_eq!(macos["non_interactive"], "fail_with_commands");
 
     let windows = inspect_build_dependency_guidance("windows").unwrap();
-    assert_eq!(
-        windows["dotnet_script"],
-        "https://dot.net/v1/dotnet-install.ps1"
-    );
-    assert_eq!(windows["dotnet_channel"], "10.0");
-    assert_eq!(
-        windows["dotnet_install_root"],
-        "%LOCALAPPDATA%\\Nexora\\tools\\dotnet"
-    );
-    assert_eq!(
-        windows["wix_install"],
-        "dotnet tool install --global wix --version 5.0.2"
-    );
+    assert_eq!(windows["inno_setup_version"], "6.7.3");
     assert!(
-        windows["cargo_wix"]
+        windows["inno_setup_install"]
             .as_str()
             .unwrap()
-            .contains("--rev 9a8ed9486637e1fb839f209730eda6c95fd12d88")
+            .contains(
+                "winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 --scope user --silent --force"
+            )
     );
     assert!(
         windows["windows_sdk"]
@@ -1825,6 +1868,40 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
             .contains("Microsoft.WindowsSDK.10.0.26100")
     );
     assert_eq!(windows["non_interactive"], "fail_with_commands");
+}
+
+#[test]
+fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
+    assert_eq!(
+        inspect_inno_setup_requirement(
+            Some("Inno Setup 6 Command-Line Compiler version 6.7.3"),
+            false,
+            false,
+        )
+        .unwrap(),
+        "ready"
+    );
+
+    let mismatch = inspect_inno_setup_requirement(
+        Some("Inno Setup 6 Command-Line Compiler version 6.7.2"),
+        false,
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(mismatch.contains("6.7.3"));
+    assert!(mismatch.contains("winget install"));
+
+    let missing = inspect_inno_setup_requirement(None, true, false)
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("非交互环境"));
+    assert!(missing.contains("--version 6.7.3"));
+
+    assert_eq!(
+        inspect_inno_setup_requirement(None, true, true).unwrap(),
+        "install"
+    );
 }
 
 #[test]

@@ -49,8 +49,6 @@ notarize = false
 
 [apps.{{ project_name }}.platforms.windows]
 icon = "assets/logos/{{ project_name }}/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "{{ project_name }}"
 desktop_shortcut_default = false
 start_menu_shortcut_default = true

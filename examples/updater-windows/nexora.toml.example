@@ -51,8 +51,6 @@ notarize = false
 
 [apps.updater-windows.platforms.windows]
 icon = "assets/logos/updater-windows/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "Nexora Examples"
 signing = "authenticode"
 signing_thumbprint = "0123456789ABCDEF0123456789ABCDEF01234567"

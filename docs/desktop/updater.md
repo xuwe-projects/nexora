@@ -1,11 +1,11 @@
 # 桌面自动更新
 
 Nexora 使用 Ed25519 签名的 `latest.json`、平台更新 ZIP 和独立 sidecar 完成应用内更新；macOS
-DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更新签名私钥只存在于开发者
+DMG 与 Windows Inno Setup EXE 只用于首次安装。S3/RustFS 凭据与更新签名私钥只存在于开发者
 发布环境，不能写入客户端、bundle、日志或仓库。
 
-当前生产链路实现 macOS 与 Windows x86_64/ARM64。Windows 首次构建同时生成简体中文 WiX MSI
-和 Burn Setup EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随当前锁定 GPUI，
+当前生产链路实现 macOS 与 Windows x86_64/ARM64。Windows 首次构建生成简体中文 Inno Setup
+EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随当前锁定 GPUI，
 即 Windows 10 1703（build 15063）。Linux 发布资源沿用同一元数据契约，但本页不承诺 Linux
 自动安装。
 
@@ -16,23 +16,21 @@ DMG、Windows MSI 与 Setup EXE 只用于首次安装。S3/RustFS 凭据与更�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.29.0 cli --locked --force --bin nexora
+  --tag v0.30.0 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```
 
 macOS 会准备 Rust target、`cargo-bundle`、Homebrew 与 `create-dmg`；缺少 Xcode Command Line
 Tools 时启动 `xcode-select --install`，完成系统安装后重新运行同一条 build。Windows 会准备
-Rust target、固定 revision 的 `cargo-wix`、WiX 5.0.2 与扩展。完全没有 .NET 时，Nexora 通过
-微软官方 `dotnet-install.ps1` 把 .NET 10 LTS SDK 安装到
-`%LOCALAPPDATA%\Nexora\tools\dotnet`，只修改当前构建进程环境。
+Rust target、固定版本的 Inno Setup 6.7.3 与 Windows SDK。交互式修复通过 winget 安装官方
+`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。
 
 需要手动排查时，对应官方命令是：
 
 ```powershell
-cargo install cargo-wix --git https://github.com/volks73/cargo-wix `
-  --rev 9a8ed9486637e1fb839f209730eda6c95fd12d88 --locked --force
-dotnet tool install --global wix --version 5.0.2
+winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 `
+  --scope user --silent --force --accept-package-agreements --accept-source-agreements
 winget install --source winget --exact --id Microsoft.WindowsSDK.10.0.26100
 ```
 
@@ -163,8 +161,6 @@ expected_team_id = "ABCDE12345"
 
 [apps.desktop.platforms.windows]
 icon = "assets/logos/desktop/logo-icon.ico"
-installer = "wix"
-install_scope = "user"
 publisher = "Example Publisher"
 signing = "none"
 desktop_shortcut_default = false
@@ -302,9 +298,7 @@ notes = "docs/releases/current/zh-CN.md"
 | `platforms.macos.signing` | 是 | `none`、`ad_hoc` 或 `developer_id` | 无 | 否 | 未知值失败；生产应为 `developer_id` |
 | `platforms.macos.notarize` | 是 | 是否提交 Apple notarization | 无 | 否 | `true` 且非 Developer ID 时失败 |
 | `platforms.macos.expected_team_id` | 否 | sidecar 安装前要求的新 bundle Team ID | 未配置 | 否 | 不匹配时拒绝安装；ad-hoc 本地验证应省略 |
-| `platforms.windows.icon` | 是 | 主 EXE、MSI 与 Setup EXE 使用的 ICO | 无 | 否 | 文件缺失或 ICO 无效时失败 |
-| `platforms.windows.installer` | 否 | Windows 安装器实现；固定为 `wix` | `wix` | 否 | 其他值失败 |
-| `platforms.windows.install_scope` | 否 | 当前只支持无需提权的 `user` | `user` | 否 | `machine` 会被明确拒绝 |
+| `platforms.windows.icon` | 是 | 主 EXE 与 Inno Setup EXE 使用的 ICO | 无 | 否 | 文件缺失或 ICO 无效时失败 |
 | `platforms.windows.publisher` | Windows 是 | 安装器发布者和版本资源公司名 | 无 | 否 | Windows 构建缺失时失败 |
 | `platforms.windows.signing` | 否 | `none` 跳过 Authenticode；`authenticode` 签署并验证 Windows 文件身份 | `none` | 否 | 未知值失败；公开生产发布建议使用 `authenticode` |
 | `platforms.windows.signing_thumbprint` | Authenticode 时是 | 当前用户 `My` 证书存储中的 40 位 SHA-1 证书指纹；也可由 `WINDOWS_SIGN_CERTIFICATE_SHA1` 注入 | 未配置 | 否 | `none` 模式配置该字段，或格式无效时构建失败 |
@@ -340,7 +334,7 @@ nexora updater keygen --app desktop \
 
 四类凭据不可混淆：RustFS/S3 AK/SK 只授权上传对象；Ed25519 私钥签署更新清单，公钥内置于
 客户端验证来源；Apple Developer ID 证书签署 macOS 代码身份并配合 notarization/Gatekeeper；
-Windows Authenticode 证书签署 EXE、MSI 与 Setup EXE。它们互不替代；发布私钥和证书私钥都
+Windows Authenticode 证书签署主 EXE、updater EXE 与 Setup EXE。它们互不替代；发布私钥和证书私钥都
 不能进入客户端、仓库或日志。
 
 ## 签名与验证链路
@@ -382,7 +376,7 @@ expected_publisher = "Example Publisher"
 timestamp_url = "https://timestamp.example.com"
 ```
 
-构建会签署并验证主程序、updater、MSI 和 Setup EXE；应用内更新会拒绝未签名、证书链无效、
+构建会签署并验证主程序、updater 和 Setup EXE；应用内更新会拒绝未签名、证书链无效、
 thumbprint 不匹配或 publisher 不匹配的主程序和 updater。自签名证书可用于受控测试，但外部
 Windows 设备默认不会信任它。
 
@@ -461,9 +455,9 @@ version/build number、两项来源、创建 Unix 秒和本次 targets；同一�
 损坏或不支持的收据会在构建前失败，不从目录名猜测身份。
 
 `nexora build` 只构建本地平台产物、sidecar、bundle 配置、每个发布产物的 `.sha256` 和
-`artifact.json`，不访问对象存储。Windows 产物为 branded `.exe`、MSI 与更新 ZIP；旁车内容使用小写 SHA-256、两个空格、完整 branded 文件名
-和 LF 换行。版本、构建号、图标、updater 配置和 sidecar 全部写入后才签名；ZIP 与 DMG 都来自
-同一个已完成资源写入并签名的 `.app`。
+`artifact.json`，不访问对象存储。Windows 产物为 branded Inno Setup EXE 与更新 ZIP；两者来自
+同一个 staging，旁车内容使用小写 SHA-256、两个空格、完整 branded 文件名和 LF 换行。版本、
+构建号、图标、updater 配置和 sidecar 全部写入后才签名。
 
 `nexora publish`（包括 yank）只从当前 release receipt 读取 version/build number，不重新计算
 本机时间，也不会隐式 build。它校验收据与 app、package、channel、Cargo version 和当前配置
@@ -489,7 +483,7 @@ publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则�
 覆盖的 channel 根文件。
 
 `latest.json` 是签名更新清单，继续保留且最后更新。新的发布不再生成 `latest.dmg`、
-`latest-<arch>.dmg`、`latest.exe`、`latest.msi`、`latest.zip` 等安装包/负载 alias。对象布局为：
+`latest-<arch>.dmg`、`latest.exe`、`latest.zip` 等安装包/负载 alias。对象布局为：
 
 ```text
 [<object_prefix>/]<app_key>/<channel>/latest.json
