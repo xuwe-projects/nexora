@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 const SQLX_CONFIG: &str = include_str!("../../../sqlx.toml");
 const IDENTITY_UP: &str =
-    include_str!("../migrations/20260806042552_account_identity_baseline.up.sql");
+    include_str!("../migrations/20260807034412_account_identity_baseline.up.sql");
 const AUTHORIZATION_UP: &str =
-    include_str!("../migrations/20260806042557_account_authorization_baseline.up.sql");
+    include_str!("../migrations/20260807034430_account_authorization_baseline.up.sql");
 const PROTECTION_UP: &str =
-    include_str!("../migrations/20260806042602_account_protection_baseline.up.sql");
+    include_str!("../migrations/20260807034446_account_protection_baseline.up.sql");
 const CATALOG_UP: &str =
-    include_str!("../migrations/20260806042607_account_catalog_baseline.up.sql");
+    include_str!("../migrations/20260807034500_account_catalog_baseline.up.sql");
 
 #[test]
 fn baseline_contains_four_reversible_timestamp_migrations() {
@@ -25,10 +25,10 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
 
     assert_eq!(migration_names.len(), 8);
     for version in [
-        "20260806042552_account_identity_baseline",
-        "20260806042557_account_authorization_baseline",
-        "20260806042602_account_protection_baseline",
-        "20260806042607_account_catalog_baseline",
+        "20260807034412_account_identity_baseline",
+        "20260807034430_account_authorization_baseline",
+        "20260807034446_account_protection_baseline",
+        "20260807034500_account_catalog_baseline",
     ] {
         assert!(migration_names.contains(&format!("{version}.up.sql")));
         assert!(migration_names.contains(&format!("{version}.down.sql")));
@@ -46,18 +46,13 @@ fn sqlx_configuration_uses_framework_history_and_reversible_timestamps() {
 
 #[test]
 fn baseline_describes_only_the_current_account_structure() {
-    assert!(
-        IDENTITY_UP.contains("identity_id TEXT CONSTRAINT users_identity_id_not_null NOT NULL")
-    );
+    assert!(IDENTITY_UP.contains("identity_id TEXT NOT NULL"));
     assert!(IDENTITY_UP.contains("username TEXT"));
     assert!(!IDENTITY_UP.contains("avatar_url"));
     assert!(!IDENTITY_UP.contains("subject TEXT"));
 
-    assert!(AUTHORIZATION_UP.contains("id BIGSERIAL CONSTRAINT roles_id_not_null NOT NULL"));
-    assert!(
-        AUTHORIZATION_UP
-            .contains("owner TEXT CONSTRAINT roles_owner_not_null NOT NULL DEFAULT 'IMES'")
-    );
+    assert!(AUTHORIZATION_UP.contains("id BIGSERIAL NOT NULL"));
+    assert!(AUTHORIZATION_UP.contains("owner TEXT NOT NULL DEFAULT 'IMES'"));
     assert!(PROTECTION_UP.contains("CREATE FUNCTION account.protect_system_initialization()"));
     assert!(CATALOG_UP.contains("'users:provision'"));
     assert!(!CATALOG_UP.contains("users:avatar.write"));
@@ -66,4 +61,23 @@ fn baseline_describes_only_the_current_account_structure() {
         assert!(!sql.contains("_sqlx_migrations"));
         assert!(!sql.contains("ALTER TABLE"));
     }
+}
+
+#[test]
+fn baseline_uses_postgresql_17_compatible_not_null_columns() {
+    for sql in [IDENTITY_UP, AUTHORIZATION_UP, PROTECTION_UP, CATALOG_UP] {
+        for line in sql.lines() {
+            assert!(
+                !(line.contains("CONSTRAINT") && line.contains("NOT NULL")),
+                "PostgreSQL 17 不会把命名 NOT NULL 列约束注册为可注释的 pg_constraint: {line}"
+            );
+            assert!(
+                !(line.contains("COMMENT ON CONSTRAINT") && line.contains("_not_null")),
+                "PostgreSQL 17 无法注释命名 NOT NULL 列约束: {line}"
+            );
+        }
+    }
+
+    assert!(IDENTITY_UP.contains("id VARCHAR(8) NOT NULL"));
+    assert!(AUTHORIZATION_UP.contains("id BIGSERIAL NOT NULL"));
 }

@@ -29,6 +29,11 @@ sqlx migrate add <module>_<description>
 或重命名；历史错误通过新增迁移修复。只有用户明确授权无需兼容旧数据库的受控基线重构时，
 才允许重建迁移历史。
 
+当前 v0.31.0 基线以 PostgreSQL 17 为最低受支持数据库版本。列级 `NOT NULL` 直接写在列定义
+中，不为其声明 PostgreSQL 18 才能作为独立 `pg_constraint` 注释的约束名；列职责继续通过
+`COMMENT ON COLUMN` 记录。v0.29.0 与 v0.30.x 的框架迁移历史不能原地升级到该基线，必须先
+保护需要保留的数据，再清库重建，并且不得恢复旧 DDL、旧 migration history 或旧 checksum。
+
 ## 宿主启动顺序
 
 ```rust

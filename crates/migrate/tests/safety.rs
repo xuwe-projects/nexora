@@ -1,19 +1,19 @@
 const IDENTITY_UP: &str =
-    include_str!("../migrations/20260806042552_account_identity_baseline.up.sql");
+    include_str!("../migrations/20260807034412_account_identity_baseline.up.sql");
 const IDENTITY_DOWN: &str =
-    include_str!("../migrations/20260806042552_account_identity_baseline.down.sql");
+    include_str!("../migrations/20260807034412_account_identity_baseline.down.sql");
 const AUTHORIZATION_UP: &str =
-    include_str!("../migrations/20260806042557_account_authorization_baseline.up.sql");
+    include_str!("../migrations/20260807034430_account_authorization_baseline.up.sql");
 const AUTHORIZATION_DOWN: &str =
-    include_str!("../migrations/20260806042557_account_authorization_baseline.down.sql");
+    include_str!("../migrations/20260807034430_account_authorization_baseline.down.sql");
 const PROTECTION_UP: &str =
-    include_str!("../migrations/20260806042602_account_protection_baseline.up.sql");
+    include_str!("../migrations/20260807034446_account_protection_baseline.up.sql");
 const PROTECTION_DOWN: &str =
-    include_str!("../migrations/20260806042602_account_protection_baseline.down.sql");
+    include_str!("../migrations/20260807034446_account_protection_baseline.down.sql");
 const CATALOG_UP: &str =
-    include_str!("../migrations/20260806042607_account_catalog_baseline.up.sql");
+    include_str!("../migrations/20260807034500_account_catalog_baseline.up.sql");
 const CATALOG_DOWN: &str =
-    include_str!("../migrations/20260806042607_account_catalog_baseline.down.sql");
+    include_str!("../migrations/20260807034500_account_catalog_baseline.down.sql");
 
 #[test]
 fn identity_baseline_owns_schema_users_and_initialization() {

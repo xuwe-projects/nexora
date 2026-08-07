@@ -6,12 +6,12 @@ use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
     inspect_build_plans, inspect_build_plans_for_channel, inspect_channel_artifact_keys,
     inspect_create_windows_update_zip, inspect_credential_selection,
-    inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_setup_requirement,
-    inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
-    inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
-    inspect_signing_key, inspect_windows_binary_link_args, inspect_windows_installer_sources,
-    inspect_windows_resource_scripts, validate_display_name, write_bundle_icon, write_bundle_info,
-    write_sha256_sidecar,
+    inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_path_definition,
+    inspect_inno_setup_requirement, inspect_prepare_release_receipt, inspect_publish_object_layout,
+    inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
+    inspect_release_selection, inspect_signing_key, inspect_windows_binary_link_args,
+    inspect_windows_installer_sources, inspect_windows_resource_scripts, validate_display_name,
+    write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
 #[cfg(windows)]
 use commands::{
@@ -896,11 +896,7 @@ fn inno_definitions_escape_quotes_and_select_arm64_architecture() {
 
 #[test]
 fn inno_definitions_reject_windows_invalid_path_characters() {
-    let fixture = Fixture::new(
-        "inno-invalid?path",
-        &with_windows_target(app_config("one", "package-one", "Application One")),
-    );
-    let error = inspect_windows_installer_sources(fixture.config(), "one")
+    let error = inspect_inno_path_definition(Path::new("inno-invalid?path"))
         .unwrap_err()
         .to_string();
 

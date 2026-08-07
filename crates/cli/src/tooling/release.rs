@@ -6037,6 +6037,16 @@ pub fn inspect_compile_windows_installer(
     Ok(plan.setup_path)
 }
 
+/// 校验测试传入的 Windows 路径，并返回对应的 Inno Setup 定义。
+///
+/// # Errors
+///
+/// 路径不是 UTF-8，或包含 Windows 路径不允许的字符时返回错误。
+#[allow(dead_code)]
+pub fn inspect_inno_path_definition(path: impl AsRef<Path>) -> CliResult<String> {
+    inno_path_definition("TestPath", path.as_ref(), "Windows 测试路径")
+}
+
 /// 为集成测试返回主进程与 updater 独立的 Windows PE 资源脚本。
 ///
 /// # Errors
