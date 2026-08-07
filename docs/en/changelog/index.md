@@ -7,7 +7,8 @@ title: Changelog
 Each release page contains the complete changes, GitHub owners, genuinely related issues or pull
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
-- [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [Unreleased: pending](./unreleased)
+- [0.32.0: cross-platform publishing and Windows update transactions](./0.32.0)
 - [0.31.1: PostgreSQL 17 framework migration baseline fix](./0.31.1)
 - [0.31.0: PostgreSQL 17 framework migration baseline fix (superseded by 0.31.1)](./0.31.0)
 - [0.30.2: Fix Inno Setup installer compilation](./0.30.2)

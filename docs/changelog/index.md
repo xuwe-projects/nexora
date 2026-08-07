@@ -7,7 +7,8 @@ title: 更新日志
 每个版本页面都包含完整改动、GitHub 处理人、确实关联的 Issue/PR、兼容性说明，以及从上一
 版本升级到当前版本的操作。
 
-- [Unreleased：跨平台桌面自动更新协议与 Skill](./unreleased)
+- [Unreleased：待记录](./unreleased)
+- [0.32.0：跨平台发布与 Windows 更新事务](./0.32.0)
 - [0.31.1：PostgreSQL 17 框架迁移基线修复](./0.31.1)
 - [0.31.0：PostgreSQL 17 框架迁移基线修复（已由 0.31.1 取代）](./0.31.0)
 - [0.30.2：修复 Inno Setup 安装包编译](./0.30.2)

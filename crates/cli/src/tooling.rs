@@ -19,9 +19,9 @@ pub use release::{
     inspect_inno_setup_requirement, inspect_prepare_release_receipt, inspect_publish_object_layout,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
     inspect_release_selection, inspect_select_inno_setup_candidate, inspect_signing_key,
-    inspect_windows_binary_link_args,
-    inspect_windows_installer_sources, inspect_windows_resource_scripts, validate_display_name,
-    write_bundle_icon, write_bundle_info, write_sha256_sidecar,
+    inspect_windows_binary_link_args, inspect_windows_installer_sources,
+    inspect_windows_resource_scripts, validate_display_name, write_bundle_icon, write_bundle_info,
+    write_sha256_sidecar,
 };
 #[cfg(windows)]
 #[allow(unused_imports)]
