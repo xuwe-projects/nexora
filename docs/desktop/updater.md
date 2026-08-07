@@ -16,7 +16,7 @@ EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.30.1 cli --locked --force --bin nexora
+  --tag v0.30.2 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```

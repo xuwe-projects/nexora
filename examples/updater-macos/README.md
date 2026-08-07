@@ -15,7 +15,7 @@
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.30.1 cli --locked --force --bin nexora
+  --tag v0.30.2 cli --locked --force --bin nexora
 
 nexora doctor
 nexora doctor --fix
