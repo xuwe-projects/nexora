@@ -76,10 +76,10 @@ jobs:
         run: |
           cargo test -p cli --locked --test build windows_resources_use_utf8_unicode_table_and_distinct_process_identity
           cargo test -p cli --locked --test build windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files
-      - name: Test installed Inno Setup engine version
+      - name: Test installed Inno Setup gate and installer compile
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: cargo test -p cli --locked --test build installed_inno_setup_reports_pinned_engine_version
+        run: cargo test -p cli --locked --test build installed_inno_setup_ -- --nocapture
       - name: Build release binary
         shell: bash
         run: cargo build -p cli --release --locked --target "${{ matrix.target }}"

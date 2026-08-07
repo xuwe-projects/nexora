@@ -14,7 +14,10 @@ use commands::{
     write_sha256_sidecar,
 };
 #[cfg(windows)]
-use commands::{inspect_compile_windows_resource_executables, inspect_inno_setup_compiler_version};
+use commands::{
+    inspect_compile_windows_installer, inspect_compile_windows_resource_executables,
+    inspect_inno_setup_compiler_version,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     env,
@@ -840,7 +843,6 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     );
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
     let script = sources["iss"].as_str().unwrap();
-    let arguments = sources["arguments"].as_array().unwrap();
     let updater_config = &sources["updater_config"];
 
     assert_eq!(sources["file_version"], "1.2.3.7");
@@ -853,17 +855,13 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     assert!(script.contains("Source: \"*\""));
     assert!(script.contains("recursesubdirs createallsubdirs"));
     assert!(script.contains("skipifsilent"));
-    assert!(arguments.contains(&serde_json::json!("/DAppId=\"com.example.one\"")));
-    assert!(arguments.contains(&serde_json::json!("/DAppName=\"Application One\"")));
-    assert!(arguments.contains(&serde_json::json!(
-        "/DArchitectureAllowed=\"x64compatible and not arm64\""
-    )));
-    assert!(arguments.contains(&serde_json::json!("/DMinimumWindowsBuild=15063")));
-    assert!(arguments.iter().any(|argument| {
-        argument.as_str().is_some_and(|argument| {
-            argument.starts_with("/DSourceDir=\"") && argument.contains("windows installer 中文")
-        })
-    }));
+    assert!(script.starts_with("#define AppId \"com.example.one\""));
+    assert!(script.contains("#define AppName \"Application One\""));
+    assert!(script.contains("#define ArchitectureAllowed \"x64compatible and not arm64\""));
+    assert!(script.contains("#define MinimumWindowsBuild 15063"));
+    assert!(script.contains("#define SourceDir \""));
+    assert!(script.contains("windows installer 中文"));
+    assert!(!script.contains("/DAppId"));
     assert_eq!(
         updater_config["expected_windows_signer_thumbprint"],
         "00112233445566778899AABBCCDDEEFF00112233"
@@ -887,13 +885,11 @@ fn inno_definitions_escape_quotes_and_select_arm64_architecture() {
         );
     let fixture = Fixture::new("inno quoted 中文", &config);
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
-    let arguments = sources["arguments"].as_array().unwrap();
+    let script = sources["iss"].as_str().unwrap();
 
-    assert!(arguments.contains(&serde_json::json!(
-        "/DAppPublisher=\"Nexora \"\"Quoted\"\" 发布者\""
-    )));
-    assert!(arguments.contains(&serde_json::json!("/DArchitectureAllowed=\"arm64\"")));
-    assert!(arguments.contains(&serde_json::json!("/DArchitectureInstallMode=\"arm64\"")));
+    assert!(script.contains("#define AppPublisher \"Nexora \"\"Quoted\"\" 发布者\""));
+    assert!(script.contains("#define ArchitectureAllowed \"arm64\""));
+    assert!(script.contains("#define ArchitectureInstallMode \"arm64\""));
 }
 
 #[test]
@@ -1072,10 +1068,10 @@ fn windows_file_version_accepts_large_release_build_number() {
 
     assert_eq!(sources["file_version"], "1.2.3.54236");
     assert!(
-        sources["arguments"]
-            .as_array()
+        sources["iss"]
+            .as_str()
             .unwrap()
-            .contains(&serde_json::json!("/DFileVersion=\"1.2.3.54236\""))
+            .contains("#define FileVersion \"1.2.3.54236\"")
     );
 }
 
@@ -1924,6 +1920,33 @@ fn installed_inno_setup_reports_pinned_engine_version() {
         path.display()
     );
     assert_eq!(inspect_inno_setup_compiler_version(path).unwrap(), "6.7.3");
+}
+
+#[cfg(windows)]
+#[test]
+fn installed_inno_setup_compiles_generated_installer_source() {
+    let compiler = env::var_os("NEXORA_TEST_ISCC")
+        .map(PathBuf::from)
+        .expect("NEXORA_TEST_ISCC must point to an installed ISCC.exe");
+    let config = with_windows_target(app_config("one", "package-one", "中文 iMES One")).replace(
+        "publisher = \"Nexora Test Publisher\"",
+        r#"publisher = "Nexora \"Quoted\" 发布者""#,
+    );
+    let fixture = Fixture::new("inno smoke 中文 path", &config);
+    let setup = inspect_compile_windows_installer(
+        fixture.config(),
+        "one",
+        compiler,
+        fixture.root.join("inno smoke 输出"),
+    )
+    .unwrap();
+
+    assert!(
+        setup.is_file(),
+        "missing compiled setup: {}",
+        setup.display()
+    );
+    assert!(fs::metadata(setup).unwrap().len() > 0);
 }
 
 #[test]

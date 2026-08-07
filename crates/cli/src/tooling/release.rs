@@ -1937,8 +1937,8 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     }
     let staging = stage_windows_update_payload(plan, updater_path.as_deref())?;
     create_windows_update_zip(plan, &staging)?;
-    let installer_source = write_windows_installer_source(plan)?;
-    build_windows_setup(plan, &staging, &installer_source)?;
+    let installer_source = write_windows_installer_source(plan, &staging)?;
+    build_windows_setup(plan, &installer_source)?;
     sign_windows_file(plan, &plan.setup_path)?;
     write_artifact_manifest(plan)?;
     println!("EXE: {}", plan.app_path.display());
@@ -2412,18 +2412,18 @@ fn create_windows_update_zip_at(staging: &Path, destination: &Path) -> CliResult
 }
 
 struct WindowsInstallerSource {
-    iss: &'static str,
-    arguments: Vec<String>,
+    iss: String,
     updater_config: Option<BundledUpdaterConfig>,
     file_version: String,
 }
 
-fn write_windows_installer_source(plan: &BuildPlan) -> CliResult<PathBuf> {
+fn write_windows_installer_source(plan: &BuildPlan, staging: &Path) -> CliResult<PathBuf> {
     let work_dir = windows_work_dir(plan);
     fs::create_dir_all(&work_dir)
         .map_err(|error| CliError::new(format!("无法创建 {}: {error}", work_dir.display())))?;
     let source_path = work_dir.join("installer.iss");
-    fs::write(&source_path, WINDOWS_INSTALLER_TEMPLATE).map_err(|error| {
+    let source = windows_installer_source(plan, staging)?;
+    fs::write(&source_path, source.iss).map_err(|error| {
         CliError::new(format!(
             "无法写入 Inno Setup 源文件 {}: {error}",
             source_path.display()
@@ -2432,28 +2432,31 @@ fn write_windows_installer_source(plan: &BuildPlan) -> CliResult<PathBuf> {
     Ok(source_path)
 }
 
-fn build_windows_setup(plan: &BuildPlan, staging: &Path, source: &Path) -> CliResult<()> {
+fn build_windows_setup(plan: &BuildPlan, source: &Path) -> CliResult<()> {
     create_parent(&plan.setup_path)?;
     remove_existing_file(&plan.setup_path)?;
     let compiler = compatible_inno_setup_compiler()?;
-    let arguments = windows_inno_compiler_arguments(plan, staging)?;
+    run_inno_setup(&compiler, source, &plan.setup_path)
+}
+
+fn run_inno_setup(compiler: &Path, source: &Path, setup_path: &Path) -> CliResult<()> {
     let mut command = Command::new(compiler);
-    command.arg(source).args(arguments);
+    command.arg(source);
     run_status("ISCC Inno Setup", &mut command)?;
-    if plan.setup_path.is_file() {
+    if setup_path.is_file() {
         Ok(())
     } else {
         Err(CliError::new(format!(
             "ISCC 未生成预期安装程序：{}",
-            plan.setup_path.display()
+            setup_path.display()
         )))
     }
 }
 
 fn windows_installer_source(plan: &BuildPlan, staging: &Path) -> CliResult<WindowsInstallerSource> {
+    let definitions = windows_inno_definitions(plan, staging)?;
     Ok(WindowsInstallerSource {
-        iss: WINDOWS_INSTALLER_TEMPLATE,
-        arguments: windows_inno_compiler_arguments(plan, staging)?,
+        iss: format!("{}\n\n{WINDOWS_INSTALLER_TEMPLATE}", definitions.join("\n")),
         updater_config: plan
             .updater
             .as_ref()
@@ -2463,7 +2466,7 @@ fn windows_installer_source(plan: &BuildPlan, staging: &Path) -> CliResult<Windo
     })
 }
 
-fn windows_inno_compiler_arguments(plan: &BuildPlan, staging: &Path) -> CliResult<Vec<String>> {
+fn windows_inno_definitions(plan: &BuildPlan, staging: &Path) -> CliResult<Vec<String>> {
     let options = windows_options(plan)?;
     if plan.app_id.len() > 127 {
         return Err(CliError::new(
@@ -2532,7 +2535,7 @@ fn inno_string_definition(name: &str, value: &str) -> CliResult<String> {
         )));
     }
     let escaped = value.replace('{', "{{").replace('"', "\"\"");
-    Ok(format!("/D{name}=\"{escaped}\""))
+    Ok(format!("#define {name} \"{escaped}\""))
 }
 
 fn inno_path_definition(name: &str, path: &Path, label: &str) -> CliResult<String> {
@@ -2551,7 +2554,7 @@ fn inno_path_definition(name: &str, path: &Path, label: &str) -> CliResult<Strin
 }
 
 fn inno_number_definition(name: &str, value: u64) -> String {
-    format!("/D{name}={value}")
+    format!("#define {name} {value}")
 }
 
 fn collect_relative_files(root: &Path, directory: &Path) -> CliResult<Vec<PathBuf>> {
@@ -5975,9 +5978,49 @@ pub fn inspect_windows_installer_sources(
     Ok(serde_json::json!({
         "file_version": source.file_version,
         "iss": source.iss,
-        "arguments": source.arguments,
         "updater_config": source.updater_config,
     }))
+}
+
+/// 在 Windows 集成测试中使用真实 `ISCC.exe` 编译生产路径生成的安装脚本。
+///
+/// # Errors
+///
+/// 配置或安装脚本无效、测试 payload 无法写入、`ISCC.exe` 执行失败，或未生成预期安装包时
+/// 返回错误。
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn inspect_compile_windows_installer(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    compiler: impl AsRef<Path>,
+    output_directory: impl AsRef<Path>,
+) -> CliResult<PathBuf> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let mut plan = inspection_windows_build_plan(&project, app_key)?;
+    let output_directory = output_directory.as_ref();
+    fs::create_dir_all(output_directory).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 Inno Setup smoke 目录 `{}`: {error}",
+            output_directory.display()
+        ))
+    })?;
+    plan.setup_path = output_directory.join("nexora-inno-smoke.exe");
+    let staging = output_directory.join("payload");
+    fs::create_dir_all(&staging).map_err(|error| {
+        CliError::new(format!(
+            "无法创建 Inno Setup smoke payload `{}`: {error}",
+            staging.display()
+        ))
+    })?;
+    fs::write(
+        staging.join(safe_file_name(&plan.app_path)?),
+        b"nexora smoke\n",
+    )
+    .map_err(|error| CliError::new(format!("无法写入 Inno Setup smoke payload: {error}")))?;
+    let source = write_windows_installer_source(&plan, &staging)?;
+    run_inno_setup(compiler.as_ref(), &source, &plan.setup_path)?;
+    Ok(plan.setup_path)
 }
 
 /// 为集成测试返回主进程与 updater 独立的 Windows PE 资源脚本。
