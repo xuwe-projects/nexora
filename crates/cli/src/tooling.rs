@@ -10,9 +10,6 @@ use std::{error::Error, fmt, path::PathBuf};
 
 pub(super) use release::{BuildConfig, PublishConfig};
 
-#[cfg(windows)]
-#[allow(unused_imports)]
-pub use release::inspect_compile_windows_resource_executables;
 #[allow(unused_imports)]
 pub use release::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
@@ -24,6 +21,11 @@ pub use release::{
     inspect_signing_key, inspect_windows_binary_link_args, inspect_windows_installer_sources,
     inspect_windows_resource_scripts, validate_display_name, write_bundle_icon, write_bundle_info,
     write_sha256_sidecar,
+};
+#[cfg(windows)]
+#[allow(unused_imports)]
+pub use release::{
+    inspect_compile_windows_resource_executables, inspect_inno_setup_compiler_version,
 };
 
 /// CLI 命令解析与执行流程共用的结果类型。

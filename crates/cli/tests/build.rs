@@ -2,8 +2,6 @@
 #[path = "../src/tooling.rs"]
 pub mod commands;
 
-#[cfg(windows)]
-use commands::inspect_compile_windows_resource_executables;
 use commands::{
     inspect_app_selection, inspect_build_datetime_number, inspect_build_dependency_guidance,
     inspect_build_plans, inspect_build_plans_for_channel, inspect_channel_artifact_keys,
@@ -15,6 +13,8 @@ use commands::{
     inspect_windows_resource_scripts, validate_display_name, write_bundle_icon, write_bundle_info,
     write_sha256_sidecar,
 };
+#[cfg(windows)]
+use commands::{inspect_compile_windows_resource_executables, inspect_inno_setup_compiler_version};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     env,
@@ -1873,22 +1873,13 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
 #[test]
 fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
     assert_eq!(
-        inspect_inno_setup_requirement(
-            Some("Inno Setup 6 Command-Line Compiler version 6.7.3"),
-            false,
-            false,
-        )
-        .unwrap(),
+        inspect_inno_setup_requirement(Some("6.7.3.0"), false, false).unwrap(),
         "ready"
     );
 
-    let mismatch = inspect_inno_setup_requirement(
-        Some("Inno Setup 6 Command-Line Compiler version 6.7.2"),
-        false,
-        false,
-    )
-    .unwrap_err()
-    .to_string();
+    let mismatch = inspect_inno_setup_requirement(Some("6.7.2.0"), false, false)
+        .unwrap_err()
+        .to_string();
     assert!(mismatch.contains("6.7.3"));
     assert!(mismatch.contains("winget install"));
 
@@ -1902,6 +1893,27 @@ fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
         inspect_inno_setup_requirement(None, true, true).unwrap(),
         "install"
     );
+
+    let nonzero_build = inspect_inno_setup_requirement(Some("6.7.3.1"), false, false)
+        .unwrap_err()
+        .to_string();
+    assert!(nonzero_build.contains("6.7.3"));
+    assert!(nonzero_build.contains("winget install"));
+}
+
+#[cfg(windows)]
+#[test]
+fn installed_inno_setup_has_pinned_file_version() {
+    let path = env::var_os("NEXORA_TEST_ISCC")
+        .map(PathBuf::from)
+        .expect("NEXORA_TEST_ISCC must point to an installed ISCC.exe");
+
+    assert!(
+        path.is_file(),
+        "missing installed ISCC.exe: {}",
+        path.display()
+    );
+    assert_eq!(inspect_inno_setup_compiler_version(path).unwrap(), "6.7.3");
 }
 
 #[test]

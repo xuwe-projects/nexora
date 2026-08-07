@@ -48,6 +48,12 @@
   directory and uses one-time health confirmation to keep the new version or roll back.
 - The account menu key context uses framework naming: `nexora_account_menu`.
 
+## Fixed
+
+- Windows build dependency checks now read the `ISCC.exe` PE fixed file-version resource instead
+  of parsing a patch version that the official `/?` banner does not print. The pinned winget
+  installation of Inno Setup 6.7.3 is now detected exactly.
+
 ## Removed
 
 - Removed Jenkinsfile, the old desktop build env example, the old raw `latest.json` example, the

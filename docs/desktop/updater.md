@@ -16,7 +16,7 @@ EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.30.0 cli --locked --force --bin nexora
+  --tag v0.30.1 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```
@@ -24,7 +24,8 @@ nexora doctor --fix
 macOS 会准备 Rust target、`cargo-bundle`、Homebrew 与 `create-dmg`；缺少 Xcode Command Line
 Tools 时启动 `xcode-select --install`，完成系统安装后重新运行同一条 build。Windows 会准备
 Rust target、固定版本的 Inno Setup 6.7.3 与 Windows SDK。交互式修复通过 winget 安装官方
-`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。
+`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。Nexora 读取
+`ISCC.exe` PE 资源中的固定文件版本 `6.7.3.0`，不会依赖只显示主版本的 `/?` 帮助横幅。
 
 需要手动排查时，对应官方命令是：
 

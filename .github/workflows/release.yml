@@ -60,12 +60,26 @@ jobs:
       - name: Install Rust target
         shell: bash
         run: rustup target add "${{ matrix.target }}"
+      - name: Install pinned Inno Setup
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 --scope user --silent --force --accept-package-agreements --accept-source-agreements
+          $iscc = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "Inno Setup installed without the expected ISCC.exe: $iscc"
+          }
+          "NEXORA_TEST_ISCC=$iscc" >> $env:GITHUB_ENV
       - name: Test Windows Unicode resource contract
         if: contains(matrix.target, 'windows')
         shell: bash
         run: |
           cargo test -p cli --locked --test build windows_resources_use_utf8_unicode_table_and_distinct_process_identity
           cargo test -p cli --locked --test build windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files
+      - name: Test installed Inno Setup version resource
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: cargo test -p cli --locked --test build installed_inno_setup_has_pinned_file_version
       - name: Build release binary
         shell: bash
         run: cargo build -p cli --release --locked --target "${{ matrix.target }}"

@@ -4736,32 +4736,120 @@ fn inno_setup_compiler_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(windows)]
 fn inno_setup_compiler_version(path: &Path) -> CliResult<Version> {
-    let output = Command::new(path).arg("/?").output().map_err(|error| {
-        CliError::new(format!(
-            "无法读取 Inno Setup 编译器版本 {}: {error}",
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt as _, ptr};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+    };
+
+    const VERSION_INFO_SIGNATURE: u32 = 0xFEEF_04BD;
+    const ROOT_BLOCK: [u16; 2] = [b'\\' as u16, 0];
+
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut unused_handle = 0;
+    // SAFETY: `wide_path` is NUL-terminated and remains alive for every Windows API call below.
+    let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), &mut unused_handle) };
+    if size == 0 {
+        return Err(CliError::new(format!(
+            "无法读取 ISCC.exe 文件版本资源 {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        )));
+    }
+    let mut buffer = vec![0_u8; size as usize];
+    // SAFETY: the buffer has exactly the size requested by `GetFileVersionInfoSizeW`.
+    if unsafe {
+        GetFileVersionInfoW(
+            wide_path.as_ptr(),
+            0,
+            size,
+            buffer.as_mut_ptr().cast::<c_void>(),
+        )
+    } == 0
+    {
+        return Err(CliError::new(format!(
+            "无法加载 ISCC.exe 文件版本资源 {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        )));
+    }
+
+    let mut value = ptr::null_mut::<c_void>();
+    let mut value_size = 0;
+    // SAFETY: `buffer` contains a loaded version resource; the root query returns a pointer into it.
+    let queried = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr().cast::<c_void>(),
+            ROOT_BLOCK.as_ptr(),
+            &mut value,
+            &mut value_size,
+        )
+    };
+    if queried == 0
+        || value.is_null()
+        || (value_size as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return Err(CliError::new(format!(
+            "ISCC.exe 缺少有效的固定文件版本信息：{}",
             path.display()
-        ))
-    })?;
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    parse_inno_setup_version(&text).ok_or_else(|| {
+        )));
+    }
+    // SAFETY: the validated root block contains at least one complete `VS_FIXEDFILEINFO` value.
+    let version_info = unsafe { ptr::read_unaligned(value.cast::<VS_FIXEDFILEINFO>()) };
+    if version_info.dwSignature != VERSION_INFO_SIGNATURE {
+        return Err(CliError::new(format!(
+            "ISCC.exe 固定文件版本签名无效：{}",
+            path.display()
+        )));
+    }
+
+    normalize_inno_setup_file_version(
+        (version_info.dwFileVersionMS >> 16) as u16,
+        version_info.dwFileVersionMS as u16,
+        (version_info.dwFileVersionLS >> 16) as u16,
+        version_info.dwFileVersionLS as u16,
+    )
+    .ok_or_else(|| {
         CliError::new(format!(
-            "无法从 ISCC.exe 输出解析 Inno Setup 版本：{}",
+            "ISCC.exe 文件版本 {}.{}.{}.{} 不是受支持的三段发布版本：{}",
+            version_info.dwFileVersionMS >> 16,
+            version_info.dwFileVersionMS & 0xFFFF,
+            version_info.dwFileVersionLS >> 16,
+            version_info.dwFileVersionLS & 0xFFFF,
             path.display()
         ))
     })
 }
 
-fn parse_inno_setup_version(output: &str) -> Option<Version> {
-    output.split_whitespace().find_map(|part| {
-        let candidate =
-            part.trim_matches(|character: char| !character.is_ascii_digit() && character != '.');
-        Version::parse(candidate).ok()
-    })
+#[cfg(not(windows))]
+fn inno_setup_compiler_version(_path: &Path) -> CliResult<Version> {
+    Err(CliError::new("ISCC.exe 文件版本只能在 Windows 宿主读取"))
+}
+
+fn normalize_inno_setup_file_version(
+    major: u16,
+    minor: u16,
+    patch: u16,
+    build: u16,
+) -> Option<Version> {
+    (build == 0).then(|| Version::new(major.into(), minor.into(), patch.into()))
+}
+
+fn parse_inno_setup_file_version(value: &str) -> Option<Version> {
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    let build = parts.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+    if parts.next().is_some() {
+        return None;
+    }
+    normalize_inno_setup_file_version(major, minor, patch, build)
 }
 
 fn inno_setup_install_command() -> String {
@@ -5775,9 +5863,9 @@ pub fn inspect_build_dependency_guidance(platform: &str) -> CliResult<serde_json
     }
 }
 
-/// 为集成测试评估 ISCC 版本与当前终端修复策略，不执行任何外部命令。
+/// 为集成测试评估 ISCC 文件版本与当前终端修复策略，不执行任何外部命令。
 ///
-/// 返回 `ready` 表示输出中的版本与框架固定版本一致；返回 `install` 表示交互式
+/// 返回 `ready` 表示文件版本与框架固定版本一致；返回 `install` 表示交互式
 /// `--fix` 可以继续执行 winget 安装。
 ///
 /// # Errors
@@ -5785,14 +5873,14 @@ pub fn inspect_build_dependency_guidance(platform: &str) -> CliResult<serde_json
 /// 输出缺少版本、版本不匹配且未启用修复，或非交互环境请求自动修复时返回精确安装指引。
 #[allow(dead_code)]
 pub fn inspect_inno_setup_requirement(
-    version_output: Option<&str>,
+    file_version: Option<&str>,
     fix: bool,
     interactive: bool,
 ) -> CliResult<String> {
     let expected = Version::parse(INNO_SETUP_VERSION)
         .map_err(|error| CliError::new(format!("内置 Inno Setup 版本无效: {error}")))?;
-    if version_output
-        .and_then(parse_inno_setup_version)
+    if file_version
+        .and_then(parse_inno_setup_file_version)
         .is_some_and(|actual| actual == expected)
     {
         return Ok("ready".to_owned());
@@ -5805,6 +5893,19 @@ pub fn inspect_inno_setup_requirement(
         interactive,
     )?;
     Ok("install".to_owned())
+}
+
+/// 读取真实 `ISCC.exe` 的 Windows 固定文件版本，供宿主回归测试验证探测链路。
+///
+/// 返回值使用三段发布版本；官方资源中的第四段必须为零。
+///
+/// # Errors
+///
+/// 文件不存在、版本资源缺失或损坏，或第四段版本不为零时返回错误。
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn inspect_inno_setup_compiler_version(path: impl AsRef<Path>) -> CliResult<String> {
+    inno_setup_compiler_version(path.as_ref()).map(|version| version.to_string())
 }
 
 /// 为集成测试返回稳定 app_key 对象布局和公开 URL，不访问对象存储。

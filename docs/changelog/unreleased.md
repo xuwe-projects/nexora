@@ -42,6 +42,11 @@
 - macOS updater 安装阶段改为启动复制到随机临时目录的独立 sidecar，并通过一次性健康确认决定
   保留新版本或回滚旧版本。
 - 账户菜单 key context 从产品命名改为通用 `nexora_account_menu`。
+
+## Fixed
+
+- Windows 构建依赖检查改为读取 `ISCC.exe` 的 PE 固定文件版本资源，不再从官方 `/?` 帮助
+  横幅中解析并不存在的补丁版本；winget 安装的 Inno Setup 6.7.3 现在可被精确识别。
 - `nexora build` 从所选 app 注册读取品牌和 updater 配置，将 ICNS 写入 `.app` 的 Resources 与
   Info.plist；缺失或格式错误的目标平台图标会在打包前失败。
 - 手动更新流程在发现版本后等待用户确认再下载；可选启动检查仅检查版本，并以非模态通知提示。

@@ -16,7 +16,7 @@ CRUD 页面、表单对话框、字段容器和层级选择器。应用仍然直
 
 ```toml
 [dependencies]
-nexora = { version = "0.30.0", features = ["desktop", "derive"] }
+nexora = { version = "0.30.1", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }

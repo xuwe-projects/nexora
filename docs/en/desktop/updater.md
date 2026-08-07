@@ -11,7 +11,7 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.30.0 cli --locked --force --bin nexora
+  --tag v0.30.1 cli --locked --force --bin nexora
 nexora doctor
 nexora doctor --fix
 ```
@@ -24,6 +24,8 @@ Setup 6.7.3, and the official Windows SDK installer. System installers may requi
 a restart; rerun the same build afterward.
 Non-interactive builds never launch installers and instead fail with exact commands. SDK tools are
 discovered from standard locations without requiring a permanent PATH change.
+Nexora reads fixed file version `6.7.3.0` from the `ISCC.exe` PE resource; it does not depend on the
+`/?` help banner, which only identifies the Inno Setup major version.
 The complete field-by-field reference, including required status, sources, defaults, secret status,
 examples, and failure behavior, is maintained in the
 [Chinese updater reference](/desktop/updater). The code defaults are `force_path_style = false`,
