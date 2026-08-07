@@ -14,6 +14,9 @@ pub mod crud_panel;
 /// 标准 CRUD 数据表增强能力。
 pub mod crud_table;
 
+/// DataTable 列顺序与列宽的持久化模型和纯逻辑适配。
+pub mod data_table_layout;
+
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
@@ -52,6 +55,10 @@ pub use crud_panel::{CrudPanel, CrudPanelToolbar};
 pub use crud_table::{
     CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
     RowSelectionEvent,
+};
+pub use data_table_layout::{
+    DataTableColumnLayout, DataTableLayout, DataTableLayoutError, DataTableLayoutKey,
+    apply_data_table_layout, capture_data_table_layout, data_table_layout_from_event,
 };
 pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl};
 pub use labeled_control::{

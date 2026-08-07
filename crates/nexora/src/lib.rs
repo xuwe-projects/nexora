@@ -41,7 +41,9 @@ pub mod server;
 #[cfg(feature = "desktop")]
 pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
-    ApplicationTabStyle, PanelHeaderAction, install_panel_header_actions,
+    ApplicationTabStyle, PanelHeaderAction, PersistentDataTableDelegate, TrayUnavailablePolicy,
+    WindowSession, WindowSessionRole, WindowTabSession, install_panel_header_actions,
+    persistent_crud_table_state, persistent_data_table_state, reset_data_table_layout,
 };
 #[cfg(feature = "desktop")]
 pub use application_info::ApplicationInfo;
@@ -106,7 +108,8 @@ pub mod __private {
     #[cfg(feature = "desktop")]
     pub use crate::application::{
         AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
-        ShellPreferences, restore_appearance_preferences, restore_main_window_options,
+        ShellPreferences, WindowSession, WindowSessionRole, WindowTabSession,
+        restore_appearance_preferences, restore_main_window_options,
     };
     #[cfg(feature = "desktop")]
     pub use crate::runtime::create_login_feature;

@@ -5,7 +5,8 @@ use gpui::{Bounds, TestAppContext, WindowBounds, point, px, size};
 use gpui_component::{Size, Theme, ThemeMode};
 use nexora::__private::{
     AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
-    ShellPreferences, restore_appearance_preferences, restore_main_window_options,
+    ShellPreferences, WindowSession, WindowSessionRole, WindowTabSession,
+    restore_appearance_preferences, restore_main_window_options,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
@@ -47,6 +48,101 @@ fn old_preferences_use_safe_account_defaults() {
     let serialized = toml::to_string(&preferences).unwrap();
     assert!(!serialized.contains("access_token"));
     assert!(!serialized.contains("refresh_token"));
+}
+
+#[test]
+fn unknown_workspace_fields_survive_same_schema_round_trip() {
+    let preferences: ShellPreferences = toml::from_str(
+        r#"
+        schema_version = 1
+        future_scalar = "keep-me"
+
+        [future_table]
+        enabled = true
+        "#,
+    )
+    .expect("同一 schema 的未知字段应当可以读取");
+
+    let serialized = toml::to_string_pretty(&preferences).expect("偏好应当可以重新序列化");
+
+    assert!(serialized.contains("future_scalar = \"keep-me\""));
+    assert!(serialized.contains("[future_table]"));
+    assert!(serialized.contains("enabled = true"));
+}
+
+#[test]
+fn schema_zero_preferences_migrate_legacy_tabs_and_geometry_into_main_session() {
+    let mut preferences: ShellPreferences = toml::from_str(
+        r#"
+        pinned_tabs = ["/", "/users?status=active"]
+
+        [main_window]
+        display_uuid = "display-legacy"
+
+        [main_window.bounds]
+        state = "windowed"
+        x = 10
+        y = 20
+        width = 900
+        height = 640
+        "#,
+    )
+    .expect("历史偏好应当可反序列化");
+
+    assert_eq!(preferences.schema_version, 0);
+    assert!(preferences.migrate_to_current());
+    assert_eq!(preferences.schema_version, 1);
+    assert!(preferences.pinned_tabs.is_empty());
+    assert!(preferences.main_window.is_none());
+    let main = preferences
+        .windows
+        .iter()
+        .find(|session| session.session_id == "main")
+        .expect("迁移应当创建主窗口会话");
+    assert_eq!(main.role, WindowSessionRole::MainShell);
+    assert_eq!(main.display_uuid.as_deref(), Some("display-legacy"));
+    assert_eq!(main.tabs.len(), 2);
+    assert!(main.tabs.iter().all(|tab| tab.pinned));
+}
+
+#[test]
+fn window_tab_move_is_clamped_to_its_pin_partition() {
+    let mut session = WindowSession {
+        session_id: "shell-1".to_owned(),
+        tabs: [
+            ("pinned-a", true),
+            ("pinned-b", true),
+            ("regular-a", false),
+            ("regular-b", false),
+        ]
+        .into_iter()
+        .map(|(route_id, pinned)| WindowTabSession {
+            route_id: route_id.to_owned(),
+            location: format!("/{route_id}"),
+            pinned,
+        })
+        .collect(),
+        ..WindowSession::default()
+    };
+
+    assert!(session.move_tab_within_partition(3, 0));
+    assert_eq!(
+        session
+            .tabs
+            .iter()
+            .map(|tab| tab.route_id.as_str())
+            .collect::<Vec<_>>(),
+        ["pinned-a", "pinned-b", "regular-b", "regular-a"]
+    );
+    assert!(session.move_tab_within_partition(0, 3));
+    assert_eq!(
+        session
+            .tabs
+            .iter()
+            .map(|tab| tab.route_id.as_str())
+            .collect::<Vec<_>>(),
+        ["pinned-b", "pinned-a", "regular-b", "regular-a"]
+    );
 }
 
 #[test]

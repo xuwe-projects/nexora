@@ -70,6 +70,23 @@ pub struct AccountAuthenticationScope {
     pub user_id: Option<String>,
 }
 
+/// 仅通过受保护进程 IPC 传输的 Account 会话快照。
+///
+/// 登录变体包含短期 token，因此该类型刻意不实现 `Debug`，也不得写入磁盘或日志。
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum AccountProcessState {
+    /// 当前窗口组已经退出登录。
+    SignedOut,
+    /// 当前窗口组共享的已认证会话。
+    SignedIn {
+        /// OIDC 短期 token 与 Provider 用户资料。
+        tokens: Box<OidcTokenCache>,
+        /// Account 服务确认的用户、角色和权限快照。
+        profile: Box<AccessProfileResponse>,
+    },
+}
+
 /// 可以安全交给桌面 UI 的 Account 登录失败信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountLoginFailure {
@@ -211,6 +228,83 @@ pub fn authentication_scope(cx: &App) -> AccountAuthenticationScope {
             .map(AccountLogin::profile)
             .map(|profile| profile.user.id.clone()),
     }
+}
+
+/// 生成当前进程可交给受保护 IPC 的账号会话快照。
+pub(crate) fn process_state(cx: &App) -> AccountProcessState {
+    let Some(state) = cx.try_global::<AccountLoginState>() else {
+        return AccountProcessState::SignedOut;
+    };
+    let Some(login) = state.login.as_ref() else {
+        return AccountProcessState::SignedOut;
+    };
+    AccountProcessState::SignedIn {
+        tokens: Box::new(login.session().tokens().clone()),
+        profile: Box::new(login.profile().clone()),
+    }
+}
+
+/// 应用来自受保护 IPC 的账号状态，并刷新当前进程全部登录门禁。
+///
+/// 主进程作为 `authoritative` 接收子进程登录时负责安全存储和后续 token 刷新；普通
+/// 窗口子进程只消费主进程广播，避免多个进程并发轮换 refresh token。
+pub(crate) fn apply_process_state(
+    process_state: AccountProcessState,
+    authoritative: bool,
+    cx: &mut App,
+) {
+    match process_state {
+        AccountProcessState::SignedOut => {
+            let snapshot = login_snapshot(cx);
+            if snapshot.authenticated
+                || snapshot.busy
+                || snapshot.restoring
+                || snapshot.recovery_allowed
+            {
+                sign_out(cx);
+            }
+        }
+        AccountProcessState::SignedIn { tokens, profile } => {
+            let tokens = *tokens;
+            let Some(session) = OidcSession::from_token_cache(tokens.clone()) else {
+                return;
+            };
+            if !cx.has_global::<AccountLoginState>() {
+                return;
+            }
+            let state = cx.global_mut::<AccountLoginState>();
+            if let Some(cancellation) = state.cancellation.take() {
+                cancellation.store(true, Ordering::Release);
+            }
+            state.generation = state.generation.wrapping_add(1);
+            let generation = state.generation;
+            state.authentication_revision = state.authentication_revision.wrapping_add(1);
+            state.login = Some(AccountLogin {
+                session,
+                profile: *profile,
+            });
+            state.tokens = Some(tokens.clone());
+            state.busy = false;
+            state.restoring = false;
+            state.refresh_scheduled = false;
+            state.refresh_in_flight = false;
+            state.can_retry_recovery = false;
+            state.status = "登录状态已从主进程同步".into();
+            state.failure = None;
+            if authoritative {
+                persist_session(tokens, generation, true, cx);
+            }
+            refresh_login_windows(cx);
+        }
+    }
+}
+
+/// 观察当前进程账号会话变化，供应用级进程协调器发布内存快照。
+pub(crate) fn observe_process_state(
+    cx: &mut App,
+    mut observer: impl FnMut(AccountProcessState, &mut App) + 'static,
+) -> Subscription {
+    cx.observe_global::<AccountLoginState>(move |cx| observer(process_state(cx), cx))
 }
 
 /// 返回当前应用是否已经通过 Account 登录门禁。

@@ -192,6 +192,16 @@ impl RouteQuery {
         });
         Self { values }
     }
+
+    fn encode(&self) -> String {
+        let mut serializer = form_urlencoded::Serializer::new(String::new());
+        self.values.iter().for_each(|(name, values)| {
+            values.iter().for_each(|value| {
+                serializer.append_pair(name, value);
+            });
+        });
+        serializer.finish()
+    }
 }
 
 /// 一次成功路径匹配的完整结果。
@@ -229,6 +239,27 @@ impl RouteMatch {
     /// 返回规范化后的具体路径，可直接作为标签或窗口实例键。
     pub fn concrete_path(&self) -> &str {
         &self.concrete_path
+    }
+
+    /// 返回包含规范化路径与完整查询参数的稳定内部路由位置。
+    ///
+    /// 查询键按稳定顺序编码，同名查询值保留原始顺序；动态 path parameters 已包含在
+    /// `concrete_path` 中。该值可写入窗口会话，并在新进程中通过 [`crate::AppRegistry::resolve`]
+    /// 恢复，不能用只含 path 的 [`Self::concrete_path`] 替代。
+    pub fn location(&self) -> String {
+        let query = self.query.encode();
+        if query.is_empty() {
+            self.concrete_path.clone()
+        } else {
+            format!("{}?{query}", self.concrete_path)
+        }
+    }
+
+    /// 返回标签、会话和跨进程协议使用的稳定完整路由身份。
+    ///
+    /// 身份同时包含目标稳定 ID 与完整路由位置，避免仅 path 相同但 query 不同的页面互相覆盖。
+    pub fn stable_id(&self) -> String {
+        format!("{}::{}", self.target.id(), self.location())
     }
 
     /// 把动态路径参数反序列化为业务类型并包装为 [`Path<T>`]。

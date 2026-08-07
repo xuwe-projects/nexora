@@ -32,12 +32,15 @@ pub use oidc::{
     OidcClient, OidcConfig, OidcError, OidcPrompt, OidcRevocationResult, OidcSession,
     OidcTokenCache, PendingOidcLogin,
 };
-pub(crate) use runtime::observe_authentication_in;
 pub use runtime::{
     AccountAuthenticationScope, AccountLoginFailure, AccountLoginRuntimeError,
     AccountLoginSnapshot, api_session, authentication_scope, install_authenticator,
     is_authenticated, login_profile, login_session, login_snapshot, login_with_other_account,
     observe_authentication, retry_recovery, set_remember_login, sign_out, start_login,
+};
+pub(crate) use runtime::{
+    AccountProcessState, apply_process_state, observe_authentication_in, observe_process_state,
+    process_state,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);

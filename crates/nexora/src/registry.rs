@@ -23,7 +23,7 @@ use crate::{
     route::{RouteParameters, canonical_segment, decode_parameter, parse_location},
 };
 #[cfg(feature = "desktop")]
-use crate::{WindowInstance, WindowRuntimeError};
+use crate::{WindowInstance, WindowRuntimeError, WindowSession};
 
 /// 生成代码组装应用注册表时使用的构建器。
 ///
@@ -613,6 +613,45 @@ impl AppRegistry {
         route: RouteMatch,
         cx: &mut App,
     ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
+        self.open_window_on_display(route, None, cx)
+    }
+
+    /// 在指定稳定显示器 UUID 上创建已解析的独立原生窗口。
+    ///
+    /// 该入口用于受管 Settings 与 Registered Window 子进程。UUID 在当前进程内
+    /// 重新解析为 `DisplayId`；显示器已断开时安全回退到主显示器。其余单例、
+    /// 强类型路由和生命周期语义与 [`Self::open_window`] 一致。
+    ///
+    /// # Errors
+    ///
+    /// 路由目标、强类型参数、Window 工厂或平台开窗失败时返回
+    /// [`WindowRuntimeError`]。
+    #[cfg(feature = "desktop")]
+    pub fn open_window_on_display(
+        &self,
+        route: RouteMatch,
+        display_uuid: Option<&str>,
+        cx: &mut App,
+    ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
+        self.open_window_with_session(route, display_uuid, None, cx)
+    }
+
+    pub(crate) fn open_window_session(
+        &self,
+        route: RouteMatch,
+        session: &WindowSession,
+        cx: &mut App,
+    ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
+        self.open_window_with_session(route, session.display_uuid.as_deref(), Some(session), cx)
+    }
+
+    fn open_window_with_session(
+        &self,
+        route: RouteMatch,
+        display_uuid: Option<&str>,
+        session: Option<&WindowSession>,
+        cx: &mut App,
+    ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
         let RouteTarget::Window(metadata) = route.target() else {
             return Err(WindowRuntimeError::FeatureTarget {
                 path: route.concrete_path().to_owned(),
@@ -622,7 +661,15 @@ impl AppRegistry {
             .window_registrations
             .get(metadata.id())
             .ok_or(WindowRuntimeError::MissingFactory { id: metadata.id() })?;
-        let options: WindowOptions = (registration.options_factory())(&route, cx)?;
+        let mut options: WindowOptions = (registration.options_factory())(&route, cx)?;
+        if let Some(restored) = session.and_then(|session| {
+            crate::application::restored_window_session_bounds(session, options.window_min_size, cx)
+        }) {
+            options.display_id = restored.display_id;
+            options.window_bounds = Some(restored.bounds);
+        } else {
+            ::desktop::apply_window_display_preference(&mut options, display_uuid, None, cx);
+        }
         if metadata.id() == "settings"
             && let Some(handle) = cx
                 .try_global::<SettingsWindowRuntime>()

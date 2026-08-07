@@ -20,7 +20,10 @@ pub use crate::account::client::{
     login_profile, login_session, login_snapshot, login_with_other_account, observe_authentication,
     oidc_config, retry_recovery, set_remember_login, sign_out, start_login,
 };
-pub use crate::application::{PanelHeaderAction, install_panel_header_actions};
+pub use crate::application::{
+    PanelHeaderAction, PersistentDataTableDelegate, install_panel_header_actions,
+    persistent_crud_table_state, persistent_data_table_state, reset_data_table_layout,
+};
 pub use crate::application_info::{ApplicationInfo, application_info};
 pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
@@ -30,7 +33,8 @@ pub use ::updater::{
 };
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
-    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection, Event,
+    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection,
+    DataTableColumnLayout, DataTableLayout, DataTableLayoutError, DataTableLayoutKey, Event,
     FieldValue, FieldValueParseError, FormDialog, FormDialogState, FormFieldDraft, FormItem,
     FormItemControl, LabeledControl, LabeledControlBuilder, LabeledControlTarget,
     LoadedRowsSelectionEvent, NumberFieldValue, RowSelectionEvent, SidebarRegion, TableCell,

@@ -179,6 +179,22 @@ fn updater_health_arguments_do_not_override_the_default_config_path() {
 }
 
 #[test]
+fn internal_child_process_arguments_do_not_override_the_default_config_path() {
+    for argument in [
+        "--nexora-process-role=shell",
+        "--nexora-session-id=shell-1",
+        "--nexora-handshake=credential",
+        "--nexora-endpoint=/private/runtime/endpoint.json",
+    ] {
+        let path = nexora::config::__private::config_path_from_args([
+            "application".into(),
+            argument.into(),
+        ]);
+        assert!(path.is_none(), "{argument} 不应当被识别为配置路径");
+    }
+}
+
+#[test]
 fn positional_config_path_is_preserved() {
     let arguments = [
         OsString::from("imes"),

@@ -8,9 +8,17 @@ gpui = { workspace = true }
 gpui-component = { workspace = true }
 # 可选：使用内置默认资源
 gpui-component-assets = { workspace = true }
+directories = { workspace = true }
+fs2 = { workspace = true }
+rand = { workspace = true }
 reqwest_client = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 theme = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
@@ -18,6 +26,8 @@ gpui = { workspace = true, features = ["test-support"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui = { workspace = true, features = ["font-kit"] }
 gpui_platform = { workspace = true, features = ["font-kit"] }
+image = { workspace = true }
+tray-icon = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui = { workspace = true, features = ["windows-manifest"] }
@@ -28,7 +38,11 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
 ] }
+image = { workspace = true }
+tray-icon = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui = { workspace = true, features = ["wayland", "x11"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }
+image = { workspace = true }
+ksni = { workspace = true }

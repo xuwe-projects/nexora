@@ -11,6 +11,11 @@ use gpui::{
 use gpui_platform::application;
 use reqwest_client::ReqwestClient;
 
+/// 应用单例、子进程窗口与本地 IPC 协调。
+pub mod process;
+/// 主进程原生系统托盘封装。
+pub mod tray;
+
 const ROTATE_CCW_ICON_PATH: &str = "icons/rotate-ccw.svg";
 const ROTATE_CCW_ICON: &[u8] = include_bytes!("../assets/icons/rotate-ccw.svg");
 
@@ -114,8 +119,13 @@ impl fmt::Debug for ApplicationAssets {
 /// 桌面应用运行时选项。
 ///
 /// 该结构保存所有 `with_*` 链式配置产生的启动参数，最终由运行器消费。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ApplicationOptions {
+    /// 是否由通用运行器创建默认启动窗口。
+    ///
+    /// 设置或注册 Window 子进程会关闭此项，并在 [`Application::initialize`] 中
+    /// 打开唯一目标窗口。
+    pub open_startup_window: bool,
     /// 是否以守护模式启动应用。
     ///
     /// 为 `true` 时，运行器仍会按窗口配置创建主窗口，但会使用显式退出策略，
@@ -149,6 +159,21 @@ pub struct ApplicationOptions {
     /// 运行器会在进入 GPUI 事件循环前把它和框架、组件库的默认资源合并。该字段用于
     /// 应用自定义 SVG 图标、图片或其他通过 `svg().path(...)`、`img(...)` 读取的资源。
     pub application_assets: Option<ApplicationAssets>,
+}
+
+impl Default for ApplicationOptions {
+    fn default() -> Self {
+        Self {
+            open_startup_window: true,
+            daemon_mode: false,
+            activate: false,
+            window_options: None,
+            window_size: None,
+            window_min_size: None,
+            startup_display_uuid: None,
+            application_assets: None,
+        }
+    }
 }
 
 /// 桌面应用抽象。
@@ -398,6 +423,7 @@ where
             }
 
             let ApplicationOptions {
+                open_startup_window: _,
                 daemon_mode: _,
                 activate,
                 window_options,
@@ -465,6 +491,6 @@ fn runtime_plan(options: &ApplicationOptions) -> ApplicationRuntimePlan {
 
     ApplicationRuntimePlan {
         quit_mode,
-        open_startup_window: true,
+        open_startup_window: options.open_startup_window,
     }
 }

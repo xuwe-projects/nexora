@@ -291,6 +291,30 @@ fn dynamic_path_extracts_decoded_parameter_and_query() {
     assert_eq!(query.tag, ["a", "b"]);
 }
 
+#[test]
+fn route_match_serializes_complete_stable_location() {
+    let registry = AppRegistry::builder()
+        .feature::<UserDetailsFeature>()
+        .build()
+        .unwrap();
+    let matched = registry
+        .resolve("/users/details/42?tag=b&tab=roles&tag=a")
+        .expect("完整路由应当可以解析");
+
+    assert_eq!(
+        matched.location(),
+        "/users/details/42?tab=roles&tag=b&tag=a"
+    );
+    assert_eq!(
+        matched.stable_id(),
+        "user-details::/users/details/42?tab=roles&tag=b&tag=a"
+    );
+    let restored = registry
+        .resolve(&matched.location())
+        .expect("序列化位置应当可以恢复");
+    assert_eq!(restored, matched);
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct DecodedUserDetailsPath {
     id: String,

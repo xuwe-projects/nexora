@@ -21,26 +21,26 @@ members = [
 ]
 
 [workspace.package]
-version = "0.32.0"
+version = "0.33.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xuwe-projects/nexora"
 homepage = "https://github.com/xuwe-projects/nexora"
 
 [workspace.dependencies]
-account = { version = "0.32.0", path = "modules/account", default-features = false }
+account = { version = "0.33.0", path = "modules/account", default-features = false }
 actions = { path = "crates/actions" }
 api = { path = "crates/api" }
 changelog = { path = "crates/changelog" }
-configuration = { version = "0.32.0", path = "crates/configuration" }
-contracts = { version = "0.32.0", path = "crates/contracts" }
-desktop = { version = "0.32.0", path = "crates/desktop" }
+configuration = { version = "0.33.0", path = "crates/configuration" }
+contracts = { version = "0.33.0", path = "crates/contracts" }
+desktop = { version = "0.33.0", path = "crates/desktop" }
 kernel = { path = "crates/kernel" }
 logging = { path = "crates/logging" }
-macros = { package = "nexora-macros", version = "0.32.0", path = "crates/macros" }
-migrate = { version = "0.32.0", path = "crates/migrate", default-features = false }
-nexora = { version = "0.32.0", path = "crates/nexora" }
-oidc = { version = "0.32.0", path = "crates/oidc" }
+macros = { package = "nexora-macros", version = "0.33.0", path = "crates/macros" }
+migrate = { version = "0.33.0", path = "crates/migrate", default-features = false }
+nexora = { version = "0.33.0", path = "crates/nexora" }
+oidc = { version = "0.33.0", path = "crates/oidc" }
 theme = { path = "crates/theme" }
 ui = { path = "crates/ui" }
 updater = { path = "crates/updater", default-features = false }
@@ -53,6 +53,7 @@ dialoguer = { version = "0.12", default-features = false }
 askama = { version = "0.16.0", default-features = false, features = ["derive", "std"] }
 config-rs = { package = "config", version = "0.15.25", default-features = false, features = ["toml"] }
 directories = { version = "6", default-features = false }
+fs2 = { version = "0.4.3", default-features = false }
 include_dir = { version = "0.7", default-features = false }
 inventory = { version = "0.3.24", default-features = false }
 matchit = { version = "0.8.4", default-features = false }
@@ -72,6 +73,8 @@ url = { version = "2", default-features = false, features = ["serde", "std"] }
 uuid = { version = "1.23.5", default-features = false, features = ["serde", "v7"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
+tray-icon = { version = "0.24.2", default-features = false }
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 # 服务端异步、HTTP 与 PostgreSQL

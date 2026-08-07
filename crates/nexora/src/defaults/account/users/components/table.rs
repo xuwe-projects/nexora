@@ -16,6 +16,7 @@ use gpui_component::{
 use crate::{
     defaults::account::has_permission,
     desktop::contract::{UserResponse, UserStatus, UserType},
+    persistent_crud_table_state,
 };
 use ui::{Card, CrudTableDelegate, TableCell};
 
@@ -55,14 +56,22 @@ impl UsersTable {
             .on_load_more(move |_, cx| {
                 _ = load_page.update(cx, UsersPage::load_next_page);
             });
-        let state = cx.new(|cx| {
-            TableState::new(delegate, window, cx)
-                .sortable(false)
-                .col_movable(true)
-                .col_resizable(true)
-                .col_selectable(false)
-                .row_selectable(false)
-        });
+        let state = persistent_crud_table_state(
+            "users",
+            "users-table",
+            delegate,
+            |state| {
+                state
+                    .sortable(false)
+                    .col_movable(true)
+                    .col_resizable(true)
+                    .col_selectable(false)
+                    .row_selectable(false)
+            },
+            window,
+            cx,
+        )
+        .expect("默认用户表格稳定列布局应当合法");
         Self {
             state,
             all_rows: Vec::new(),

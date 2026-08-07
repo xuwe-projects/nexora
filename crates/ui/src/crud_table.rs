@@ -224,6 +224,14 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
         &self.columns
     }
 
+    /// 返回当前全部列定义的可变切片。
+    ///
+    /// 该入口用于框架级列布局恢复与 `TableEvent` 同步；业务代码不应用它
+    /// 增删列或修改稳定 key。调用后应由所属 `TableState` 通知刷新。
+    pub fn columns_mut(&mut self) -> &mut [Column] {
+        &mut self.columns
+    }
+
     /// 用新数据替换当前全部行。
     ///
     /// 该方法只更新 delegate 内部数据；调用方在 GPUI Entity 中修改后仍应通过对应

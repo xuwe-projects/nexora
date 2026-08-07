@@ -1,6 +1,8 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::{Arc, Barrier},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -35,6 +37,13 @@ impl Default for ServerConfig {
 struct Preferences {
     schema_version: u32,
     theme: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+struct ConcurrentPreferences {
+    theme: String,
+    density: String,
 }
 
 impl VersionedConfiguration for Preferences {
@@ -124,6 +133,55 @@ fn user_store_round_trips_toml_atomically() {
 }
 
 #[test]
+fn user_store_update_reloads_latest_value_under_cross_process_lock() {
+    let directory = temporary_directory("concurrent-update");
+    let path = directory.join("settings.toml");
+    let store = UserConfigStore::<ConcurrentPreferences>::at_path(&path);
+    store
+        .save(&ConcurrentPreferences::default())
+        .expect("应当可以写入初始配置");
+    let barrier = Arc::new(Barrier::new(3));
+
+    let theme_worker = {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+            let store = UserConfigStore::<ConcurrentPreferences>::at_path(path);
+            barrier.wait();
+            store
+                .update(|preferences| preferences.theme = "dark".to_owned())
+                .expect("主题 patch 应当成功");
+        })
+    };
+    let density_worker = {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+            let store = UserConfigStore::<ConcurrentPreferences>::at_path(path);
+            barrier.wait();
+            store
+                .update(|preferences| preferences.density = "compact".to_owned())
+                .expect("密度 patch 应当成功");
+        })
+    };
+
+    barrier.wait();
+    theme_worker.join().expect("主题线程不应 panic");
+    density_worker.join().expect("密度线程不应 panic");
+    let loaded = store.load_or_default().expect("应当可以读取合并结果");
+
+    assert_eq!(loaded.theme, "dark");
+    assert_eq!(loaded.density, "compact");
+    let temporary_files = fs::read_dir(&directory)
+        .expect("应当可以读取配置目录")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+        .count();
+    assert_eq!(temporary_files, 0);
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn newer_user_schema_is_rejected() {
     let directory = temporary_directory("schema");
     let path = directory.join("settings.toml");
@@ -136,6 +194,24 @@ fn newer_user_schema_is_rejected() {
         .expect_err("更高 schema 版本必须被拒绝");
 
     assert!(error.to_string().contains("不支持配置 schema 版本 2"));
+    _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn versioned_update_does_not_overwrite_newer_schema() {
+    let directory = temporary_directory("schema-update");
+    let path = directory.join("settings.toml");
+    fs::create_dir_all(&directory).expect("应当可以创建测试目录");
+    let original = "schema_version = 2\ntheme = \"future\"\nfuture_option = true\n";
+    fs::write(&path, original).expect("应当可以写入未来版本配置");
+    let store = UserConfigStore::<Preferences>::at_path(&path);
+
+    let error = store
+        .update_versioned(|preferences| preferences.theme = "dark".to_owned())
+        .expect_err("旧程序不得更新更高版本 schema");
+
+    assert!(error.to_string().contains("不支持配置 schema 版本 2"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
     _ = fs::remove_dir_all(directory);
 }
 
