@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: cross-platform desktop updater protocol and Skill](./unreleased)
+- [0.31.0: PostgreSQL 17 framework migration baseline fix](./0.31.0)
 - [0.30.1: Fix exact Inno Setup 6 version detection](./0.30.1)
 - [0.30.0: Windows Inno Setup 6 installer](./0.30.0)
 - [0.29.0: independent SQLx history and reversible framework baselines](./0.29.0)

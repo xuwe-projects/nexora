@@ -13,16 +13,16 @@ COMMENT ON TYPE account.user_status IS
     '用户访问状态：active=正常访问，suspended=保留记录但禁止访问受保护资源';
 
 CREATE TABLE account.users (
-    id VARCHAR(8) CONSTRAINT users_id_not_null NOT NULL,
-    identity_id TEXT CONSTRAINT users_identity_id_not_null NOT NULL,
+    id VARCHAR(8) NOT NULL,
+    identity_id TEXT NOT NULL,
     username TEXT,
     email TEXT,
-    display_name TEXT CONSTRAINT users_display_name_not_null NOT NULL,
-    status account.user_status CONSTRAINT users_status_not_null NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ CONSTRAINT users_created_at_not_null NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ CONSTRAINT users_updated_at_not_null NOT NULL DEFAULT NOW(),
-    last_login_at TIMESTAMPTZ CONSTRAINT users_last_login_at_not_null NOT NULL DEFAULT NOW(),
-    is_super_admin BOOLEAN CONSTRAINT users_is_super_admin_not_null NOT NULL DEFAULT FALSE,
+    display_name TEXT NOT NULL,
+    status account.user_status NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT users_pkey PRIMARY KEY (id),
     CONSTRAINT users_id_format CHECK (id ~ '^[A-Za-z0-9]{8}$'),
     CONSTRAINT users_identity_id_unique UNIQUE (identity_id),
@@ -47,14 +47,6 @@ COMMENT ON COLUMN account.users.updated_at IS '本地用户资料最后更新时
 COMMENT ON COLUMN account.users.last_login_at IS '最近一次成功认证并同步身份的时间';
 COMMENT ON COLUMN account.users.is_super_admin IS '是否为系统唯一超级管理员；该身份不绑定角色或权限并直接绕过权限校验';
 COMMENT ON CONSTRAINT users_pkey ON account.users IS '保证每个本地用户具有唯一稳定主键';
-COMMENT ON CONSTRAINT users_id_not_null ON account.users IS '要求每个用户都具有本地主键';
-COMMENT ON CONSTRAINT users_identity_id_not_null ON account.users IS '要求每个用户都绑定认证授权身份 ID';
-COMMENT ON CONSTRAINT users_display_name_not_null ON account.users IS '要求每个用户都具有展示名称';
-COMMENT ON CONSTRAINT users_status_not_null ON account.users IS '要求每个用户都具有明确访问状态';
-COMMENT ON CONSTRAINT users_created_at_not_null ON account.users IS '要求每个用户都记录创建时间';
-COMMENT ON CONSTRAINT users_updated_at_not_null ON account.users IS '要求每个用户都记录最后更新时间';
-COMMENT ON CONSTRAINT users_last_login_at_not_null ON account.users IS '要求每个用户都记录最近登录时间';
-COMMENT ON CONSTRAINT users_is_super_admin_not_null ON account.users IS '要求每个用户都明确是否为超级管理员';
 COMMENT ON CONSTRAINT users_id_format ON account.users IS '保证用户 ID 固定为 8 位大小写字母或数字';
 COMMENT ON CONSTRAINT users_identity_id_unique ON account.users IS '保证一个认证授权身份只对应一个本地用户';
 COMMENT ON CONSTRAINT users_identity_id_valid ON account.users IS '保证认证授权身份 ID 非空且长度不超过 255 个字符';
@@ -76,8 +68,8 @@ CREATE UNIQUE INDEX users_single_super_admin_idx
 COMMENT ON INDEX account.users_single_super_admin_idx IS '保证整个系统最多存在一个内置超级管理员用户';
 
 CREATE TABLE account.system_initialization (
-    id SMALLINT CONSTRAINT system_initialization_id_not_null NOT NULL DEFAULT 1,
-    is_initialized BOOLEAN CONSTRAINT system_initialization_is_initialized_not_null NOT NULL DEFAULT FALSE,
+    id SMALLINT NOT NULL DEFAULT 1,
+    is_initialized BOOLEAN NOT NULL DEFAULT FALSE,
     initialized_at TIMESTAMPTZ,
     super_admin_user_id VARCHAR(8),
     identity_issuer TEXT,
@@ -102,8 +94,6 @@ COMMENT ON COLUMN account.system_initialization.initialized_at IS '系统完成�
 COMMENT ON COLUMN account.system_initialization.super_admin_user_id IS '初始化时选定的 8 位超级管理员本地用户 ID';
 COMMENT ON COLUMN account.system_initialization.identity_issuer IS '当前部署唯一允许使用的规范 OIDC issuer URL；首次启动绑定后永久不可更换';
 COMMENT ON CONSTRAINT system_initialization_pkey ON account.system_initialization IS '保证初始化状态单例记录具有稳定主键';
-COMMENT ON CONSTRAINT system_initialization_id_not_null ON account.system_initialization IS '要求初始化状态单例始终具有固定主键';
-COMMENT ON CONSTRAINT system_initialization_is_initialized_not_null ON account.system_initialization IS '要求初始化状态始终具有明确完成标记';
 COMMENT ON CONSTRAINT system_initialization_singleton ON account.system_initialization IS '保证初始化状态表只允许固定单例记录';
 COMMENT ON CONSTRAINT system_initialization_state_consistent ON account.system_initialization IS '保证完成标记与超级管理员、完成时间同时存在或同时为空';
 COMMENT ON CONSTRAINT system_initialization_identity_issuer_valid ON account.system_initialization IS '允许首次绑定前为空；绑定值必须非空且长度不超过 2048 个字符';
