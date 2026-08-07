@@ -24,8 +24,9 @@ nexora doctor --fix
 macOS 会准备 Rust target、`cargo-bundle`、Homebrew 与 `create-dmg`；缺少 Xcode Command Line
 Tools 时启动 `xcode-select --install`，完成系统安装后重新运行同一条 build。Windows 会准备
 Rust target、固定版本的 Inno Setup 6.7.3 与 Windows SDK。交互式修复通过 winget 安装官方
-`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。Nexora 读取
-`ISCC.exe` PE 资源中的固定文件版本 `6.7.3.0`，不会依赖只显示主版本的 `/?` 帮助横幅。
+`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。Nexora 让
+`ISCC.exe` 从标准输入读取空脚本，并解析编译前输出的 `Compiler engine version`；不会依赖
+只显示主版本的 `/?` 帮助横幅，也不会生成临时安装产物。
 
 需要手动排查时，对应官方命令是：
 

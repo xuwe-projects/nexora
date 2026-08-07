@@ -33,5 +33,5 @@ jobs:
             throw "Inno Setup installed without the expected ISCC.exe: $iscc"
           }
           "NEXORA_TEST_ISCC=$iscc" >> $env:GITHUB_ENV
-      - name: Verify installed compiler file version
-        run: cargo test -p cli --locked --test build installed_inno_setup_has_pinned_file_version
+      - name: Verify installed compiler engine version
+        run: cargo test -p cli --locked --test build installed_inno_setup_reports_pinned_engine_version

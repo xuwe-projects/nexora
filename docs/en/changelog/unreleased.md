@@ -50,9 +50,10 @@
 
 ## Fixed
 
-- Windows build dependency checks now read the `ISCC.exe` PE fixed file-version resource instead
-  of parsing a patch version that the official `/?` banner does not print. The pinned winget
-  installation of Inno Setup 6.7.3 is now detected exactly.
+- Windows build dependency checks now ask `ISCC.exe` to read an empty script from standard input and
+  parse the exact compiler-engine version printed before compilation, instead of parsing a patch
+  version that the official `/?` banner does not print. The pinned winget installation of Inno
+  Setup 6.7.3 is now detected exactly.
 
 ## Removed
 

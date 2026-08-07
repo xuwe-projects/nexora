@@ -24,8 +24,9 @@ Setup 6.7.3, and the official Windows SDK installer. System installers may requi
 a restart; rerun the same build afterward.
 Non-interactive builds never launch installers and instead fail with exact commands. SDK tools are
 discovered from standard locations without requiring a permanent PATH change.
-Nexora reads fixed file version `6.7.3.0` from the `ISCC.exe` PE resource; it does not depend on the
-`/?` help banner, which only identifies the Inno Setup major version.
+Nexora asks `ISCC.exe` to read an empty script from standard input and parses the exact
+`Compiler engine version` printed before compilation. It does not depend on the `/?` help banner,
+which only identifies the Inno Setup major version, and creates no temporary installer artifact.
 The complete field-by-field reference, including required status, sources, defaults, secret status,
 examples, and failure behavior, is maintained in the
 [Chinese updater reference](/desktop/updater). The code defaults are `force_path_style = false`,

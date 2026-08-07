@@ -1873,13 +1873,22 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
 #[test]
 fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
     assert_eq!(
-        inspect_inno_setup_requirement(Some("6.7.3.0"), false, false).unwrap(),
+        inspect_inno_setup_requirement(
+            Some("Compiler engine version: Inno Setup 6.7.3"),
+            false,
+            false,
+        )
+        .unwrap(),
         "ready"
     );
 
-    let mismatch = inspect_inno_setup_requirement(Some("6.7.2.0"), false, false)
-        .unwrap_err()
-        .to_string();
+    let mismatch = inspect_inno_setup_requirement(
+        Some("Compiler engine version: Inno Setup 6.7.2"),
+        false,
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(mismatch.contains("6.7.3"));
     assert!(mismatch.contains("winget install"));
 
@@ -1894,16 +1903,17 @@ fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
         "install"
     );
 
-    let nonzero_build = inspect_inno_setup_requirement(Some("6.7.3.1"), false, false)
-        .unwrap_err()
-        .to_string();
-    assert!(nonzero_build.contains("6.7.3"));
-    assert!(nonzero_build.contains("winget install"));
+    let banner_only =
+        inspect_inno_setup_requirement(Some("Inno Setup 6 Command-Line Compiler"), false, false)
+            .unwrap_err()
+            .to_string();
+    assert!(banner_only.contains("6.7.3"));
+    assert!(banner_only.contains("winget install"));
 }
 
 #[cfg(windows)]
 #[test]
-fn installed_inno_setup_has_pinned_file_version() {
+fn installed_inno_setup_reports_pinned_engine_version() {
     let path = env::var_os("NEXORA_TEST_ISCC")
         .map(PathBuf::from)
         .expect("NEXORA_TEST_ISCC must point to an installed ISCC.exe");
