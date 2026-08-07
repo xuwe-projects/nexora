@@ -9,7 +9,8 @@ use commands::{
     inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_path_definition,
     inspect_inno_setup_requirement, inspect_prepare_release_receipt, inspect_publish_object_layout,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
-    inspect_release_selection, inspect_signing_key, inspect_windows_binary_link_args,
+    inspect_release_selection, inspect_select_inno_setup_candidate, inspect_signing_key,
+    inspect_windows_binary_link_args,
     inspect_windows_installer_sources, inspect_windows_resource_scripts, validate_display_name,
     write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
@@ -848,7 +849,11 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     assert_eq!(sources["file_version"], "1.2.3.7");
     assert!(script.contains("WizardStyle=modern"));
     assert!(script.contains("PrivilegesRequired=lowest"));
-    assert!(script.contains("DefaultDirName={localappdata}\\Programs\\{#AppId}"));
+    assert!(
+        script.contains("DefaultDirName={localappdata}\\Programs\\{#AppPublisher}\\{#AppName}")
+    );
+    assert!(!script.contains("DefaultDirName={localappdata}\\Programs\\{#AppName}"));
+    assert!(!script.contains("DefaultDirName={localappdata}\\Programs\\{#AppId}"));
     assert!(script.contains("DisableDirPage=no"));
     assert!(script.contains("#define LanguageFile \""));
     assert!(script.contains("ChineseSimplified.isl"));
@@ -875,11 +880,11 @@ fn windows_installer_source_defines_chinese_inno_flow() {
 }
 
 #[test]
-fn inno_definitions_escape_quotes_and_select_arm64_architecture() {
+fn inno_definitions_escape_braces_and_select_arm64_architecture() {
     let config = with_windows_target(app_config("one", "package-one", "Application One"))
         .replace(
             "publisher = \"Nexora Test Publisher\"",
-            r#"publisher = "Nexora \"Quoted\" 发布者""#,
+            r#"publisher = "Nexora {Quoted} 发布者""#,
         )
         .replace(
             "required = [\"x86_64-pc-windows-msvc\"]",
@@ -889,12 +894,47 @@ fn inno_definitions_escape_quotes_and_select_arm64_architecture() {
     let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
     let script = sources["iss"].as_str().unwrap();
 
-    assert!(script.contains("#define AppPublisher \"Nexora \"\"Quoted\"\" 发布者\""));
+    assert!(script.contains("#define AppPublisher \"Nexora {{Quoted} 发布者\""));
     assert!(script.contains("#define ArchitectureAllowed \"arm64\""));
     assert!(script.contains("#define ArchitectureInstallMode \"arm64\""));
 }
 
 #[test]
+fn invalid_windows_publishers_are_rejected_before_installer_generation() {
+    for publisher in [
+        ".",
+        "..",
+        "bad/name",
+        "bad\\name",
+        "bad:name",
+        "bad\"name",
+        "CON",
+        "lpt1.txt",
+        "trailing. ",
+    ] {
+        let config = with_windows_target(app_config("one", "package-one", "Application One"))
+            .replace(
+                "publisher = \"Nexora Test Publisher\"",
+                &format!("publisher = {publisher:?}"),
+            );
+        let fixture = Fixture::new("invalid-windows-publisher", &config);
+        let error = inspect_windows_installer_sources(fixture.config(), "one")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("platforms.windows.publisher"),
+            "publisher {publisher:?} returned: {error}"
+        );
+        assert!(
+            error.contains("安装目录"),
+            "publisher {publisher:?} returned: {error}"
+        );
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
 fn inno_definitions_reject_windows_invalid_path_characters() {
     let error = inspect_inno_path_definition(Path::new("inno-invalid?path"))
         .unwrap_err()
@@ -1832,7 +1872,7 @@ fn publish_credentials_fall_back_independently_by_channel_and_field() {
 }
 
 #[test]
-fn build_dependency_guidance_uses_pinned_official_installers() {
+fn build_dependency_guidance_is_manual_and_read_only() {
     let macos = inspect_build_dependency_guidance("macos").unwrap();
     assert_eq!(macos["xcode_command_line_tools"], "xcode-select --install");
     assert_eq!(macos["cargo_bundle"], "cargo install cargo-bundle");
@@ -1843,16 +1883,17 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
             .unwrap()
             .contains("Homebrew/install/HEAD/install.sh")
     );
-    assert_eq!(macos["non_interactive"], "fail_with_commands");
+    assert_eq!(macos["automatic_install"], false);
 
     let windows = inspect_build_dependency_guidance("windows").unwrap();
-    assert_eq!(windows["inno_setup_version"], "6.7.3");
+    assert_eq!(windows["inno_setup_supported"], ">=6.7.3, <8.0.0");
+    assert_eq!(windows["inno_setup_recommended"], "7.0.2");
     assert!(
         windows["inno_setup_install"]
             .as_str()
             .unwrap()
             .contains(
-                "winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 --scope user --silent --force"
+                "winget install --source winget --exact --id JRSoftware.InnoSetup.7 --version 7.0.2 --scope user --silent --force"
             )
     );
     assert!(
@@ -1861,53 +1902,99 @@ fn build_dependency_guidance_uses_pinned_official_installers() {
             .unwrap()
             .contains("Microsoft.WindowsSDK.10.0.26100")
     );
-    assert_eq!(windows["non_interactive"], "fail_with_commands");
+    assert_eq!(windows["automatic_install"], false);
 }
 
 #[test]
-fn inno_dependency_rejects_missing_or_mismatched_versions_before_build() {
-    assert_eq!(
-        inspect_inno_setup_requirement(
-            Some("Compiler engine version: Inno Setup 6.7.3"),
-            false,
-            false,
-        )
-        .unwrap(),
-        "ready"
-    );
+fn inno_dependency_accepts_only_the_supported_range() {
+    for version in ["6.7.3", "6.8.1", "7.0.0", "7.0.2", "7.9.9"] {
+        assert_eq!(
+            inspect_inno_setup_requirement(Some(&format!(
+                "Compiler engine version: Inno Setup {version}"
+            )))
+            .unwrap(),
+            "ready"
+        );
+    }
 
-    let mismatch = inspect_inno_setup_requirement(
-        Some("Compiler engine version: Inno Setup 6.7.2"),
-        false,
-        false,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(mismatch.contains("6.7.3"));
-    assert!(mismatch.contains("winget install"));
-
-    let missing = inspect_inno_setup_requirement(None, true, false)
+    for version in ["6.7.2", "8.0.0", "8.1.0"] {
+        let error = inspect_inno_setup_requirement(Some(&format!(
+            "Compiler engine version: Inno Setup {version}"
+        )))
         .unwrap_err()
         .to_string();
-    assert!(missing.contains("非交互环境"));
-    assert!(missing.contains("--version 6.7.3"));
+        assert!(error.contains(">= 6.7.3, < 8.0.0"));
+        assert!(error.contains("JRSoftware.InnoSetup.7"));
+    }
 
-    assert_eq!(
-        inspect_inno_setup_requirement(None, true, true).unwrap(),
-        "install"
-    );
-
-    let banner_only =
-        inspect_inno_setup_requirement(Some("Inno Setup 6 Command-Line Compiler"), false, false)
+    for output in [None, Some("Inno Setup 7 Command-Line Compiler")] {
+        let error = inspect_inno_setup_requirement(output)
             .unwrap_err()
             .to_string();
-    assert!(banner_only.contains("6.7.3"));
-    assert!(banner_only.contains("winget install"));
+        assert!(error.contains(">= 6.7.3, < 8.0.0"));
+        assert!(error.contains("Nexora 不会自动执行"));
+    }
+}
+
+#[test]
+fn inno_candidate_selection_uses_the_highest_valid_version() {
+    let selected = inspect_select_inno_setup_candidate(&[
+        (
+            "C:/broken/Inno Setup 7/ISCC.exe",
+            Some("Inno Setup 7 Command-Line Compiler"),
+        ),
+        (
+            "C:/Inno Setup 6/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 6.7.3"),
+        ),
+        (
+            "C:/Inno Setup 7.0.0/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 7.0.0"),
+        ),
+        (
+            "C:/Inno Setup 7.0.2/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 7.0.2"),
+        ),
+        (
+            "C:/unsupported/Inno Setup 8/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 8.0.0"),
+        ),
+    ])
+    .unwrap();
+    assert_eq!(selected["path"], "C:/Inno Setup 7.0.2/ISCC.exe");
+    assert_eq!(selected["version"], "7.0.2");
+
+    let fallback = inspect_select_inno_setup_candidate(&[
+        ("C:/broken/ISCC.exe", None),
+        (
+            "C:/valid/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 6.8.0"),
+        ),
+    ])
+    .unwrap();
+    assert_eq!(fallback["path"], "C:/valid/ISCC.exe");
+    assert_eq!(fallback["version"], "6.8.0");
+
+    let error = inspect_select_inno_setup_candidate(&[
+        (
+            "C:/old/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 6.7.2"),
+        ),
+        (
+            "C:/future/ISCC.exe",
+            Some("Compiler engine version: Inno Setup 8.0.0"),
+        ),
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("C:/old/ISCC.exe (6.7.2)"));
+    assert!(error.contains("C:/future/ISCC.exe (8.0.0)"));
 }
 
 #[cfg(windows)]
 #[test]
-fn installed_inno_setup_reports_pinned_engine_version() {
+#[ignore = "需要 NEXORA_TEST_ISCC 指向人工或 CI 预装的兼容 ISCC.exe"]
+fn installed_inno_setup_reports_supported_engine_version() {
     let path = env::var_os("NEXORA_TEST_ISCC")
         .map(PathBuf::from)
         .expect("NEXORA_TEST_ISCC must point to an installed ISCC.exe");
@@ -1917,18 +2004,19 @@ fn installed_inno_setup_reports_pinned_engine_version() {
         "missing installed ISCC.exe: {}",
         path.display()
     );
-    assert_eq!(inspect_inno_setup_compiler_version(path).unwrap(), "6.7.3");
+    assert_eq!(inspect_inno_setup_compiler_version(path).unwrap(), "7.0.2");
 }
 
 #[cfg(windows)]
 #[test]
+#[ignore = "需要 NEXORA_TEST_ISCC 指向人工或 CI 预装的兼容 ISCC.exe"]
 fn installed_inno_setup_compiles_generated_installer_source() {
     let compiler = env::var_os("NEXORA_TEST_ISCC")
         .map(PathBuf::from)
         .expect("NEXORA_TEST_ISCC must point to an installed ISCC.exe");
     let config = with_windows_target(app_config("one", "package-one", "中文 iMES One")).replace(
         "publisher = \"Nexora Test Publisher\"",
-        r#"publisher = "Nexora \"Quoted\" 发布者""#,
+        r#"publisher = "Nexora {Quoted} 发布者""#,
     );
     let fixture = Fixture::new("inno smoke 中文 path", &config);
     let setup = inspect_compile_windows_installer(
@@ -1975,6 +2063,7 @@ fn windows_resources_use_utf8_unicode_table_and_distinct_process_identity() {
 
 #[test]
 #[cfg(windows)]
+#[ignore = "需要当前 Windows 宿主人工或 CI 预装 rc.exe 与 MSVC linker"]
 fn windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files() {
     let config = windows_host_config(with_windows_target(app_config(
         "one",

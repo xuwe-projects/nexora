@@ -17,13 +17,15 @@
 
 ## Changed
 
-- Windows first-install packaging now uses pinned Inno Setup 6.7.3 and produces only a Simplified
-  Chinese Setup EXE plus the sidecar update ZIP; MSI and Burn bundles are no longer generated. Build
-  and doctor detect or repair ISCC through winget, and no longer require cargo-wix, WiX extensions,
+- Windows first-install packaging accepts Inno Setup `>= 6.7.3, < 8.0.0` and produces only a
+  Simplified Chinese Setup EXE plus the sidecar update ZIP; MSI and Burn bundles are no longer
+  generated. Build and doctor detect ISCC read-only and no longer require cargo-wix, WiX extensions,
   or a Nexora-managed .NET SDK. Installation is fixed to the unelevated current-user scope under
-  `%LOCALAPPDATA%\Programs\<app_id>` by default, with directory selection, desktop/Start menu
-  shortcuts, and launch-after-finish options preserved. Setup and the update ZIP share one staging
-  directory. Publish uploads both artifacts and checksums while signed `latest.json` references only
+  `%LOCALAPPDATA%\Programs\<publisher>\<display_name>` by default, with directory selection,
+  desktop/Start menu shortcuts, and launch-after-finish options preserved. Both `publisher` and
+  `display_name` must be safe Windows directory names. `app_id` remains the stable installer,
+  updater, and publish identity rather than a default directory component. Setup and the update ZIP
+  share one staging directory. Publish uploads both artifacts and checksums while signed `latest.json` references only
   `windows_update_zip`. Windows startup loads `nexora-updater.json` beside the main EXE; GUI apps
   and sidecars do not create console windows. Rust writes update ZIP entries with `/` separators.
   `signing = "none"` retains Ed25519, SHA-256, ZIP safety, and PE architecture checks, while
@@ -33,10 +35,10 @@
 - The default scaffold and `examples/updater-windows` now declare `stable`, `beta`, and a
   `default_channel`. Interactive `nexora build` shows channel selection, while CI can use
   `--channel` or `--all-channels` explicitly.
-- `apps.<app>.targets.required` is optional. `nexora build` defaults to the `rustc -vV` host target,
-  supports repeated `--target` overrides, and repairs missing Rust targets plus macOS/Windows
-  packaging dependencies in interactive terminals. System-installer completion can resume by
-  rerunning the same command; non-interactive environments receive exact installation commands.
+- `apps.<app>.targets.required` is optional. `nexora build` defaults to the `rustc -vV` host target
+  and supports repeated `--target` overrides. Interactive and non-interactive builds now perform the
+  same read-only Rust target and platform-tool preflight before any receipt or staging write, then
+  fail with complete manual installation guidance.
 - Publish targets no longer accept `credential_env_prefix`. Access, secret, and session fields each
   fall back through channel-specific Nexora, base Nexora, and AWS variables independently.
 - `nexora build` again writes standard `.sha256` sidecars for final ZIP and DMG artifacts, publish
@@ -50,15 +52,20 @@
 
 ## Fixed
 
-- Windows build dependency checks now ask `ISCC.exe` to read an empty script from standard input and
-  parse the exact compiler-engine version printed before compilation, instead of parsing a patch
-  version that the official `/?` banner does not print. The pinned winget installation of Inno
-  Setup 6.7.3 is now detected exactly.
+- The Windows sidecar now carries the exact main executable name verified from the update ZIP instead
+  of guessing by scanning the installation directory, so Inno Setup's `unins000.exe` no longer causes
+  a multiple-main-EXE failure. The transaction preserves `unins<digits>.exe/.dat/.msg` from the rollback
+  backup and rejects staged collisions, keeping the Apps & Features uninstall entry valid after update.
+- Windows dependency checks run every discovered Inno Setup 6/7 `ISCC.exe` candidate in standard
+  input mode, parse the actual compiler-engine version, ignore broken or incompatible candidates,
+  and select the highest compatible version.
 
 ## Removed
 
 - Removed Jenkinsfile, the old desktop build env example, the old raw `latest.json` example, the
   macOS shell updater helper and test, and the macOS-only updater README.
+- Removed `nexora doctor --fix`, all CLI Rustup/winget/Homebrew/Cargo/Xcode installation and download
+  paths, and the standalone `windows-tooling.yml`; Release explicitly pins Inno Setup 7.0.2.
 - Removed `credential_env_prefix` from `nexora.toml`; existing configuration must delete the field.
 
 ## Upgrade Notes

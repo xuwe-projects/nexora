@@ -45,6 +45,28 @@ nexora update
 nexora version
 ```
 
+## Read-only dependency diagnostics
+
+`nexora doctor` only reads tool paths, versions, and capabilities for the current host. It never
+downloads or installs software, runs `winget install`, `rustup target add`, `cargo install`,
+`brew install`, or `xcode-select --install`, changes PATH, opens a browser, or launches a system
+installer. Interactive terminals and CI use identical detection semantics; only presentation may
+differ.
+
+Every diagnostic includes purpose, required or conditional status, detected path and version,
+supported range, official download URL, copyable manual installation and verification commands,
+and the Nexora command to rerun. A missing required tool or incompatible version returns a non-zero
+status; a tool used only by a disabled signing/notarization mode is a warning.
+
+`nexora build` performs the same read-only preflight before writing
+`dist/<app>/<channel>/release.json`, creating staging, or starting Cargo. A failed preflight writes
+no new receipt or build state. Install the dependency manually, then rerun the original build
+command.
+
+`nexora doctor --fix` has been removed. Replace the old command with `nexora doctor`, then run the
+installation commands yourself. The complete Windows/macOS tool, version, certificate, and key
+matrix is in [Desktop updater](../desktop/updater.md#manually-installed-build-prerequisites).
+
 Account needs both a desktop and a server package and therefore requires workspace layout.
 Generated projects pin the current Nexora Git tag. Install the CLI with `cargo install --path` when
 testing local source changes.

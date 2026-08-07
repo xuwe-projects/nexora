@@ -64,8 +64,8 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 --scope user --silent --force --accept-package-agreements --accept-source-agreements
-          $iscc = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+          winget install --source winget --exact --id JRSoftware.InnoSetup.7 --version 7.0.2 --scope user --silent --force --accept-package-agreements --accept-source-agreements
+          $iscc = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 7\ISCC.exe"
           if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
             throw "Inno Setup installed without the expected ISCC.exe: $iscc"
           }
@@ -75,11 +75,11 @@ jobs:
         shell: bash
         run: |
           cargo test -p cli --locked --test build windows_resources_use_utf8_unicode_table_and_distinct_process_identity
-          cargo test -p cli --locked --test build windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files
+          cargo test -p cli --locked --test build windows_runner_reads_distinct_unicode_version_info_from_actual_pe_files -- --ignored
       - name: Test installed Inno Setup gate and installer compile
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
-        run: cargo test -p cli --locked --test build installed_inno_setup_ -- --nocapture
+        run: cargo test -p cli --locked --test build installed_inno_setup_ -- --ignored --nocapture
       - name: Build release binary
         shell: bash
         run: cargo build -p cli --release --locked --target "${{ matrix.target }}"
@@ -96,6 +96,7 @@ jobs:
           name: cli-${{ matrix.target }}
           path: release-assets/${{ matrix.asset }}
           if-no-files-found: error
+          retention-days: 1
 
   manifest:
     needs: build
@@ -154,6 +155,7 @@ jobs:
           name: cli-update-manifest
           path: release-assets/nexora-update.json
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     needs: manifest

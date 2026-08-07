@@ -190,6 +190,29 @@ fn release_workflow_builds_every_manifest_target_with_the_exact_asset_name() {
 }
 
 #[test]
+fn github_workflows_keep_only_docs_and_reproducible_release() {
+    let workflow_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(".github/workflows");
+    let mut names = fs::read_dir(workflow_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, ["docs.yml", "release.yml"]);
+
+    let workflow = RELEASE_WORKFLOW.replace("\r\n", "\n");
+    assert!(workflow.contains("tags:\n      - \"v*\""));
+    assert!(!workflow.contains("pull_request:"));
+    assert!(!workflow.contains("schedule:"));
+    assert!(!workflow.contains("branches:"));
+    assert!(workflow.contains("--id JRSoftware.InnoSetup.7 --version 7.0.2"));
+    assert!(workflow.contains("Programs\\Inno Setup 7\\ISCC.exe"));
+    assert!(workflow.contains("installed_inno_setup_ -- --ignored --nocapture"));
+    assert_eq!(workflow.matches("retention-days: 1").count(), 2);
+}
+
+#[test]
 #[cfg(unix)]
 fn unix_install_replaces_atomically_and_preserves_current_on_failure() {
     use std::os::unix::fs::PermissionsExt as _;

@@ -34,8 +34,11 @@ const DIST_DIRECTORY: &str = "dist";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 const MUTABLE_CACHE: &str = "no-cache";
 const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
-const INNO_SETUP_VERSION: &str = "6.7.3";
-const INNO_SETUP_WINGET_PACKAGE: &str = "JRSoftware.InnoSetup";
+const INNO_SETUP_MINIMUM_VERSION: &str = "6.7.3";
+const INNO_SETUP_MAXIMUM_VERSION: &str = "8.0.0";
+const INNO_SETUP_RECOMMENDED_VERSION: &str = "7.0.2";
+const INNO_SETUP_WINGET_PACKAGE: &str = "JRSoftware.InnoSetup.7";
+const INNO_SETUP_DOWNLOAD_URL: &str = "https://jrsoftware.org/isdl.php";
 const WINDOWS_INSTALLER_TEMPLATE: &str = include_str!("../../templates/windows/installer.iss");
 const WINDOWS_CHINESE_SIMPLIFIED_MESSAGES: &str =
     include_str!("../../templates/windows/ChineseSimplified.isl");
@@ -717,13 +720,26 @@ pub(super) fn run_build_command(config: BuildConfig) -> CliResult<()> {
         config.all_channels,
         terminal_is_interactive(),
     )?;
-    ensure_rust_toolchain(true)?;
-    for (app_key, channel) in selections {
+    ensure_rust_toolchain("原始 `nexora build` 命令")?;
+    let selections = selections
+        .into_iter()
+        .map(|(app_key, channel)| {
+            let app = &project.config.apps[&app_key];
+            let targets = project.resolve_build_targets(app_key.as_str(), app, &config.target)?;
+            Ok((app_key, channel, targets))
+        })
+        .collect::<CliResult<Vec<_>>>()?;
+    for (app_key, _, targets) in &selections {
+        let app = &project.config.apps[app_key];
+        for target in targets {
+            ensure_target_build_dependencies(target, app)?;
+        }
+    }
+    for (app_key, channel, targets) in selections {
         let app = &project.config.apps[&app_key];
         let package_version = cargo_package_version(&project.root, &app.package, false)?;
         let configured =
             project.resolved_release(&app_key, app, &channel, Some(package_version))?;
-        let targets = project.resolve_build_targets(app_key.as_str(), app, &config.target)?;
         let receipt = project.prepare_build_receipt(&app_key, app, &configured, &targets)?;
         let release = receipt.validated_release(&configured)?;
         let frozen_notes = freeze_release_notes(&project.root, &app_key, app, &release)?;
@@ -1853,7 +1869,6 @@ fn execute_macos_build(plan: &BuildPlan) -> CliResult<()> {
         "版本：{} / build {} / {}",
         plan.release.version, plan.release.build_number, plan.target
     );
-    ensure_build_dependencies(plan)?;
     run_cargo_bundle(plan)?;
     ensure_app_exists(&plan.app_path, &plan.package)?;
     let executable = bundle_executable_name(&plan.app_path)?;
@@ -1918,7 +1933,6 @@ fn write_runtime_config_to_directory(plan: &BuildPlan, config_directory: &Path) 
 fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     println!("build: {} ({})", plan.display_name, plan.app_key);
     remove_existing_file(&plan.artifact_path)?;
-    ensure_windows_build_dependencies(plan)?;
     let main_resource = compile_windows_resource(plan, WindowsResourceKind::Main)?;
     build_windows_binary(plan, &plan.package, &main_resource)?;
     let updater_path = if plan.updater.is_some() {
@@ -1948,16 +1962,6 @@ fn execute_windows_build(plan: &BuildPlan) -> CliResult<()> {
     println!("SETUP: {}", plan.setup_path.display());
     println!("ARTIFACT: {}", plan.artifact_path.display());
     Ok(())
-}
-
-fn ensure_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
-    ensure_macos_dependencies(
-        &plan.target,
-        plan.signing != SigningMode::None,
-        plan.signing == SigningMode::DeveloperId,
-        plan.notarize,
-        true,
-    )
 }
 
 fn run_cargo_bundle(plan: &BuildPlan) -> CliResult<()> {
@@ -2125,19 +2129,6 @@ fn write_updater_config_to_path(plan: &BuildPlan, path: &Path) -> CliResult<()> 
         .map_err(|error| CliError::new(format!("无法生成 updater bundle 配置: {error}")))?;
     fs::write(path, contents)
         .map_err(|error| CliError::new(format!("无法写入 updater bundle 配置: {error}")))
-}
-
-fn ensure_windows_build_dependencies(plan: &BuildPlan) -> CliResult<()> {
-    if env::consts::OS != "windows" {
-        return Err(CliError::new("当前宿主不能构建 Windows targets"));
-    }
-    ensure_windows_dependencies(
-        &plan.target,
-        plan.windows
-            .as_ref()
-            .is_some_and(|options| options.signing == WindowsSigningMode::Authenticode),
-        true,
-    )
 }
 
 fn windows_work_dir(plan: &BuildPlan) -> PathBuf {
@@ -2614,6 +2605,7 @@ fn windows_build_options(config: &WindowsConfig) -> CliResult<WindowsBuildOption
         .clone()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CliError::new("Windows Setup.exe 需要 platforms.windows.publisher"))?;
+    validate_windows_install_directory_component(&publisher, "platforms.windows.publisher")?;
     let (signing_thumbprint, timestamp_url, expected_publisher) = match config.signing {
         WindowsSigningMode::None => {
             for (field, configured) in [
@@ -4153,6 +4145,24 @@ pub fn inspect_build_datetime_number(
 /// 名称为空、包含控制字符、路径分隔符、Windows 禁止字符、保留设备名或尾随点/空格时
 /// 返回错误。合法 Unicode、中文、大小写和内部空格会原样保留。
 pub fn validate_display_name(value: &str) -> CliResult<()> {
+    if !is_safe_windows_path_component(value) {
+        return Err(CliError::new(format!(
+            "display_name `{value}` 不能安全作为跨平台分发文件名"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_windows_install_directory_component(value: &str, field: &str) -> CliResult<()> {
+    if !is_safe_windows_path_component(value) {
+        return Err(CliError::new(format!(
+            "{field} `{value}` 不能安全作为 Windows 安装目录名"
+        )));
+    }
+    Ok(())
+}
+
+fn is_safe_windows_path_component(value: &str) -> bool {
     let invalid_windows_character = value.chars().any(|character| {
         matches!(
             character,
@@ -4171,19 +4181,13 @@ pub fn validate_display_name(value: &str) -> CliResult<()> {
         .strip_prefix("COM")
         .or_else(|| device_name.strip_prefix("LPT"))
         .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'));
-    if value.trim().is_empty()
-        || matches!(value, "." | "..")
-        || value.ends_with('.')
-        || value.ends_with(' ')
-        || invalid_windows_character
-        || value.chars().any(char::is_control)
-        || reserved_device
-    {
-        return Err(CliError::new(format!(
-            "display_name `{value}` 不能安全作为跨平台分发文件名"
-        )));
-    }
-    Ok(())
+    !value.trim().is_empty()
+        && !matches!(value, "." | "..")
+        && !value.ends_with('.')
+        && !value.ends_with(' ')
+        && !invalid_windows_character
+        && !value.chars().any(char::is_control)
+        && !reserved_device
 }
 
 fn validate_safe_component(value: &str, label: &str) -> CliResult<()> {
@@ -4467,22 +4471,93 @@ fn default_start_menu_shortcut() -> bool {
     true
 }
 
-pub(super) fn run_doctor(fix: bool) -> CliResult<()> {
-    if env::consts::OS == "macos" {
-        ensure_macos()?;
-        ensure_rust_toolchain(fix)?;
-        let target = rustc_host_target()?;
-        ensure_macos_dependencies(&target, true, true, true, fix)?;
-        println!("doctor: macOS 构建依赖可用");
-    } else if env::consts::OS == "windows" {
-        ensure_rust_toolchain(fix)?;
-        let target = rustc_host_target()?;
-        ensure_windows_dependencies(&target, true, fix)?;
-        println!("doctor: Windows SDK 与 Inno Setup 构建依赖可用");
-    } else {
-        return Err(CliError::new("当前宿主暂不支持桌面发布构建"));
+#[derive(Debug)]
+struct DependencyDiagnostic {
+    name: String,
+    purpose: String,
+    requirement: String,
+    ready: bool,
+    status: String,
+    detected_path: Option<String>,
+    detected_version: Option<String>,
+    supported: String,
+    official_download: String,
+    manual_install: String,
+    verify_command: String,
+    rerun_command: String,
+    detail: Option<String>,
+    required: bool,
+}
+
+impl DependencyDiagnostic {
+    fn render(&self) -> String {
+        let mut output = format!(
+            "依赖：{}\n用途：{}\n要求：{}\n状态：{}\n检测路径：{}\n检测版本：{}\n支持范围/能力：{}\n官方下载：{}\n人工安装：{}\n验证命令：{}\n安装后重跑：{}\nNexora 不会自动执行上述安装命令。",
+            self.name,
+            self.purpose,
+            self.requirement,
+            self.status,
+            self.detected_path.as_deref().unwrap_or("未检测到"),
+            self.detected_version.as_deref().unwrap_or("未检测到"),
+            self.supported,
+            self.official_download,
+            self.manual_install,
+            self.verify_command,
+            self.rerun_command,
+        );
+        if let Some(detail) = &self.detail {
+            output.push_str("\n诊断：");
+            output.push_str(detail);
+        }
+        output
     }
-    Ok(())
+}
+
+#[derive(Debug)]
+struct InnoSetupDetection {
+    path: PathBuf,
+    version: Result<Version, String>,
+}
+
+pub(super) fn run_doctor() -> CliResult<()> {
+    let diagnostics = match env::consts::OS {
+        "macos" => macos_doctor_diagnostics(),
+        "windows" => windows_doctor_diagnostics(),
+        _ => return Err(CliError::new("当前宿主暂不支持桌面发布构建")),
+    };
+    let failed = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.required && !diagnostic.ready)
+        .count();
+    for diagnostic in &diagnostics {
+        if !diagnostic.ready && !diagnostic.required {
+            println!("warning: 条件依赖当前不可用");
+        }
+        println!("{}\n", diagnostic.render());
+    }
+    if failed == 0 {
+        println!("doctor: 当前宿主的必需构建依赖可用");
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "doctor: {failed} 项必需构建依赖缺失或不兼容；请按上述人工指引处理后重新运行 `nexora doctor`"
+        )))
+    }
+}
+
+fn ensure_target_build_dependencies(target: &str, app: &AppConfig) -> CliResult<()> {
+    match target_platform(target)? {
+        BuildTargetPlatform::MacOs => ensure_macos_dependencies(
+            target,
+            app.platforms.macos.signing != SigningMode::None,
+            app.platforms.macos.signing == SigningMode::DeveloperId,
+            app.platforms.macos.notarize,
+        ),
+        BuildTargetPlatform::Windows => ensure_windows_dependencies(
+            target,
+            app.platforms.windows.signing == WindowsSigningMode::Authenticode,
+        ),
+    }
 }
 
 fn ensure_macos_dependencies(
@@ -4490,145 +4565,270 @@ fn ensure_macos_dependencies(
     code_signing: bool,
     developer_id: bool,
     notarize: bool,
-    fix: bool,
 ) -> CliResult<()> {
     ensure_macos()?;
-    ensure_rust_toolchain(fix)?;
-    ensure_rust_target_installed(target, fix)?;
-    ensure_xcode_command_line_tools(code_signing, developer_id, notarize, fix)?;
-    ensure_cargo_tool("cargo-bundle", "cargo-bundle", fix)?;
-    ensure_homebrew(fix)?;
-    ensure_brew_formula("create-dmg", fix)
+    ensure_rust_target_installed(target, "原始 `nexora build` 命令")?;
+    ensure_diagnostic(xcode_diagnostic(
+        code_signing,
+        developer_id,
+        notarize,
+        true,
+        "原始 `nexora build` 命令",
+    ))?;
+    ensure_diagnostic(command_dependency_diagnostic(
+        "cargo-bundle",
+        "生成 macOS .app bundle",
+        true,
+        "命令可执行",
+        "https://crates.io/crates/cargo-bundle",
+        "cargo install cargo-bundle",
+        "cargo-bundle --version",
+        &["--version"],
+        "原始 `nexora build` 命令",
+    ))?;
+    ensure_diagnostic(command_dependency_diagnostic(
+        "create-dmg",
+        "从已签名 .app 生成 DMG",
+        true,
+        "命令可执行",
+        "https://github.com/create-dmg/create-dmg",
+        "brew install create-dmg",
+        "create-dmg --version",
+        &["--version"],
+        "原始 `nexora build` 命令",
+    ))
 }
 
-fn ensure_windows_dependencies(target: &str, authenticode: bool, fix: bool) -> CliResult<()> {
-    ensure_rust_toolchain(fix)?;
-    ensure_rust_target_installed(target, fix)?;
-    ensure_windows_sdk(authenticode, fix)?;
-    ensure_inno_setup(fix)
-}
-
-fn ensure_rust_toolchain(fix: bool) -> CliResult<()> {
-    activate_rust_tool_path()?;
-    if command_exists("cargo") && command_exists("rustup") {
-        return Ok(());
+fn ensure_windows_dependencies(target: &str, authenticode: bool) -> CliResult<()> {
+    if env::consts::OS != "windows" {
+        return Err(CliError::new("当前宿主不能构建 Windows targets"));
     }
-    let manual = if env::consts::OS == "windows" {
-        "从 https://rustup.rs 下载并运行 rustup-init.exe -y"
+    ensure_rust_target_installed(target, "原始 `nexora build` 命令")?;
+    ensure_diagnostic(msvc_linker_diagnostic(
+        target,
+        true,
+        "原始 `nexora build` 命令",
+    ))?;
+    ensure_diagnostic(windows_sdk_diagnostic(
+        authenticode,
+        true,
+        "原始 `nexora build` 命令",
+    ))?;
+    ensure_diagnostic(inno_setup_diagnostic(true, "原始 `nexora build` 命令"))
+}
+
+fn ensure_rust_toolchain(rerun_command: &str) -> CliResult<()> {
+    ensure_diagnostic(rust_toolchain_diagnostic(true, rerun_command))
+}
+
+fn ensure_rust_target_installed(target: &str, rerun_command: &str) -> CliResult<()> {
+    ensure_diagnostic(rust_target_diagnostic(target, true, rerun_command))
+}
+
+fn ensure_diagnostic(diagnostic: DependencyDiagnostic) -> CliResult<()> {
+    if diagnostic.ready {
+        Ok(())
     } else {
-        RUSTUP_INSTALL_COMMAND
+        Err(CliError::new(diagnostic.render()))
+    }
+}
+
+fn macos_doctor_diagnostics() -> Vec<DependencyDiagnostic> {
+    let target = doctor_host_target();
+    vec![
+        rust_toolchain_diagnostic(true, "`nexora doctor`"),
+        rust_target_diagnostic(&target, true, "`nexora doctor`"),
+        xcode_diagnostic(false, false, false, true, "`nexora doctor`"),
+        command_dependency_diagnostic(
+            "cargo-bundle",
+            "生成 macOS .app bundle",
+            true,
+            "命令可执行",
+            "https://crates.io/crates/cargo-bundle",
+            "cargo install cargo-bundle",
+            "cargo-bundle --version",
+            &["--version"],
+            "`nexora doctor`",
+        ),
+        command_dependency_diagnostic(
+            "create-dmg",
+            "生成 macOS DMG",
+            true,
+            "命令可执行",
+            "https://github.com/create-dmg/create-dmg",
+            "brew install create-dmg",
+            "create-dmg --version",
+            &["--version"],
+            "`nexora doctor`",
+        ),
+        command_dependency_diagnostic(
+            "brew",
+            "人工安装 create-dmg 等 macOS 构建工具",
+            false,
+            "可选；已通过其他方式安装工具时不需要",
+            "https://brew.sh/",
+            HOMEBREW_INSTALL_COMMAND,
+            "brew --version",
+            &["--version"],
+            "`nexora doctor`",
+        ),
+        command_dependency_diagnostic(
+            "codesign",
+            "Developer ID 或 ad_hoc 代码签名",
+            false,
+            "配置 signing != none 时必需",
+            "https://developer.apple.com/xcode/resources/",
+            "xcode-select --install",
+            "codesign --version",
+            &["--version"],
+            "`nexora doctor`",
+        ),
+        xcrun_dependency_diagnostic("notarytool", "提交 Apple 公证", "`nexora doctor`"),
+        xcrun_dependency_diagnostic("stapler", "装订 Apple 公证票据", "`nexora doctor`"),
+    ]
+}
+
+fn windows_doctor_diagnostics() -> Vec<DependencyDiagnostic> {
+    let target = doctor_host_target();
+    vec![
+        rust_toolchain_diagnostic(true, "`nexora doctor`"),
+        rust_target_diagnostic(&target, true, "`nexora doctor`"),
+        msvc_linker_diagnostic(&target, true, "`nexora doctor`"),
+        windows_sdk_diagnostic(false, true, "`nexora doctor`"),
+        inno_setup_diagnostic(true, "`nexora doctor`"),
+        windows_sdk_signing_diagnostic("`nexora doctor`"),
+    ]
+}
+
+fn rust_toolchain_diagnostic(required: bool, rerun_command: &str) -> DependencyDiagnostic {
+    let commands = ["rustup", "rustc", "cargo"];
+    let missing = commands
+        .iter()
+        .filter(|command| !command_exists(command))
+        .copied()
+        .collect::<Vec<_>>();
+    let ready = missing.is_empty();
+    let version = ready.then(|| {
+        [
+            command_version("rustup", &["--version"]),
+            command_version("rustc", &["--version"]),
+            command_version("cargo", &["--version"]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("; ")
+    });
+    DependencyDiagnostic {
+        name: "Rustup 与 Rust toolchain".to_owned(),
+        purpose: "编译 Nexora 应用及 updater sidecar".to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready {
+            "可用".to_owned()
+        } else {
+            "缺失".to_owned()
+        },
+        detected_path: command_path("cargo").map(|path| path.display().to_string()),
+        detected_version: version.filter(|version| !version.is_empty()),
+        supported: "rustup、rustc 与 cargo 均可执行".to_owned(),
+        official_download: "https://rustup.rs/".to_owned(),
+        manual_install: if env::consts::OS == "windows" {
+            "从 https://rustup.rs/ 下载 rustup-init.exe 后运行 `rustup-init.exe -y`".to_owned()
+        } else {
+            RUSTUP_INSTALL_COMMAND.to_owned()
+        },
+        verify_command: "rustup --version && rustc --version && cargo --version".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: (!ready).then(|| format!("缺少命令：{}", missing.join("、"))),
+        required,
+    }
+}
+
+fn rust_target_diagnostic(
+    target: &str,
+    required: bool,
+    rerun_command: &str,
+) -> DependencyDiagnostic {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output();
+    let (ready, detail) = match output {
+        Ok(output) if output.status.success() => {
+            let installed = String::from_utf8_lossy(&output.stdout);
+            (installed.lines().any(|line| line.trim() == target), None)
+        }
+        Ok(output) => (
+            false,
+            Some(format!(
+                "`rustup target list --installed` 失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+        ),
+        Err(error) => (false, Some(format!("无法执行 rustup：{error}"))),
     };
-    require_interactive_repair("Rust 工具链", manual, fix)?;
-    if env::consts::OS == "windows" {
-        let url = format!(
-            "https://static.rust-lang.org/rustup/dist/{}/rustup-init.exe",
-            windows_host_rust_target()
-        );
-        let installer = managed_tools_root()?.join("downloads/rustup-init.exe");
-        download_official_file(&url, &installer, "Rustup 安装器")?;
-        run_status("安装 Rust 工具链", Command::new(&installer).arg("-y"))?;
-    } else {
-        run_status(
-            "安装 Rust 工具链",
-            Command::new("sh").args(["-c", RUSTUP_INSTALL_COMMAND]),
-        )?;
-    }
-    activate_rust_tool_path()?;
-    if command_exists("cargo") && command_exists("rustup") {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            "Rust 工具链安装完成后仍无法找到 cargo/rustup；请运行 `{manual}`，然后重新执行 `nexora build`"
-        )))
+    DependencyDiagnostic {
+        name: format!("Rust target {target}"),
+        purpose: "为选定宿主/目标架构编译应用".to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready { "可用" } else { "缺失" }.to_owned(),
+        detected_path: command_path("rustup").map(|path| path.display().to_string()),
+        detected_version: ready.then(|| target.to_owned()),
+        supported: format!("`rustup target list --installed` 包含 {target}"),
+        official_download: "https://rustup.rs/".to_owned(),
+        manual_install: format!("rustup target add {target}"),
+        verify_command: "rustup target list --installed".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail,
+        required,
     }
 }
 
-fn ensure_rust_target_installed(target: &str, fix: bool) -> CliResult<()> {
-    let output = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法查询已安装 Rust target: {error}")))?;
-    if !output.status.success() {
-        return Err(CliError::new(format!(
-            "`rustup target list --installed` 失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    if String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .any(|installed| installed.trim() == target)
-    {
-        return Ok(());
-    }
-    let manual = format!("rustup target add {target}");
-    require_repair("Rust target", &manual, fix)?;
-    run_status(
-        &format!("安装 Rust target {target}"),
-        Command::new("rustup").args(["target", "add", target]),
-    )?;
-    let output = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map_err(|error| CliError::new(format!("无法复检 Rust target: {error}")))?;
-    if output.status.success()
-        && String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|installed| installed.trim() == target)
-    {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            "执行 `{manual}` 后仍未检测到 target；请检查输出并重新执行 `nexora build`"
-        )))
+#[allow(
+    clippy::too_many_arguments,
+    reason = "依赖诊断字段直接对应 CLI 输出契约，保持调用处可审查"
+)]
+fn command_dependency_diagnostic(
+    command: &str,
+    purpose: &str,
+    required: bool,
+    supported: &str,
+    official_download: &str,
+    manual_install: &str,
+    verify_command: &str,
+    version_args: &[&str],
+    rerun_command: &str,
+) -> DependencyDiagnostic {
+    let path = command_path(command);
+    let ready = path.is_some();
+    DependencyDiagnostic {
+        name: command.to_owned(),
+        purpose: purpose.to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready { "可用" } else { "缺失" }.to_owned(),
+        detected_path: path.map(|path| path.display().to_string()),
+        detected_version: ready
+            .then(|| command_version(command, version_args))
+            .flatten(),
+        supported: supported.to_owned(),
+        official_download: official_download.to_owned(),
+        manual_install: manual_install.to_owned(),
+        verify_command: verify_command.to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: None,
+        required,
     }
 }
 
-fn ensure_cargo_tool(command: &str, crate_name: &str, fix: bool) -> CliResult<()> {
-    if command_exists(command) {
-        return Ok(());
-    }
-    let manual = format!("cargo install {crate_name}");
-    require_repair(command, &manual, fix)?;
-    run_status(
-        &format!("安装 {command}"),
-        Command::new("cargo").args(["install", crate_name]),
-    )?;
-    require_command_with_guidance(command, &manual)
-}
-
-fn ensure_homebrew(fix: bool) -> CliResult<()> {
-    activate_homebrew_path()?;
-    if command_exists("brew") {
-        return Ok(());
-    }
-    require_interactive_repair("Homebrew", HOMEBREW_INSTALL_COMMAND, fix)?;
-    run_status(
-        "安装 Homebrew",
-        Command::new("/bin/bash").args(["-c", HOMEBREW_INSTALL_COMMAND]),
-    )?;
-    activate_homebrew_path()?;
-    require_command_with_guidance("brew", HOMEBREW_INSTALL_COMMAND)
-}
-
-fn ensure_brew_formula(formula: &str, fix: bool) -> CliResult<()> {
-    if command_exists(formula) {
-        return Ok(());
-    }
-    let manual = format!("brew install {formula}");
-    require_repair(formula, &manual, fix)?;
-    run_status(
-        &format!("安装 {formula}"),
-        Command::new("brew").args(["install", formula]),
-    )?;
-    require_command_with_guidance(formula, &manual)
-}
-
-fn ensure_xcode_command_line_tools(
+fn xcode_diagnostic(
     code_signing: bool,
     developer_id: bool,
     notarize: bool,
-    fix: bool,
-) -> CliResult<()> {
+    required: bool,
+    rerun_command: &str,
+) -> DependencyDiagnostic {
     let mut commands = vec!["ditto", "plutil"];
     if code_signing {
         commands.push("codesign");
@@ -4639,106 +4839,343 @@ fn ensure_xcode_command_line_tools(
     if notarize {
         commands.push("xcrun");
     }
-    let commands_available = commands.iter().all(|command| command_exists(command));
-    let developer_directory_available = Command::new("xcode-select")
+    let missing = commands
+        .iter()
+        .filter(|command| !command_exists(command))
+        .copied()
+        .collect::<Vec<_>>();
+    let developer_directory = Command::new("xcode-select")
         .arg("-p")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    let notarization_tools_available = !notarize
-        || ["notarytool", "stapler"].iter().all(|tool| {
-            Command::new("xcrun")
-                .args(["--find", tool])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            String::from_utf8(output.stdout)
+                .ok()
+                .map(|path| path.trim().to_owned())
         });
-    if commands_available && developer_directory_available && notarization_tools_available {
-        return Ok(());
+    let missing_notarization = notarize
+        && ["notarytool", "stapler"]
+            .iter()
+            .any(|tool| xcrun_tool_path(tool).is_none());
+    let ready = missing.is_empty() && developer_directory.is_some() && !missing_notarization;
+    let mut details = Vec::new();
+    if !missing.is_empty() {
+        details.push(format!("缺少命令：{}", missing.join("、")));
     }
-    let manual = "xcode-select --install";
-    require_interactive_repair("Xcode Command Line Tools", manual, fix)?;
-    let status = Command::new("xcode-select")
-        .arg("--install")
-        .status()
-        .map_err(|error| {
-            CliError::new(format!("无法启动 Xcode Command Line Tools 安装器: {error}"))
-        })?;
-    Err(CliError::new(format!(
-        "已启动 Xcode Command Line Tools 安装器（状态 {status}）；安装完成后重新执行 `nexora build`。如果已安装但缺少 notarytool/stapler，请安装完整 Xcode 并选择其 Developer 目录"
-    )))
+    if developer_directory.is_none() {
+        details.push("`xcode-select -p` 未返回 Developer 目录".to_owned());
+    }
+    if missing_notarization {
+        details.push("缺少 notarytool 或 stapler".to_owned());
+    }
+    DependencyDiagnostic {
+        name: "Xcode / Xcode Command Line Tools".to_owned(),
+        purpose: "提供 macOS bundle、签名与公证系统工具".to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready { "可用" } else { "缺失" }.to_owned(),
+        detected_path: developer_directory,
+        detected_version: command_version("xcodebuild", &["-version"]),
+        supported: "ditto、plutil 与所选签名/公证模式需要的 Xcode 工具可执行".to_owned(),
+        official_download: "https://developer.apple.com/xcode/resources/".to_owned(),
+        manual_install: "xcode-select --install；公证需要完整 Xcode".to_owned(),
+        verify_command: "xcode-select -p && xcodebuild -version".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: (!details.is_empty()).then(|| details.join("；")),
+        required,
+    }
 }
 
-fn ensure_inno_setup(fix: bool) -> CliResult<()> {
-    if compatible_inno_setup_compiler().is_ok() {
-        return Ok(());
+fn xcrun_dependency_diagnostic(
+    tool: &str,
+    purpose: &str,
+    rerun_command: &str,
+) -> DependencyDiagnostic {
+    let path = xcrun_tool_path(tool);
+    let ready = path.is_some();
+    DependencyDiagnostic {
+        name: tool.to_owned(),
+        purpose: purpose.to_owned(),
+        requirement: "notarize = true 时必需".to_owned(),
+        ready,
+        status: if ready {
+            "可用"
+        } else {
+            "缺失（条件依赖）"
+        }
+        .to_owned(),
+        detected_path: path.map(|path| path.display().to_string()),
+        detected_version: None,
+        supported: format!("`xcrun --find {tool}` 成功"),
+        official_download: "https://developer.apple.com/xcode/resources/".to_owned(),
+        manual_install: "安装完整 Xcode 并用 xcode-select 选择 Developer 目录".to_owned(),
+        verify_command: format!("xcrun --find {tool}"),
+        rerun_command: rerun_command.to_owned(),
+        detail: None,
+        required: false,
     }
-    let manual = inno_setup_install_command();
-    require_repair(&format!("Inno Setup {INNO_SETUP_VERSION}"), &manual, fix)?;
-    if !command_exists("winget") {
-        return Err(CliError::new(format!(
-            "系统没有 winget；请安装后运行 {manual}，再重新执行 nexora build"
-        )));
+}
+
+fn xcrun_tool_path(tool: &str) -> Option<PathBuf> {
+    let output = Command::new("xcrun").args(["--find", tool]).output().ok()?;
+    if !output.status.success() {
+        return None;
     }
-    run_status(
-        &format!("安装 Inno Setup {INNO_SETUP_VERSION}"),
-        Command::new("winget").args([
-            "install",
-            "--source",
-            "winget",
-            "--exact",
-            "--id",
-            INNO_SETUP_WINGET_PACKAGE,
-            "--version",
-            INNO_SETUP_VERSION,
-            "--scope",
-            "user",
-            "--silent",
-            "--force",
-            "--accept-package-agreements",
-            "--accept-source-agreements",
-        ]),
-    )?;
-    compatible_inno_setup_compiler().map(|_| ()).map_err(|error| {
-        CliError::new(format!(
-            "执行 {manual} 后 Inno Setup 仍不可用：{error}；请检查安装输出并重新执行 nexora build"
-        ))
-    })
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|path| PathBuf::from(path.trim()))
+        .filter(|path| path.is_file())
+}
+
+fn msvc_linker_diagnostic(
+    target: &str,
+    required: bool,
+    rerun_command: &str,
+) -> DependencyDiagnostic {
+    let path = msvc_linker_path(target);
+    let ready = path.is_some();
+    DependencyDiagnostic {
+        name: format!("Visual Studio Build Tools / link.exe ({target})"),
+        purpose: "链接 Windows MSVC 主程序与 updater sidecar".to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready { "可用" } else { "缺失" }.to_owned(),
+        detected_path: path.map(|path| path.display().to_string()),
+        detected_version: None,
+        supported: "Visual Studio C++ Build Tools 为目标架构提供 link.exe".to_owned(),
+        official_download: "https://visualstudio.microsoft.com/downloads/".to_owned(),
+        manual_install: "Visual Studio Installer -> 使用 C++ 的桌面开发；命令行可使用 `winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --source winget --override \"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"`".to_owned(),
+        verify_command: "where.exe link.exe；或使用 Visual Studio Installer 的 vswhere.exe 查找 VC\\Tools\\MSVC\\**\\link.exe".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: None,
+        required,
+    }
+}
+
+fn msvc_linker_path(target: &str) -> Option<PathBuf> {
+    if let Some(path) = command_path("link.exe") {
+        return Some(path);
+    }
+    let (component, architecture) = if target.starts_with("aarch64-") {
+        ("Microsoft.VisualStudio.Component.VC.Tools.ARM64", "arm64")
+    } else {
+        ("Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "x64")
+    };
+    let vswhere = ["ProgramFiles(x86)", "ProgramFiles"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from)
+        .map(|root| {
+            root.join("Microsoft Visual Studio")
+                .join("Installer")
+                .join("vswhere.exe")
+        })
+        .find(|path| path.is_file())?;
+    let pattern = format!("VC\\Tools\\MSVC\\**\\bin\\Host*\\{architecture}\\link.exe");
+    let output = Command::new(vswhere)
+        .args(["-latest", "-products", "*", "-requires", component, "-find"])
+        .arg(pattern)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+}
+
+fn windows_sdk_diagnostic(
+    authenticode: bool,
+    required: bool,
+    rerun_command: &str,
+) -> DependencyDiagnostic {
+    let mut tools = vec!["rc.exe", "fxc.exe"];
+    if authenticode {
+        tools.push("signtool.exe");
+    }
+    let detections = tools
+        .iter()
+        .map(|tool| (*tool, windows_sdk_tool(tool)))
+        .collect::<Vec<_>>();
+    let ready = detections.iter().all(|(_, result)| result.is_ok());
+    let paths = detections
+        .iter()
+        .filter_map(|(_, result)| result.as_ref().ok())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let missing = detections
+        .iter()
+        .filter(|(_, result)| result.is_err())
+        .map(|(tool, _)| *tool)
+        .collect::<Vec<_>>();
+    DependencyDiagnostic {
+        name: "Windows SDK（rc.exe / fxc.exe）".to_owned(),
+        purpose: "编译版本资源和 GPUI 所需 Windows shader；Authenticode 模式还需要 signtool.exe"
+            .to_owned(),
+        requirement: if authenticode {
+            "必需；当前 Authenticode 配置还要求 signtool.exe"
+        } else if required {
+            "必需；signtool.exe 仅 Authenticode 模式需要"
+        } else {
+            "条件必需"
+        }
+        .to_owned(),
+        ready,
+        status: if ready { "可用" } else { "缺失" }.to_owned(),
+        detected_path: (!paths.is_empty()).then(|| paths.join("；")),
+        detected_version: paths
+            .first()
+            .and_then(|path| windows_sdk_version_from_path(Path::new(path))),
+        supported:
+            "Windows 10/11 SDK，rc.exe 与 fxc.exe 可执行；Authenticode 时 signtool.exe 可执行"
+                .to_owned(),
+        official_download: WINDOWS_SDK_DOWNLOAD_URL.to_owned(),
+        manual_install: windows_sdk_install_command(),
+        verify_command: "where.exe rc.exe; where.exe fxc.exe; where.exe signtool.exe".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: (!missing.is_empty()).then(|| format!("缺少工具：{}", missing.join("、"))),
+        required,
+    }
+}
+
+fn windows_sdk_signing_diagnostic(rerun_command: &str) -> DependencyDiagnostic {
+    let result = windows_sdk_tool("signtool.exe");
+    let ready = result.is_ok();
+    DependencyDiagnostic {
+        name: "signtool.exe".to_owned(),
+        purpose: "对主程序、sidecar 与 Setup EXE 执行 Authenticode 签名".to_owned(),
+        requirement: "signing = authenticode 时必需".to_owned(),
+        ready,
+        status: if ready {
+            "可用"
+        } else {
+            "缺失（条件依赖）"
+        }
+        .to_owned(),
+        detected_path: result.ok().map(|path| path.display().to_string()),
+        detected_version: None,
+        supported: "Windows SDK signtool.exe 可执行".to_owned(),
+        official_download: WINDOWS_SDK_DOWNLOAD_URL.to_owned(),
+        manual_install: windows_sdk_install_command(),
+        verify_command: "where.exe signtool.exe".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: None,
+        required: false,
+    }
+}
+
+fn windows_sdk_version_from_path(path: &Path) -> Option<String> {
+    path.parent()?
+        .parent()?
+        .file_name()?
+        .to_str()
+        .map(str::to_owned)
+}
+
+fn windows_sdk_install_command() -> String {
+    format!(
+        "winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"
+    )
+}
+
+fn inno_setup_diagnostic(required: bool, rerun_command: &str) -> DependencyDiagnostic {
+    let detections = detect_inno_setup_compilers();
+    let selected = select_inno_setup_detection(&detections);
+    let ready = selected.is_some();
+    let detected = detections
+        .iter()
+        .map(|detection| match &detection.version {
+            Ok(version) => format!("{} ({version})", detection.path.display()),
+            Err(error) => format!("{} ({error})", detection.path.display()),
+        })
+        .collect::<Vec<_>>();
+    DependencyDiagnostic {
+        name: "Inno Setup / ISCC.exe".to_owned(),
+        purpose: "编译 Windows 当前用户范围的首次安装 Setup EXE".to_owned(),
+        requirement: if required { "必需" } else { "条件必需" }.to_owned(),
+        ready,
+        status: if ready {
+            "可用".to_owned()
+        } else if detections.is_empty() {
+            "缺失".to_owned()
+        } else {
+            "版本不兼容或无法解析".to_owned()
+        },
+        detected_path: selected.map(|detection| detection.path.display().to_string()),
+        detected_version: selected
+            .and_then(|detection| detection.version.as_ref().ok().map(ToString::to_string)),
+        supported: ">= 6.7.3, < 8.0.0；多个兼容候选选择最高版本".to_owned(),
+        official_download: INNO_SETUP_DOWNLOAD_URL.to_owned(),
+        manual_install: inno_setup_install_command(),
+        verify_command: "ISCC.exe -（从 Compiler engine version 行读取实际版本）".to_owned(),
+        rerun_command: rerun_command.to_owned(),
+        detail: (!detected.is_empty()).then(|| format!("候选检测结果：{}", detected.join("；"))),
+        required,
+    }
 }
 
 fn compatible_inno_setup_compiler() -> CliResult<PathBuf> {
-    let candidates = inno_setup_compiler_candidates();
-    if candidates.is_empty() {
-        return Err(CliError::new(format!(
-            "没有找到 Inno Setup {INNO_SETUP_VERSION} 的 ISCC.exe；请运行 {}",
-            inno_setup_install_command()
-        )));
-    }
-    let expected = Version::parse(INNO_SETUP_VERSION)
-        .map_err(|error| CliError::new(format!("内置 Inno Setup 版本无效: {error}")))?;
-    let mut detected = Vec::new();
-    for path in candidates {
-        match inno_setup_compiler_version(&path) {
-            Ok(actual) if actual == expected => return Ok(path),
-            Ok(actual) => detected.push(format!("{} ({actual})", path.display())),
-            Err(error) => detected.push(format!("{} ({error})", path.display())),
-        }
-    }
-    Err(CliError::new(format!(
-        "找到 ISCC.exe，但没有精确版本 {expected}：{}；请运行 {}",
-        detected.join("、"),
-        inno_setup_install_command()
-    )))
+    let detections = detect_inno_setup_compilers();
+    select_inno_setup_detection(&detections)
+        .map(|detection| detection.path.clone())
+        .ok_or_else(|| {
+            CliError::new(inno_setup_diagnostic(true, "原始 `nexora build` 命令").render())
+        })
+}
+
+fn detect_inno_setup_compilers() -> Vec<InnoSetupDetection> {
+    inno_setup_compiler_candidates()
+        .into_iter()
+        .map(|path| InnoSetupDetection {
+            version: inno_setup_compiler_version(&path).map_err(|error| error.to_string()),
+            path,
+        })
+        .collect()
+}
+
+fn select_inno_setup_detection(detections: &[InnoSetupDetection]) -> Option<&InnoSetupDetection> {
+    detections
+        .iter()
+        .filter(|detection| {
+            detection
+                .version
+                .as_ref()
+                .is_ok_and(inno_setup_version_is_supported)
+        })
+        .fold(None, |selected, candidate| match selected {
+            Some(current)
+                if current.version.as_ref().expect("已筛选有效版本")
+                    >= candidate.version.as_ref().expect("已筛选有效版本") =>
+            {
+                Some(current)
+            }
+            _ => Some(candidate),
+        })
+}
+
+fn inno_setup_version_is_supported(version: &Version) -> bool {
+    let minimum = Version::parse(INNO_SETUP_MINIMUM_VERSION).expect("内置 Inno Setup 最低版本有效");
+    let maximum = Version::parse(INNO_SETUP_MAXIMUM_VERSION).expect("内置 Inno Setup 最高版本有效");
+    version >= &minimum && version < &maximum
 }
 
 fn inno_setup_compiler_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if command_exists("ISCC.exe") {
-        candidates.push(PathBuf::from("ISCC.exe"));
+    if let Some(path) = command_path("ISCC.exe") {
+        candidates.push(path);
     }
     for (variable, suffix) in [
+        ("LOCALAPPDATA", "Programs/Inno Setup 7/ISCC.exe"),
+        ("LOCALAPPDATA", "Programs/Inno Setup 7 (32-bit)/ISCC.exe"),
+        ("ProgramFiles", "Inno Setup 7/ISCC.exe"),
+        ("ProgramFiles(x86)", "Inno Setup 7 (32-bit)/ISCC.exe"),
+        ("ProgramFiles(x86)", "Inno Setup 7/ISCC.exe"),
         ("LOCALAPPDATA", "Programs/Inno Setup 6/ISCC.exe"),
         ("ProgramFiles(x86)", "Inno Setup 6/ISCC.exe"),
         ("ProgramFiles", "Inno Setup 6/ISCC.exe"),
@@ -4789,174 +5226,57 @@ fn parse_inno_setup_engine_version(output: &str) -> Option<Version> {
 
 fn inno_setup_install_command() -> String {
     format!(
-        "winget install --source winget --exact --id {INNO_SETUP_WINGET_PACKAGE} --version {INNO_SETUP_VERSION} --scope user --silent --force --accept-package-agreements --accept-source-agreements"
+        "winget install --source winget --exact --id {INNO_SETUP_WINGET_PACKAGE} --version {INNO_SETUP_RECOMMENDED_VERSION} --scope user --silent --force --accept-package-agreements --accept-source-agreements"
     )
 }
-fn ensure_windows_sdk(authenticode: bool, fix: bool) -> CliResult<()> {
-    let mut tools = vec!["rc.exe", "fxc.exe"];
-    if authenticode {
-        tools.push("signtool.exe");
-    }
-    if tools.iter().all(|tool| windows_sdk_tool(tool).is_ok()) {
-        return Ok(());
-    }
-    let manual = format!(
-        "winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"
-    );
-    require_interactive_repair("Windows SDK", &manual, fix)?;
-    if command_exists("winget") {
-        run_status(
-            "安装 Windows SDK",
-            Command::new("winget").args([
-                "install",
-                "--source",
-                "winget",
-                "--exact",
-                "--id",
-                WINDOWS_SDK_WINGET_PACKAGE,
-                "--accept-package-agreements",
-                "--accept-source-agreements",
-            ]),
-        )?;
-        if tools.iter().all(|tool| windows_sdk_tool(tool).is_ok()) {
-            return Ok(());
-        }
-        return Err(CliError::new(
-            "Windows SDK 安装已完成，但所需工具尚不可见；请完成安装器或系统重启，然后重新执行 `nexora build`",
-        ));
-    }
-    let _ = Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", WINDOWS_SDK_DOWNLOAD_URL])
-        .status();
-    Err(CliError::new(format!(
-        "系统没有 winget，已尝试打开 Windows SDK 官方下载页；请安装后重新执行 `nexora build`。命令：`{manual}`；官方下载：{WINDOWS_SDK_DOWNLOAD_URL}"
-    )))
-}
 
-fn require_repair(label: &str, manual: &str, fix: bool) -> CliResult<()> {
-    require_repair_for_terminal(label, manual, fix, terminal_is_interactive())
-}
-
-fn require_repair_for_terminal(
-    label: &str,
-    manual: &str,
-    fix: bool,
-    interactive: bool,
-) -> CliResult<()> {
-    if !fix {
-        return Err(CliError::new(format!(
-            "缺少或不兼容的 {label}；请运行 `{manual}`，或执行 `nexora doctor --fix`"
-        )));
-    }
-    if !interactive {
-        return Err(CliError::new(format!(
-            "非交互环境缺少或不兼容的 {label}；不会自动安装，请运行 `{manual}` 后重新执行 `nexora build`"
-        )));
-    }
-    Ok(())
-}
-
-fn require_interactive_repair(label: &str, manual: &str, fix: bool) -> CliResult<()> {
-    require_repair(label, manual, fix)
-}
-
-fn require_command_with_guidance(command: &str, manual: &str) -> CliResult<()> {
-    if command_exists(command) {
-        Ok(())
-    } else {
-        Err(CliError::new(format!(
-            "执行 `{manual}` 后仍缺少命令 `{command}`；请检查安装输出和当前 PATH，然后重新执行 `nexora build`"
-        )))
-    }
-}
-
-fn download_official_file(url: &str, destination: &Path, label: &str) -> CliResult<()> {
-    create_parent(destination)?;
-    let response = reqwest::blocking::get(url)
-        .map_err(|error| CliError::new(format!("下载{label} `{url}` 失败: {error}")))?;
-    if !response.status().is_success() {
-        return Err(CliError::new(format!(
-            "下载{label} `{url}` 返回 HTTP {}",
-            response.status()
-        )));
-    }
-    let bytes = response
-        .bytes()
-        .map_err(|error| CliError::new(format!("读取{label}响应失败: {error}")))?;
-    fs::write(destination, bytes).map_err(|error| {
-        CliError::new(format!(
-            "无法写入{label} `{}`: {error}",
-            destination.display()
-        ))
+fn doctor_host_target() -> String {
+    rustc_host_target().unwrap_or_else(|_| match (env::consts::OS, env::consts::ARCH) {
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc".to_owned(),
+        ("windows", _) => "x86_64-pc-windows-msvc".to_owned(),
+        ("macos", "aarch64") => "aarch64-apple-darwin".to_owned(),
+        ("macos", _) => "x86_64-apple-darwin".to_owned(),
+        _ => "unknown".to_owned(),
     })
 }
 
-fn windows_host_rust_target() -> &'static str {
-    if env::consts::ARCH == "aarch64" {
-        "aarch64-pc-windows-msvc"
+fn command_path(command: &str) -> Option<PathBuf> {
+    let output = if env::consts::OS == "windows" {
+        Command::new("where.exe").arg(command).output().ok()?
     } else {
-        "x86_64-pc-windows-msvc"
+        Command::new("sh")
+            .args(["-c", "command -v -- \"$1\"", "sh", command])
+            .output()
+            .ok()?
+    };
+    if !output.status.success() {
+        return None;
     }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| PathBuf::from(line.trim()))
 }
 
-fn managed_tools_root() -> CliResult<PathBuf> {
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| path.join("Nexora/tools"))
-        .ok_or_else(|| CliError::new("Windows 缺少 LOCALAPPDATA，无法定位 Nexora 用户级工具目录"))
-}
-
-fn activate_rust_tool_path() -> CliResult<()> {
-    let cargo_home = env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| {
-        let variable = if env::consts::OS == "windows" {
-            "USERPROFILE"
-        } else {
-            "HOME"
-        };
-        env::var_os(variable)
-            .map(PathBuf::from)
-            .map(|path| path.join(".cargo"))
-    });
-    if let Some(path) = cargo_home.map(|path| path.join("bin")) {
-        prepend_process_paths([path])?;
+fn command_version(command: &str, arguments: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(arguments).output().ok()?;
+    if !output.status.success() {
+        return None;
     }
-    Ok(())
-}
-
-fn activate_homebrew_path() -> CliResult<()> {
-    let paths = [
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ]
-    .into_iter()
-    .filter(|path| path.is_dir())
-    .collect::<Vec<_>>();
-    prepend_process_paths(paths)
-}
-
-fn prepend_process_paths(paths: impl IntoIterator<Item = PathBuf>) -> CliResult<()> {
-    let mut combined = paths
-        .into_iter()
-        .filter(|path| !path.as_os_str().is_empty())
-        .collect::<Vec<_>>();
-    if let Some(existing) = env::var_os("PATH") {
-        combined.extend(env::split_paths(&existing));
-    }
-    let mut unique = Vec::new();
-    for path in combined {
-        if !unique.contains(&path) {
-            unique.push(path);
-        }
-    }
-    let joined = env::join_paths(unique)
-        .map_err(|error| CliError::new(format!("无法更新当前构建进程 PATH: {error}")))?;
-    unsafe { env::set_var("PATH", joined) };
-    Ok(())
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_owned())
 }
 
 fn windows_sdk_tool(name: &str) -> CliResult<PathBuf> {
-    if command_exists(name) {
-        return Ok(PathBuf::from(name));
+    if let Some(path) = command_path(name) {
+        return Ok(path);
     }
     let mut bin_roots = Vec::new();
     for variable in ["ProgramFiles(x86)", "ProgramFiles"] {
@@ -5783,51 +6103,81 @@ pub fn inspect_build_dependency_guidance(platform: &str) -> CliResult<serde_json
             "homebrew": HOMEBREW_INSTALL_COMMAND,
             "create_dmg": "brew install create-dmg",
             "xcode_command_line_tools": "xcode-select --install",
-            "non_interactive": "fail_with_commands",
+            "automatic_install": false,
         })),
         "windows" => Ok(serde_json::json!({
             "rustup": "https://rustup.rs / rustup-init.exe -y",
             "rust_target": "rustup target add <target>",
-            "inno_setup_version": INNO_SETUP_VERSION,
+            "inno_setup_supported": ">=6.7.3, <8.0.0",
+            "inno_setup_recommended": INNO_SETUP_RECOMMENDED_VERSION,
             "inno_setup_install": inno_setup_install_command(),
-            "windows_sdk": format!("winget install --source winget --exact --id {WINDOWS_SDK_WINGET_PACKAGE} --accept-package-agreements --accept-source-agreements"),
+            "windows_sdk": windows_sdk_install_command(),
             "windows_sdk_download": WINDOWS_SDK_DOWNLOAD_URL,
-            "non_interactive": "fail_with_commands",
+            "automatic_install": false,
         })),
         other => Err(CliError::new(format!("不支持构建依赖平台 `{other}`"))),
     }
 }
 
-/// 为集成测试评估 ISCC 编译器引擎版本与当前终端修复策略，不执行任何外部命令。
+/// 为集成测试评估 ISCC 编译器引擎版本是否位于本地支持范围，不执行任何外部命令。
 ///
-/// 返回 `ready` 表示引擎版本与框架固定版本一致；返回 `install` 表示交互式
-/// `--fix` 可以继续执行 winget 安装。
+/// 返回 `ready` 表示版本位于 `>= 6.7.3, < 8.0.0`；其他结果只返回人工安装指引。
 ///
 /// # Errors
 ///
-/// 输出缺少版本、版本不匹配且未启用修复，或非交互环境请求自动修复时返回精确安装指引。
+/// 输出缺少可解析版本或版本不在支持范围时返回错误。
 #[allow(dead_code)]
-pub fn inspect_inno_setup_requirement(
-    engine_output: Option<&str>,
-    fix: bool,
-    interactive: bool,
-) -> CliResult<String> {
-    let expected = Version::parse(INNO_SETUP_VERSION)
-        .map_err(|error| CliError::new(format!("内置 Inno Setup 版本无效: {error}")))?;
+pub fn inspect_inno_setup_requirement(engine_output: Option<&str>) -> CliResult<String> {
     if engine_output
         .and_then(parse_inno_setup_engine_version)
-        .is_some_and(|actual| actual == expected)
+        .as_ref()
+        .is_some_and(inno_setup_version_is_supported)
     {
         return Ok("ready".to_owned());
     }
-    let manual = inno_setup_install_command();
-    require_repair_for_terminal(
-        &format!("Inno Setup {INNO_SETUP_VERSION}"),
-        &manual,
-        fix,
-        interactive,
-    )?;
-    Ok("install".to_owned())
+    Err(CliError::new(format!(
+        "缺少兼容的 Inno Setup：需要 >= 6.7.3, < 8.0.0；官方下载：{INNO_SETUP_DOWNLOAD_URL}；人工安装：`{}`。Nexora 不会自动执行该命令；安装后重新运行原始 `nexora build` 命令",
+        inno_setup_install_command()
+    )))
+}
+
+/// 为集成测试从多个 ISCC 路径和引擎输出中选择最高兼容版本，不执行编译器。
+///
+/// 相同版本保留输入中更靠前的路径，因此测试可验证生产代码的稳定路径优先级。
+///
+/// # Errors
+///
+/// 所有候选均缺少可解析版本或位于支持范围之外时，返回包含逐候选结果的错误。
+#[allow(dead_code)]
+pub fn inspect_select_inno_setup_candidate(
+    candidates: &[(&str, Option<&str>)],
+) -> CliResult<serde_json::Value> {
+    let detections = candidates
+        .iter()
+        .map(|(path, output)| InnoSetupDetection {
+            path: PathBuf::from(path),
+            version: output
+                .and_then(parse_inno_setup_engine_version)
+                .ok_or_else(|| "无法解析版本".to_owned()),
+        })
+        .collect::<Vec<_>>();
+    if let Some(selected) = select_inno_setup_detection(&detections) {
+        return Ok(serde_json::json!({
+            "path": selected.path.to_string_lossy(),
+            "version": selected.version.as_ref().expect("已筛选有效版本").to_string(),
+        }));
+    }
+    let results = detections
+        .iter()
+        .map(|detection| match &detection.version {
+            Ok(version) => format!("{} ({version})", detection.path.display()),
+            Err(error) => format!("{} ({error})", detection.path.display()),
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    Err(CliError::new(format!(
+        "没有兼容的 Inno Setup（需要 >= 6.7.3, < 8.0.0）：{results}"
+    )))
 }
 
 /// 启动真实 `ISCC.exe` 并读取其编译器引擎版本，供 Windows 宿主回归测试验证探测链路。

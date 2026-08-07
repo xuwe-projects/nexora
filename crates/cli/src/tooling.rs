@@ -18,7 +18,8 @@ pub use release::{
     inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_path_definition,
     inspect_inno_setup_requirement, inspect_prepare_release_receipt, inspect_publish_object_layout,
     inspect_release_artifacts, inspect_release_artifacts_for_channel, inspect_release_resources,
-    inspect_release_selection, inspect_signing_key, inspect_windows_binary_link_args,
+    inspect_release_selection, inspect_select_inno_setup_candidate, inspect_signing_key,
+    inspect_windows_binary_link_args,
     inspect_windows_installer_sources, inspect_windows_resource_scripts, validate_display_name,
     write_bundle_icon, write_bundle_info, write_sha256_sidecar,
 };
@@ -55,11 +56,7 @@ impl fmt::Display for CliError {
 impl Error for CliError {}
 
 #[derive(Args, Debug, Clone)]
-pub(super) struct DoctorConfig {
-    /// 缺少可自动安装的依赖时尝试安装。
-    #[arg(long)]
-    fix: bool,
-}
+pub(super) struct DoctorConfig {}
 
 #[derive(Args, Debug, Clone)]
 pub(super) struct LintConfig {
@@ -131,8 +128,8 @@ pub(super) fn run_publish_command(config: PublishConfig) -> CliResult<()> {
     release::run_publish_command(config)
 }
 
-pub(super) fn run_doctor_command(config: DoctorConfig) -> CliResult<()> {
-    release::run_doctor(config.fix)
+pub(super) fn run_doctor_command(_config: DoctorConfig) -> CliResult<()> {
+    release::run_doctor()
 }
 
 pub(super) fn run_updater_command(config: UpdaterConfig) -> CliResult<()> {

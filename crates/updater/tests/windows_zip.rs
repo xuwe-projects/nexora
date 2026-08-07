@@ -253,9 +253,38 @@ fn windows_install_preflight_accepts_writable_sibling_staging() {
     fs::create_dir_all(&current).unwrap();
     fs::create_dir_all(&staged).unwrap();
     fs::write(current.join("main.exe"), b"current").unwrap();
+    fs::write(current.join("main-updater.exe"), b"updater").unwrap();
+    fs::write(current.join("unins000.exe"), b"uninstaller").unwrap();
+    fs::write(current.join("unins000.dat"), b"uninstaller data").unwrap();
     fs::write(staged.join("main.exe"), b"staged").unwrap();
 
-    windows_implementation::preflight_install_layout(&current, &staged, &staging_root).unwrap();
+    windows_implementation::preflight_install_layout(&current, &staged, &staging_root, "main.exe")
+        .unwrap();
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_install_preflight_rejects_a_different_executable_as_the_main_app() {
+    let fixture = Fixture::new("exact-main-executable-preflight");
+    let current = fixture.root.join("installed-app");
+    let staging_root = fixture.root.join(".nexora-updater").join("staging");
+    let staged = staging_root.join("extracted");
+    fs::create_dir_all(&current).unwrap();
+    fs::create_dir_all(&staged).unwrap();
+    fs::write(current.join("different.exe"), b"current").unwrap();
+    fs::write(current.join("unins000.exe"), b"uninstaller").unwrap();
+    fs::write(staged.join("main.exe"), b"staged").unwrap();
+
+    let error = windows_implementation::preflight_install_layout(
+        &current,
+        &staged,
+        &staging_root,
+        "main.exe",
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("main.exe"), "unexpected error: {error}");
 }
 
 #[test]
@@ -269,9 +298,14 @@ fn windows_install_preflight_rejects_staging_inside_install_directory() {
     fs::write(current.join("main.exe"), b"current").unwrap();
     fs::write(staged.join("main.exe"), b"staged").unwrap();
 
-    let error = windows_implementation::preflight_install_layout(&current, &staged, &staging_root)
-        .unwrap_err()
-        .to_string();
+    let error = windows_implementation::preflight_install_layout(
+        &current,
+        &staged,
+        &staging_root,
+        "main.exe",
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("边界无效"), "unexpected error: {error}");
 }
@@ -319,6 +353,7 @@ fn windows_install_helper_runs_outside_the_install_directory() {
     let request = windows_implementation::InstallHelperRequest {
         process_id: 42,
         app_id: "com.example.desktop",
+        main_exe_name: "main.exe",
         current_app: &install_dir,
         staged_app: &staged_app,
         staging_root: &staging_root,
@@ -332,6 +367,66 @@ fn windows_install_helper_runs_outside_the_install_directory() {
 
     assert_eq!(command.get_current_dir(), Some(runtime_dir.as_path()));
     assert_ne!(command.get_current_dir(), Some(install_dir.as_path()));
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--main-exe-name", "main.exe"])
+    );
+}
+
+#[test]
+fn windows_update_preserves_inno_setup_uninstaller_files() {
+    let fixture = Fixture::new("preserve-inno-uninstaller");
+    let backup = fixture.root.join("backup");
+    let current = fixture.root.join("current");
+    fs::create_dir_all(&backup).unwrap();
+    fs::create_dir_all(&current).unwrap();
+    fs::write(backup.join("unins000.exe"), b"uninstaller").unwrap();
+    fs::write(backup.join("unins000.dat"), b"uninstaller data").unwrap();
+    fs::write(backup.join("UNINS001.MSG"), b"localized messages").unwrap();
+    fs::write(backup.join("uninsABC.exe"), b"not an Inno uninstaller").unwrap();
+    fs::write(backup.join("application.exe"), b"old application").unwrap();
+
+    windows_implementation::preserve_inno_uninstaller_files(&backup, &current).unwrap();
+
+    assert_eq!(
+        fs::read(current.join("unins000.exe")).unwrap(),
+        b"uninstaller"
+    );
+    assert_eq!(
+        fs::read(current.join("unins000.dat")).unwrap(),
+        b"uninstaller data"
+    );
+    assert_eq!(
+        fs::read(current.join("UNINS001.MSG")).unwrap(),
+        b"localized messages"
+    );
+    assert!(!current.join("uninsABC.exe").exists());
+    assert!(!current.join("application.exe").exists());
+}
+
+#[test]
+fn windows_update_refuses_to_overwrite_staged_inno_uninstaller_files() {
+    let fixture = Fixture::new("reject-staged-inno-uninstaller");
+    let backup = fixture.root.join("backup");
+    let current = fixture.root.join("current");
+    fs::create_dir_all(&backup).unwrap();
+    fs::create_dir_all(&current).unwrap();
+    fs::write(backup.join("unins000.exe"), b"trusted uninstaller").unwrap();
+    fs::write(current.join("unins000.exe"), b"staged collision").unwrap();
+
+    let error = windows_implementation::preserve_inno_uninstaller_files(&backup, &current)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("unins000.exe"), "unexpected error: {error}");
+    assert_eq!(
+        fs::read(current.join("unins000.exe")).unwrap(),
+        b"staged collision"
+    );
 }
 
 fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {

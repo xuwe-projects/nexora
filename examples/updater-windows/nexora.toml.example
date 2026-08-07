@@ -10,7 +10,7 @@ public_base_url = "http://127.0.0.1:9000/nexora-updater-example"
 allow_insecure_http = true
 
 [apps.updater-windows]
-package = "nexora-updater-windows-example"
+package = "nexora-desktop"
 app_id = "com.nexora.examples.updater-windows"
 display_name = "Windows 更新程序示例"
 publish_target = "rustfs"
@@ -27,6 +27,7 @@ version = "1.0.1"
 build_number = 5
 minimum_supported_version = "0.0.0"
 signing_key_file = ".secrets/updater-windows.key"
+notes = "release-notes/current.md"
 
 [apps.updater-windows.release.channels.beta]
 
@@ -52,10 +53,7 @@ notarize = false
 [apps.updater-windows.platforms.windows]
 icon = "assets/logos/updater-windows/logo-icon.ico"
 publisher = "Nexora Examples"
-signing = "authenticode"
-signing_thumbprint = "0123456789ABCDEF0123456789ABCDEF01234567"
-expected_publisher = "Nexora Examples"
-timestamp_url = "http://timestamp.digicert.com"
+signing = "none"
 desktop_shortcut_default = false
 start_menu_shortcut_default = true
 launch_after_install_default = true

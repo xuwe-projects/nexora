@@ -11,19 +11,33 @@
 完整配置字段、默认值、密钥轮换、验证链路与生产签名说明见
 [桌面自动更新文档](../../docs/desktop/updater.md)。
 
-## 首次安装开发工具
+## 人工安装开发工具
+
+Nexora CLI 不下载或安装机器级依赖。交互式与非交互式 `doctor`/build 都只检测；旧的
+`nexora doctor --fix` 已删除。先按
+[完整 macOS 依赖表](../../docs/desktop/updater.md#macos) 人工准备工具：
+
+| 工具 | 要求 | 检测 | 人工安装 |
+| --- | --- | --- | --- |
+| Rustup/toolchain | 必需 | `rustup --version && rustc --version && cargo --version` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y` |
+| 当前宿主 target | Intel `x86_64-apple-darwin` 或 Apple Silicon `aarch64-apple-darwin` | `rustup target list --installed` | `rustup target add <target>` |
+| Xcode/CLT | 必需；公证需要完整 Xcode | `xcode-select -p && xcodebuild -version` | `xcode-select --install` |
+| `cargo-bundle` | 必需 | `cargo-bundle --version` | `cargo install cargo-bundle` |
+| Homebrew | 可选安装器 | `brew --version` | 使用 [brew.sh](https://brew.sh/) 官方命令 |
+| `create-dmg` | 必需 | `create-dmg --version` | `brew install create-dmg` |
+| `codesign` | `signing != "none"` 时必需 | `codesign --version` | 随 Xcode/CLT 安装 |
+| `notarytool` / `stapler` | `notarize = true` 时必需 | `xcrun --find notarytool && xcrun --find stapler` | 安装完整 Xcode |
+
+安装后关闭并重新打开终端，再运行：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.30.2 cli --locked --force --bin nexora
-
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.30.2 cli --locked --force --bin nexora
 nexora doctor
-nexora doctor --fix
 ```
 
-交互式 `nexora build` 与 `nexora doctor --fix` 会自动准备 Rust target、`cargo-bundle`、Homebrew
-和 `create-dmg`。缺少 Xcode Command Line Tools 时会启动系统安装器；完成后重新运行原命令。
-`nexora doctor` 只检查，CI/非交互环境只返回完整安装命令。
+`ad_hoc` 仅用于本地功能验收；正式分发需要 Developer ID Application 证书、Keychain 中的私钥、
+notarytool 凭据和 stapler。Ed25519 私钥与 S3 AK/SK 同样是秘密，但与 Apple 代码签名独立；不得
+提交、打包或输出日志。任何命令都由用户复制执行，Nexora 不会代为执行。
 
 ## 第一次配置
 

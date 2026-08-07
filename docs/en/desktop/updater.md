@@ -7,26 +7,62 @@ Chinese Inno Setup EXE while in-app updates consume only `windows.zip`. The defa
 Windows floor follows the pinned GPUI baseline: Windows 10 1703, build 15063. Linux release
 resources follow the same metadata contract, but Linux auto-installation is not documented here.
 
-## First-time prerequisites
+## Manually installed build prerequisites
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
   --tag v0.31.1 cli --locked --force --bin nexora
 nexora doctor
-nexora doctor --fix
 ```
 
-In an interactive terminal, `nexora build` detects, installs, and rechecks the dependencies required
-by the selected configuration. `doctor` is read-only and `doctor --fix` uses the same repair path.
-macOS repair covers Rust targets, cargo-bundle, Homebrew, create-dmg, and launches the official
-Xcode Command Line Tools installer when needed. Windows repair covers Rust targets, pinned Inno
-Setup 6.7.3, and the official Windows SDK installer. System installers may require confirmation or
-a restart; rerun the same build afterward.
-Non-interactive builds never launch installers and instead fail with exact commands. SDK tools are
-discovered from standard locations without requiring a permanent PATH change.
-Nexora asks `ISCC.exe` to read an empty script from standard input and parses the exact
-`Compiler engine version` printed before compilation. It does not depend on the `/?` help banner,
-which only identifies the Inno Setup major version, and creates no temporary installer artifact.
+`nexora doctor` and `nexora build` only detect prerequisites. They never download software, run an
+installation command below, change PATH, open a download page, or launch a system installer.
+`nexora doctor --fix` has been removed: replace it with `nexora doctor`, copy the reported command,
+install the tool yourself, reopen the terminal unless noted otherwise, run the verification
+command, then rerun `nexora doctor` or the original `nexora build ...` command.
+
+### Windows
+
+| Tool | Requirement and purpose | Supported capability / detection | Official source | Manual installation | Secrets |
+| --- | --- | --- | --- | --- | --- |
+| Rustup, rustc, Cargo | Required to compile the app and sidecar | `rustup --version`, `rustc --version`, `cargo --version` | [rustup.rs](https://rustup.rs/) | Download official `rustup-init.exe`, then run `rustup-init.exe -y` | No |
+| Rust target | Required for the selected target: `x86_64-pc-windows-msvc` or `aarch64-pc-windows-msvc` | `rustup target list --installed` | [Rust platform support](https://doc.rust-lang.org/rustc/platform-support.html) | `rustup target add <target>` | No |
+| Visual Studio Build Tools / `link.exe` | Required MSVC linker | `where.exe link.exe`; install the Desktop development with C++ workload | [Visual Studio Downloads](https://visualstudio.microsoft.com/downloads/) | `winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --source winget --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` | No; installer may require elevation |
+| Windows SDK, `rc.exe`, `fxc.exe` | Required for version resources and GPUI shaders | `where.exe rc.exe`, `where.exe fxc.exe`; Windows 10/11 SDK | [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) | `winget install --source winget --exact --id Microsoft.WindowsSDK.10.0.26100 --accept-package-agreements --accept-source-agreements` | No; installer may require elevation |
+| `signtool.exe` | Required only for `signing = "authenticode"` | `where.exe signtool.exe`; supplied by the Windows SDK | [SignTool](https://learn.microsoft.com/windows/win32/seccrypto/signtool) | Same Windows SDK command | No |
+| Inno Setup / `ISCC.exe` | Required for the first-install Setup EXE | `>= 6.7.3, < 8.0.0`; parse `Compiler engine version` from `ISCC.exe -`; 7.x recommended for new installs | [Inno Setup Downloads](https://jrsoftware.org/isdl.php) | `winget install --source winget --exact --id JRSoftware.InnoSetup.7 --version 7.0.2 --scope user --silent --force --accept-package-agreements --accept-source-agreements` | No |
+| Authenticode certificate | Required only for production Authenticode validation | `Get-ChildItem Cert:\CurrentUser\My`; `signtool verify /pa <file>`; thumbprint, publisher, and RFC 3161 URL must match | [SignTool](https://learn.microsoft.com/windows/win32/seccrypto/signtool) | Obtain from a trusted CA and import into the current-user certificate store | Yes: certificate private key and PFX password |
+| Ed25519 update key | Required to publish; independent of Authenticode | `nexora updater keygen --app <id> --private-key-file <ignored-path>` | This page's signing section | Generate with that command and store the private key in an ignored file or secret manager | Yes: private key |
+| S3-compatible test bucket | Required for a real two-version update acceptance run | Anonymous `GET` of channel `latest.json`; publish separately validates the S3 API | Chosen S3/RustFS provider | Administrator creates the bucket, anonymous-read policy, and publisher credentials | Yes: AK/SK/session token are publish-only |
+
+Discovery covers PATH plus user-level and system-level Inno Setup 7 and 6 directories. Nexora runs
+every candidate to obtain its actual engine version, ignores broken or unparsable candidates, and
+selects the highest compatible version; a stable discovery order breaks equal-version ties.
+Directory names never determine the final version. Windows x64 and Windows on ARM use their matching
+host targets; Nexora does not perform cross-OS pseudo-packaging. `signing = "none"` skips only
+Authenticode: Ed25519, size/SHA-256, ZIP safety, and PE architecture checks remain mandatory.
+
+### macOS
+
+| Tool | Requirement and purpose | Supported capability / detection | Official source | Manual installation | Secrets |
+| --- | --- | --- | --- | --- | --- |
+| Rustup, rustc, Cargo | Required to compile the app and sidecar | `rustup --version`, `rustc --version`, `cargo --version` | [rustup.rs](https://rustup.rs/) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y` | No |
+| Rust target | Required: `x86_64-apple-darwin` or `aarch64-apple-darwin` | `rustup target list --installed` | [Rust platform support](https://doc.rust-lang.org/rustc/platform-support.html) | `rustup target add <target>` | No |
+| Xcode / Command Line Tools | Required for `ditto`, `plutil`, and the developer directory | `xcode-select -p`, `xcodebuild -version` | [Xcode Resources](https://developer.apple.com/xcode/resources/) | `xcode-select --install`; notarization requires full Xcode | No; system installer may prompt |
+| `codesign` | Required when `signing != "none"` | `codesign --version` | [Code Signing](https://developer.apple.com/support/code-signing/) | Installed with Xcode/CLT | Developer ID mode uses a certificate private key |
+| `notarytool`, `stapler` | Required when `notarize = true` | `xcrun --find notarytool`, `xcrun --find stapler` | [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) | Install full Xcode and select its Developer directory with `sudo xcode-select -s <path>` | Apple/App Store Connect credentials are secret |
+| `cargo-bundle` | Required to create `.app` | `cargo-bundle --version` | [cargo-bundle](https://crates.io/crates/cargo-bundle) | `cargo install cargo-bundle` | No |
+| Homebrew | Optional manual installer for tools such as create-dmg | `brew --version` | [brew.sh](https://brew.sh/) | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` | No |
+| `create-dmg` | Required to create the DMG | `create-dmg --version` | [create-dmg](https://github.com/create-dmg/create-dmg) | `brew install create-dmg` | No |
+| Developer ID Application certificate | Required for production distribution; not required for local `ad_hoc` validation | `security find-identity -v -p codesigning`, `codesign -dv --verbose=4 <app>` | [Apple certificates](https://developer.apple.com/help/account/certificates/) | Create in Apple Developer and import into Keychain | Yes: certificate private key |
+| Apple notarization credentials | Required when `notarize = true` | `xcrun notarytool history --keychain-profile <profile>` | [Notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow) | `xcrun notarytool store-credentials <profile>` | Yes: password/API key/issuer |
+| Ed25519 key and S3 test bucket | Required for real publish/update acceptance; independent of Apple signing | Same checks as Windows | Security and publish sections below | `nexora updater keygen ...`; administrator provisions object storage | Yes |
+
+`ad_hoc` is only local code signing; it is not Developer ID signing or notarization. Public Internet
+distribution requires Developer ID, notarytool, and stapler. Intel and Apple Silicon builds use the
+matching host/target. Every installation action remains explicit user or workflow code; Nexora CLI
+never executes it.
+
 The complete field-by-field reference, including required status, sources, defaults, secret status,
 examples, and failure behavior, is maintained in the
 [Chinese updater reference](/desktop/updater). The code defaults are `force_path_style = false`,
@@ -135,6 +171,11 @@ the selected host-compatible target, main binary, and `<executable>-updater` sid
 branded `.app.zip` and DMG files. Windows produces a branded Inno Setup `.exe` and `windows.zip`; only the
 ZIP enters the updater manifest. Every release artifact receives a standard SHA-256 sidecar using
 the complete branded filename and is indexed by `artifact.json`.
+
+A fresh Windows install defaults to
+`%LOCALAPPDATA%\Programs\<publisher>\<display_name>`. Both user-visible directory components must
+be safe Windows path names. The stable `app_id` continues to identify installation upgrades,
+updater transactions, manifests, and feeds; it does not become a directory component.
 
 ## Windows Authenticode policy
 
@@ -249,6 +290,9 @@ staging, pending payloads, backups, health state, and install results remain on 
 outside the directory being replaced. Before **Restart Now** exits the main process, preflight checks
 the current and staged layouts, PE entry points, volume identity, and create/rename permission in the
 installation parent. A failed preflight leaves the application running and reports the error.
+The verified main EXE filename is carried explicitly in the helper command and used for preflight,
+health launch, and failure relaunch. The sidecar never guesses by scanning other EXEs in the install
+directory, so Inno Setup's `unins000.exe` cannot be mistaken for another main executable.
 
 **Restart Later** commits `pending.json` from a synced temporary file with Windows atomic replacement,
 including when an older pending record exists. Once committed, best-effort directory durability cannot
@@ -256,7 +300,10 @@ turn success into an error or move the payload back to staging. If replacement o
 fails, the sidecar stops the failed new process, restores the old version, writes a bounded user-safe
 failure result, and only then relaunches the old application. The next launch consumes that result via
 the existing Notification component. An installation parent that is not writable is a preflight error;
-the user should select a writable installation path instead of elevating the whole updater.
+the user should select a writable installation path instead of elevating the whole updater. After the
+directory switch and before launching the new version, the sidecar preserves top-level Inno Setup
+`unins<digits>.exe`, `.dat`, and `.msg` files from the rollback backup and rejects staged collisions, so
+the Apps & Features uninstall entry remains valid after health confirmation.
 
 HTTP plus ad-hoc signing is allowed only for controlled local/LAN tests. Production must use HTTPS,
 `signing = "developer_id"`, `notarize = true`, and an `expected_team_id`. Install the Developer ID

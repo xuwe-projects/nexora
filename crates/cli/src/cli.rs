@@ -282,7 +282,7 @@ enum NexoraCommand {
         features: Vec<ProjectFeature>,
     },
 
-    /// 检查本地 macOS 打包依赖。
+    /// 只读检查当前宿主的桌面打包依赖。
     Doctor(tooling::DoctorConfig),
 
     /// 管理桌面自动更新密钥和本地工具。

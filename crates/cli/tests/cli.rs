@@ -702,6 +702,17 @@ fn help_and_version_are_available() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("update"));
     assert!(!String::from_utf8_lossy(&help.stdout).contains("__update-helper"));
 
+    let doctor_help = directory.run(&["help", "doctor"]);
+    assert!(doctor_help.status.success());
+    let doctor_help = String::from_utf8_lossy(&doctor_help.stdout);
+    assert!(doctor_help.contains("doctor"));
+    assert!(!doctor_help.contains("--fix"));
+
+    let removed_doctor_fix = directory.run(&["doctor", "--fix"]);
+    assert!(!removed_doctor_fix.status.success());
+    let removed_doctor_fix = String::from_utf8_lossy(&removed_doctor_fix.stderr);
+    assert!(removed_doctor_fix.contains("unexpected argument '--fix'"));
+
     let build_help = directory.run(&["help", "build"]);
     assert!(build_help.status.success());
     let build_help = String::from_utf8_lossy(&build_help.stdout);

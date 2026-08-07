@@ -1,5 +1,5 @@
 [package]
-name = "nexora-updater-windows-example"
+name = "nexora-desktop"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -19,9 +19,9 @@ updater = { path = "../../crates/updater" }
 "https://github.com/zed-industries/zed#gpui_macros@0.1.0" = { git = "https://github.com/zed-industries/zed", rev = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba" }
 
 [[bin]]
-name = "nexora-updater-windows-example"
+name = "nexora-desktop"
 path = "src/main.rs"
 
 [[bin]]
-name = "nexora-updater-windows-example-updater"
+name = "nexora-desktop-updater"
 path = "src/bin/sidecar.rs"

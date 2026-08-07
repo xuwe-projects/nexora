@@ -9,36 +9,60 @@ EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随�
 即 Windows 10 1703（build 15063）。Linux 发布资源沿用同一元数据契约，但本页不承诺 Linux
 自动安装。
 
-## 开发环境第一次准备
+## 人工安装构建依赖
 
-先安装 Nexora CLI。`nexora build` 会在交互式终端中检测、自动安装并复检当前构建真正需要的
-依赖；`nexora doctor` 只检查，`nexora doctor --fix` 使用相同修复流程：
+先安装 Nexora CLI，再运行只读诊断：
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
   --tag v0.31.1 cli --locked --force --bin nexora
 nexora doctor
-nexora doctor --fix
 ```
 
-macOS 会准备 Rust target、`cargo-bundle`、Homebrew 与 `create-dmg`；缺少 Xcode Command Line
-Tools 时启动 `xcode-select --install`，完成系统安装后重新运行同一条 build。Windows 会准备
-Rust target、固定版本的 Inno Setup 6.7.3 与 Windows SDK。交互式修复通过 winget 安装官方
-`JRSoftware.InnoSetup` 包；非交互环境不会启动安装器，只输出精确命令。Nexora 让
-`ISCC.exe` 从标准输入读取空脚本，并解析编译前输出的 `Compiler engine version`；不会依赖
-只显示主版本的 `/?` 帮助横幅，也不会生成临时安装产物。
+`nexora doctor` 与 `nexora build` 只检测依赖。它们不会下载软件、执行下表的安装命令、修改
+PATH、打开下载页面或启动系统安装器。`nexora doctor --fix` 已删除；旧脚本应改为
+`nexora doctor`，由操作者复制诊断中的命令。除单独注明外，安装后应关闭并重新打开终端，先
+运行表中的检测命令，再重跑 `nexora doctor` 或原始 `nexora build ...`。
 
-需要手动排查时，对应官方命令是：
+### Windows
 
-```powershell
-winget install --source winget --exact --id JRSoftware.InnoSetup --version 6.7.3 `
-  --scope user --silent --force --accept-package-agreements --accept-source-agreements
-winget install --source winget --exact --id Microsoft.WindowsSDK.10.0.26100
-```
+| 工具 | 要求与用途 | 支持范围/检测命令 | 官方入口 | 人工安装 | 敏感信息 |
+| --- | --- | --- | --- | --- | --- |
+| Rustup、rustc、Cargo | 必需；编译主程序和 sidecar | `rustup --version`、`rustc --version`、`cargo --version` | [rustup.rs](https://rustup.rs/) | 下载官方 `rustup-init.exe` 后运行 `rustup-init.exe -y` | 否 |
+| Rust target | 所选目标必需；x64 为 `x86_64-pc-windows-msvc`，ARM64 为 `aarch64-pc-windows-msvc` | `rustup target list --installed` | [Rust platform support](https://doc.rust-lang.org/rustc/platform-support.html) | `rustup target add <target>` | 否 |
+| Visual Studio Build Tools / `link.exe` | 必需；MSVC 链接器 | `where.exe link.exe`；安装“使用 C++ 的桌面开发”工作负载 | [Visual Studio Downloads](https://visualstudio.microsoft.com/downloads/) | `winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --source winget --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` | 否；安装可能要求管理员权限 |
+| Windows SDK、`rc.exe`、`fxc.exe` | 必需；版本资源和 GPUI shader | `where.exe rc.exe`、`where.exe fxc.exe`；Windows 10/11 SDK | [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) | `winget install --source winget --exact --id Microsoft.WindowsSDK.10.0.26100 --accept-package-agreements --accept-source-agreements` | 否；安装可能要求管理员权限 |
+| `signtool.exe` | `signing = "authenticode"` 时必需 | `where.exe signtool.exe`；随 Windows SDK 提供 | [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) | 与 Windows SDK 相同 | 否 |
+| Inno Setup / `ISCC.exe` | Windows 首次安装包必需 | `>= 6.7.3, < 8.0.0`；`ISCC.exe -` 的 `Compiler engine version`；新安装推荐 7.x | [Inno Setup Downloads](https://jrsoftware.org/isdl.php) | `winget install --source winget --exact --id JRSoftware.InnoSetup.7 --version 7.0.2 --scope user --silent --force --accept-package-agreements --accept-source-agreements` | 否 |
+| Authenticode 证书 | 仅正式 Authenticode 验收必需；签署主程序、sidecar 和 Setup EXE | `Get-ChildItem Cert:\CurrentUser\My`、`signtool verify /pa <file>`；证书必须匹配 thumbprint、publisher 和 RFC 3161 timestamp URL | [Microsoft SignTool](https://learn.microsoft.com/windows/win32/seccrypto/signtool) | 从受信任 CA 获取证书并导入当前用户证书存储；不提供通用安装命令 | 是；私钥、PFX 密码和 thumbprint 不得提交或记录 |
+| Ed25519 更新签名密钥 | 发布必需；与 Authenticode 独立 | `nexora updater keygen --app <id> --private-key-file <ignored-path>` | 本页“密钥与签名边界” | 用该命令生成；私钥保存到被忽略文件或秘密系统 | 是；私钥不得进入客户端或仓库 |
+| S3 兼容测试桶 | 真实两版本更新验收必需 | 匿名 `GET <public_base_url>/<app>/<channel>/latest.json`，发布端另行验证 S3 API | 所选 S3/RustFS 服务文档 | 管理员创建 bucket、匿名读策略与发布凭据；无通用安装命令 | 是；AK/SK/session token 只供 publish |
 
-Windows SDK 或 Xcode/CLT 安装需要系统确认、提权或重启时，Nexora 会明确暂停并要求重新运行
-原 build；不会静默提权。非交互/CI 环境不启动安装器，而是返回完整安装命令。Windows SDK
-工具位于标准 Windows Kits 目录即可，无需手工把 `rc.exe`、`fxc.exe`、`signtool.exe` 加入 PATH。
+Inno 发现顺序覆盖 PATH、Inno Setup 7/6 的用户级与系统级标准目录；每个候选都实际运行版本
+探测，无法执行或无法解析的候选被记录但不选用。多个兼容候选选择版本最高者；版本相同时
+使用稳定的发现顺序。目录名只用于发现，不作为版本依据。Windows x64 宿主构建 x64，Windows
+on ARM 构建 ARM64；Nexora 不提供跨操作系统伪打包。`signing = "none"` 不需要证书和
+`signtool.exe`，但不会关闭 Ed25519、SHA-256、大小、ZIP 安全或 PE 架构校验。
+
+### macOS
+
+| 工具 | 要求与用途 | 支持范围/检测命令 | 官方入口 | 人工安装 | 敏感信息 |
+| --- | --- | --- | --- | --- | --- |
+| Rustup、rustc、Cargo | 必需；编译 app 与 sidecar | `rustup --version`、`rustc --version`、`cargo --version` | [rustup.rs](https://rustup.rs/) | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y` | 否 |
+| Rust target | 所选目标必需；Intel 为 `x86_64-apple-darwin`，Apple Silicon 为 `aarch64-apple-darwin` | `rustup target list --installed` | [Rust platform support](https://doc.rust-lang.org/rustc/platform-support.html) | `rustup target add <target>` | 否 |
+| Xcode / Command Line Tools | 必需；提供 `ditto`、`plutil` 与开发目录 | `xcode-select -p`、`xcodebuild -version` | [Xcode Resources](https://developer.apple.com/xcode/resources/) | `xcode-select --install`；公证需要从 App Store/Developer 下载完整 Xcode | 否；系统安装可能要求确认 |
+| `codesign` | `signing != "none"` 时必需 | `codesign --version` | [Code Signing](https://developer.apple.com/support/code-signing/) | 随 Xcode/CLT 安装 | 证书模式涉及 Developer ID 私钥 |
+| `notarytool`、`stapler` | `notarize = true` 时必需 | `xcrun --find notarytool`、`xcrun --find stapler` | [Notarizing macOS software](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) | 安装完整 Xcode并用 `sudo xcode-select -s <Xcode.app/Contents/Developer>` 选择 | Apple ID/App Store Connect 凭据是秘密 |
+| `cargo-bundle` | 必需；生成 `.app` | `cargo-bundle --version` | [cargo-bundle](https://crates.io/crates/cargo-bundle) | `cargo install cargo-bundle` | 否 |
+| Homebrew | 可选；仅作为 `create-dmg` 的人工安装方式 | `brew --version` | [brew.sh](https://brew.sh/) | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` | 否 |
+| `create-dmg` | 必需；生成 DMG | `create-dmg --version` | [create-dmg](https://github.com/create-dmg/create-dmg) | `brew install create-dmg` | 否 |
+| Developer ID Application 证书 | 正式分发签名必需；`ad_hoc` 本地功能验证不需要 | `security find-identity -v -p codesigning`、`codesign -dv --verbose=4 <app>` | [Apple Developer certificates](https://developer.apple.com/help/account/certificates/) | 在 Apple Developer 创建并导入 Keychain；无通用命令 | 是；证书私钥不得提交 |
+| Apple 公证凭据 | `notarize = true` 时必需 | `xcrun notarytool history --keychain-profile <profile>` | [Customizing notarization](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow) | `xcrun notarytool store-credentials <profile>` | 是；密码、API key 和 issuer ID 不得记录 |
+| Ed25519 密钥与 S3 测试桶 | 真实发布/更新验收必需；与 Apple 签名独立 | 与 Windows 表相同 | 本页安全与发布章节 | `nexora updater keygen ...`；对象存储由管理员配置 | 是 |
+
+`ad_hoc` 只提供本机代码签名，不等于 Developer ID 或公证；正式互联网分发必须使用 Developer
+ID、`notarytool` 和 `stapler`。Intel/Apple Silicon 构建使用对应 macOS 宿主/target。任何安装步骤
+都由用户或 CI workflow 显式执行，Nexora CLI 不会代为执行。
 
 ## 第一次创建项目、构建与安装
 
@@ -54,8 +78,8 @@ nexora icons generate --app desktop
 nexora build --app desktop
 ```
 
-构建默认使用 `rustc -vV` 的 host target，也可重复传入 `--target` 显式覆盖。交互式 build 会
-自动执行缺失的 `rustup target add <target>`；非交互环境返回准确命令并停止。构建会生成：
+构建默认使用 `rustc -vV` 的 host target，也可重复传入 `--target` 显式覆盖。缺少 target 时，
+交互式与非交互式 build 都只返回 `rustup target add <target>` 人工指引并停止。构建会生成：
 
 - `.app`：本地 bundle，包含主程序、ICNS、sidecar 和 `nexora-updater.json`。
 - `.app.zip`：应用内更新负载；sidecar 下载、校验并替换当前 `.app`。
@@ -301,7 +325,7 @@ notes = "docs/releases/current/zh-CN.md"
 | `platforms.macos.notarize` | 是 | 是否提交 Apple notarization | 无 | 否 | `true` 且非 Developer ID 时失败 |
 | `platforms.macos.expected_team_id` | 否 | sidecar 安装前要求的新 bundle Team ID | 未配置 | 否 | 不匹配时拒绝安装；ad-hoc 本地验证应省略 |
 | `platforms.windows.icon` | 是 | 主 EXE 与 Inno Setup EXE 使用的 ICO | 无 | 否 | 文件缺失或 ICO 无效时失败 |
-| `platforms.windows.publisher` | Windows 是 | 安装器发布者和版本资源公司名 | 无 | 否 | Windows 构建缺失时失败 |
+| `platforms.windows.publisher` | Windows 是 | 安装器发布者、版本资源公司名，以及 `%LOCALAPPDATA%\Programs\<publisher>\<display_name>` 的父目录名 | 无 | 否 | 缺失或不是安全 Windows 目录名时失败 |
 | `platforms.windows.signing` | 否 | `none` 跳过 Authenticode；`authenticode` 签署并验证 Windows 文件身份 | `none` | 否 | 未知值失败；公开生产发布建议使用 `authenticode` |
 | `platforms.windows.signing_thumbprint` | Authenticode 时是 | 当前用户 `My` 证书存储中的 40 位 SHA-1 证书指纹；也可由 `WINDOWS_SIGN_CERTIFICATE_SHA1` 注入 | 未配置 | 否 | `none` 模式配置该字段，或格式无效时构建失败 |
 | `platforms.windows.expected_publisher` | 否 | updater 期望的 signer 证书 SimpleName；省略时使用 `publisher` | `publisher` | 否 | `none` 模式配置、显式空值或运行时不匹配时失败 |
@@ -439,13 +463,18 @@ Windows 应用内更新不要求管理员权限。框架会在用户所选安装
 `<install-parent>/.nexora-updater/<app_id>`，让 staging、pending、backup、健康状态和安装结果与
 安装目录始终位于同一卷；事务目录不会放进待替换的应用目录。用户点击立即重启前，框架会先
 检查当前目录、暂存目录、PE 入口、同卷关系以及父目录的创建和重命名权限，预检失败时保持主
-程序运行并显示错误，不会先退出再静默失败。
+程序运行并显示错误，不会先退出再静默失败。主程序文件名来自已验证的更新包身份，并通过
+helper 参数显式传递给 sidecar；预检、健康启动和失败恢复都定位这个精确文件，不会扫描安装
+目录里的其他 EXE，因此 Inno Setup 的 `unins000.exe` 不会再被误判为第二个候选主程序。
 
 “稍后重启”使用同步后的临时文件和 Windows 原子替换提交 `pending.json`，已有待安装版本也可
 安全覆盖。记录一旦提交，后续目录同步只能作为尽力而为的耐久性增强，不能再把已提交 payload
 移回 staging。sidecar 在替换或健康确认失败时会停止失败的新进程、恢复旧版本、先写入受限的
 用户可见失败结果，再重新打开旧版本；下次启动通过现有 Notification 显示该结果。安装到当前
 用户不可写的位置会在预检阶段失败，此时应重新选择可写安装路径，而不是把 updater 整体提权。
+目录切换后、启动新版本前，sidecar 会从仍可回滚的备份中保留顶层 Inno Setup
+`unins<数字>.exe/.dat/.msg` 文件，并拒绝更新 ZIP 伪造同名文件；健康确认后 Apps & Features 的
+原卸载入口仍指向有效卸载器。
 
 ## build、publish 与第一次升级验证
 

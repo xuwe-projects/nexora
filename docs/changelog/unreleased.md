@@ -19,10 +19,12 @@
 
 ## Changed
 
-- Windows 首次安装改用固定版本 Inno Setup 6.7.3，只生成简体中文 Setup EXE 与 sidecar
-  更新 ZIP，不再生成 MSI 或 Burn bundle；构建和 doctor 通过 winget 检测/修复 ISCC，并移除
+- Windows 首次安装使用兼容范围 `>= 6.7.3, < 8.0.0` 的 Inno Setup，只生成简体中文 Setup EXE
+  与 sidecar 更新 ZIP，不再生成 MSI 或 Burn bundle；构建和 doctor 只读检测 ISCC，并移除
   cargo-wix、WiX 扩展与 Nexora 管理的 .NET SDK。安装固定为无需提权的当前用户范围，默认位于
-  `%LOCALAPPDATA%\Programs\<app_id>`，保留目录选择、桌面/开始菜单快捷方式与完成后运行选项。
+  `%LOCALAPPDATA%\Programs\<publisher>\<display_name>`，保留目录选择、桌面/开始菜单快捷方式与
+  完成后运行选项；`publisher` 和 `display_name` 都必须是安全的 Windows 目录名，`app_id` 仍只
+  承担稳定的安装、更新和发布身份，不作为默认安装目录名。
   Setup EXE 和更新 ZIP 复用同一 staging，发布仍上传两者及校验文件，但签名 `latest.json` 只
   引用 `windows_update_zip`。Windows 应用启动时从主 EXE 同级加载 `nexora-updater.json`；
   GUI 主程序与 sidecar 不创建命令行窗口。Windows 更新 ZIP 由 Rust 直接生成并固定使用 `/`
@@ -32,8 +34,8 @@
 - 默认脚手架与 `examples/updater-windows` 同时声明 `stable`、`beta` 和 `default_channel`；交互式
   `nexora build` 会显示 channel 选择，CI 可显式使用 `--channel` 或 `--all-channels`。
 - `apps.<app>.targets.required` 改为可选；`nexora build` 默认使用 `rustc -vV` 的 host target，
-  也可通过重复 `--target` 显式覆盖。交互式构建会自动安装缺失的 Rust target 及 macOS/Windows
-  打包依赖；系统安装器完成后可重跑原命令续接，非交互环境只返回完整安装命令。
+  也可通过重复 `--target` 显式覆盖。交互式与非交互式构建现在都只读检测 Rust target 及
+  macOS/Windows 打包依赖，在任何 receipt/staging 写入前失败并返回完整人工安装指引。
 - 删除发布目标的 `credential_env_prefix`；Access Key、Secret Key 与 Session Token 分别按
   channel 专用 Nexora 变量、基础 Nexora 变量、AWS 变量逐字段回退，允许不同字段来自不同层级。
 - `nexora build` 恢复为最终 ZIP 与 DMG 生成标准 `.sha256` 旁车，publish 会把旁车上传到版本化
@@ -45,9 +47,12 @@
 
 ## Fixed
 
-- Windows 构建依赖检查改为让 `ISCC.exe` 从标准输入读取空脚本，并解析编译前输出的精确
-  编译器引擎版本，不再从官方 `/?` 帮助横幅中解析并不存在的补丁版本；winget 安装的
-  Inno Setup 6.7.3 现在可被精确识别。
+- Windows sidecar 不再扫描安装目录猜测主 EXE，而是沿用更新 ZIP 已验证的精确主程序文件名；
+  Inno Setup 的 `unins000.exe` 不会再触发“多个候选主 EXE”。事务替换会从回滚备份保留
+  `unins<数字>.exe/.dat/.msg`，并拒绝暂存包覆盖这些文件，确保更新后 Apps & Features 卸载项
+  仍然有效。
+- Windows 构建依赖检查会让所有 Inno Setup 6/7 候选的 `ISCC.exe` 从标准输入读取空脚本，
+  解析实际编译器引擎版本，忽略损坏或不兼容候选，并选择最高兼容版本。
 - `nexora build` 从所选 app 注册读取品牌和 updater 配置，将 ICNS 写入 `.app` 的 Resources 与
   Info.plist；缺失或格式错误的目标平台图标会在打包前失败。
 - 手动更新流程在发现版本后等待用户确认再下载；可选启动检查仅检查版本，并以非模态通知提示。
@@ -57,6 +62,8 @@
 
 - 删除 Jenkinsfile、旧桌面构建 env 示例、旧裸 `latest.json` 示例、macOS shell updater helper
   及其测试、macOS-only updater README。
+- 删除 `nexora doctor --fix`、CLI 内 Rustup/winget/Homebrew/Cargo/Xcode 自动安装与下载路径，
+  以及独立 `windows-tooling.yml`；Release workflow 显式固定 Inno Setup 7.0.2。
 - 删除 `nexora.toml` 的 `credential_env_prefix` 字段；旧配置必须直接移除该字段。
 
 ## Upgrade Notes

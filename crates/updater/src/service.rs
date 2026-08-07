@@ -639,11 +639,12 @@ impl UpdateSession {
     }
 }
 
-/// 已完成下载、摘要校验、解压和代码签名验证的 macOS 更新。
+/// 已完成下载、摘要校验、解压和平台代码签名验证的待安装更新。
 #[derive(Debug, Clone)]
 pub struct StagedUpdate {
     release: UpdateRelease,
     app_id: String,
+    windows_main_exe_name: Option<String>,
     staged_app: PathBuf,
     current_app: PathBuf,
     sidecar_path: PathBuf,
@@ -663,6 +664,7 @@ struct StagingCleanup {
 struct InstallHelperRequest<'a> {
     process_id: u32,
     app_id: &'a str,
+    windows_main_exe_name: Option<&'a str>,
     current_app: &'a Path,
     staged_app: &'a Path,
     staging_root: &'a Path,
@@ -803,6 +805,7 @@ impl StagedUpdate {
         let result = spawn_install_helper(InstallHelperRequest {
             process_id: std::process::id(),
             app_id: &self.app_id,
+            windows_main_exe_name: self.windows_main_exe_name.as_deref(),
             current_app: &self.current_app,
             staged_app: &self.staged_app,
             staging_root: &self.cleanup.staging_root,
@@ -1256,52 +1259,59 @@ fn download_and_stage(
 
         cancellation.ensure_active()?;
         send_event(sender, UpdateEvent::Staging)?;
-        let (staged_app, current_app, sidecar_path) = match release.artifact.kind.as_str() {
-            "macos_app_zip" => {
-                macos::extract_app_archive(&archive_path, &extract_path)?;
-                let staged_app = macos::find_app_bundle(&extract_path)?;
-                macos::verify_code_signature(&staged_app, config.expected_team_id())?;
-                let current_app = config
-                    .app_bundle_path
-                    .clone()
-                    .map(Ok)
-                    .unwrap_or_else(macos::current_app_bundle)?;
-                let sidecar_path = config.sidecar_path()?;
-                (staged_app, current_app, sidecar_path)
-            }
-            "windows_update_zip" | "windows_zip" => {
-                let main_exe = crate::windows::current_main_exe_name()?;
-                let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
-                crate::windows::extract_windows_update_zip(
-                    &archive_path,
-                    &extract_path,
-                    &main_exe,
-                    &updater_exe,
-                )?;
-                crate::windows::verify_staged_update_signatures(
-                    &extract_path,
-                    &main_exe,
-                    &updater_exe,
-                    config.windows_signature(),
-                )?;
-                let current_app = config
-                    .app_bundle_path
-                    .clone()
-                    .map(Ok)
-                    .unwrap_or_else(crate::windows::current_install_dir)?;
-                let sidecar_path = extract_path.join(updater_exe);
-                (extract_path.clone(), current_app, sidecar_path)
-            }
-            _ => {
-                return Err(UpdateError::UnsupportedArtifactKind(
-                    release.artifact.kind.clone(),
-                ));
-            }
-        };
+        let (staged_app, current_app, sidecar_path, windows_main_exe_name) =
+            match release.artifact.kind.as_str() {
+                "macos_app_zip" => {
+                    macos::extract_app_archive(&archive_path, &extract_path)?;
+                    let staged_app = macos::find_app_bundle(&extract_path)?;
+                    macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+                    let current_app = config
+                        .app_bundle_path
+                        .clone()
+                        .map(Ok)
+                        .unwrap_or_else(macos::current_app_bundle)?;
+                    let sidecar_path = config.sidecar_path()?;
+                    (staged_app, current_app, sidecar_path, None)
+                }
+                "windows_update_zip" | "windows_zip" => {
+                    let main_exe = crate::windows::current_main_exe_name()?;
+                    let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
+                    crate::windows::extract_windows_update_zip(
+                        &archive_path,
+                        &extract_path,
+                        &main_exe,
+                        &updater_exe,
+                    )?;
+                    crate::windows::verify_staged_update_signatures(
+                        &extract_path,
+                        &main_exe,
+                        &updater_exe,
+                        config.windows_signature(),
+                    )?;
+                    let current_app = config
+                        .app_bundle_path
+                        .clone()
+                        .map(Ok)
+                        .unwrap_or_else(crate::windows::current_install_dir)?;
+                    let sidecar_path = extract_path.join(updater_exe);
+                    (
+                        extract_path.clone(),
+                        current_app,
+                        sidecar_path,
+                        Some(main_exe),
+                    )
+                }
+                _ => {
+                    return Err(UpdateError::UnsupportedArtifactKind(
+                        release.artifact.kind.clone(),
+                    ));
+                }
+            };
 
         Ok(StagedUpdate {
             release,
             app_id: config.app_id.clone(),
+            windows_main_exe_name,
             staged_app,
             current_app,
             sidecar_path,
@@ -1350,9 +1360,13 @@ fn default_sidecar_path() -> Result<PathBuf, UpdateError> {
 
 fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<(), UpdateError> {
     if cfg!(target_os = "windows") {
+        let main_exe_name = request.windows_main_exe_name.ok_or_else(|| {
+            UpdateError::SidecarUnavailable("Windows 更新缺少主 EXE 文件名".to_owned())
+        })?;
         return crate::windows::spawn_install_helper(crate::windows::InstallHelperRequest {
             process_id: request.process_id,
             app_id: request.app_id,
+            main_exe_name,
             current_app: request.current_app,
             staged_app: request.staged_app,
             staging_root: request.staging_root,
@@ -1538,7 +1552,7 @@ fn restore_pending_inner(
         });
     }
 
-    let (current_app, sidecar_path) = match release.artifact.kind.as_str() {
+    let (current_app, sidecar_path, windows_main_exe_name) = match release.artifact.kind.as_str() {
         "macos_app_zip" => {
             if staged_app
                 .extension()
@@ -1557,7 +1571,7 @@ fn restore_pending_inner(
                 .map(Ok)
                 .unwrap_or_else(macos::current_app_bundle)?;
             let sidecar_path = config.sidecar_path()?;
-            (current_app, sidecar_path)
+            (current_app, sidecar_path, None)
         }
         "windows_update_zip" | "windows_zip" => {
             if !staged_app.is_dir() {
@@ -1582,7 +1596,7 @@ fn restore_pending_inner(
                 .map(Ok)
                 .unwrap_or_else(crate::windows::current_install_dir)?;
             let sidecar_path = staged_app.join(updater_exe);
-            (current_app, sidecar_path)
+            (current_app, sidecar_path, Some(main_exe))
         }
         _ => {
             return Err(UpdateError::UnsupportedArtifactKind(
@@ -1594,6 +1608,7 @@ fn restore_pending_inner(
     Ok(StagedUpdate {
         release: release.with_verified_manifest(record.manifest),
         app_id: config.app_id.clone(),
+        windows_main_exe_name,
         staged_app,
         current_app,
         sidecar_path,

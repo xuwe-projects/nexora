@@ -56,7 +56,8 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
         && cfg!(target_os = "windows")
         && old_version_available
         && !windows::process_is_running(command.parent_pid)
-        && let Err(error) = windows::relaunch_app(&command.current_app)
+        && let Some(main_exe_name) = command.main_exe_name.as_deref()
+        && let Err(error) = windows::relaunch_app(&command.current_app, main_exe_name)
     {
         tracing::warn!(error = %error, "Windows 更新失败后无法自动重新打开旧版本");
     }
@@ -74,8 +75,12 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
 /// 当健康确认文件路径不可写，或会话标识格式无效时返回错误。
 fn apply_staged_update(command: &SidecarApplyCommand) -> Result<(), UpdateError> {
     if cfg!(target_os = "windows") {
+        let main_exe_name = command.main_exe_name.as_deref().ok_or_else(|| {
+            UpdateError::SidecarFailed("Windows sidecar 缺少主 EXE 文件名".to_owned())
+        })?;
         return windows::apply_staged_update(
             command.parent_pid,
+            main_exe_name,
             &command.current_app,
             &command.staged_app,
             &command.staging_root,
@@ -134,6 +139,7 @@ pub fn report_health_from_env_args() -> Result<bool, UpdateError> {
 struct SidecarApplyCommand {
     app_id: String,
     parent_pid: u32,
+    main_exe_name: Option<String>,
     current_app: PathBuf,
     staged_app: PathBuf,
     staging_root: PathBuf,
@@ -153,6 +159,13 @@ impl SidecarApplyCommand {
             .map_err(|_| UpdateError::SidecarFailed("parent pid 不是 UTF-8".to_owned()))?
             .parse::<u32>()
             .map_err(|_| UpdateError::SidecarFailed("parent pid 无效".to_owned()))?;
+        let main_exe_name = optional_value(args, "--main-exe-name")
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| UpdateError::SidecarFailed("主 EXE 文件名不是 UTF-8".to_owned()))
+            })
+            .transpose()?;
         let current_app = PathBuf::from(required_value(args, "--current-app")?);
         let staged_app = PathBuf::from(required_value(args, "--staged-app")?);
         let staging_root = PathBuf::from(required_value(args, "--staging-root")?);
@@ -175,6 +188,7 @@ impl SidecarApplyCommand {
         Ok(Self {
             app_id,
             parent_pid,
+            main_exe_name,
             current_app,
             staged_app,
             staging_root,

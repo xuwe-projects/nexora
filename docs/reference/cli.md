@@ -45,6 +45,24 @@ nexora update
 nexora version
 ```
 
+## 只读依赖诊断
+
+`nexora doctor` 只读取当前宿主的工具路径、版本与能力，不下载或安装软件，不执行 `winget
+install`、`rustup target add`、`cargo install`、`brew install` 或 `xcode-select --install`，也不修改
+PATH、打开浏览器或启动系统安装器。交互终端与 CI 使用相同语义；只有颜色和排版可以不同。
+
+诊断会逐项显示用途、必需/条件必需状态、检测路径与版本、支持范围、官方下载地址、可复制的
+人工安装/验证命令，以及安装后应重跑的 Nexora 命令。缺少必需工具或版本不兼容时返回非零
+状态；只缺少当前配置未启用的签名/公证工具时显示 warning。
+
+`nexora build` 在写入 `dist/<app>/<channel>/release.json`、创建 staging 或开始 Cargo 编译前运行
+相同的只读预检。失败时不会写入新的 release receipt 或构建状态；用户安装依赖后重新执行原始
+build 命令。
+
+`nexora doctor --fix` 已删除。迁移方式是把旧命令改为 `nexora doctor`，然后根据输出自行执行
+安装命令。完整 Windows/macOS 工具清单、版本范围、证书和密钥边界见
+[桌面自动更新](../desktop/updater.md#人工安装构建依赖)。
+
 Account 同时需要桌面端与服务端，只支持 workspace 布局。生成项目会固定当前 Nexora Git
 tag；测试本地改动时可先用 `cargo install --path crates/cli --locked --bin nexora` 安装 CLI。
 

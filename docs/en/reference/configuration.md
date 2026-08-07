@@ -145,7 +145,17 @@ build defaults to the host from `rustc -vV`, while `nexora build --target <tripl
 The production packaging path covers macOS `.app`/DMG and Windows x86_64/ARM64 Simplified Chinese
 Inno Setup EXE and update ZIP artifacts.
 
-Windows `publisher` remains required installer metadata in every signing mode. `signing = "none"`
+Platform configuration never authorizes the CLI to install machine-level tools. `nexora doctor`
+and build preflight are read-only. Windows accepts Inno Setup `>= 6.7.3, < 8.0.0`, with 7.x
+recommended for new installations. See
+[Desktop updater](../desktop/updater.md#manually-installed-build-prerequisites) for the manual
+Windows SDK, MSVC, Rust target, Xcode, cargo-bundle, create-dmg, certificate, and notarization
+matrix. There is no configuration switch that restores `doctor --fix` or automatic installation.
+
+Windows `publisher` remains required installer metadata in every signing mode and names the
+publisher component of the fresh-install default
+`%LOCALAPPDATA%\Programs\<publisher>\<display_name>`. It must therefore be a safe Windows path
+component without `/`, `\`, `:`, reserved device names, or trailing dots/spaces. `signing = "none"`
 retains Ed25519 manifest verification, artifact SHA-256, ZIP safety, and PE architecture checks, but
 must not include `signing_thumbprint`, `expected_publisher`, or `timestamp_url`. With
 `signing = "authenticode"`, configure a certificate thumbprint (or

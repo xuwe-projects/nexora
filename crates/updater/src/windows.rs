@@ -643,6 +643,7 @@ fn hex_upper(bytes: &[u8]) -> String {
 pub(crate) struct InstallHelperRequest<'a> {
     pub process_id: u32,
     pub app_id: &'a str,
+    pub main_exe_name: &'a str,
     pub current_app: &'a Path,
     pub staged_app: &'a Path,
     pub staging_root: &'a Path,
@@ -663,6 +664,7 @@ pub(crate) fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<
         request.current_app,
         request.staged_app,
         request.staging_root,
+        request.main_exe_name,
     )?;
 
     let sidecar_runtime = copy_sidecar_to_temp(request.app_id, request.sidecar_path)?;
@@ -686,6 +688,8 @@ pub(crate) fn install_helper_command(
         .arg(request.app_id)
         .arg("--parent-pid")
         .arg(request.process_id.to_string())
+        .arg("--main-exe-name")
+        .arg(request.main_exe_name)
         .arg("--current-app")
         .arg(request.current_app)
         .arg("--staged-app")
@@ -709,6 +713,7 @@ pub(crate) fn install_helper_command(
 
 pub(crate) fn apply_staged_update(
     parent_pid: u32,
+    main_exe_name: &str,
     current_app: &Path,
     staged_app: &Path,
     staging_root: &Path,
@@ -716,6 +721,7 @@ pub(crate) fn apply_staged_update(
     health_timeout: Duration,
 ) -> Result<(), UpdateError> {
     ensure_windows()?;
+    validate_expected_exe_name(main_exe_name)?;
     wait_for_process_exit(parent_pid, Duration::from_secs(120))?;
     ensure_same_volume(current_app, staged_app)?;
     ensure_same_volume(current_app, staging_root)?;
@@ -732,9 +738,9 @@ pub(crate) fn apply_staged_update(
     let result = apply_staged_update_inner(
         current_app,
         staged_app,
-        &backup_root,
         &backup_app,
         &health_file,
+        main_exe_name,
         health_session,
         health_timeout,
     );
@@ -760,12 +766,15 @@ pub(crate) fn apply_staged_update(
 fn apply_staged_update_inner(
     current_app: &Path,
     staged_app: &Path,
-    backup_root: &Path,
     backup_app: &Path,
     health_file: &Path,
+    main_exe_name: &str,
     health_session: &str,
     health_timeout: Duration,
 ) -> Result<(), UpdateError> {
+    let backup_root = backup_app
+        .parent()
+        .ok_or_else(|| UpdateError::SidecarFailed("备份目录缺少父目录".to_owned()))?;
     fs::create_dir_all(backup_root)?;
     if let Some(parent) = health_file.parent() {
         fs::create_dir_all(parent)?;
@@ -785,8 +794,9 @@ fn apply_staged_update_inner(
             current_app.display()
         ))
     })?;
+    preserve_inno_uninstaller_files(backup_app, current_app)?;
 
-    let mut child = launch_app(current_app, health_session, health_file)?;
+    let mut child = launch_app(current_app, main_exe_name, health_session, health_file)?;
     if let Err(error) = wait_for_health(health_file, health_session, health_timeout) {
         _ = child.kill();
         _ = child.wait();
@@ -908,7 +918,9 @@ pub(crate) fn preflight_install_layout(
     current_app: &Path,
     staged_app: &Path,
     staging_root: &Path,
+    main_exe_name: &str,
 ) -> Result<(), UpdateError> {
+    validate_expected_exe_name(main_exe_name)?;
     let current_app = fs::canonicalize(current_app)
         .map_err(|error| UpdateError::SidecarFailed(format!("无法读取当前安装目录: {error}")))?;
     let staged_app = fs::canonicalize(staged_app)
@@ -925,8 +937,8 @@ pub(crate) fn preflight_install_layout(
             "Windows 更新事务目录与安装目录边界无效".to_owned(),
         ));
     }
-    find_primary_exe(&current_app)?;
-    find_primary_exe(&staged_app)?;
+    main_executable_path(&current_app, main_exe_name)?;
+    main_executable_path(&staged_app, main_exe_name)?;
 
     let install_parent = current_app
         .parent()
@@ -989,8 +1001,8 @@ pub(crate) fn process_is_running(process_id: u32) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn relaunch_app(install_dir: &Path) -> Result<(), UpdateError> {
-    drop(launch_app(install_dir, "", Path::new(""))?);
+pub(crate) fn relaunch_app(install_dir: &Path, main_exe_name: &str) -> Result<(), UpdateError> {
+    drop(launch_app(install_dir, main_exe_name, "", Path::new(""))?);
     Ok(())
 }
 
@@ -1008,10 +1020,11 @@ fn restore_backup(current_app: &Path, backup_app: &Path) -> Result<(), UpdateErr
 
 fn launch_app(
     install_dir: &Path,
+    main_exe_name: &str,
     health_session: &str,
     health_file: &Path,
 ) -> Result<std::process::Child, UpdateError> {
-    let executable = find_primary_exe(install_dir)?;
+    let executable = main_executable_path(install_dir, main_exe_name)?;
     let mut command = Command::new(executable);
     command.current_dir(install_dir);
     if !health_session.is_empty() {
@@ -1024,30 +1037,56 @@ fn launch_app(
     Ok(command.spawn()?)
 }
 
-fn find_primary_exe(install_dir: &Path) -> Result<PathBuf, UpdateError> {
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(install_dir)? {
+fn main_executable_path(install_dir: &Path, main_exe_name: &str) -> Result<PathBuf, UpdateError> {
+    validate_expected_exe_name(main_exe_name)?;
+    let executable = install_dir.join(main_exe_name);
+    if executable.is_file() {
+        return Ok(executable);
+    }
+    Err(UpdateError::SidecarFailed(format!(
+        "安装目录缺少主 EXE `{main_exe_name}`"
+    )))
+}
+
+pub(crate) fn preserve_inno_uninstaller_files(
+    backup_app: &Path,
+    current_app: &Path,
+) -> Result<(), UpdateError> {
+    for entry in fs::read_dir(backup_app)? {
         let entry = entry?;
-        let path = entry.path();
-        if !entry.file_type()?.is_file()
-            || path.extension().is_none_or(|extension| extension != "exe")
-        {
+        if !entry.file_type()?.is_file() {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
             continue;
         };
-        if !name.ends_with("-updater.exe") {
-            candidates.push(path);
+        if !is_inno_uninstaller_file(name) {
+            continue;
         }
+
+        let destination = current_app.join(&file_name);
+        if destination.try_exists()? {
+            return Err(UpdateError::SidecarFailed(format!(
+                "暂存更新不允许包含 Inno Setup 卸载器文件 `{name}`"
+            )));
+        }
+        fs::copy(entry.path(), destination)?;
     }
-    match candidates.as_slice() {
-        [path] => Ok(path.clone()),
-        [] => Err(UpdateError::SidecarFailed("安装目录缺少主 EXE".to_owned())),
-        _ => Err(UpdateError::SidecarFailed(
-            "安装目录包含多个候选主 EXE".to_owned(),
-        )),
-    }
+    Ok(())
+}
+
+fn is_inno_uninstaller_file(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    let Some((stem, extension)) = normalized.rsplit_once('.') else {
+        return false;
+    };
+    let Some(sequence) = stem.strip_prefix("unins") else {
+        return false;
+    };
+    !sequence.is_empty()
+        && sequence.bytes().all(|byte| byte.is_ascii_digit())
+        && matches!(extension, "exe" | "dat" | "msg")
 }
 
 fn wait_for_health(
