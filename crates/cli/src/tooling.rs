@@ -25,7 +25,8 @@ pub use release::{
 #[cfg(windows)]
 #[allow(unused_imports)]
 pub use release::{
-    inspect_compile_windows_resource_executables, inspect_inno_setup_compiler_version,
+    inspect_compile_windows_installer, inspect_compile_windows_resource_executables,
+    inspect_inno_setup_compiler_version,
 };
 
 /// CLI 命令解析与执行流程共用的结果类型。
