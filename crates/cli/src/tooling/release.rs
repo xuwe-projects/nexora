@@ -37,6 +37,8 @@ const MINIMUM_GPUI_WINDOWS_BUILD: u32 = 15_063;
 const INNO_SETUP_VERSION: &str = "6.7.3";
 const INNO_SETUP_WINGET_PACKAGE: &str = "JRSoftware.InnoSetup";
 const WINDOWS_INSTALLER_TEMPLATE: &str = include_str!("../../templates/windows/installer.iss");
+const WINDOWS_CHINESE_SIMPLIFIED_MESSAGES: &str =
+    include_str!("../../templates/windows/ChineseSimplified.isl");
 const HOMEBREW_INSTALL_COMMAND: &str = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
 const RUSTUP_INSTALL_COMMAND: &str =
     "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y";
@@ -2421,6 +2423,13 @@ fn write_windows_installer_source(plan: &BuildPlan, staging: &Path) -> CliResult
     let work_dir = windows_work_dir(plan);
     fs::create_dir_all(&work_dir)
         .map_err(|error| CliError::new(format!("无法创建 {}: {error}", work_dir.display())))?;
+    let language_path = work_dir.join("ChineseSimplified.isl");
+    fs::write(&language_path, WINDOWS_CHINESE_SIMPLIFIED_MESSAGES).map_err(|error| {
+        CliError::new(format!(
+            "无法写入 Inno Setup 简体中文语言文件 {}: {error}",
+            language_path.display()
+        ))
+    })?;
     let source_path = work_dir.join("installer.iss");
     let source = windows_installer_source(plan, staging)?;
     fs::write(&source_path, source.iss).map_err(|error| {
@@ -2497,6 +2506,11 @@ fn windows_inno_definitions(plan: &BuildPlan, staging: &Path) -> CliResult<Vec<S
         inno_string_definition("OutputBaseFilename", output_base_filename)?,
         inno_string_definition("MainExeName", &safe_file_name(&plan.app_path)?)?,
         inno_path_definition("IconPath", &plan.windows_icon, "Windows 安装程序图标")?,
+        inno_path_definition(
+            "LanguageFile",
+            &windows_work_dir(plan).join("ChineseSimplified.isl"),
+            "Inno Setup 简体中文语言文件",
+        )?,
         inno_string_definition("ArchitectureAllowed", architecture_allowed)?,
         inno_string_definition("ArchitectureInstallMode", architecture_install_mode)?,
         inno_number_definition(

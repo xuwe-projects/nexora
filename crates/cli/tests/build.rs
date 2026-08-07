@@ -850,7 +850,9 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     assert!(script.contains("PrivilegesRequired=lowest"));
     assert!(script.contains("DefaultDirName={localappdata}\\Programs\\{#AppId}"));
     assert!(script.contains("DisableDirPage=no"));
-    assert!(script.contains("compiler:Languages\\Unofficial\\ChineseSimplified.isl"));
+    assert!(script.contains("#define LanguageFile \""));
+    assert!(script.contains("ChineseSimplified.isl"));
+    assert!(script.contains("MessagesFile: \"{#LanguageFile}\""));
     assert!(script.contains("CloseApplications=force"));
     assert!(script.contains("Source: \"*\""));
     assert!(script.contains("recursesubdirs createallsubdirs"));

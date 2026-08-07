@@ -32,10 +32,6 @@ jobs:
           if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
             throw "Inno Setup installed without the expected ISCC.exe: $iscc"
           }
-          $language = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\Languages\Unofficial\ChineseSimplified.isl"
-          if (-not (Test-Path -LiteralPath $language -PathType Leaf)) {
-            throw "Inno Setup installed without the Simplified Chinese language file: $language"
-          }
           "NEXORA_TEST_ISCC=$iscc" >> $env:GITHUB_ENV
       - name: Verify compiler engine and compile generated installer
         run: cargo test -p cli --locked --test build installed_inno_setup_ -- --nocapture

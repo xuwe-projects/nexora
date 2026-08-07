@@ -69,10 +69,6 @@ jobs:
           if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
             throw "Inno Setup installed without the expected ISCC.exe: $iscc"
           }
-          $language = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\Languages\Unofficial\ChineseSimplified.isl"
-          if (-not (Test-Path -LiteralPath $language -PathType Leaf)) {
-            throw "Inno Setup installed without the Simplified Chinese language file: $language"
-          }
           "NEXORA_TEST_ISCC=$iscc" >> $env:GITHUB_ENV
       - name: Test Windows Unicode resource contract
         if: contains(matrix.target, 'windows')

@@ -35,7 +35,7 @@ RestartApplications=no
 SetupMutex={#AppId}.setup
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\Unofficial\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "{#LanguageFile}"
 
 [Tasks]
 #if DesktopShortcutDefault
