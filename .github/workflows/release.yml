@@ -169,17 +169,14 @@ jobs:
           pattern: cli-*
           path: release-assets
           merge-multiple: true
-      - name: Create draft release, upload complete asset set, then publish
+      - name: Create or update release with the complete asset set
         shell: bash
         run: |
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
           notes_file="docs/changelog/${version}.md"
           test -f "$notes_file"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"
-            test "$draft" = "true"
-          else
+          if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --verify-tag --draft --title "Nexora $version" --notes-file "$notes_file"
           fi
           gh release upload "$tag" release-assets/* --clobber
