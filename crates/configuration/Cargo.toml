@@ -15,4 +15,4 @@ toml = { workspace = true }
 serde = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+windows = { workspace = true, features = ["std", "Win32_Storage_FileSystem"] }

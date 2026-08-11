@@ -609,7 +609,7 @@ pub fn bootstrap(options: ProcessBootstrapOptions) -> Result<ProcessBootstrap, P
     let lock = secure_file(&lock_path)?;
     match lock.try_lock_exclusive() {
         Ok(()) => bootstrap_main(options.identity, runtime_root, lock).map(ProcessBootstrap::Main),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
             let endpoint_path = runtime_root.join("endpoint.json");
             let descriptor = read_endpoint_with_retry(&endpoint_path)?;
             let response = send_request(
