@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.33.1: complete single-process multi-window hosting and per-window navigation](./0.33.1)
 - [0.33.0: singleton main process, multi-window sessions, and table layout persistence](./0.33.0)
 - [0.32.0: cross-platform publishing and Windows update transactions](./0.32.0)
 - [0.31.1: PostgreSQL 17 framework migration baseline fix](./0.31.1)

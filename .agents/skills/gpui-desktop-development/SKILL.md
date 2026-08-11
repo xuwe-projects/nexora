@@ -227,14 +227,27 @@ impl<D> DataTable<D> {
 - 为“仅使用原能力”和“使用增强能力”分别添加集成测试，防止包装层改变默认行为。
 - 无法保持兼容时使用明确的新名称，并在实现前说明差异；不要用同名类型静默改变语义。
 
-## 12. 单进程与多窗口
+## 12. 应用单例与多窗口承载
 
-- 桌面应用默认只启动一个进程，并且只调用一次 `Application::run`。
-- 需要多个窗口时，在同一 GPUI 应用事件循环中通过 `App::open_window` 或 `cx.open_window` 创建，每个窗口拥有自己的根 Entity。
-- 不要为了打开第二个窗口再次启动当前二进制或创建第二个应用进程。
-- 不要在普通子线程中直接创建或操作窗口。GPUI 的 `App` 和窗口创建属于前台应用事件循环；子线程只负责准备数据或发出打开窗口的请求，再回到 `App` 上下文执行 `open_window`。
-- 窗口私有状态放在对应窗口根 Entity；跨窗口共享模型使用 `Entity<Model>`，真正应用级状态使用 Global。
-- 只有用户明确要求故障隔离、安全隔离或独立服务生命周期时，才设计多进程架构；这不属于普通多窗口实现。
+- Nexora 默认启用应用身份级单例门禁，并使用一个主进程协调窗口组；额外 Shell、唯一 Settings
+  和注册 Window 默认由受管子进程承载。因此“单实例”不等于“单个操作系统进程”。
+- 应用需要严格单进程时，显式设置 `ApplicationOptions::subprocess_windows(false)`。该模式仍
+  保留完整多窗口创建、历史会话恢复、显示器与边界恢复、托盘窗口组命令、唯一 Settings 和
+  注册 Window；所有窗口改由同一 GPUI 事件循环中的 `App::open_window` 创建。
+- 不要把 `.subprocess_windows(false)` 与关闭多窗口混为一谈，也不要同时关闭
+  `restore_window_sessions`、`tray_enabled` 或 `single_instance`，除非产品确实不需要这些能力。
+- 不要为了打开第二个窗口自行再次启动当前二进制、调用第二次 `Application::run` 或复制 Nexora
+  的进程协调协议。由 `ApplicationOptions` 选择承载模式，让 Shell、SettingsWindow 和注册 Window
+  继续走统一注册表与会话生命周期。
+- 同进程包含多个 Shell 时，`Context<T>::navigate` 路由到当前 Entity 所在窗口的 Shell；
+  `App::navigate` 路由到活动 Shell；无法确定来源或活动 Shell 时回退到主 Shell。窗口路由仍按
+  注册表打开独立原生窗口。
+- 不要在普通子线程中直接创建或操作窗口。GPUI 的 `App` 和窗口创建属于前台应用事件循环；
+  子线程只负责准备数据或发出打开窗口的请求，再回到 `App` 上下文执行 `open_window`。
+- 每个 Shell 和窗口保留自己的根 Entity、局部输入状态、焦点、订阅和任务；应用级 Account、
+  Preferences、Updater 与窗口组协调使用唯一 Global 或框架运行时，不为每个窗口复制。
+- 只有用户明确要求故障隔离、安全隔离或独立服务生命周期时，才在 Nexora 默认受管模式之外
+  设计新的多进程边界；普通应用不得维护第二套窗口进程协议。
 
 ## 13. GPUI 测试策略
 

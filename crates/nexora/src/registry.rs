@@ -243,6 +243,7 @@ impl AppRegistryBuilder {
 ///
 /// Feature 与 Window 共用同一套路由树，因此相同或等价动态路径会在启动阶段直接报错，
 /// 不会等到 deeplink 到达时才产生不确定行为。
+#[derive(Clone)]
 pub struct AppRegistry {
     features: Vec<FeatureMetadata>,
     navigation_groups: Vec<NavigationGroupMetadata>,
@@ -686,12 +687,31 @@ impl AppRegistry {
         }
         let factory = registration.factory();
         let window_id = metadata.id();
+        let tracked_session = session.cloned();
 
         let handle = cx
             .open_window(options, move |window, cx| {
                 let instance = factory(route, window, cx)
                     .expect("Window 路由已在创建原生窗口前完成相同的强类型校验");
-                let root = cx.new(|cx| gpui_component::Root::new(instance.view(), window, cx));
+                let root = cx.new(|cx| {
+                    if let Some(session) = tracked_session {
+                        let window_id = window.window_handle().window_id();
+                        let session_id = session.session_id;
+                        let role = session.role;
+                        cx.on_release_in(window, move |_, window, cx| {
+                            crate::application::release_standalone_window_session(
+                                window_id,
+                                session_id.as_str(),
+                                &role,
+                                window,
+                                cx,
+                            );
+                        })
+                        // nexora-lint: allow(nexora::detached_lifecycle) reason="释放订阅绑定当前窗口 Root Entity，只在该窗口释放时执行会话清理"
+                        .detach();
+                    }
+                    gpui_component::Root::new(instance.view(), window, cx)
+                });
                 theme::attach_window(window, cx);
                 root
             })

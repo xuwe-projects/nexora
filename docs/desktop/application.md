@@ -24,6 +24,22 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
+## 应用单例与窗口进程
+
+Nexora 默认只允许一个应用主实例，但额外 Shell、唯一 Settings 和注册 Window 由主进程
+协调的受管子进程承载。因此默认配置可能出现多个操作系统进程，这与“单实例”并不冲突。
+
+要求全部窗口严格运行在同一个操作系统进程时，只覆盖窗口承载选项：
+
+```rust
+ApplicationOptions::new().subprocess_windows(false)
+```
+
+`single_instance`、`restore_window_sessions` 和 `tray_enabled` 仍保持默认开启。新增 Shell、设置
+单例、注册 Window、完整标签与路由恢复、显示器和边界恢复、重复启动激活及托盘窗口组命令
+都继续可用。多个同进程 Shell 中，Feature 的 `Context<T>::navigate` 路由到来源 Entity 所在
+窗口，`App::navigate` 路由到活动 Shell，无法确定来源时回退到主 Shell。
+
 ## Logo
 
 默认登录页与 Sidebar Header 共用品牌配置。PNG 应编译进最终二进制：

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyView, App, AppContext as _, Context, EntityId, Global, IntoElement, Render, Window,
-    WindowOptions,
+    WindowId, WindowOptions,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -289,25 +289,26 @@ where
 #[cfg(feature = "desktop")]
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum NavigationRequestError {
-    /// 当前 GPUI 应用尚未创建 Nexora 主窗口 Shell，无法接收导航请求。
-    #[error("Nexora 主窗口尚未初始化，当前上下文无法提交导航请求")]
+    /// 当前 GPUI 应用尚未创建任何 Nexora Shell，无法接收导航请求。
+    #[error("Nexora Shell 尚未初始化，当前上下文无法提交导航请求")]
     DispatcherUnavailable,
 }
 
 /// 为任意 Nexora 页面上下文提供延迟且不会重入 Entity 的导航入口。
 ///
 /// `navigate` 接受内部路径或 deeplink 字符串。路径解析、Feature 标签复用和独立 Window
-/// 打开统一由当前应用 Shell 处理，调用页面不需要持有父视图或注册表句柄。
+/// 打开统一由当前 Entity 所在窗口的 Shell 处理，调用页面不需要持有父视图或注册表句柄。
 #[cfg(feature = "desktop")]
 pub trait NavigationContextExt {
     /// 在当前 Entity 更新完成后请求打开指定路径。
     ///
-    /// Feature 目标会打开或激活主窗口标签；Window 目标会创建独立原生窗口，并且不会
-    /// 进入主导航或标签。该方法只排队请求，不同步执行目标页面生命周期。
+    /// Feature 目标会打开或激活当前 Shell 的标签；Window 目标会创建独立原生窗口，并且
+    /// 不会进入 Shell 导航或标签。无法确定来源 Shell 时回退到主 Shell。该方法只排队请求，
+    /// 不同步执行目标页面生命周期。
     ///
     /// # Errors
     ///
-    /// 当前应用尚未创建 Nexora 主窗口 Shell 时返回
+    /// 当前应用尚未创建任何 Nexora Shell 时返回
     /// [`NavigationRequestError::DispatcherUnavailable`]。
     fn navigate(&mut self, location: impl Into<String>) -> Result<(), NavigationRequestError>;
 }
@@ -318,13 +319,10 @@ where
     T: 'static,
 {
     fn navigate(&mut self, location: impl Into<String>) -> Result<(), NavigationRequestError> {
-        let handler = self
-            .has_global::<NavigationDispatcher>()
-            .then(|| self.global::<NavigationDispatcher>().handler.clone())
-            .flatten()
-            .ok_or(NavigationRequestError::DispatcherUnavailable)?;
+        ensure_navigation_dispatcher_available(self)?;
+        let source = self.entity_id();
         let location = location.into();
-        self.defer(move |cx| handler(location, cx));
+        self.defer(move |cx| dispatch_navigation(location, Some(source), false, cx));
         Ok(())
     }
 }
@@ -332,13 +330,9 @@ where
 #[cfg(feature = "desktop")]
 impl NavigationContextExt for App {
     fn navigate(&mut self, location: impl Into<String>) -> Result<(), NavigationRequestError> {
-        let handler = self
-            .has_global::<NavigationDispatcher>()
-            .then(|| self.global::<NavigationDispatcher>().handler.clone())
-            .flatten()
-            .ok_or(NavigationRequestError::DispatcherUnavailable)?;
+        ensure_navigation_dispatcher_available(self)?;
         let location = location.into();
-        self.defer(move |cx| handler(location, cx));
+        self.defer(move |cx| dispatch_navigation(location, None, true, cx));
         Ok(())
     }
 }
@@ -349,31 +343,92 @@ type NavigationHandler = Rc<dyn Fn(String, &mut App)>;
 #[cfg(feature = "desktop")]
 #[derive(Default)]
 struct NavigationDispatcher {
-    handler: Option<NavigationHandler>,
+    handlers: HashMap<WindowId, NavigationHandler>,
+    main_window: Option<WindowId>,
 }
 
 #[cfg(feature = "desktop")]
 impl Global for NavigationDispatcher {}
 
 #[cfg(feature = "desktop")]
-pub(crate) fn install_navigation_handler(
+/// 把一个 Shell 的导航处理器绑定到其原生窗口。
+///
+/// 该入口只供 Nexora Shell 运行时和框架集成测试使用；`main_window` 标记唯一主 Shell，
+/// 让无法解析来源窗口的请求具有确定性回退目标。应用代码应调用 [`NavigationContextExt`]，
+/// 不应直接安装处理器。
+#[doc(hidden)]
+pub fn install_navigation_handler(
+    window_id: WindowId,
+    main_window: bool,
     handler: impl Fn(String, &mut App) + 'static,
     cx: &mut App,
 ) {
-    let dispatcher = NavigationDispatcher {
-        handler: Some(Rc::new(handler)),
-    };
-    if cx.has_global::<NavigationDispatcher>() {
-        *cx.global_mut::<NavigationDispatcher>() = dispatcher;
-    } else {
-        cx.set_global(dispatcher);
+    if !cx.has_global::<NavigationDispatcher>() {
+        cx.set_global(NavigationDispatcher::default());
+    }
+    let dispatcher = cx.global_mut::<NavigationDispatcher>();
+    dispatcher.handlers.insert(window_id, Rc::new(handler));
+    if main_window {
+        dispatcher.main_window = Some(window_id);
     }
 }
 
 #[cfg(feature = "desktop")]
-pub(crate) fn clear_navigation_handler(cx: &mut App) {
-    if cx.has_global::<NavigationDispatcher>() {
-        cx.global_mut::<NavigationDispatcher>().handler = None;
+/// 删除指定原生窗口对应的 Shell 导航处理器。
+///
+/// Shell Entity 释放时必须调用该入口，避免关闭窗口继续接收延迟导航。该函数只供框架
+/// 运行时和集成测试使用。
+#[doc(hidden)]
+pub fn remove_navigation_handler(window_id: WindowId, cx: &mut App) {
+    if !cx.has_global::<NavigationDispatcher>() {
+        return;
+    }
+    let dispatcher = cx.global_mut::<NavigationDispatcher>();
+    dispatcher.handlers.remove(&window_id);
+    if dispatcher.main_window == Some(window_id) {
+        dispatcher.main_window = None;
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn ensure_navigation_dispatcher_available(cx: &App) -> Result<(), NavigationRequestError> {
+    cx.try_global::<NavigationDispatcher>()
+        .filter(|dispatcher| !dispatcher.handlers.is_empty())
+        .map(|_| ())
+        .ok_or(NavigationRequestError::DispatcherUnavailable)
+}
+
+#[cfg(feature = "desktop")]
+fn dispatch_navigation(
+    location: String,
+    source_entity: Option<EntityId>,
+    prefer_active_window: bool,
+    cx: &mut App,
+) {
+    let source_window = source_entity
+        .and_then(|entity_id| {
+            cx.with_window(entity_id, |window, _| window.window_handle().window_id())
+        })
+        .or_else(|| {
+            prefer_active_window
+                .then(|| cx.active_window().map(|handle| handle.window_id()))
+                .flatten()
+        });
+    let handler = cx
+        .try_global::<NavigationDispatcher>()
+        .and_then(|dispatcher| {
+            source_window
+                .and_then(|window_id| dispatcher.handlers.get(&window_id))
+                .or_else(|| {
+                    dispatcher
+                        .main_window
+                        .and_then(|window_id| dispatcher.handlers.get(&window_id))
+                })
+                .or_else(|| dispatcher.handlers.values().next())
+                .cloned()
+        });
+    if let Some(handler) = handler {
+        handler(location, cx);
     }
 }
 

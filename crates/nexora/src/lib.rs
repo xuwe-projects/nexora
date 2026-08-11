@@ -114,7 +114,10 @@ pub mod __private {
     #[cfg(feature = "desktop")]
     pub use crate::runtime::create_login_feature;
     #[cfg(feature = "desktop")]
-    pub use crate::runtime::{create_feature, create_sidebar_slot, create_window, window_options};
+    pub use crate::runtime::{
+        create_feature, create_sidebar_slot, create_window, install_navigation_handler,
+        remove_navigation_handler, window_options,
+    };
 
     /// 派生宏写入注册表的类型擦除 Feature 工厂。
     #[cfg(feature = "desktop")]

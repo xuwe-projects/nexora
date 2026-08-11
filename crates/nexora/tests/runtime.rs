@@ -1,8 +1,15 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-use gpui::{AnyView, AppContext as _, Context, Empty, Render, TestAppContext, Window};
+use gpui::{
+    AnyView, AppContext as _, Context, Empty, Render, TestAppContext, Window, WindowHandle,
+};
+use nexora::__private::{install_navigation_handler, remove_navigation_handler};
 use nexora::{
     AppRegistry, FeatureContextExt as _, FeatureElement, FeatureRoute, FeatureRuntimeError,
     NavigationContextExt as _, NavigationRequestError, Path, Query, RouteExtractError,
@@ -55,6 +62,12 @@ struct NotificationObserver {
 #[derive(Default)]
 struct NavigationSource;
 
+impl Render for NavigationSource {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        Empty
+    }
+}
+
 #[gpui::test]
 fn navigation_reports_missing_application_shell(cx: &mut TestAppContext) {
     let source = cx.new(|_| NavigationSource);
@@ -64,6 +77,79 @@ fn navigation_reports_missing_application_shell(cx: &mut TestAppContext) {
         .unwrap_err();
 
     assert_eq!(error, NavigationRequestError::DispatcherUnavailable);
+}
+
+fn install_test_navigation_handler(
+    window: WindowHandle<NavigationSource>,
+    main_window: bool,
+    label: &'static str,
+    events: Rc<RefCell<Vec<(String, String)>>>,
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        install_navigation_handler(
+            window.window_id(),
+            main_window,
+            move |location, _| {
+                events.borrow_mut().push((label.to_owned(), location));
+            },
+            cx,
+        );
+    });
+}
+
+#[gpui::test]
+fn navigation_targets_source_shell_and_falls_back_to_main(cx: &mut TestAppContext) {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let main_window = cx.add_window(|_, _| NavigationSource);
+    let extra_window = cx.add_window(|_, _| NavigationSource);
+    let main_source = main_window.root(cx).unwrap();
+    let extra_source = extra_window.root(cx).unwrap();
+    install_test_navigation_handler(main_window, true, "main", events.clone(), cx);
+    install_test_navigation_handler(extra_window, false, "extra", events.clone(), cx);
+
+    cx.update_entity(&main_source, |_, cx| cx.navigate("/from-main").unwrap());
+    cx.update_entity(&extra_source, |_, cx| cx.navigate("/from-extra").unwrap());
+    cx.run_until_parked();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            ("main".to_owned(), "/from-main".to_owned()),
+            ("extra".to_owned(), "/from-extra".to_owned()),
+        ]
+    );
+
+    cx.update(|cx| remove_navigation_handler(extra_window.window_id(), cx));
+    cx.update_entity(&extra_source, |_, cx| {
+        cx.navigate("/fallback-to-main").unwrap()
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        events.borrow().last(),
+        Some(&("main".to_owned(), "/fallback-to-main".to_owned()))
+    );
+}
+
+#[gpui::test]
+fn app_navigation_targets_active_shell(cx: &mut TestAppContext) {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let main_window = cx.add_window(|_, _| NavigationSource);
+    let extra_window = cx.add_window(|_, _| NavigationSource);
+    install_test_navigation_handler(main_window, true, "main", events.clone(), cx);
+    install_test_navigation_handler(extra_window, false, "extra", events.clone(), cx);
+    extra_window
+        .update(cx, |_, window, _| window.activate_window())
+        .unwrap();
+
+    cx.update(|cx| cx.navigate("/from-app").unwrap());
+    cx.run_until_parked();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [("extra".to_owned(), "/from-app".to_owned())]
+    );
 }
 
 impl FeatureElement for RuntimeFeature {

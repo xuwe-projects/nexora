@@ -19,8 +19,8 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
-    assert!(entry.markdown().contains("自动更新"));
-    assert!(entry.markdown().contains("无需再次清库重建"));
+    assert!(entry.markdown().contains("HTTP API"));
+    assert!(entry.markdown().contains("保持兼容"));
 }
 
 #[test]
@@ -54,6 +54,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.33.0",
             "0.32.0",
             "0.31.1",
             "0.31.0",

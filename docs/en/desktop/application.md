@@ -25,6 +25,24 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
+## Application singleton and window processes
+
+Nexora allows one main application instance by default, while extra Shells, the unique Settings
+window, and registered Windows are hosted by managed child processes coordinated by the main
+process. Seeing multiple OS processes therefore does not conflict with singleton enforcement.
+
+To run every window in exactly one OS process, change only the hosting option:
+
+```rust
+ApplicationOptions::new().subprocess_windows(false)
+```
+
+`single_instance`, `restore_window_sessions`, and `tray_enabled` remain enabled by default. New
+Shells, Settings uniqueness, registered Windows, complete tab/location restoration, display and
+bounds restoration, duplicate-launch activation, and tray window-group commands remain available.
+With multiple Shells in one process, `Context<T>::navigate` targets the Shell containing the source
+entity, `App::navigate` targets the active Shell, and unresolved origins fall back to the main Shell.
+
 ## Logo
 
 The default login page and sidebar header share the branding configuration:

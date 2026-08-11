@@ -152,6 +152,16 @@ fn option_builders_replace_framework_defaults() {
 }
 
 #[test]
+fn single_process_window_mode_keeps_window_group_features_enabled() {
+    let options = ApplicationOptions::new().subprocess_windows(false);
+
+    assert!(options.single_instance);
+    assert!(!options.subprocess_windows);
+    assert!(options.restore_window_sessions);
+    assert!(options.tray_enabled);
+}
+
+#[test]
 fn native_window_title_uses_framework_default_only_when_application_did_not_set_one() {
     let options = ApplicationOptions::new().default_native_window_title("安装元数据名称");
     assert_eq!(

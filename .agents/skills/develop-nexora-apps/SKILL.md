@@ -102,6 +102,22 @@ impl FeatureElement for UserDetailsFeature {
 
 独立原生窗口使用 `#[derive(nexora::Window)]` 和 `WindowElement`。它支持同样的 `path_params/query_params/factory`，不进入主导航或标签；可覆盖 `window_options`、`initialize` 和 `closing`。
 
+## 选择窗口进程模型
+
+- `ApplicationOptions` 默认启用 `single_instance`、`subprocess_windows`、
+  `restore_window_sessions` 和 `tray_enabled`。这表示只有一个应用主实例，但额外 Shell、
+  Settings 和注册 Window 默认由受管子进程承载，操作系统中出现多个同一应用进程是预期行为。
+- 产品要求严格单个操作系统进程时，只需显式调用
+  `.subprocess_windows(false)`。Nexora 会在同一 GPUI 事件循环中创建全部窗口，并继续恢复
+  Shell 标签、活动标签、显示器、边界、最小化状态、唯一 Settings 和注册 Window 会话。
+- 不要为了单进程同时关闭 `single_instance`、`restore_window_sessions` 或
+  `tray_enabled`；这些选项分别控制重复启动门禁、历史窗口恢复和托盘窗口组行为，与窗口
+  是否由子进程承载相互独立。
+- 多 Shell 同进程运行时，Feature 或子 Entity 的 `Context<T>::navigate` 进入它所在窗口的
+  Shell；应用级 `App::navigate` 进入当前活动 Shell；没有明确来源时回退到主 Shell。应用
+  不要安装第二套路由分发器。
+
+
 ## 自定义专用单例
 
 Account 桌面端默认提供登录页。只有确实需要自定义时才声明一个 `LoginFeature`：

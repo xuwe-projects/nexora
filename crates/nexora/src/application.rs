@@ -24,7 +24,8 @@ use gpui::{Anchor, WindowHandle};
 use gpui::{
     AnyElement, AnyView, App, AssetSource, Bounds, Context, Entity, Global, Image, ImageFormat,
     IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, Task,
-    WeakEntity, Window, WindowBounds, WindowOptions, div, img, point, prelude::*, px, size,
+    WeakEntity, Window, WindowBounds, WindowId, WindowOptions, div, img, point, prelude::*, px,
+    size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size as ComponentSize,
@@ -334,7 +335,7 @@ use crate::{
     AppRegistry, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NavigationContextExt as _,
     NavigationGroupMetadata, RegistryError, ResolveError, RouteMatch, RouteTargetKind,
     WindowRuntimeError,
-    runtime::{clear_navigation_handler, install_navigation_handler},
+    runtime::{install_navigation_handler, remove_navigation_handler},
 };
 
 /// Nexora 桌面应用的启动选项。
@@ -398,6 +399,9 @@ pub struct ApplicationOptions {
     /// 是否强制同一应用身份只有一个主进程，默认开启。
     pub single_instance: bool,
     /// 是否使用独立子进程承载额外 Shell、Settings 和注册 Window，默认开启。
+    ///
+    /// 关闭后仍保留完整多窗口创建、恢复、导航、托盘和会话持久化能力，但所有窗口都在
+    /// 主进程的同一 GPUI 事件循环中运行；该开关只改变窗口承载方式，不会关闭多窗口。
     pub subprocess_windows: bool,
     /// 是否恢复 `workspace.toml` 中的全部窗口会话，默认开启。
     pub restore_window_sessions: bool,
@@ -502,6 +506,9 @@ impl ApplicationOptions {
     }
 
     /// 设置额外顶层窗口是否由受管子进程承载。
+    ///
+    /// 传入 `false` 时，额外 Shell、唯一 Settings 和注册 Window 会改由当前 GPUI 进程
+    /// 创建，同时继续参与窗口会话恢复、逐窗口导航分发和窗口组托盘命令。
     pub const fn subprocess_windows(mut self, enabled: bool) -> Self {
         self.subprocess_windows = enabled;
         self
@@ -821,13 +828,13 @@ impl VersionedConfiguration for ShellPreferences {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowSessionRole {
-    /// 唯一主进程拥有的主 Shell 窗口。
+    /// 应用窗口组中唯一的主 Shell 窗口。
     MainShell,
-    /// 独立子进程承载的完整应用 Shell 窗口。
+    /// 额外的完整应用 Shell 窗口。
     Shell,
-    /// 应用级唯一设置子进程窗口。
+    /// 应用级唯一设置窗口。
     Settings,
-    /// `#[derive(nexora::Window)]` 注册的业务子进程窗口。
+    /// `#[derive(nexora::Window)]` 注册的业务窗口。
     Registered,
 }
 
@@ -1905,7 +1912,7 @@ where
         .filter(|tab| tab.pinned)
         .map(|tab| tab.location.clone())
         .collect();
-    let sessions_to_restore = if child_payload.is_none() && restore_window_sessions {
+    let mut sessions_to_restore = if child_payload.is_none() && restore_window_sessions {
         shell_preferences
             .windows
             .iter()
@@ -1916,7 +1923,7 @@ where
         Vec::new()
     };
     if subprocess_windows && let ::desktop::process::ProcessBootstrap::Main(main) = &process {
-        for session in sessions_to_restore {
+        for session in std::mem::take(&mut sessions_to_restore) {
             let Some(payload) = window_startup_payload_for_session(&registry, &session) else {
                 continue;
             };
@@ -1960,6 +1967,7 @@ where
         initial_route: Some(initial_route),
         account_registry: Some(account_registry),
         account_initial_route: Some(account_initial_route),
+        sessions_to_restore,
     };
 
     DesktopApplication::run(adapter);
@@ -1991,12 +1999,13 @@ struct ApplicationAdapter<A> {
     initial_route: Option<RouteMatch>,
     account_registry: Option<AppRegistry>,
     account_initial_route: Option<RouteMatch>,
+    sessions_to_restore: Vec<WindowSession>,
 }
 
 struct ApplicationProcessRuntime {
     process: ::desktop::process::ProcessBootstrap,
     tray: Option<::desktop::tray::TrayController>,
-    standalone_window_session: Option<WindowSession>,
+    standalone_window_sessions: HashMap<WindowId, WindowSession>,
     last_received_account_state: Option<serde_json::Value>,
     last_published_account_state: Option<serde_json::Value>,
     _account_subscription: Option<Subscription>,
@@ -2009,6 +2018,107 @@ struct ApplicationProcessRuntime {
 }
 
 impl Global for ApplicationProcessRuntime {}
+
+struct InProcessWindowRuntime {
+    registry: AppRegistry,
+    shell_template: ApplicationShellTemplate,
+    shell_window_options: ApplicationShellWindowOptions,
+    sessions_to_restore: Vec<WindowSession>,
+}
+
+impl Global for InProcessWindowRuntime {}
+
+#[derive(Clone)]
+struct ApplicationShellTemplate {
+    application_name: String,
+    application_logo: Option<ApplicationLogo>,
+    account_enabled: bool,
+    sidebar_subtitle: Option<String>,
+    tab_style: ApplicationTabStyle,
+    sidebar_search: bool,
+}
+
+impl ApplicationShellTemplate {
+    fn config(&self, window_session: WindowSession) -> ApplicationShellConfig {
+        ApplicationShellConfig {
+            application_name: self.application_name.clone(),
+            application_logo: self.application_logo,
+            account_enabled: self.account_enabled,
+            sidebar_subtitle: self.sidebar_subtitle.clone(),
+            tab_style: self.tab_style,
+            sidebar_search: self.sidebar_search,
+            pinned_tab_paths: Vec::new(),
+            window_session,
+        }
+    }
+}
+
+struct ApplicationShellWindowOptions {
+    base: WindowOptions,
+    window_size: Option<Size<Pixels>>,
+    window_min_size: Option<Size<Pixels>>,
+}
+
+impl ApplicationShellWindowOptions {
+    fn from_desktop_options(options: &DesktopApplicationOptions) -> Self {
+        Self {
+            base: options
+                .window_options
+                .as_ref()
+                .map(clone_window_options)
+                .unwrap_or_default(),
+            window_size: options.window_size,
+            window_min_size: options.window_min_size,
+        }
+    }
+
+    fn for_session(&self, session: &WindowSession, cx: &App) -> WindowOptions {
+        let mut options = clone_window_options(&self.base);
+        if let Some(restored) = restored_window_session_bounds(session, self.window_min_size, cx) {
+            options.display_id = restored.display_id;
+            options.window_bounds = Some(restored.bounds);
+        } else {
+            ::desktop::apply_window_display_preference(
+                &mut options,
+                session.display_uuid.as_deref(),
+                self.window_size,
+                cx,
+            );
+        }
+        if let Some(window_min_size) = self.window_min_size {
+            options.window_min_size = Some(window_min_size);
+        }
+        options
+    }
+}
+
+fn clone_window_options(options: &WindowOptions) -> WindowOptions {
+    WindowOptions {
+        window_bounds: options.window_bounds,
+        titlebar: options
+            .titlebar
+            .as_ref()
+            .map(|titlebar| gpui::TitlebarOptions {
+                title: titlebar.title.clone(),
+                appears_transparent: titlebar.appears_transparent,
+                traffic_light_position: titlebar.traffic_light_position,
+            }),
+        focus: options.focus,
+        show: options.show,
+        kind: options.kind.clone(),
+        is_movable: options.is_movable,
+        app_owns_titlebar_drag: options.app_owns_titlebar_drag,
+        is_resizable: options.is_resizable,
+        is_minimizable: options.is_minimizable,
+        display_id: options.display_id,
+        window_background: options.window_background,
+        app_id: options.app_id.clone(),
+        window_min_size: options.window_min_size,
+        window_decorations: options.window_decorations,
+        icon: options.icon.clone(),
+        tabbing_identifier: options.tabbing_identifier.clone(),
+    }
+}
 
 fn install_application_process_runtime(runtime: ApplicationProcessRuntime, cx: &mut App) {
     cx.set_global(runtime);
@@ -2052,7 +2162,7 @@ fn process_runtime_tick(cx: &mut App) -> bool {
         | Some(::desktop::tray::TrayEvent::Available)
         | None => {}
     }
-    persist_standalone_window_session(cx);
+    persist_standalone_window_sessions(cx);
     let is_child = matches!(
         cx.global::<ApplicationProcessRuntime>().process,
         ::desktop::process::ProcessBootstrap::Child(_)
@@ -2277,32 +2387,104 @@ fn apply_parent_window_command(command: ::desktop::process::ParentWindowCommand,
     });
 }
 
-fn persist_standalone_window_session(cx: &mut App) {
-    let Some(mut session) = cx
+fn persist_standalone_window_sessions(cx: &mut App) {
+    let sessions = cx
         .try_global::<ApplicationProcessRuntime>()
-        .and_then(|runtime| runtime.standalone_window_session.clone())
-    else {
+        .map(|runtime| {
+            runtime
+                .standalone_window_sessions
+                .iter()
+                .map(|(window_id, session)| (*window_id, session.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let windows = cx.windows();
+    for (window_id, mut session) in sessions {
+        let Some(handle) = windows
+            .iter()
+            .find(|handle| handle.window_id() == window_id)
+            .copied()
+        else {
+            continue;
+        };
+        let Ok(Some(placement)) = handle.update(cx, |_, window, cx| {
+            capture_main_window_placement(window, cx)
+        }) else {
+            continue;
+        };
+        session.display_uuid = Some(placement.display_uuid);
+        session.bounds = Some(placement.bounds);
+        let unchanged = shell_preferences_snapshot(cx)
+            .windows
+            .iter()
+            .any(|existing| existing == &session);
+        if !unchanged {
+            update_shell_preferences(cx, |preferences| {
+                preferences.upsert_window_session(session.clone());
+            });
+            cx.global_mut::<ApplicationProcessRuntime>()
+                .standalone_window_sessions
+                .insert(window_id, session);
+        }
+    }
+}
+
+fn track_standalone_window_session(
+    handle: WindowHandle<gpui_component::Root>,
+    session: WindowSession,
+    cx: &mut App,
+) {
+    let window_id = handle.window_id();
+    cx.global_mut::<ApplicationProcessRuntime>()
+        .standalone_window_sessions
+        .insert(window_id, session);
+}
+
+#[cfg(feature = "desktop")]
+fn close_in_process_registered_windows(cx: &mut App) {
+    if !cx.has_global::<InProcessWindowRuntime>() {
         return;
-    };
-    let Some(handle) = cx.windows().into_iter().next() else {
-        return;
-    };
-    let Ok(Some(placement)) = handle.update(cx, |_, window, cx| {
-        capture_main_window_placement(window, cx)
-    }) else {
-        return;
-    };
-    session.display_uuid = Some(placement.display_uuid);
-    session.bounds = Some(placement.bounds);
-    let unchanged = shell_preferences_snapshot(cx)
-        .windows
+    }
+    let window_ids = cx
+        .global::<ApplicationProcessRuntime>()
+        .standalone_window_sessions
         .iter()
-        .any(|existing| existing == &session);
-    if !unchanged {
+        .filter(|(_, session)| session.role == WindowSessionRole::Registered)
+        .map(|(window_id, _)| *window_id)
+        .collect::<HashSet<_>>();
+    for handle in cx.windows() {
+        if window_ids.contains(&handle.window_id()) {
+            _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+pub(crate) fn release_standalone_window_session(
+    window_id: WindowId,
+    session_id: &str,
+    role: &WindowSessionRole,
+    window: &Window,
+    cx: &mut App,
+) {
+    let session = cx
+        .try_global::<ApplicationProcessRuntime>()
+        .and_then(|runtime| runtime.standalone_window_sessions.get(&window_id))
+        .cloned();
+    if let (Some(mut session), Some(placement)) =
+        (session, capture_main_window_placement(window, cx))
+    {
+        session.display_uuid = Some(placement.display_uuid);
+        session.bounds = Some(placement.bounds);
         update_shell_preferences(cx, |preferences| {
             preferences.upsert_window_session(session);
         });
     }
+    if cx.has_global::<ApplicationProcessRuntime>() {
+        cx.global_mut::<ApplicationProcessRuntime>()
+            .standalone_window_sessions
+            .remove(&window_id);
+    }
+    notify_individual_window_closed(session_id, role, cx);
 }
 
 fn minimize_coordinated_window_group(cx: &mut App) {
@@ -2349,7 +2531,7 @@ fn coordinated_application_exit(reason: ::desktop::process::ExitReason, cx: &mut
     cx.quit();
 }
 
-fn notify_individual_child_window_closed(cx: &mut App) {
+fn notify_individual_window_closed(session_id: &str, role: &WindowSessionRole, cx: &mut App) {
     let Some(runtime) = cx.try_global::<ApplicationProcessRuntime>() else {
         return;
     };
@@ -2360,6 +2542,14 @@ fn notify_individual_child_window_closed(cx: &mut App) {
         && let Err(error) = child.send(::desktop::process::ChildCommand::WindowClosed)
     {
         tracing::warn!(error = %error, "无法通知主进程删除已关闭窗口会话");
+        return;
+    }
+    if !runtime.subprocess_windows && *role != WindowSessionRole::MainShell {
+        update_shell_preferences(cx, |preferences| {
+            preferences
+                .windows
+                .retain(|session| session.session_id != session_id);
+        });
     }
 }
 
@@ -2393,6 +2583,104 @@ fn request_coordinated_window(
     }
 }
 
+fn open_in_process_shell_session(
+    initial_route: RouteMatch,
+    session: WindowSession,
+    cx: &mut App,
+) -> Result<WindowHandle<gpui_component::Root>, NavigationError> {
+    let (registry, config, options) = {
+        let runtime = cx.try_global::<InProcessWindowRuntime>().ok_or_else(|| {
+            NavigationError::ShellWindow {
+                message: "同进程窗口运行时尚未初始化".to_owned(),
+            }
+        })?;
+        let options = runtime.shell_window_options.for_session(&session, cx);
+        (
+            runtime.registry.clone(),
+            runtime.shell_template.config(session),
+            options,
+        )
+    };
+    let handle = cx
+        .open_window(options, move |window, cx| {
+            let shell =
+                cx.new(|cx| ApplicationShell::new(registry, initial_route, config, window, cx));
+            let root = cx.new(|cx| gpui_component::Root::new(shell, window, cx));
+            theme::attach_window(window, cx);
+            root
+        })
+        .map_err(|source| NavigationError::ShellWindow {
+            message: source.to_string(),
+        })?;
+    cx.activate(true);
+    Ok(handle)
+}
+
+fn restore_in_process_window_sessions(cx: &mut App) {
+    let sessions = std::mem::take(
+        &mut cx
+            .global_mut::<InProcessWindowRuntime>()
+            .sessions_to_restore,
+    );
+    for session in sessions {
+        let session_id = session.session_id.clone();
+        if let Err(error) = restore_in_process_window_session(session, cx) {
+            tracing::warn!(session_id = %session_id, error = %error, "无法恢复同进程窗口会话，已跳过该窗口");
+        }
+    }
+}
+
+fn restore_in_process_window_session(
+    session: WindowSession,
+    cx: &mut App,
+) -> Result<(), NavigationError> {
+    let registry = cx
+        .try_global::<InProcessWindowRuntime>()
+        .ok_or_else(|| NavigationError::ShellWindow {
+            message: "同进程窗口运行时尚未初始化".to_owned(),
+        })?
+        .registry
+        .clone();
+    match session.role {
+        WindowSessionRole::MainShell => Ok(()),
+        WindowSessionRole::Shell => {
+            let active_tab = session
+                .active_tab
+                .as_deref()
+                .and_then(|active| session.tabs.iter().find(|tab| tab.route_id == active));
+            let route = active_tab
+                .into_iter()
+                .chain(session.tabs.iter())
+                .find_map(|tab| {
+                    registry
+                        .resolve(tab.location.as_str())
+                        .ok()
+                        .filter(|route| route.target().kind() == RouteTargetKind::Feature)
+                })
+                .ok_or_else(|| NavigationError::ShellWindow {
+                    message: "Shell 会话不包含可恢复 Feature 标签".to_owned(),
+                })?;
+            open_in_process_shell_session(route, session, cx)?;
+            Ok(())
+        }
+        WindowSessionRole::Settings | WindowSessionRole::Registered => {
+            let location = session.location.clone().or_else(|| {
+                (session.role == WindowSessionRole::Settings).then(|| "/settings".to_owned())
+            });
+            let location = location.ok_or_else(|| NavigationError::ShellWindow {
+                message: "注册窗口会话缺少恢复路由".to_owned(),
+            })?;
+            let route = registry.resolve(location.as_str())?;
+            let handle = registry.open_window_session(route, &session, cx)?;
+            track_standalone_window_session(handle, session.clone(), cx);
+            if session.minimized {
+                _ = handle.update(cx, |_, window, _| window.minimize_window());
+            }
+            Ok(())
+        }
+    }
+}
+
 impl<A> DesktopApplication for ApplicationAdapter<A>
 where
     A: Application,
@@ -2409,6 +2697,8 @@ where
 
     fn initialize(&mut self, cx: &mut App) {
         gpui_component::set_locale(self.locale.as_str());
+        let shell_window_options =
+            ApplicationShellWindowOptions::from_desktop_options(&self.options);
         const DEFAULT_TRAY_ICON: &[u8] = include_bytes!("../../../assets/logos/logo-icon-128.png");
         let is_main_process = matches!(
             self.process.as_ref(),
@@ -2435,15 +2725,11 @@ where
         } else {
             None
         };
-        let standalone_window_session = self
-            .startup_window_route
-            .is_some()
-            .then(|| self.window_session.clone());
         install_application_process_runtime(
             ApplicationProcessRuntime {
                 process: self.process.take().expect("应用进程协调器只能安装一次"),
                 tray,
-                standalone_window_session,
+                standalone_window_sessions: HashMap::new(),
                 last_received_account_state: None,
                 last_published_account_state: None,
                 _account_subscription: None,
@@ -2477,6 +2763,28 @@ where
         window_actions::init(self.application_name.clone(), cx);
         self.application.initialize(cx);
         self.account_enabled = crate::account::client::login_snapshot(cx).configured;
+        if !self.subprocess_windows {
+            let registry = if self.account_enabled {
+                self.account_registry.as_ref()
+            } else {
+                self.registry.as_ref()
+            }
+            .expect("同进程窗口注册表应当在主窗口创建前可用")
+            .clone();
+            cx.set_global(InProcessWindowRuntime {
+                registry,
+                shell_template: ApplicationShellTemplate {
+                    application_name: self.application_name.clone(),
+                    application_logo: self.application_logo,
+                    account_enabled: self.account_enabled,
+                    sidebar_subtitle: self.sidebar_subtitle.clone(),
+                    tab_style: self.tab_style,
+                    sidebar_search: self.sidebar_search,
+                },
+                shell_window_options,
+                sessions_to_restore: std::mem::take(&mut self.sessions_to_restore),
+            });
+        }
         install_account_process_state_runtime(cx);
         if self.account_enabled {
             account_actions::bind_keys(cx);
@@ -2500,14 +2808,11 @@ where
             match registry.open_window_session(route, &self.window_session, cx) {
                 Ok(handle) => {
                     let minimized = self.window_session.minimized;
-                    _ = handle.update(cx, |_, window, cx| {
+                    track_standalone_window_session(handle, self.window_session.clone(), cx);
+                    _ = handle.update(cx, |_, window, _cx| {
                         if minimized {
                             window.minimize_window();
                         }
-                        window.on_window_should_close(cx, |_, cx| {
-                            notify_individual_child_window_closed(cx);
-                            true
-                        });
                     });
                 }
                 Err(error) => {
@@ -2570,6 +2875,9 @@ where
             )
         });
         crate::desktop::updater::start_installed_updater(window, cx);
+        if cx.has_global::<InProcessWindowRuntime>() {
+            cx.defer(restore_in_process_window_sessions);
+        }
         root
     }
 }
@@ -2584,6 +2892,8 @@ enum NavigationError {
     Window(#[from] WindowRuntimeError),
     #[error(transparent)]
     Process(#[from] ::desktop::process::ProcessError),
+    #[error("无法创建同进程 Shell 窗口：{message}")]
+    ShellWindow { message: String },
     #[cfg(feature = "desktop")]
     #[error("未登录时不能打开独立窗口 `{path}`")]
     AuthenticationRequired { path: String },
@@ -2885,8 +3195,15 @@ impl ApplicationShell {
             pinned_tab_paths,
             mut window_session,
         } = config;
+        if window_session.session_id.is_empty() {
+            window_session = WindowSession::main();
+        }
+        let is_main_window = window_session.role == WindowSessionRole::MainShell;
+        let window_id = window.window_handle().window_id();
         let shell = cx.entity().downgrade();
         install_navigation_handler(
+            window_id,
+            is_main_window,
             move |location, cx| {
                 _ = shell.update_in(cx, move |this, window, cx| {
                     this.handle_navigation_request(location, window, cx);
@@ -2894,10 +3211,6 @@ impl ApplicationShell {
             },
             cx,
         );
-        if window_session.session_id.is_empty() {
-            window_session = WindowSession::main();
-        }
-        let is_main_window = window_session.role == WindowSessionRole::MainShell;
         if is_main_window {
             window.on_window_should_close(cx, |window, cx| {
                 if cx
@@ -2983,12 +3296,28 @@ impl ApplicationShell {
         let restored_tabs = window_session
             .tabs
             .iter()
-            .filter_map(|tab| {
-                registry
-                    .resolve(tab.location.as_str())
-                    .ok()
-                    .filter(|route| route.target().kind() == RouteTargetKind::Feature)
-                    .map(|route| (ShellRoute::new(route), tab.pinned))
+            .filter_map(|tab| match registry.resolve(tab.location.as_str()) {
+                Ok(route) if route.target().kind() == RouteTargetKind::Feature => {
+                    Some((ShellRoute::new(route), tab.pinned))
+                }
+                Ok(route) => {
+                    tracing::warn!(
+                        session_id = %window_session.session_id,
+                        location = %tab.location,
+                        target = ?route.target().kind(),
+                        "窗口会话标签不是 Feature，已跳过该标签"
+                    );
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        session_id = %window_session.session_id,
+                        location = %tab.location,
+                        error = %error,
+                        "窗口会话标签路由无效，已跳过该标签"
+                    );
+                    None
+                }
             })
             .fold(Vec::new(), |mut tabs, tab| {
                 if !tabs.iter().any(|(route, _)| route == &tab.0) {
@@ -3085,15 +3414,15 @@ impl ApplicationShell {
         let _window_bounds_subscription = cx.observe_window_bounds(window, |this, window, cx| {
             this.schedule_main_window_placement_persist(window, cx);
         });
-        let _release_subscription = Some(cx.on_release_in(window, |this, window, cx| {
+        let _release_subscription = Some(cx.on_release_in(window, move |this, window, cx| {
             this.main_window_persist_task = None;
             this.persist_window_session(cx);
             this.persist_current_main_window_placement(window, cx);
             if let Some(runtime) = cx.try_global::<ShellPreferencesRuntime>() {
                 runtime.flush();
             }
-            notify_individual_child_window_closed(cx);
-            clear_navigation_handler(cx);
+            notify_individual_window_closed(&this.session_id, &this.session_role, cx);
+            remove_navigation_handler(window_id, cx);
             for (_, mut instance) in this.feature_instances.drain() {
                 instance.close(window, cx);
             }
@@ -3181,6 +3510,7 @@ impl ApplicationShell {
                     instance.close(window, cx);
                 }
                 self.close_business_windows(cx);
+                close_in_process_registered_windows(cx);
             }
             self.sidebar_header = self.registry.create_sidebar_header(window, cx);
             self.sidebar_footer = self.registry.create_sidebar_footer(window, cx);
@@ -3190,6 +3520,7 @@ impl ApplicationShell {
                 instance.close(window, cx);
             }
             self.close_business_windows(cx);
+            close_in_process_registered_windows(cx);
             self.sidebar_header = None;
             self.sidebar_footer = None;
             self.navigation_error = None;
@@ -3470,8 +3801,12 @@ impl ApplicationShell {
                     cx.notify();
                     return Ok(());
                 }
-                let handle = self.registry.open_window(route, cx)?;
-                if !is_settings {
+                let handle = self.registry.open_window_session(route, &session, cx)?;
+                track_standalone_window_session(handle, session.clone(), cx);
+                update_shell_preferences(cx, |preferences| {
+                    preferences.upsert_window_session(session);
+                });
+                if !is_settings && !cx.has_global::<InProcessWindowRuntime>() {
                     self.business_windows
                         .retain(|existing| existing.read(cx).is_ok());
                     self.business_windows.push(handle);
@@ -3626,7 +3961,7 @@ impl ApplicationShell {
         route: &ShellRoute,
         window: &Window,
         cx: &mut App,
-    ) -> Result<(), ::desktop::process::ProcessError> {
+    ) -> Result<(), NavigationError> {
         let display_uuid = window
             .display(cx)
             .and_then(|display| display.uuid().ok())
@@ -3656,7 +3991,12 @@ impl ApplicationShell {
             update_shell_preferences(cx, |preferences| {
                 preferences.upsert_window_session(session);
             });
+            return Ok(());
         }
+        open_in_process_shell_session(route.route().clone(), session.clone(), cx)?;
+        update_shell_preferences(cx, |preferences| {
+            preferences.upsert_window_session(session);
+        });
         Ok(())
     }
 
