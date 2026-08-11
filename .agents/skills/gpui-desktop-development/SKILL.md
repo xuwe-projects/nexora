@@ -229,13 +229,14 @@ impl<D> DataTable<D> {
 
 ## 12. 应用单例与多窗口承载
 
-- Nexora 默认启用应用身份级单例门禁，并使用一个主进程协调窗口组；额外 Shell、唯一 Settings
-  和注册 Window 默认由受管子进程承载。因此“单实例”不等于“单个操作系统进程”。
-- 应用需要严格单进程时，显式设置 `ApplicationOptions::subprocess_windows(false)`。该模式仍
-  保留完整多窗口创建、历史会话恢复、显示器与边界恢复、托盘窗口组命令、唯一 Settings 和
-  注册 Window；所有窗口改由同一 GPUI 事件循环中的 `App::open_window` 创建。
-- 不要把 `.subprocess_windows(false)` 与关闭多窗口混为一谈，也不要同时关闭
-  `restore_window_sessions`、`tray_enabled` 或 `single_instance`，除非产品确实不需要这些能力。
+- Nexora 默认启用应用身份级单例门禁，并在同一个 GPUI 事件循环中通过 `App::open_window`
+  承载主窗口、额外 Shell、唯一 Settings 和注册 Window。应用级 Account、Preferences、Updater、
+  业务模型和缓存使用唯一 Global 或共享 Model，不为每个窗口复制。
+- 只有应用确实需要故障隔离、安全隔离或独立服务生命周期时，才显式设置
+  `ApplicationOptions::subprocess_windows(true)`，让额外窗口改由主进程协调的受管子进程承载。
+  “单实例”在该显式模式下不等于“单个操作系统进程”。
+- 不要把默认单进程与关闭多窗口混为一谈，也不要同时关闭 `restore_window_sessions`、
+  `tray_enabled` 或 `single_instance`，除非产品确实不需要这些能力。
 - 不要为了打开第二个窗口自行再次启动当前二进制、调用第二次 `Application::run` 或复制 Nexora
   的进程协调协议。由 `ApplicationOptions` 选择承载模式，让 Shell、SettingsWindow 和注册 Window
   继续走统一注册表与会话生命周期。

@@ -10,7 +10,7 @@ order: 2
 从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.33.2 cli --locked --force --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.34.0 cli --locked --force --bin nexora
 ```
 
 框架开发者可以在 Nexora 仓库根目录安装本地源码：

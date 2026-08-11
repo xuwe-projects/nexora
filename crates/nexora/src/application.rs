@@ -398,7 +398,7 @@ pub struct ApplicationOptions {
     pub sidebar_search: bool,
     /// 是否强制同一应用身份只有一个主进程，默认开启。
     pub single_instance: bool,
-    /// 是否使用独立子进程承载额外 Shell、Settings 和注册 Window，默认开启。
+    /// 是否使用独立子进程承载额外 Shell、Settings 和注册 Window，默认关闭。
     ///
     /// 关闭后仍保留完整多窗口创建、恢复、导航、托盘和会话持久化能力，但所有窗口都在
     /// 主进程的同一 GPUI 事件循环中运行；该开关只改变窗口承载方式，不会关闭多窗口。
@@ -437,7 +437,7 @@ impl Default for ApplicationOptions {
             tab_style: ApplicationTabStyle::Tab,
             sidebar_search: false,
             single_instance: true,
-            subprocess_windows: true,
+            subprocess_windows: false,
             restore_window_sessions: true,
             tray_enabled: true,
             child_shutdown_timeout: Duration::from_secs(5),
@@ -2223,76 +2223,107 @@ fn process_runtime_tick(cx: &mut App) -> bool {
         }
     }
 
-    loop {
-        let event = match &cx.global::<ApplicationProcessRuntime>().process {
-            ::desktop::process::ProcessBootstrap::Main(main) => main.try_recv(),
-            _ => None,
-        };
-        let Some(event) = event else {
-            break;
-        };
+    drain_main_process_events(CoordinatorEventMode::Running, cx);
+    true
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CoordinatorEventMode {
+    Running,
+    Exiting,
+}
+
+fn drain_main_process_events(mode: CoordinatorEventMode, cx: &mut App) {
+    let mut rejected_window_sessions = HashSet::new();
+    while let Some(event) = match &cx.global::<ApplicationProcessRuntime>().process {
+        ::desktop::process::ProcessBootstrap::Main(main) => main.try_recv(),
+        _ => None,
+    } {
         match event {
             ::desktop::process::CoordinatorEvent::ActivateGroup => {
-                if let ::desktop::process::ProcessBootstrap::Main(main) =
-                    &cx.global::<ApplicationProcessRuntime>().process
-                {
-                    main.activate_window_group();
+                if mode == CoordinatorEventMode::Running {
+                    if let ::desktop::process::ProcessBootstrap::Main(main) =
+                        &cx.global::<ApplicationProcessRuntime>().process
+                    {
+                        main.activate_window_group();
+                    }
+                    apply_parent_window_command(
+                        ::desktop::process::ParentWindowCommand::Activate,
+                        cx,
+                    );
                 }
-                apply_parent_window_command(::desktop::process::ParentWindowCommand::Activate, cx);
             }
             ::desktop::process::CoordinatorEvent::ChildCommand {
                 session_id,
                 command,
-            } => match command {
-                ::desktop::process::ChildCommand::CreateWindow { payload } => {
-                    let result = match &cx.global::<ApplicationProcessRuntime>().process {
-                        ::desktop::process::ProcessBootstrap::Main(main) => {
-                            main.spawn_window(payload)
+            } => {
+                if matches!(
+                    &command,
+                    ::desktop::process::ChildCommand::WindowClosed
+                        | ::desktop::process::ChildCommand::PreferencePatch { .. }
+                        | ::desktop::process::ChildCommand::WindowSessionPatch { .. }
+                        | ::desktop::process::ChildCommand::DataTableLayoutPatch { .. }
+                ) {
+                    let mut preferences = shell_preferences_snapshot(cx);
+                    match apply_child_preference_command(&mut preferences, &session_id, command) {
+                        Ok(true) => {
+                            update_shell_preferences(cx, |current| *current = preferences);
                         }
-                        _ => unreachable!(),
-                    };
-                    if let Err(error) = result {
-                        tracing::warn!(error = %error, "无法响应子进程创建窗口请求");
+                        Ok(false) => unreachable!("偏好命令应当由偏好协调器处理"),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "子进程提交的 Shell 偏好 patch 无效");
+                        }
                     }
+                    continue;
                 }
-                ::desktop::process::ChildCommand::WindowClosed => {
-                    update_shell_preferences(cx, |preferences| {
-                        preferences
-                            .windows
-                            .retain(|session| session.session_id != session_id);
-                    });
-                }
-                ::desktop::process::ChildCommand::PreferencePatch { patch }
-                | ::desktop::process::ChildCommand::WindowSessionPatch { patch }
-                | ::desktop::process::ChildCommand::DataTableLayoutPatch { patch } => {
-                    if let Ok(patch) = serde_json::from_value::<ShellPreferencesPatch>(patch) {
-                        update_shell_preferences(cx, |preferences| {
-                            preferences.merge_changed_fields(&patch.before, &patch.after);
-                        });
-                        let snapshot = shell_preferences_snapshot(cx);
+                match command {
+                    ::desktop::process::ChildCommand::CreateWindow { payload } => {
+                        if mode == CoordinatorEventMode::Exiting {
+                            let already_open = shell_preferences_snapshot(cx)
+                                .windows
+                                .iter()
+                                .any(|session| session.session_id == payload.session_id);
+                            if !already_open {
+                                rejected_window_sessions.insert(payload.session_id);
+                            }
+                            continue;
+                        }
+                        let result = match &cx.global::<ApplicationProcessRuntime>().process {
+                            ::desktop::process::ProcessBootstrap::Main(main) => {
+                                main.spawn_window(payload)
+                            }
+                            _ => unreachable!(),
+                        };
+                        if let Err(error) = result {
+                            tracing::warn!(error = %error, "无法响应子进程创建窗口请求");
+                        }
+                    }
+                    ::desktop::process::ChildCommand::AccountState { state } => {
                         if let ::desktop::process::ProcessBootstrap::Main(main) =
                             &cx.global::<ApplicationProcessRuntime>().process
-                            && let Ok(snapshot) = serde_json::to_value(snapshot)
                         {
-                            main.broadcast_preferences(snapshot);
+                            main.broadcast_account_state(state.clone());
                         }
+                        apply_received_account_process_state(state, true, cx);
                     }
+                    ::desktop::process::ChildCommand::WindowClosed
+                    | ::desktop::process::ChildCommand::PreferencePatch { .. }
+                    | ::desktop::process::ChildCommand::WindowSessionPatch { .. }
+                    | ::desktop::process::ChildCommand::DataTableLayoutPatch { .. }
+                    | ::desktop::process::ChildCommand::Heartbeat
+                    | ::desktop::process::ChildCommand::HideGroup
+                    | ::desktop::process::ChildCommand::ActivateGroup => {}
                 }
-                ::desktop::process::ChildCommand::AccountState { state } => {
-                    if let ::desktop::process::ProcessBootstrap::Main(main) =
-                        &cx.global::<ApplicationProcessRuntime>().process
-                    {
-                        main.broadcast_account_state(state.clone());
-                    }
-                    apply_received_account_process_state(state, true, cx);
-                }
-                ::desktop::process::ChildCommand::Heartbeat
-                | ::desktop::process::ChildCommand::HideGroup
-                | ::desktop::process::ChildCommand::ActivateGroup => {}
-            },
+            }
         }
     }
-    true
+    if !rejected_window_sessions.is_empty() {
+        update_shell_preferences(cx, |preferences| {
+            preferences
+                .windows
+                .retain(|session| !rejected_window_sessions.contains(&session.session_id));
+        });
+    }
 }
 
 fn install_account_process_state_runtime(cx: &mut App) {
@@ -2510,14 +2541,14 @@ fn hide_coordinated_window_group(cx: &mut App) {
 }
 
 fn coordinated_application_exit(reason: ::desktop::process::ExitReason, cx: &mut App) {
-    if let Some(runtime) = cx.try_global::<ShellPreferencesRuntime>() {
-        runtime.flush();
-    }
     let timeout = cx
         .try_global::<ApplicationProcessRuntime>()
         .map(|runtime| runtime.child_shutdown_timeout)
         .unwrap_or(Duration::from_secs(5));
     if cx.has_global::<ApplicationProcessRuntime>() {
+        if cx.global::<ApplicationProcessRuntime>().exiting {
+            return;
+        }
         cx.global_mut::<ApplicationProcessRuntime>().exiting = true;
     }
     if let Some(ApplicationProcessRuntime {
@@ -2527,6 +2558,10 @@ fn coordinated_application_exit(reason: ::desktop::process::ExitReason, cx: &mut
     {
         main.begin_shutdown(reason);
         main.wait_for_children(timeout);
+    }
+    drain_main_process_events(CoordinatorEventMode::Exiting, cx);
+    if let Some(runtime) = cx.try_global::<ShellPreferencesRuntime>() {
+        runtime.flush();
     }
     cx.quit();
 }
@@ -2557,6 +2592,43 @@ fn notify_individual_window_closed(session_id: &str, role: &WindowSessionRole, c
 struct ShellPreferencesPatch {
     before: ShellPreferences,
     after: ShellPreferences,
+}
+
+/// 把子进程提交的偏好或窗口关闭命令合并到权威 Shell 偏好快照。
+///
+/// 返回 `true` 表示该命令已经由偏好协调器处理；返回 `false` 表示命令属于窗口创建、
+/// 账号状态或心跳等其他运行时职责。窗口关闭会删除对应会话，偏好 patch 则按字段合并，
+/// 因此退出阶段可以按 IPC 到达顺序收敛最终窗口集合。
+///
+/// # Errors
+///
+/// 子进程提交的 patch 不是有效的 [`ShellPreferencesPatch`] JSON 时返回反序列化错误，
+/// 并保持传入快照不变。
+pub fn apply_child_preference_command(
+    preferences: &mut ShellPreferences,
+    session_id: &str,
+    command: ::desktop::process::ChildCommand,
+) -> Result<bool, serde_json::Error> {
+    match command {
+        ::desktop::process::ChildCommand::WindowClosed => {
+            preferences
+                .windows
+                .retain(|session| session.session_id != session_id);
+            Ok(true)
+        }
+        ::desktop::process::ChildCommand::PreferencePatch { patch }
+        | ::desktop::process::ChildCommand::WindowSessionPatch { patch }
+        | ::desktop::process::ChildCommand::DataTableLayoutPatch { patch } => {
+            let patch = serde_json::from_value::<ShellPreferencesPatch>(patch)?;
+            preferences.merge_changed_fields(&patch.before, &patch.after);
+            Ok(true)
+        }
+        ::desktop::process::ChildCommand::Heartbeat
+        | ::desktop::process::ChildCommand::CreateWindow { .. }
+        | ::desktop::process::ChildCommand::ActivateGroup
+        | ::desktop::process::ChildCommand::HideGroup
+        | ::desktop::process::ChildCommand::AccountState { .. } => Ok(false),
+    }
 }
 
 fn request_coordinated_window(

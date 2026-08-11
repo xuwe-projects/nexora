@@ -83,7 +83,7 @@ fn default_options_are_immediately_usable() {
     assert_eq!(options.tab_style, ApplicationTabStyle::Tab);
     assert!(!options.sidebar_search);
     assert!(options.single_instance);
-    assert!(options.subprocess_windows);
+    assert!(!options.subprocess_windows);
     assert!(options.restore_window_sessions);
     assert!(options.tray_enabled);
     assert_eq!(options.child_shutdown_timeout, Duration::from_secs(5));
@@ -152,11 +152,21 @@ fn option_builders_replace_framework_defaults() {
 }
 
 #[test]
-fn single_process_window_mode_keeps_window_group_features_enabled() {
-    let options = ApplicationOptions::new().subprocess_windows(false);
+fn default_single_process_window_mode_keeps_window_group_features_enabled() {
+    let options = ApplicationOptions::new();
 
     assert!(options.single_instance);
     assert!(!options.subprocess_windows);
+    assert!(options.restore_window_sessions);
+    assert!(options.tray_enabled);
+}
+
+#[test]
+fn subprocess_window_mode_remains_available_by_explicit_opt_in() {
+    let options = ApplicationOptions::new().subprocess_windows(true);
+
+    assert!(options.single_instance);
+    assert!(options.subprocess_windows);
     assert!(options.restore_window_sessions);
     assert!(options.tray_enabled);
 }

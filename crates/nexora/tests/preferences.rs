@@ -1,12 +1,12 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-use desktop::ApplicationOptions as DesktopApplicationOptions;
+use desktop::{ApplicationOptions as DesktopApplicationOptions, process::ChildCommand};
 use gpui::{Bounds, TestAppContext, WindowBounds, point, px, size};
 use gpui_component::{Size, Theme, ThemeMode};
 use nexora::__private::{
     AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
     ShellPreferences, WindowSession, WindowSessionRole, WindowTabSession,
-    restore_appearance_preferences, restore_main_window_options,
+    apply_child_preference_command, restore_appearance_preferences, restore_main_window_options,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
@@ -142,6 +142,91 @@ fn window_tab_move_is_clamped_to_its_pin_partition() {
             .map(|tab| tab.route_id.as_str())
             .collect::<Vec<_>>(),
         ["pinned-b", "pinned-a", "regular-b", "regular-a"]
+    );
+}
+
+#[test]
+fn queued_window_close_wins_over_final_session_patches_during_exit() {
+    let main = WindowSession::main();
+    let closed = WindowSession {
+        session_id: "shell-closed".to_owned(),
+        role: WindowSessionRole::Shell,
+        location: Some("/before-close".to_owned()),
+        ..WindowSession::default()
+    };
+    let open = WindowSession {
+        session_id: "shell-open".to_owned(),
+        role: WindowSessionRole::Shell,
+        location: Some("/before-exit".to_owned()),
+        ..WindowSession::default()
+    };
+    let mut preferences = ShellPreferences::default();
+    preferences.windows = vec![main, closed.clone(), open.clone()];
+
+    let mut closed_after = preferences.clone();
+    closed_after
+        .windows
+        .iter_mut()
+        .find(|session| session.session_id == closed.session_id)
+        .expect("待关闭窗口会话应当存在")
+        .location = Some("/final-close-state".to_owned());
+    let closed_patch = serde_json::json!({
+        "before": preferences,
+        "after": closed_after,
+    });
+    assert!(
+        apply_child_preference_command(
+            &mut preferences,
+            closed.session_id.as_str(),
+            ChildCommand::WindowSessionPatch {
+                patch: closed_patch,
+            },
+        )
+        .expect("关闭前的最终窗口会话 patch 应当有效")
+    );
+
+    let open_before = preferences.clone();
+    let mut open_after = open_before.clone();
+    open_after
+        .windows
+        .iter_mut()
+        .find(|session| session.session_id == open.session_id)
+        .expect("退出时仍打开的窗口会话应当存在")
+        .location = Some("/final-open-state".to_owned());
+    let open_patch = serde_json::json!({
+        "before": open_before,
+        "after": open_after,
+    });
+    assert!(
+        apply_child_preference_command(
+            &mut preferences,
+            open.session_id.as_str(),
+            ChildCommand::WindowSessionPatch { patch: open_patch },
+        )
+        .expect("退出时仍打开窗口的最终会话 patch 应当有效")
+    );
+    assert!(
+        apply_child_preference_command(
+            &mut preferences,
+            closed.session_id.as_str(),
+            ChildCommand::WindowClosed,
+        )
+        .expect("窗口关闭命令应当可以应用")
+    );
+
+    assert!(
+        preferences
+            .windows
+            .iter()
+            .all(|session| session.session_id != closed.session_id)
+    );
+    assert_eq!(
+        preferences
+            .windows
+            .iter()
+            .find(|session| session.session_id == open.session_id)
+            .and_then(|session| session.location.as_deref()),
+        Some("/final-open-state")
     );
 }
 
