@@ -49,6 +49,17 @@ the business shell. Recovery never opens a browser. Refresh-token rotation disab
 marker before saving the new record. A temporary security-store failure does not sign out the current
 process; later refreshes retry the save.
 
+The secure-storage service is `${application_identity}.account.oidc`. Production builds obtain the
+application identity from the `app_id` registered in `nexora.toml`; development runs use the stable
+identity derived from the application name and canonical executable path, including an explicit
+application identity override when configured. The OIDC issuer and client ID digest remains the
+credential key within that service, so separate applications never share a refresh token merely
+because they reuse the same OIDC configuration.
+
+This is a breaking change from the earlier fixed `nexora.account.oidc` service. Nexora does not read,
+migrate, or delete the old entry. Users upgrading an existing application must sign in once before
+new recoverable credentials are stored in the application's namespace.
+
 Access tokens are refreshed in the background roughly 60 seconds before expiry. Network, provider 5xx,
 and Account 5xx failures retain a potentially valid refresh token and use bounded backoff. `invalid_grant`,
 subject mismatch, `account_suspended`, and `account_not_registered` disable recovery, remove local

@@ -9,6 +9,9 @@ use nexora::desktop::{
 };
 use serde::Deserialize;
 
+const ACCOUNT_RUNTIME_SOURCE: &str = include_str!("../src/account/client/runtime.rs");
+const APPLICATION_SOURCE: &str = include_str!("../src/application.rs");
+
 #[derive(Debug, Deserialize, nexora::Settings)]
 struct DesktopSettings {
     api: ApiSettings,
@@ -60,6 +63,14 @@ fn test_authenticator() -> AccountAuthenticator {
         1
     );
     AccountAuthenticator::new(&config).expect("测试认证协调器应能离线构造")
+}
+
+#[test]
+fn account_credentials_use_the_resolved_application_identity_namespace() {
+    assert!(ACCOUNT_RUNTIME_SOURCE.contains("format!(\"{application_identity}.account.oidc\")"));
+    assert!(ACCOUNT_RUNTIME_SOURCE.contains("crate::application::application_identity(cx)"));
+    assert!(!ACCOUNT_RUNTIME_SOURCE.contains("Entry::new(\"nexora.account.oidc\""));
+    assert!(APPLICATION_SOURCE.contains("application_identity: self.application_identity.clone()"));
 }
 
 #[gpui::test]

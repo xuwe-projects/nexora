@@ -1816,6 +1816,7 @@ where
         application_info.app_id(),
         options.application_identity_override.as_deref(),
     )?;
+    let application_identity_value = application_identity.as_str().to_owned();
     let single_instance = options.single_instance;
     let subprocess_windows = options.subprocess_windows;
     let restore_window_sessions = options.restore_window_sessions;
@@ -1959,6 +1960,7 @@ where
         window_session,
         startup_window_route,
         process: Some(process),
+        application_identity: application_identity_value,
         subprocess_windows,
         child_shutdown_timeout,
         tray_enabled,
@@ -1991,6 +1993,7 @@ struct ApplicationAdapter<A> {
     window_session: WindowSession,
     startup_window_route: Option<RouteMatch>,
     process: Option<::desktop::process::ProcessBootstrap>,
+    application_identity: String,
     subprocess_windows: bool,
     child_shutdown_timeout: Duration,
     tray_enabled: bool,
@@ -2004,6 +2007,7 @@ struct ApplicationAdapter<A> {
 
 struct ApplicationProcessRuntime {
     process: ::desktop::process::ProcessBootstrap,
+    application_identity: String,
     tray: Option<::desktop::tray::TrayController>,
     standalone_window_sessions: HashMap<WindowId, WindowSession>,
     last_received_account_state: Option<serde_json::Value>,
@@ -2134,6 +2138,11 @@ fn install_application_process_runtime(runtime: ApplicationProcessRuntime, cx: &
     })
     // nexora-lint: allow(nexora::detached_lifecycle) reason="进程心跳与主进程 IPC 监听属于应用级 Global 生命周期"
     .detach();
+}
+
+pub(crate) fn application_identity(cx: &App) -> Option<&str> {
+    cx.try_global::<ApplicationProcessRuntime>()
+        .map(|runtime| runtime.application_identity.as_str())
 }
 
 fn process_runtime_tick(cx: &mut App) -> bool {
@@ -2800,6 +2809,7 @@ where
         install_application_process_runtime(
             ApplicationProcessRuntime {
                 process: self.process.take().expect("应用进程协调器只能安装一次"),
+                application_identity: self.application_identity.clone(),
                 tray,
                 standalone_window_sessions: HashMap::new(),
                 last_received_account_state: None,

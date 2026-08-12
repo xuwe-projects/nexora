@@ -46,6 +46,14 @@ Provider 轮换 refresh token 时会先撤销旧的恢复许可，再保存新�
 当前进程登录，后续刷新会再次尝试；Access Token 接近过期时运行时会在后台自动续期，旧任务由
 generation 丢弃，同一账号的资料刷新不会销毁业务 Feature 或 Window。
 
+安全存储 service 使用 `${application_identity}.account.oidc`：正式构建的应用身份来自
+`nexora.toml` 注册的 `app_id`，开发运行则使用应用名与规范化可执行文件路径生成的稳定身份，
+并遵守显式 application identity override。OIDC issuer 与 client ID 的摘要继续作为该 service
+下的凭据 key，因此不同应用即使复用相同 OIDC 配置也不会共享 refresh token。
+
+这是相对早期固定 `nexora.account.oidc` service 的破坏性变更。框架不会读取、迁移或删除旧项；
+升级已有应用后用户需要重新登录一次，新的可恢复凭据才会写入应用自己的命名空间。
+
 网络、Provider 5xx 和 Account 5xx 等临时错误会保留仍可能有效的 refresh token 并退避重试；
 `invalid_grant`、subject 不一致、`account_suspended` 和 `account_not_registered` 会禁止恢复、
 清理本地凭据并返回登录门禁。默认登录请求使用 `prompt=select_account`，因此可以选择其他

@@ -53,6 +53,14 @@ fn development_identity_combines_application_name_and_canonical_executable() {
 }
 
 #[test]
+fn explicit_application_identity_uses_registered_app_id() {
+    let identity = ApplicationIdentity::explicit("com.example.imes")
+        .expect("注册的 app ID 应当能生成稳定应用身份");
+
+    assert_eq!(identity.as_str(), "com.example.imes");
+}
+
+#[test]
 fn second_bootstrap_activates_existing_main_process() {
     let directory = TestDirectory::new("single-instance");
     let identity =

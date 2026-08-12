@@ -98,6 +98,7 @@ pub struct AccountLoginFailure {
 
 struct AccountLoginState {
     authenticator: AccountAuthenticator,
+    credential_service: Option<String>,
     login: Option<AccountLogin>,
     busy: bool,
     status: SharedString,
@@ -148,9 +149,11 @@ pub fn install_authenticator(authenticator: AccountAuthenticator, cx: &mut App) 
             (0, 0)
         };
     let preferences = crate::application::shell_preferences_snapshot(cx);
-    let secure_storage_supported = secure_storage_supported();
+    let credential_service = credential_service(cx);
+    let secure_storage_supported = secure_storage_supported() && credential_service.is_some();
     let state = AccountLoginState {
         authenticator,
+        credential_service,
         login: None,
         tokens: None,
         busy: false,
@@ -401,7 +404,7 @@ pub fn sign_out(cx: &mut App) {
     if !cx.has_global::<AccountLoginState>() {
         return;
     }
-    let (authenticator, refresh_token) = {
+    let (authenticator, credential_service, refresh_token) = {
         let state = cx.global_mut::<AccountLoginState>();
         let refresh_token = state
             .tokens
@@ -423,7 +426,11 @@ pub fn sign_out(cx: &mut App) {
         state.status = "已退出登录".into();
         state.failure = None;
         state.login_window = None;
-        (state.authenticator.clone(), refresh_token)
+        (
+            state.authenticator.clone(),
+            state.credential_service.clone(),
+            refresh_token,
+        )
     };
     crate::application::update_shell_preferences(cx, |preferences| {
         preferences.account.recovery_allowed = false;
@@ -436,7 +443,9 @@ pub fn sign_out(cx: &mut App) {
         if let Some(receiver) = preferences_flush {
             _ = receiver.recv();
         }
-        let _ = secure_delete(key.as_str());
+        if let Some(service) = credential_service {
+            let _ = secure_delete(service.as_str(), key.as_str());
+        }
         if let Some(refresh_token) = refresh_token {
             let _ = authenticator.revoke_refresh_token(refresh_token.as_str());
         }
@@ -457,13 +466,16 @@ pub fn set_remember_login(remember_login: bool, cx: &mut App) {
         return;
     };
     let remember_login = state.secure_storage_supported && remember_login;
-    let authenticator = {
+    let (authenticator, credential_service) = {
         let state = cx.global_mut::<AccountLoginState>();
         state.remember_login = remember_login;
         if !remember_login {
             state.recovery_allowed = false;
         }
-        state.authenticator.clone()
+        (
+            state.authenticator.clone(),
+            state.credential_service.clone(),
+        )
     };
     crate::application::update_shell_preferences(cx, |preferences| {
         preferences.account.remember_login = remember_login;
@@ -478,7 +490,9 @@ pub fn set_remember_login(remember_login: bool, cx: &mut App) {
             if let Some(receiver) = preferences_flush {
                 _ = receiver.recv();
             }
-            let _ = secure_delete(key.as_str());
+            if let Some(service) = credential_service {
+                let _ = secure_delete(service.as_str(), key.as_str());
+            }
         })
         // nexora-lint: allow(nexora::detached_lifecycle) reason="删除安全凭据必须在偏好写入完成后于后台执行，不能阻塞 GPUI 事件循环"
         .detach();
@@ -668,6 +682,11 @@ fn credential_key(authenticator: &AccountAuthenticator) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn credential_service(cx: &App) -> Option<String> {
+    crate::application::application_identity(cx)
+        .map(|application_identity| format!("{application_identity}.account.oidc"))
+}
+
 fn stored_credential(tokens: &OidcTokenCache) -> Option<StoredCredential> {
     Some(StoredCredential {
         version: 1,
@@ -681,9 +700,8 @@ fn stored_credential(tokens: &OidcTokenCache) -> Option<StoredCredential> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn secure_load(key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
-    let entry =
-        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+fn secure_load(service: &str, key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
+    let entry = Entry::new(service, key).map_err(|_| SecureStorageError::Unavailable)?;
     let value = match entry.get_password() {
         Ok(value) => value,
         Err(keyring::Error::NoEntry) => return Ok(None),
@@ -702,29 +720,35 @@ fn secure_load(key: &str) -> Result<Option<StoredCredential>, SecureStorageError
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn secure_load(_key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
+fn secure_load(_service: &str, _key: &str) -> Result<Option<StoredCredential>, SecureStorageError> {
     Ok(None)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn secure_save(key: &str, credential: &StoredCredential) -> Result<(), SecureStorageError> {
+fn secure_save(
+    service: &str,
+    key: &str,
+    credential: &StoredCredential,
+) -> Result<(), SecureStorageError> {
     let value = serde_json::to_string(credential).map_err(|_| SecureStorageError::Unavailable)?;
-    let entry =
-        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+    let entry = Entry::new(service, key).map_err(|_| SecureStorageError::Unavailable)?;
     entry
         .set_password(value.as_str())
         .map_err(|_| SecureStorageError::Unavailable)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn secure_save(_key: &str, _credential: &StoredCredential) -> Result<(), SecureStorageError> {
+fn secure_save(
+    _service: &str,
+    _key: &str,
+    _credential: &StoredCredential,
+) -> Result<(), SecureStorageError> {
     Err(SecureStorageError::Unavailable)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn secure_delete(key: &str) -> Result<(), SecureStorageError> {
-    let entry =
-        Entry::new("nexora.account.oidc", key).map_err(|_| SecureStorageError::Unavailable)?;
+fn secure_delete(service: &str, key: &str) -> Result<(), SecureStorageError> {
+    let entry = Entry::new(service, key).map_err(|_| SecureStorageError::Unavailable)?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => Err(SecureStorageError::Unavailable),
@@ -732,7 +756,7 @@ fn secure_delete(key: &str) -> Result<(), SecureStorageError> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn secure_delete(_key: &str) -> Result<(), SecureStorageError> {
+fn secure_delete(_service: &str, _key: &str) -> Result<(), SecureStorageError> {
     Ok(())
 }
 
@@ -740,11 +764,14 @@ fn set_recovery_disabled(cx: &mut App) {
     if !cx.has_global::<AccountLoginState>() {
         return;
     }
-    let authenticator = {
+    let (authenticator, credential_service) = {
         let state = cx.global_mut::<AccountLoginState>();
         state.recovery_allowed = false;
         state.can_retry_recovery = false;
-        state.authenticator.clone()
+        (
+            state.authenticator.clone(),
+            state.credential_service.clone(),
+        )
     };
     crate::application::update_shell_preferences(cx, |preferences| {
         preferences.account.recovery_allowed = false;
@@ -755,7 +782,9 @@ fn set_recovery_disabled(cx: &mut App) {
         if let Some(receiver) = preferences_flush {
             _ = receiver.recv();
         }
-        let _ = secure_delete(key.as_str());
+        if let Some(service) = credential_service {
+            let _ = secure_delete(service.as_str(), key.as_str());
+        }
     })
     // nexora-lint: allow(nexora::detached_lifecycle) reason="删除安全凭据必须在偏好写入完成后于后台执行，不能阻塞 GPUI 事件循环"
     .detach();
@@ -794,7 +823,7 @@ fn start_recovery(cx: &mut App) {
         return;
     }
     let cancellation = Arc::new(AtomicBool::new(false));
-    let (authenticator, generation) = {
+    let (authenticator, credential_service, generation) = {
         let state = cx.global_mut::<AccountLoginState>();
         state.generation = state.generation.wrapping_add(1);
         state.busy = true;
@@ -803,11 +832,19 @@ fn start_recovery(cx: &mut App) {
         state.status = "正在恢复登录状态…".into();
         state.failure = None;
         state.cancellation = Some(cancellation);
-        (state.authenticator.clone(), state.generation)
+        (
+            state.authenticator.clone(),
+            state
+                .credential_service
+                .clone()
+                .expect("安全存储恢复必须具有应用凭据命名空间"),
+            state.generation,
+        )
     };
     refresh_login_windows(cx);
     let key = credential_key(&authenticator);
-    let load = cx.background_spawn(async move { secure_load(key.as_str()) });
+    let load =
+        cx.background_spawn(async move { secure_load(credential_service.as_str(), key.as_str()) });
     cx.spawn(async move |cx| {
         let result = load.await;
         cx.update(|cx| finish_recovery_load(result, authenticator, generation, cx));
@@ -1008,6 +1045,10 @@ fn persist_session(tokens: OidcTokenCache, generation: u64, force: bool, cx: &mu
         return;
     };
     let authenticator = state.authenticator.clone();
+    let credential_service = state
+        .credential_service
+        .clone()
+        .expect("安全凭据持久化必须具有应用凭据命名空间");
     let key = credential_key(&authenticator);
     {
         let state = cx.global_mut::<AccountLoginState>();
@@ -1021,7 +1062,7 @@ fn persist_session(tokens: OidcTokenCache, generation: u64, force: bool, cx: &mu
         if let Some(receiver) = preferences_flush {
             _ = receiver.recv();
         }
-        secure_save(key.as_str(), &credential)
+        secure_save(credential_service.as_str(), key.as_str(), &credential)
     });
     cx.spawn(async move |cx| {
         let result = save.await;
