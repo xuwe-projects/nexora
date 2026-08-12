@@ -167,7 +167,7 @@ pub mod __private {
 
     use super::{AccountClientSection, AccountServerSection, Settings};
 
-    /// 从完整进程参数中提取可选配置文件路径，并忽略 updater 与桌面子进程内部参数。
+    /// 从完整进程参数中提取可选配置文件路径，并忽略 updater 内部参数。
     ///
     /// 该函数仅供 Nexora 配置加载器和集成测试共享；sidecar 使用
     /// `--nexora-updater-health-session` 启动新版本时必须继续使用应用默认配置，而不能把内部
@@ -175,19 +175,7 @@ pub mod __private {
     #[doc(hidden)]
     pub fn config_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
         let first = args.into_iter().nth(1)?;
-        if first == "--nexora-updater-health-session"
-            || first == "--nexora-updater-health-file"
-            || first.to_str().is_some_and(|argument| {
-                [
-                    "--nexora-process-role=",
-                    "--nexora-session-id=",
-                    "--nexora-handshake=",
-                    "--nexora-endpoint=",
-                ]
-                .iter()
-                .any(|prefix| argument.starts_with(prefix))
-            })
-        {
+        if first == "--nexora-updater-health-session" || first == "--nexora-updater-health-file" {
             None
         } else {
             Some(PathBuf::from(first))

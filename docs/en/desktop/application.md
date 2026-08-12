@@ -25,27 +25,33 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
-## Application singleton and window processes
+## Application singleton and window lifecycle
 
 Nexora allows one main application instance by default and hosts the main window, extra Shells,
 the unique Settings window, and registered Windows in the same GPUI event loop. The default
 configuration therefore uses one OS process, allowing application Globals, business models,
 Account state, preferences, and caches to be shared by every window. Each window still owns its
-Shell, Feature UI, focus, input, and form drafts.
+Shell, Feature UI, focus, input, and form drafts. Windows cannot be switched to subprocess hosting.
 
-Enable managed subprocess windows explicitly only when fault isolation, security isolation, or an
-independent service lifecycle is required:
+Extra Shells, the unique Settings window, and registered Windows remain available while the
+application is running. Nexora persists only the main window's display, position, size, and
+maximized/fullscreen state. It does not persist tabs, extra Shells, Settings, or registered Window
+sessions. Every cold start creates exactly one main window and opens `initial_path`. Duplicate
+launches still activate the running process through the application-identity singleton IPC.
 
-```rust
-ApplicationOptions::new().subprocess_windows(true)
-```
-
-`single_instance`, `restore_window_sessions`, and `tray_enabled` remain enabled by default. New
-Shells, Settings uniqueness, registered Windows, complete tab/location restoration, display and
-bounds restoration, duplicate-launch activation, and tray window-group commands remain available
-in both hosting modes. With the default in-process Shells, `Context<T>::navigate` targets the Shell
+With in-process Shells, `Context<T>::navigate` targets the Shell
 containing the source entity, `App::navigate` targets the active Shell, and unresolved origins fall
 back to the main Shell.
+
+### Migrating from window-session releases
+
+Remove `.single_instance(...)`, `.subprocess_windows(...)`, and `.restore_window_sessions(...)`
+calls; the application-identity singleton gate is mandatory and there is no replacement switch.
+`WindowSession`, `WindowSessionRole`, and `WindowTabSession` have also been removed from the public
+Rust API. When an old `workspace.toml` is first read, schema 0 keeps `main_window` geometry and
+drops `pinned_tabs`; schema 1 extracts only the main-window placement from the `windows` entry whose
+ID is `main`. A successful save removes the retired session fields while preserving theme,
+DataTable layout, and non-secret Account preferences.
 
 ## Logo
 

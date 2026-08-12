@@ -102,17 +102,17 @@ impl FeatureElement for UserDetailsFeature {
 
 独立原生窗口使用 `#[derive(nexora::Window)]` 和 `WindowElement`。它支持同样的 `path_params/query_params/factory`，不进入主导航或标签；可覆盖 `window_options`、`initialize` 和 `closing`。
 
-## 选择窗口进程模型
+## 窗口进程与冷启动模型
 
-- `ApplicationOptions` 默认启用 `single_instance`、`restore_window_sessions` 和
-  `tray_enabled`，并默认关闭 `subprocess_windows`。主窗口、额外 Shell、Settings 和注册
-  Window 在同一个 GPUI 事件循环中创建，共享应用级 Global、业务模型和缓存。
-- 只有产品确实要求故障隔离、安全隔离或独立服务生命周期时，才显式调用
-  `.subprocess_windows(true)` 启用受管子进程。两种承载模式都继续恢复 Shell 标签、活动标签、
-  显示器、边界、最小化状态、唯一 Settings 和注册 Window 会话。
-- 不要为了单进程同时关闭 `single_instance`、`restore_window_sessions` 或
-  `tray_enabled`；这些选项分别控制重复启动门禁、历史窗口恢复和托盘窗口组行为，与窗口
-  是否由子进程承载相互独立。
+- Nexora 强制启用应用身份级单例门禁；`ApplicationOptions` 默认启用 `tray_enabled`。主窗口、
+  额外 Shell、Settings 和注册 Window 始终在同一个 GPUI 事件循环中创建，共享
+  应用级 Global、业务模型和缓存。不存在窗口子进程选项。
+- 运行期允许多原生窗口，但冷启动只创建主窗口并打开 `initial_path`。只保留主窗口的
+  显示器、边界和最大化/全屏状态；不恢复标签、额外 Shell、Settings 或注册 Window。
+- 已删除 `single_instance`、`subprocess_windows`、`restore_window_sessions`、
+  `WindowSession`、`WindowSessionRole` 和 `WindowTabSession`；不得增加兼容 no-op 或替代恢复开关。
+- 不要为了打开第二个窗口再次启动当前二进制；额外窗口
+  继续通过 Shell、SettingsWindow 和注册 Window 的统一运行时创建。
 - 多 Shell 同进程运行时，Feature 或子 Entity 的 `Context<T>::navigate` 进入它所在窗口的
   Shell；应用级 `App::navigate` 进入当前活动 Shell；没有明确来源时回退到主 Shell。应用
   不要安装第二套路由分发器。
@@ -162,6 +162,9 @@ impl Render for AppLogin {
   `ApplicationLogo::png(include_bytes!(...))`；只有需要重做完整布局时才覆盖 `LoginFeature`。
 - 登录失败由 Account 运行时推送 `Notification`；服务端返回 `request_id` 时通知提供复制
   Action。自定义登录页仍可从 `login_snapshot().failure` 读取结构化失败信息。
+- Account 失败必须保留连接、超时、响应读取、契约不兼容、结构化拒绝和非结构化响应的
+  阶段分类，不得统一误报为无法连接。临时失败保留安全凭据和恢复资格；只有已有明确
+  永久语义的失败才清理。界面和日志不得输出完整 endpoint、token、Authorization header 或原始响应正文。
 - 未登录时 Shell 不创建业务 Feature，并拒绝打开普通业务 Window；固定的 `/settings` 仍可用于修正认证配置。退出会清空 Feature 缓存、Sidebar 插槽和已打开的业务 Window。
 - 生成的 Account workspace 已在 `Application::initialize` 中调用 `nexora::desktop::install_authenticator(authenticator, cx)`。手写入口也必须先从根 Settings 构造 `client_config` 和 `AccountAuthenticator`，再安装一次。
 - 框架根据是否安装 `AccountAuthenticator` 自动启用登录门禁和默认 Account 页面；不要再在 `ApplicationOptions` 中增加重复的 `account_enabled` 布尔开关。

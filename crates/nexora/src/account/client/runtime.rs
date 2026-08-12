@@ -70,28 +70,13 @@ pub struct AccountAuthenticationScope {
     pub user_id: Option<String>,
 }
 
-/// 仅通过受保护进程 IPC 传输的 Account 会话快照。
-///
-/// 登录变体包含短期 token，因此该类型刻意不实现 `Debug`，也不得写入磁盘或日志。
-#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub(crate) enum AccountProcessState {
-    /// 当前窗口组已经退出登录。
-    SignedOut,
-    /// 当前窗口组共享的已认证会话。
-    SignedIn {
-        /// OIDC 短期 token 与 Provider 用户资料。
-        tokens: Box<OidcTokenCache>,
-        /// Account 服务确认的用户、角色和权限快照。
-        profile: Box<AccessProfileResponse>,
-    },
-}
-
 /// 可以安全交给桌面 UI 的 Account 登录失败信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountLoginFailure {
     /// 不包含 token、内部错误链或数据库信息的用户可读说明。
     pub message: SharedString,
+    /// 服务端返回的可选稳定错误码。
+    pub code: Option<SharedString>,
     /// 服务端返回的可选请求 ID，可用于日志检索和一键复制。
     pub request_id: Option<SharedString>,
 }
@@ -231,83 +216,6 @@ pub fn authentication_scope(cx: &App) -> AccountAuthenticationScope {
             .map(AccountLogin::profile)
             .map(|profile| profile.user.id.clone()),
     }
-}
-
-/// 生成当前进程可交给受保护 IPC 的账号会话快照。
-pub(crate) fn process_state(cx: &App) -> AccountProcessState {
-    let Some(state) = cx.try_global::<AccountLoginState>() else {
-        return AccountProcessState::SignedOut;
-    };
-    let Some(login) = state.login.as_ref() else {
-        return AccountProcessState::SignedOut;
-    };
-    AccountProcessState::SignedIn {
-        tokens: Box::new(login.session().tokens().clone()),
-        profile: Box::new(login.profile().clone()),
-    }
-}
-
-/// 应用来自受保护 IPC 的账号状态，并刷新当前进程全部登录门禁。
-///
-/// 主进程作为 `authoritative` 接收子进程登录时负责安全存储和后续 token 刷新；普通
-/// 窗口子进程只消费主进程广播，避免多个进程并发轮换 refresh token。
-pub(crate) fn apply_process_state(
-    process_state: AccountProcessState,
-    authoritative: bool,
-    cx: &mut App,
-) {
-    match process_state {
-        AccountProcessState::SignedOut => {
-            let snapshot = login_snapshot(cx);
-            if snapshot.authenticated
-                || snapshot.busy
-                || snapshot.restoring
-                || snapshot.recovery_allowed
-            {
-                sign_out(cx);
-            }
-        }
-        AccountProcessState::SignedIn { tokens, profile } => {
-            let tokens = *tokens;
-            let Some(session) = OidcSession::from_token_cache(tokens.clone()) else {
-                return;
-            };
-            if !cx.has_global::<AccountLoginState>() {
-                return;
-            }
-            let state = cx.global_mut::<AccountLoginState>();
-            if let Some(cancellation) = state.cancellation.take() {
-                cancellation.store(true, Ordering::Release);
-            }
-            state.generation = state.generation.wrapping_add(1);
-            let generation = state.generation;
-            state.authentication_revision = state.authentication_revision.wrapping_add(1);
-            state.login = Some(AccountLogin {
-                session,
-                profile: *profile,
-            });
-            state.tokens = Some(tokens.clone());
-            state.busy = false;
-            state.restoring = false;
-            state.refresh_scheduled = false;
-            state.refresh_in_flight = false;
-            state.can_retry_recovery = false;
-            state.status = "登录状态已从主进程同步".into();
-            state.failure = None;
-            if authoritative {
-                persist_session(tokens, generation, true, cx);
-            }
-            refresh_login_windows(cx);
-        }
-    }
-}
-
-/// 观察当前进程账号会话变化，供应用级进程协调器发布内存快照。
-pub(crate) fn observe_process_state(
-    cx: &mut App,
-    mut observer: impl FnMut(AccountProcessState, &mut App) + 'static,
-) -> Subscription {
-    cx.observe_global::<AccountLoginState>(move |cx| observer(process_state(cx), cx))
 }
 
 /// 返回当前应用是否已经通过 Account 登录门禁。
@@ -618,6 +526,9 @@ fn complete_login(
             persist_session(tokens, generation, true, cx);
         }
         Err(error) => {
+            if is_permanent_failure(&error) {
+                set_recovery_disabled(cx);
+            }
             let failure = login_failure(&error);
             let displayed = push_login_failure_notification(&failure, cx);
             let state = cx.global_mut::<AccountLoginState>();
@@ -956,6 +867,7 @@ fn finish_recovery(
             persist_session(tokens, generation, true, cx);
         }
         Err(error) if is_permanent_failure(&error) => {
+            let failure = login_failure(&error);
             set_recovery_disabled(cx);
             let state = cx.global_mut::<AccountLoginState>();
             state.authentication_revision = state.authentication_revision.wrapping_add(1);
@@ -965,25 +877,20 @@ fn finish_recovery(
             state.login = None;
             state.tokens = None;
             state.can_retry_recovery = false;
-            state.status = "保存的登录状态已失效，请重新登录".into();
-            state.failure = Some(AccountLoginFailure {
-                message: "保存的登录状态已失效，请重新登录".into(),
-                request_id: None,
-            });
+            state.status = failure.message.clone();
+            state.failure = Some(failure);
             refresh_login_windows(cx);
         }
-        Err(_) => {
+        Err(error) => {
+            let failure = login_failure(&error);
             let state = cx.global_mut::<AccountLoginState>();
             state.busy = false;
             state.restoring = false;
             state.cancellation = None;
             state.tokens = Some(previous_tokens);
             state.can_retry_recovery = true;
-            state.status = "暂时无法恢复登录状态，请重试".into();
-            state.failure = Some(AccountLoginFailure {
-                message: "暂时无法恢复登录状态，请重试".into(),
-                request_id: None,
-            });
+            state.status = failure.message.clone();
+            state.failure = Some(failure);
             refresh_login_windows(cx);
         }
     }
@@ -1001,6 +908,7 @@ fn set_recovery_failure(generation: u64, message: &str, retryable: bool, cx: &mu
     state.status = message.into();
     state.failure = Some(AccountLoginFailure {
         message: message.into(),
+        code: None,
         request_id: None,
     });
     refresh_login_windows(cx);
@@ -1011,13 +919,7 @@ fn is_permanent_failure(error: &AccountAuthenticationError) -> bool {
         AccountAuthenticationError::Oidc(error) => {
             error.is_refresh_token_rejected() || matches!(error, oidc::OidcError::SubjectMismatch)
         }
-        AccountAuthenticationError::Account(AccountClientError::Rejected { code, .. }) => {
-            matches!(
-                code.as_str(),
-                "account_suspended" | "account_not_registered"
-            )
-        }
-        AccountAuthenticationError::Account(_) => false,
+        AccountAuthenticationError::Account(error) => error.is_permanent_authentication_failure(),
     }
 }
 
@@ -1085,6 +987,7 @@ fn persist_session(tokens: OidcTokenCache, generation: u64, force: bool, cx: &mu
                     state.status = "保持登录状态失败，当前会话仍可继续使用".into();
                     state.failure = Some(AccountLoginFailure {
                         message: "保持登录状态失败，当前会话仍可继续使用".into(),
+                        code: None,
                         request_id: None,
                     });
                 }
@@ -1181,16 +1084,14 @@ fn finish_refresh(
             persist_session(tokens, generation, rotated, cx);
         }
         Err(error) if is_permanent_failure(&error) => {
+            let failure = login_failure(&error);
             set_recovery_disabled(cx);
             let state = cx.global_mut::<AccountLoginState>();
             state.authentication_revision = state.authentication_revision.wrapping_add(1);
             state.login = None;
             state.tokens = None;
-            state.status = "登录状态已失效，请重新登录".into();
-            state.failure = Some(AccountLoginFailure {
-                message: "登录状态已失效，请重新登录".into(),
-                request_id: None,
-            });
+            state.status = failure.message.clone();
+            state.failure = Some(failure);
             refresh_login_windows(cx);
         }
         Err(error) => {
@@ -1229,22 +1130,50 @@ struct LoginFailureNotification;
 fn login_failure(error: &AccountAuthenticationError) -> AccountLoginFailure {
     match error {
         AccountAuthenticationError::Account(AccountClientError::Rejected {
+            code,
             message,
             request_id,
             ..
         }) => AccountLoginFailure {
             message: message.clone().into(),
+            code: Some(code.clone().into()),
             request_id: (!request_id.trim().is_empty() && request_id != "unknown")
                 .then(|| request_id.clone().into()),
         },
         AccountAuthenticationError::Account(error) => AccountLoginFailure {
             message: error.user_message().into(),
-            request_id: None,
+            code: None,
+            request_id: error.request_id().map(Into::into),
         },
         AccountAuthenticationError::Oidc(error) => AccountLoginFailure {
-            message: error.to_string().into(),
+            message: oidc_user_message(error).into(),
+            code: None,
             request_id: None,
         },
+    }
+}
+
+fn oidc_user_message(error: &oidc::OidcError) -> String {
+    match error {
+        oidc::OidcError::Http(reason) if reason.is_timeout() => {
+            "OIDC 身份服务请求超时，请重试".to_owned()
+        }
+        oidc::OidcError::Http(reason) if reason.is_connect() => {
+            "无法连接 OIDC 身份服务，请检查网络或稍后重试".to_owned()
+        }
+        oidc::OidcError::Http(_) => "OIDC 身份服务请求失败，请重试".to_owned(),
+        oidc::OidcError::DiscoveryIssuerMismatch { .. } => {
+            "OIDC discovery issuer 与客户端配置不一致".to_owned()
+        }
+        oidc::OidcError::InvalidIssuer(_) => "OIDC issuer 配置无效".to_owned(),
+        oidc::OidcError::InvalidRedirectUri(_) => "OIDC 本地回调配置无效".to_owned(),
+        oidc::OidcError::Io(_) => "OIDC 本地回调通信失败".to_owned(),
+        oidc::OidcError::OAuth(_) | oidc::OidcError::TokenEndpointOAuth { .. } => {
+            "OIDC 身份服务拒绝了登录请求".to_owned()
+        }
+        oidc::OidcError::InvalidIdToken(_) => "OIDC ID token 校验失败".to_owned(),
+        oidc::OidcError::Json(_) => "客户端与 OIDC 身份服务版本或响应契约不兼容".to_owned(),
+        _ => error.to_string(),
     }
 }
 
@@ -1256,10 +1185,14 @@ fn push_login_failure_notification(failure: &AccountLoginFailure, cx: &mut App) 
     let Some(window_handle) = window_handle else {
         return false;
     };
-    let message = failure.request_id.as_ref().map_or_else(
-        || failure.message.clone(),
-        |request_id| format!("{}\n请求 ID：{request_id}", failure.message).into(),
-    );
+    let message = match (&failure.code, &failure.request_id) {
+        (Some(code), Some(request_id)) => {
+            format!("{}\n错误码：{code}\n请求 ID：{request_id}", failure.message).into()
+        }
+        (Some(code), None) => format!("{}\n错误码：{code}", failure.message).into(),
+        (None, Some(request_id)) => format!("{}\n请求 ID：{request_id}", failure.message).into(),
+        (None, None) => failure.message.clone(),
+    };
     let mut notification = Notification::error(message)
         .id::<LoginFailureNotification>()
         .title("登录失败");

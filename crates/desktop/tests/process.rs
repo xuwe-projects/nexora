@@ -7,7 +7,6 @@ use std::{
 
 use desktop::process::{
     ApplicationIdentity, CoordinatorEvent, ProcessBootstrap, ProcessBootstrapOptions, bootstrap,
-    is_internal_process_argument,
 };
 
 struct TestDirectory(PathBuf);
@@ -91,15 +90,4 @@ fn second_bootstrap_activates_existing_main_process() {
         assert!(Instant::now() < deadline, "主进程应当收到激活事件");
         thread::sleep(Duration::from_millis(10));
     }
-}
-
-#[test]
-fn internal_child_arguments_are_not_configuration_paths() {
-    assert!(is_internal_process_argument("--nexora-process-role=shell"));
-    assert!(is_internal_process_argument("--nexora-session-id=window-1"));
-    assert!(is_internal_process_argument("--nexora-handshake=secret"));
-    assert!(is_internal_process_argument(
-        "--nexora-endpoint=/private/runtime/endpoint.json"
-    ));
-    assert!(!is_internal_process_argument("config/application.toml"));
 }

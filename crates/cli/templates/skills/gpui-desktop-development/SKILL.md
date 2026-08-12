@@ -232,14 +232,11 @@ impl<D> DataTable<D> {
 - Nexora 默认启用应用身份级单例门禁，并在同一个 GPUI 事件循环中通过 `App::open_window`
   承载主窗口、额外 Shell、唯一 Settings 和注册 Window。应用级 Account、Preferences、Updater、
   业务模型和缓存使用唯一 Global 或共享 Model，不为每个窗口复制。
-- 只有应用确实需要故障隔离、安全隔离或独立服务生命周期时，才显式设置
-  `ApplicationOptions::subprocess_windows(true)`，让额外窗口改由主进程协调的受管子进程承载。
-  “单实例”在该显式模式下不等于“单个操作系统进程”。
-- 不要把默认单进程与关闭多窗口混为一谈，也不要同时关闭 `restore_window_sessions`、
-  `tray_enabled` 或 `single_instance`，除非产品确实不需要这些能力。
+- 窗口承载严格保持单个应用进程；不存在子进程窗口配置或第二套窗口 IPC。
+- 不要把单进程与关闭多窗口混为一谈；额外 Shell、Settings 和注册 Window 仍由
+  `App::open_window` 在运行期创建。冷启动只恢复主窗口几何并打开 `initial_path`。
 - 不要为了打开第二个窗口自行再次启动当前二进制、调用第二次 `Application::run` 或复制 Nexora
-  的进程协调协议。由 `ApplicationOptions` 选择承载模式，让 Shell、SettingsWindow 和注册 Window
-  继续走统一注册表与会话生命周期。
+  的进程协调协议。Shell、SettingsWindow 和注册 Window 继续走统一注册表与运行时生命周期。
 - 同进程包含多个 Shell 时，`Context<T>::navigate` 路由到当前 Entity 所在窗口的 Shell；
   `App::navigate` 路由到活动 Shell；无法确定来源或活动 Shell 时回退到主 Shell。窗口路由仍按
   注册表打开独立原生窗口。
@@ -247,8 +244,7 @@ impl<D> DataTable<D> {
   子线程只负责准备数据或发出打开窗口的请求，再回到 `App` 上下文执行 `open_window`。
 - 每个 Shell 和窗口保留自己的根 Entity、局部输入状态、焦点、订阅和任务；应用级 Account、
   Preferences、Updater 与窗口组协调使用唯一 Global 或框架运行时，不为每个窗口复制。
-- 只有用户明确要求故障隔离、安全隔离或独立服务生命周期时，才在 Nexora 默认受管模式之外
-  设计新的多进程边界；普通应用不得维护第二套窗口进程协议。
+- 不得在 Nexora 之外为普通窗口设计多进程边界或维护第二套窗口进程协议。
 
 ## 13. GPUI 测试策略
 

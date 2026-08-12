@@ -33,6 +33,19 @@ text, so use it only in controlled environments where that risk is accepted.
 There is no separate `account_enabled` switch. A regular desktop application that does not install
 an authenticator gets neither the login gate nor the default `/users` and `/roles` pages.
 
+## Login error diagnostics
+
+The Account client classifies failures by request stage: connection, timeout, response-body read,
+successful-HTTP contract incompatibility, structured server rejection, and unstructured abnormal
+response. The UI no longer presents contract failures as network unavailability. A safe
+`request_id`, when present, keeps the copy action.
+
+Display and Debug summaries contain no complete endpoint, Bearer token, Authorization header, or
+raw response body. Connection, timeout, temporary service, response-read, and contract failures
+retain Keychain/Credential Manager credentials and recovery eligibility. Only failures with existing
+permanent semantics—including `invalid_grant`, OIDC subject mismatch, `account_not_registered`, and
+`account_suspended`—clear recovery state.
+
 ## Session persistence and refresh
 
 The desktop Account configuration guarantees that the OIDC scope contains `offline_access` without

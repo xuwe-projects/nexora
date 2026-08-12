@@ -244,8 +244,8 @@ impl RouteMatch {
     /// 返回包含规范化路径与完整查询参数的稳定内部路由位置。
     ///
     /// 查询键按稳定顺序编码，同名查询值保留原始顺序；动态 path parameters 已包含在
-    /// `concrete_path` 中。该值可写入窗口会话，并在新进程中通过 [`crate::AppRegistry::resolve`]
-    /// 恢复，不能用只含 path 的 [`Self::concrete_path`] 替代。
+    /// `concrete_path` 中。该值适合在当前运行期中作为标签、窗口初始路由或导航位置，
+    /// 不能用只含 path 的 [`Self::concrete_path`] 替代。
     pub fn location(&self) -> String {
         let query = self.query.encode();
         if query.is_empty() {

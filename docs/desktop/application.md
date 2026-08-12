@@ -24,24 +24,30 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
-## 应用单例与窗口进程
+## 应用单例与窗口生命周期
 
 Nexora 默认只允许一个应用主实例，并在同一个 GPUI 事件循环中承载主窗口、额外 Shell、
 唯一 Settings 和注册 Window。因此默认配置只有一个操作系统进程，应用级 Global、业务模型、
 Account、偏好和缓存可以由全部窗口共享；每个窗口仍独立持有自己的 Shell、Feature UI、焦点、
-输入和表单草稿。
+输入和表单草稿。窗口不能切换为子进程承载。
 
-确实需要故障隔离、安全隔离或独立服务生命周期时，可以显式启用受管子进程窗口：
+运行期仍可以打开额外 Shell、唯一 Settings 和注册 Window。Nexora 只持久化主窗口的
+显示器、位置、尺寸与最大化/全屏状态；退出后不保留标签、额外 Shell、Settings 或注册
+Window 会话。冷启动始终只创建一个主窗口并打开 `initial_path`。重复启动仍通过
+应用身份级单例 IPC 激活已运行进程。
 
-```rust
-ApplicationOptions::new().subprocess_windows(true)
-```
-
-`single_instance`、`restore_window_sessions` 和 `tray_enabled` 仍保持默认开启。新增 Shell、设置
-单例、注册 Window、完整标签与路由恢复、显示器和边界恢复、重复启动激活及托盘窗口组命令
-在两种承载模式下都继续可用。默认的多个同进程 Shell 中，Feature 的
+多个同进程 Shell 中，Feature 的
 `Context<T>::navigate` 路由到来源 Entity 所在窗口，`App::navigate` 路由到活动 Shell，
 无法确定来源时回退到主 Shell。
+
+### 从窗口会话版本迁移
+
+删除应用中的 `.single_instance(...)`、`.subprocess_windows(...)` 和
+`.restore_window_sessions(...)` 调用；应用身份级单例门禁固定启用，新版本不提供替代开关。
+`WindowSession`、`WindowSessionRole` 和 `WindowTabSession` 也已从公开 Rust API 删除。首次读取旧
+`workspace.toml` 时，schema 0 保留 `main_window` 几何并丢弃 `pinned_tabs`；schema 1 只从
+`windows` 中 ID 为 `main` 的记录提取主窗口位置。成功保存后，会话字段从文件中清除，
+主题、DataTable 布局和 Account 非秘密偏好保留。
 
 ## Logo
 

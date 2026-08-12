@@ -203,6 +203,28 @@ mod client {
                 .contains("authorization: bearer access-token\r\n")
         );
     }
+
+    #[test]
+    fn account_client_debug_does_not_expose_endpoint_or_token() {
+        let endpoint = "https://private-account.example.com";
+        let token = "sensitive-access-token";
+        let settings = desktop_settings(endpoint, false);
+        let config = client_config(&settings, &settings.api).expect("HTTPS endpoint 应当有效");
+        let config_debug = format!("{config:?}");
+        let client = AccountClient::new(&config).expect("Account client 应当可创建");
+        let session = client.session(token);
+
+        assert!(!config_debug.contains(endpoint));
+        assert!(!config_debug.contains("private-account.example.com"));
+        assert!(!config_debug.contains(token));
+        let client_debug = format!("{client:?}");
+        assert!(!client_debug.contains(endpoint));
+        assert!(!client_debug.contains("private-account.example.com"));
+        assert!(!client_debug.contains(token));
+
+        // AccountSession 刻意不实现 Debug，防止调用方直接打印持有 Bearer token 的会话。
+        drop(session);
+    }
 }
 
 #[cfg(feature = "server")]

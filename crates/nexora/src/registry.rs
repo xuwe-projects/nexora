@@ -23,7 +23,7 @@ use crate::{
     route::{RouteParameters, canonical_segment, decode_parameter, parse_location},
 };
 #[cfg(feature = "desktop")]
-use crate::{WindowInstance, WindowRuntimeError, WindowSession};
+use crate::{WindowInstance, WindowRuntimeError};
 
 /// 生成代码组装应用注册表时使用的构建器。
 ///
@@ -619,8 +619,7 @@ impl AppRegistry {
 
     /// 在指定稳定显示器 UUID 上创建已解析的独立原生窗口。
     ///
-    /// 该入口用于受管 Settings 与 Registered Window 子进程。UUID 在当前进程内
-    /// 重新解析为 `DisplayId`；显示器已断开时安全回退到主显示器。其余单例、
+    /// UUID 在当前进程内重新解析为 `DisplayId`；显示器已断开时安全回退到主显示器。其余单例、
     /// 强类型路由和生命周期语义与 [`Self::open_window`] 一致。
     ///
     /// # Errors
@@ -634,23 +633,13 @@ impl AppRegistry {
         display_uuid: Option<&str>,
         cx: &mut App,
     ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
-        self.open_window_with_session(route, display_uuid, None, cx)
+        self.open_window_with_display(route, display_uuid, cx)
     }
 
-    pub(crate) fn open_window_session(
-        &self,
-        route: RouteMatch,
-        session: &WindowSession,
-        cx: &mut App,
-    ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
-        self.open_window_with_session(route, session.display_uuid.as_deref(), Some(session), cx)
-    }
-
-    fn open_window_with_session(
+    fn open_window_with_display(
         &self,
         route: RouteMatch,
         display_uuid: Option<&str>,
-        session: Option<&WindowSession>,
         cx: &mut App,
     ) -> Result<WindowHandle<gpui_component::Root>, WindowRuntimeError> {
         let RouteTarget::Window(metadata) = route.target() else {
@@ -663,14 +652,7 @@ impl AppRegistry {
             .get(metadata.id())
             .ok_or(WindowRuntimeError::MissingFactory { id: metadata.id() })?;
         let mut options: WindowOptions = (registration.options_factory())(&route, cx)?;
-        if let Some(restored) = session.and_then(|session| {
-            crate::application::restored_window_session_bounds(session, options.window_min_size, cx)
-        }) {
-            options.display_id = restored.display_id;
-            options.window_bounds = Some(restored.bounds);
-        } else {
-            ::desktop::apply_window_display_preference(&mut options, display_uuid, None, cx);
-        }
+        ::desktop::apply_window_display_preference(&mut options, display_uuid, None, cx);
         if metadata.id() == "settings"
             && let Some(handle) = cx
                 .try_global::<SettingsWindowRuntime>()
@@ -687,31 +669,11 @@ impl AppRegistry {
         }
         let factory = registration.factory();
         let window_id = metadata.id();
-        let tracked_session = session.cloned();
-
         let handle = cx
             .open_window(options, move |window, cx| {
                 let instance = factory(route, window, cx)
                     .expect("Window 路由已在创建原生窗口前完成相同的强类型校验");
-                let root = cx.new(|cx| {
-                    if let Some(session) = tracked_session {
-                        let window_id = window.window_handle().window_id();
-                        let session_id = session.session_id;
-                        let role = session.role;
-                        cx.on_release_in(window, move |_, window, cx| {
-                            crate::application::release_standalone_window_session(
-                                window_id,
-                                session_id.as_str(),
-                                &role,
-                                window,
-                                cx,
-                            );
-                        })
-                        // nexora-lint: allow(nexora::detached_lifecycle) reason="释放订阅绑定当前窗口 Root Entity，只在该窗口释放时执行会话清理"
-                        .detach();
-                    }
-                    gpui_component::Root::new(instance.view(), window, cx)
-                });
+                let root = cx.new(|cx| gpui_component::Root::new(instance.view(), window, cx));
                 theme::attach_window(window, cx);
                 root
             })

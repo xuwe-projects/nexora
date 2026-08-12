@@ -10,7 +10,7 @@ use std::fmt;
 pub enum TrayEvent {
     /// 显示并激活当前应用的全部窗口。
     ActivateWindowGroup,
-    /// 退出当前应用及其全部窗口子进程。
+    /// 退出当前应用及其全部原生窗口。
     ExitApplication,
     /// Linux SNI watcher 或平台托盘宿主暂时不可用。
     Unavailable,

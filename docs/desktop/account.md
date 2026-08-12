@@ -32,6 +32,17 @@ nexora::desktop::install_authenticator(authenticator, cx);
 不需要额外的 `account_enabled` 开关；没有安装认证器的普通桌面应用不会创建登录门禁，也
 不会注入 `/users` 与 `/roles` 默认页面。
 
+## 登录错误诊断
+
+Account 客户端按请求阶段分类错误：连接失败、请求超时、响应读取失败、成功 HTTP
+响应与客户端契约不兼容、服务端结构化拒绝，以及非结构化异常响应。界面不会把连接失败与
+契约不兼容混为同一提示；有安全 `request_id` 时继续提供复制操作。
+
+错误的 Display/Debug 摘要不包含完整 endpoint、Bearer token、Authorization header 或原始响应
+正文。连接、超时、临时服务错误、响应读取与契约不兼容均保留 Keychain/Credential
+Manager 凭据和恢复资格；只有 `invalid_grant`、OIDC subject 不一致、
+`account_not_registered`、`account_suspended` 等已有明确永久语义的失败会清理恢复状态。
+
 ## 会话保持与自动续期
 
 桌面 Account 配置会确保 OIDC scope 包含 `offline_access`，但不会重复添加调用方已经提供的

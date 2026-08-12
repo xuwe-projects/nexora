@@ -4,6 +4,7 @@ use std::{
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use contracts::patch::PatchField;
@@ -255,6 +256,180 @@ fn account_error_preserves_envelope_code_message_and_request_id() {
     assert_eq!(code, "permission_denied");
     assert_eq!(message, "没有执行该操作的权限");
     assert_eq!(request_id, "req_contract_01");
+    assert!(
+        !AccountClientError::Rejected {
+            status,
+            code,
+            message,
+            request_id,
+        }
+        .is_permanent_authentication_failure()
+    );
+}
+
+#[test]
+fn structured_unauthorized_response_preserves_safe_diagnostics() {
+    let body = r#"{
+        "error":{
+            "code":"invalid_access_token",
+            "message":"登录凭据已失效",
+            "details":{},
+            "request_id":""
+        }
+    }"#;
+    let (endpoint, server) = spawn_mock(
+        "401 Unauthorized",
+        body,
+        &[("X-Request-Id", "req_unauthorized_01")],
+    );
+    let error = session(endpoint)
+        .me()
+        .expect_err("401 结构化拒绝必须保留安全诊断信息");
+    server.join().expect("测试服务线程应结束");
+
+    assert_eq!(error.category(), "rejected");
+    assert_eq!(error.status(), Some(401));
+    assert_eq!(error.request_id(), Some("req_unauthorized_01"));
+    assert!(error.user_message().contains("登录凭据已失效"));
+    let AccountClientError::Rejected { code, message, .. } = &error else {
+        panic!("结构化 401 应解码为 Rejected")
+    };
+    assert_eq!(code, "invalid_access_token");
+    assert_eq!(message, "登录凭据已失效");
+    assert!(!error.is_permanent_authentication_failure());
+}
+
+#[test]
+fn only_stable_permanent_account_rejections_disable_credential_recovery() {
+    for code in ["account_suspended", "account_not_registered"] {
+        let error = AccountClientError::Rejected {
+            status: 403,
+            code: code.to_owned(),
+            message: "账号不可用".to_owned(),
+            request_id: "req_permanent".to_owned(),
+        };
+        assert!(error.is_permanent_authentication_failure(), "{code}");
+    }
+
+    for code in [
+        "service_unavailable",
+        "temporarily_unavailable",
+        "permission_denied",
+    ] {
+        let error = AccountClientError::Rejected {
+            status: 503,
+            code: code.to_owned(),
+            message: "服务暂时不可用".to_owned(),
+            request_id: "req_transient".to_owned(),
+        };
+        assert!(!error.is_permanent_authentication_failure(), "{code}");
+    }
+}
+
+#[test]
+fn connection_failure_has_a_safe_distinct_category() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("应能分配测试端口");
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+
+    let error = session(endpoint.clone())
+        .me()
+        .expect_err("已关闭的端口应当连接失败");
+
+    assert_eq!(error.category(), "connection");
+    assert_eq!(
+        error.user_message(),
+        "无法连接 Account 服务，请检查网络或稍后重试"
+    );
+    assert!(!error.to_string().contains(&endpoint));
+    assert!(!format!("{error:?}").contains(&endpoint));
+}
+
+#[test]
+fn account_request_timeout_is_retryable_and_distinct() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("应能监听 loopback 测试端口");
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("客户端应连接测试服务");
+        let _request = read_request(&mut stream);
+        thread::sleep(Duration::from_secs(16));
+    });
+
+    let error = session(endpoint)
+        .me()
+        .expect_err("未响应的服务应当触发客户端超时");
+    server.join().expect("测试服务线程应结束");
+
+    assert_eq!(error.category(), "timeout");
+    assert_eq!(error.user_message(), "Account 服务请求超时，请重试");
+}
+
+#[test]
+fn successful_incompatible_me_response_is_a_contract_error() {
+    let body = r#"{"user":{"id":"wrong-contract"}}"#;
+    let (endpoint, server) =
+        spawn_mock("200 OK", body, &[("X-Request-Id", "req_contract_mismatch")]);
+    let error = session(endpoint)
+        .me()
+        .expect_err("200 响应不符合 /me 契约时必须报契约错误");
+    let request = server.join().expect("测试服务线程应结束");
+
+    assert_request(&request, "GET", "/me");
+    assert_eq!(error.category(), "contract");
+    assert_eq!(error.status(), Some(200));
+    assert_eq!(error.request_id(), Some("req_contract_mismatch"));
+    assert_eq!(
+        error.user_message(),
+        "客户端与 Account 服务版本或响应契约不兼容"
+    );
+    assert!(!error.to_string().contains(body));
+    assert!(!format!("{error:?}").contains(body));
+}
+
+#[test]
+fn non_structured_error_response_does_not_echo_its_body() {
+    let sensitive_body = "upstream debug: provider_secret=must-not-leak";
+    let (endpoint, server) = spawn_mock(
+        "502 Bad Gateway",
+        sensitive_body,
+        &[("X-Request-Id", "req_gateway_01")],
+    );
+    let error = session(endpoint)
+        .me()
+        .expect_err("非结构化错误响应必须报安全响应错误");
+    server.join().expect("测试服务线程应结束");
+
+    assert_eq!(error.category(), "unexpected_response");
+    assert_eq!(error.status(), Some(502));
+    assert_eq!(error.request_id(), Some("req_gateway_01"));
+    assert!(!error.user_message().contains(sensitive_body));
+    assert!(!error.to_string().contains(sensitive_body));
+    assert!(!format!("{error:?}").contains(sensitive_body));
+}
+
+#[test]
+fn truncated_response_body_is_a_safe_response_read_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("应能监听 loopback 测试端口");
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("客户端应连接测试服务");
+        let _request = read_request(&mut stream);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nX-Request-Id: req_truncated_01\r\nConnection: close\r\n\r\n{\"partial\":true}",
+            )
+            .expect("应能写入截断响应");
+    });
+
+    let error = session(endpoint)
+        .me()
+        .expect_err("响应体被截断时必须报读取错误");
+    server.join().expect("测试服务线程应结束");
+
+    assert_eq!(error.category(), "response_read");
+    assert_eq!(error.status(), Some(200));
+    assert_eq!(error.request_id(), Some("req_truncated_01"));
+    assert_eq!(error.user_message(), "读取 Account 服务响应失败，请重试");
 }
 
 fn session(endpoint: String) -> nexora::desktop::AccountSession {

@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.35.0: strict single-process windows and staged Account diagnostics](./0.35.0)
 - [0.34.0: default in-process multi-window hosting and accurate session restoration](./0.34.0)
 - [0.33.2: Windows build and singleton lock fixes with repeatable publishing](./0.33.2)
 - [0.33.1: complete single-process multi-window hosting and per-window navigation](./0.33.1)

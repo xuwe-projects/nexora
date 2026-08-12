@@ -11,7 +11,7 @@ use gpui::{
 use gpui_platform::application;
 use reqwest_client::ReqwestClient;
 
-/// 应用单例、子进程窗口与本地 IPC 协调。
+/// 应用单例与重复启动激活的本地 IPC 协调。
 pub mod process;
 /// 主进程原生系统托盘封装。
 pub mod tray;
@@ -122,9 +122,7 @@ impl fmt::Debug for ApplicationAssets {
 #[derive(Debug)]
 pub struct ApplicationOptions {
     /// 是否由通用运行器创建默认启动窗口。
-    ///
-    /// 设置或注册 Window 子进程会关闭此项，并在 [`Application::initialize`] 中
-    /// 打开唯一目标窗口。
+    /// 关闭后由实现方在 [`Application::initialize`] 中自行安排启动界面。
     pub open_startup_window: bool,
     /// 是否以守护模式启动应用。
     ///

@@ -1,7 +1,6 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
 use std::borrow::Cow;
-use std::time::Duration;
 
 use gpui::{AssetSource, Context, Empty, IntoElement, SharedString, Window, px, size};
 use nexora::{
@@ -82,11 +81,7 @@ fn default_options_are_immediately_usable() {
     assert_eq!(options.initial_path, "/");
     assert_eq!(options.tab_style, ApplicationTabStyle::Tab);
     assert!(!options.sidebar_search);
-    assert!(options.single_instance);
-    assert!(!options.subprocess_windows);
-    assert!(options.restore_window_sessions);
     assert!(options.tray_enabled);
-    assert_eq!(options.child_shutdown_timeout, Duration::from_secs(5));
     assert!(options.application_identity_override.is_none());
     assert_eq!(options.window_size, Some(size(px(900.0), px(640.0))));
     assert_eq!(options.window_min_size, Some(size(px(640.0), px(480.0))));
@@ -115,11 +110,7 @@ fn option_builders_replace_framework_defaults() {
         .window_min_size(720.0, 480.0)
         .activate(false)
         .daemon_mode(true)
-        .single_instance(false)
-        .subprocess_windows(false)
-        .restore_window_sessions(false)
         .tray_enabled(false)
-        .child_shutdown_timeout(Duration::from_secs(9))
         .application_identity("com.example.nexora-studio")
         .startup_display_uuid("display-1");
 
@@ -139,11 +130,7 @@ fn option_builders_replace_framework_defaults() {
     assert_eq!(options.window_min_size, Some(size(px(720.0), px(480.0))));
     assert!(!options.activate);
     assert!(options.daemon_mode);
-    assert!(!options.single_instance);
-    assert!(!options.subprocess_windows);
-    assert!(!options.restore_window_sessions);
     assert!(!options.tray_enabled);
-    assert_eq!(options.child_shutdown_timeout, Duration::from_secs(9));
     assert_eq!(
         options.application_identity_override.as_deref(),
         Some("com.example.nexora-studio")
@@ -152,22 +139,9 @@ fn option_builders_replace_framework_defaults() {
 }
 
 #[test]
-fn default_single_process_window_mode_keeps_window_group_features_enabled() {
+fn strict_single_process_window_mode_keeps_window_group_features_enabled() {
     let options = ApplicationOptions::new();
 
-    assert!(options.single_instance);
-    assert!(!options.subprocess_windows);
-    assert!(options.restore_window_sessions);
-    assert!(options.tray_enabled);
-}
-
-#[test]
-fn subprocess_window_mode_remains_available_by_explicit_opt_in() {
-    let options = ApplicationOptions::new().subprocess_windows(true);
-
-    assert!(options.single_instance);
-    assert!(options.subprocess_windows);
-    assert!(options.restore_window_sessions);
     assert!(options.tray_enabled);
 }
 

@@ -448,6 +448,21 @@ fn window_runtime_validates_typed_route_before_factory_and_dispatches_lifecycle(
     drop(entity);
 }
 
+#[gpui::test]
+fn registered_windows_share_one_gpui_application_loop(cx: &mut TestAppContext) {
+    let first = cx.add_window(|_, _| Empty);
+    let second = cx.add_window(|_, _| Empty);
+
+    assert_eq!(cx.windows().len(), 2);
+    first
+        .update(cx, |_, window, _| window.remove_window())
+        .expect("第一个窗口应能独立关闭");
+    assert_eq!(cx.windows().len(), 1);
+    second
+        .update(cx, |_, window, _| window.remove_window())
+        .expect("第二个窗口应能独立关闭");
+}
+
 static CONSTRUCTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 static INITIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 

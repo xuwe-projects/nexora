@@ -15,7 +15,7 @@ use contracts::{
     error::ErrorEnvelope,
 };
 use reqwest::{
-    Method, StatusCode,
+    Method,
     blocking::{Client, RequestBuilder, Response},
 };
 use serde::{Deserialize, de::DeserializeOwned};
@@ -32,15 +32,12 @@ pub use oidc::{
     OidcClient, OidcConfig, OidcError, OidcPrompt, OidcRevocationResult, OidcSession,
     OidcTokenCache, PendingOidcLogin,
 };
+pub(crate) use runtime::observe_authentication_in;
 pub use runtime::{
     AccountAuthenticationScope, AccountLoginFailure, AccountLoginRuntimeError,
     AccountLoginSnapshot, api_session, authentication_scope, install_authenticator,
     is_authenticated, login_profile, login_session, login_snapshot, login_with_other_account,
     observe_authentication, retry_recovery, set_remember_login, sign_out, start_login,
-};
-pub(crate) use runtime::{
-    AccountProcessState, apply_process_state, observe_authentication_in, observe_process_state,
-    process_state,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -92,10 +89,20 @@ impl AccountClientSection for Settings {
 }
 
 /// 已校验、可直接创建 OIDC 与 Account HTTP 客户端的桌面配置。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AccountClientConfig {
     oidc: OidcConfig,
     api_endpoint: Url,
+}
+
+impl std::fmt::Debug for AccountClientConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AccountClientConfig")
+            .field("oidc", &"configured")
+            .field("api_endpoint", &"redacted")
+            .finish()
+    }
 }
 
 impl AccountClientConfig {
@@ -188,10 +195,18 @@ fn oidc_config_from(settings: &Settings) -> Result<OidcConfig, OidcError> {
 ///
 /// 该类型不保存 access token；每次登录或刷新完成后，使用 [`Self::session`] 创建只存在于
 /// 内存的认证会话。同步请求应放到 GPUI 后台执行器或专用工作线程中运行。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AccountClient {
     http: Client,
     api_endpoint: Url,
+}
+
+impl std::fmt::Debug for AccountClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AccountClient")
+            .finish_non_exhaustive()
+    }
 }
 
 impl AccountClient {
@@ -199,10 +214,14 @@ impl AccountClient {
     ///
     /// # Errors
     ///
-    /// 当前平台无法构造 Reqwest 客户端时返回 [`AccountClientError::Request`]。
+    /// 当前平台无法构造 Reqwest 客户端时返回
+    /// [`AccountClientError::ClientInitialization`]。
     pub fn new(config: &AccountClientConfig) -> Result<Self, AccountClientError> {
         Ok(Self {
-            http: Client::builder().timeout(REQUEST_TIMEOUT).build()?,
+            http: Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|_| AccountClientError::ClientInitialization)?,
             api_endpoint: config.api_endpoint.clone(),
         })
     }
@@ -221,10 +240,18 @@ impl AccountClient {
 ///
 /// UI 仍由应用决定如何打开系统浏览器和展示进度；该类型负责 Provider discovery、loopback
 /// callback、token 交换以及业务账号存在性/状态校验，避免每个桌面应用重复拼装协议步骤。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AccountAuthenticator {
     oidc: OidcClient,
     account: AccountClient,
+}
+
+impl std::fmt::Debug for AccountAuthenticator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AccountAuthenticator")
+            .finish_non_exhaustive()
+    }
 }
 
 impl AccountAuthenticator {
@@ -586,15 +613,24 @@ impl AccountSession {
     where
         T: DeserializeOwned,
     {
-        let response = request.send()?;
+        let response = request.send().map_err(classify_request_error)?;
         if response.status().is_success() {
-            return Ok(response.json()?);
+            let status = response.status().as_u16();
+            let request_id = response_request_id(&response);
+            let body = response
+                .bytes()
+                .map_err(|_| AccountClientError::ResponseRead {
+                    status,
+                    request_id: request_id.clone(),
+                })?;
+            return serde_json::from_slice(&body)
+                .map_err(|_| AccountClientError::Contract { status, request_id });
         }
         Err(rejected(response))
     }
 
     fn send_empty(&self, request: RequestBuilder) -> Result<(), AccountClientError> {
-        let response = request.send()?;
+        let response = request.send().map_err(classify_request_error)?;
         if response.status().is_success() {
             return Ok(());
         }
@@ -603,15 +639,36 @@ impl AccountSession {
 }
 
 /// Account API 配置、网络或服务端拒绝错误。
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum AccountClientError {
-    /// HTTP client 构造、连接、超时或响应 JSON 解析失败。
-    #[error("Account API 请求失败: {0}")]
-    Request(
-        /// Reqwest 返回且不包含 Bearer token 的底层错误。
-        #[from]
-        reqwest::Error,
-    ),
+    /// 当前平台无法初始化 HTTP client。
+    #[error("无法初始化 Account HTTP 客户端")]
+    ClientInitialization,
+    /// 请求未能与 Account 服务建立连接。
+    #[error("无法连接 Account 服务")]
+    Connection,
+    /// Account 请求超过客户端截止时间。
+    #[error("Account 服务请求超时")]
+    Timeout,
+    /// 请求在连接成功前因其他传输原因失败。
+    #[error("Account 服务请求失败")]
+    Request,
+    /// 已收到 HTTP 响应头，但无法完整读取响应体。
+    #[error("Account 服务响应读取失败（status={status}）")]
+    ResponseRead {
+        /// HTTP 状态码。
+        status: u16,
+        /// 响应头中可用的请求 ID。
+        request_id: Option<String>,
+    },
+    /// 成功 HTTP 响应不符合当前 Account 契约。
+    #[error("Account 服务成功响应与客户端契约不兼容（status={status}）")]
+    Contract {
+        /// HTTP 状态码。
+        status: u16,
+        /// 响应头中可用的请求 ID。
+        request_id: Option<String>,
+    },
     /// 服务端使用统一错误契约拒绝请求。
     #[error("Account API 拒绝请求: {message}（code={code}, request_id={request_id}）")]
     Rejected {
@@ -624,9 +681,87 @@ pub enum AccountClientError {
         /// 用于服务端日志检索的请求 ID。
         request_id: String,
     },
+    /// 服务端返回了非结构化错误响应。
+    #[error("Account 服务返回无法识别的错误响应（status={status}）")]
+    UnexpectedResponse {
+        /// HTTP 状态码。
+        status: u16,
+        /// 响应头中可用的请求 ID。
+        request_id: Option<String>,
+    },
+}
+
+impl std::fmt::Debug for AccountClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AccountClientError")
+            .field("category", &self.category())
+            .field("status", &self.status())
+            .field("request_id", &self.request_id())
+            .finish()
+    }
 }
 
 impl AccountClientError {
+    /// 返回不包含 endpoint、token 或响应正文的稳定阶段名称。
+    pub const fn category(&self) -> &'static str {
+        match self {
+            Self::ClientInitialization => "client_initialization",
+            Self::Connection => "connection",
+            Self::Timeout => "timeout",
+            Self::Request => "request",
+            Self::ResponseRead { .. } => "response_read",
+            Self::Contract { .. } => "contract",
+            Self::Rejected { .. } => "rejected",
+            Self::UnexpectedResponse { .. } => "unexpected_response",
+        }
+    }
+
+    /// 返回已收到响应的 HTTP 状态码。
+    pub const fn status(&self) -> Option<u16> {
+        match self {
+            Self::ResponseRead { status, .. }
+            | Self::Contract { status, .. }
+            | Self::Rejected { status, .. }
+            | Self::UnexpectedResponse { status, .. } => Some(*status),
+            Self::ClientInitialization | Self::Connection | Self::Timeout | Self::Request => None,
+        }
+    }
+
+    /// 返回服务端传回的安全请求 ID。
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::ResponseRead { request_id, .. }
+            | Self::Contract { request_id, .. }
+            | Self::UnexpectedResponse { request_id, .. } => request_id.as_deref(),
+            Self::Rejected { request_id, .. }
+                if !request_id.trim().is_empty() && request_id != "unknown" =>
+            {
+                Some(request_id)
+            }
+            Self::ClientInitialization
+            | Self::Connection
+            | Self::Timeout
+            | Self::Request
+            | Self::Rejected { .. } => None,
+        }
+    }
+
+    /// 返回该错误是否明确表示当前 Account 恢复凭据已永久失效。
+    ///
+    /// 连接、超时、临时服务拒绝、响应读取和契约不兼容均返回 `false`；
+    /// 只有服务端稳定错误码已明确证明本地账号不可继续使用时才返回 `true`。
+    pub fn is_permanent_authentication_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Rejected { code, .. }
+                if matches!(
+                    code.as_str(),
+                    "account_suspended" | "account_not_registered"
+                )
+        )
+    }
+
     /// 返回适合在桌面界面中展示且不包含 token 的错误信息。
     pub fn user_message(&self) -> String {
         match self {
@@ -636,7 +771,13 @@ impl AccountClientError {
                 ..
             } if request_id != "unknown" => format!("{message}（请求 ID：{request_id}）"),
             Self::Rejected { message, .. } => message.clone(),
-            Self::Request(_) => "无法连接 Account 服务，请检查网络或稍后重试".to_owned(),
+            Self::ClientInitialization => "无法初始化 Account 客户端，请重试".to_owned(),
+            Self::Connection => "无法连接 Account 服务，请检查网络或稍后重试".to_owned(),
+            Self::Timeout => "Account 服务请求超时，请重试".to_owned(),
+            Self::Request => "Account 服务请求未完成，请重试".to_owned(),
+            Self::ResponseRead { .. } => "读取 Account 服务响应失败，请重试".to_owned(),
+            Self::Contract { .. } => "客户端与 Account 服务版本或响应契约不兼容".to_owned(),
+            Self::UnexpectedResponse { .. } => "Account 服务返回了无法识别的错误响应".to_owned(),
         }
     }
 }
@@ -695,30 +836,48 @@ fn is_loopback(url: &Url) -> bool {
 
 fn rejected(response: Response) -> AccountClientError {
     let status = response.status();
-    let header_request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-        .unwrap_or_else(|| "unknown".to_owned());
-    let envelope = response.json::<ErrorEnvelope>().ok();
+    let header_request_id = response_request_id(&response);
+    let body = match response.bytes() {
+        Ok(body) => body,
+        Err(_) => {
+            return AccountClientError::ResponseRead {
+                status: status.as_u16(),
+                request_id: header_request_id,
+            };
+        }
+    };
+    let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(&body) else {
+        return AccountClientError::UnexpectedResponse {
+            status: status.as_u16(),
+            request_id: header_request_id,
+        };
+    };
     AccountClientError::Rejected {
         status: status.as_u16(),
-        code: envelope
-            .as_ref()
-            .map(|value| value.error.code.clone())
-            .unwrap_or_else(|| fallback_error_code(status)),
-        message: envelope
-            .as_ref()
-            .map(|value| value.error.message.clone())
-            .unwrap_or_else(|| "Account 服务返回了无法识别的错误响应".to_owned()),
-        request_id: envelope
-            .map(|value| value.error.request_id)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(header_request_id),
+        code: envelope.error.code,
+        message: envelope.error.message,
+        request_id: (!envelope.error.request_id.trim().is_empty())
+            .then_some(envelope.error.request_id)
+            .or(header_request_id)
+            .unwrap_or_else(|| "unknown".to_owned()),
     }
 }
 
-fn fallback_error_code(status: StatusCode) -> String {
-    format!("http_{}", status.as_u16())
+fn response_request_id(response: &Response) -> Option<String> {
+    response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn classify_request_error(reason: reqwest::Error) -> AccountClientError {
+    if reason.is_timeout() {
+        AccountClientError::Timeout
+    } else if reason.is_connect() {
+        AccountClientError::Connection
+    } else {
+        AccountClientError::Request
+    }
 }

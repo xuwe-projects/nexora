@@ -1,12 +1,14 @@
 #![cfg(all(feature = "desktop", feature = "derive"))]
 
-use desktop::{ApplicationOptions as DesktopApplicationOptions, process::ChildCommand};
+use std::{fs, path::PathBuf, time::SystemTime};
+
+use configuration::UserConfigStore;
+use desktop::ApplicationOptions as DesktopApplicationOptions;
 use gpui::{Bounds, TestAppContext, WindowBounds, point, px, size};
 use gpui_component::{Size, Theme, ThemeMode};
 use nexora::__private::{
     AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
-    ShellPreferences, WindowSession, WindowSessionRole, WindowTabSession,
-    apply_child_preference_command, restore_appearance_preferences, restore_main_window_options,
+    ShellPreferences, restore_appearance_preferences, restore_main_window_options,
 };
 use theme::{ColorScheme, ThemePreset, ThemeSelection};
 
@@ -14,11 +16,35 @@ fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<gpui::Pixels> {
     Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
 }
 
+struct TestPreferencesFile(PathBuf);
+
+impl TestPreferencesFile {
+    fn new(name: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("测试时间应晚于 Unix epoch")
+            .as_nanos();
+        Self(std::env::temp_dir().join(format!(
+            "nexora-preferences-{name}-{}-{nonce}.toml",
+            std::process::id()
+        )))
+    }
+}
+
+impl Drop for TestPreferencesFile {
+    fn drop(&mut self) {
+        _ = fs::remove_file(&self.0);
+        if let Some(file_name) = self.0.file_name().and_then(|name| name.to_str()) {
+            _ = fs::remove_file(self.0.with_file_name(format!(".{file_name}.lock")));
+        }
+    }
+}
+
 #[test]
 fn shell_preferences_default_to_safe_values() {
     let preferences = ShellPreferences::default();
 
-    assert!(preferences.pinned_tabs.is_empty());
+    assert_eq!(preferences.schema_version, 2);
     assert_eq!(
         preferences.appearance.theme_preset,
         ThemePreset::default().id()
@@ -41,11 +67,13 @@ fn shell_preferences_default_to_safe_values() {
 
 #[test]
 fn old_preferences_use_safe_account_defaults() {
-    let preferences: ShellPreferences = toml::from_str("pinned_tabs = []").unwrap();
+    let mut preferences: ShellPreferences = toml::from_str("pinned_tabs = []").unwrap();
 
     assert!(preferences.account.remember_login);
     assert!(!preferences.account.recovery_allowed);
+    assert!(preferences.migrate_to_current());
     let serialized = toml::to_string(&preferences).unwrap();
+    assert!(!serialized.contains("pinned_tabs"));
     assert!(!serialized.contains("access_token"));
     assert!(!serialized.contains("refresh_token"));
 }
@@ -54,7 +82,7 @@ fn old_preferences_use_safe_account_defaults() {
 fn unknown_workspace_fields_survive_same_schema_round_trip() {
     let preferences: ShellPreferences = toml::from_str(
         r#"
-        schema_version = 1
+        schema_version = 2
         future_scalar = "keep-me"
 
         [future_table]
@@ -71,7 +99,7 @@ fn unknown_workspace_fields_survive_same_schema_round_trip() {
 }
 
 #[test]
-fn schema_zero_preferences_migrate_legacy_tabs_and_geometry_into_main_session() {
+fn schema_zero_preferences_keep_main_geometry_and_drop_legacy_tabs() {
     let mut preferences: ShellPreferences = toml::from_str(
         r#"
         pinned_tabs = ["/", "/users?status=active"]
@@ -91,148 +119,86 @@ fn schema_zero_preferences_migrate_legacy_tabs_and_geometry_into_main_session() 
 
     assert_eq!(preferences.schema_version, 0);
     assert!(preferences.migrate_to_current());
-    assert_eq!(preferences.schema_version, 1);
-    assert!(preferences.pinned_tabs.is_empty());
-    assert!(preferences.main_window.is_none());
-    let main = preferences
-        .windows
-        .iter()
-        .find(|session| session.session_id == "main")
-        .expect("迁移应当创建主窗口会话");
-    assert_eq!(main.role, WindowSessionRole::MainShell);
-    assert_eq!(main.display_uuid.as_deref(), Some("display-legacy"));
-    assert_eq!(main.tabs.len(), 2);
-    assert!(main.tabs.iter().all(|tab| tab.pinned));
+    assert_eq!(preferences.schema_version, 2);
+    let main = preferences.main_window.as_ref().expect("应保留主窗口位置");
+    assert_eq!(main.display_uuid, "display-legacy");
+    assert_eq!(
+        main.bounds,
+        PersistedWindowBounds::Windowed {
+            x: 10,
+            y: 20,
+            width: 900,
+            height: 640,
+        }
+    );
+    let serialized = toml::to_string_pretty(&preferences).unwrap();
+    assert!(!serialized.contains("pinned_tabs"));
+    assert!(!serialized.contains("windows"));
 }
 
 #[test]
-fn window_tab_move_is_clamped_to_its_pin_partition() {
-    let mut session = WindowSession {
-        session_id: "shell-1".to_owned(),
-        tabs: [
-            ("pinned-a", true),
-            ("pinned-b", true),
-            ("regular-a", false),
-            ("regular-b", false),
+fn schema_one_extracts_only_main_window_and_clears_all_sessions() {
+    let mut preferences: ShellPreferences = toml::from_str(
+        r#"
+        schema_version = 1
+        future_scalar = "keep-me"
+        pinned_tabs = ["/legacy"]
+
+        [[windows]]
+        session_id = "shell-extra"
+        display_uuid = "display-extra"
+        active_tab = "ignored"
+
+        [[windows]]
+        session_id = "main"
+        display_uuid = "display-main"
+        active_tab = "ignored-main"
+
+        [windows.bounds]
+        state = "maximized"
+        x = 30
+        y = 40
+        width = 1200
+        height = 800
+
+        [appearance]
+        theme_preset = "nexora"
+        color_scheme = "dark"
+        font_size = 18
+        component_size = "large"
+
+        [table_layouts.users]
+        columns = [
+            { key = "name", width = 240.0 },
+            { key = "status", width = 120.0 },
         ]
-        .into_iter()
-        .map(|(route_id, pinned)| WindowTabSession {
-            route_id: route_id.to_owned(),
-            location: format!("/{route_id}"),
-            pinned,
-        })
-        .collect(),
-        ..WindowSession::default()
-    };
+        "#,
+    )
+    .expect("schema 1 窗口会话应当可读");
 
-    assert!(session.move_tab_within_partition(3, 0));
+    assert!(preferences.migrate_to_current());
+    assert_eq!(preferences.schema_version, 2);
     assert_eq!(
-        session
-            .tabs
-            .iter()
-            .map(|tab| tab.route_id.as_str())
-            .collect::<Vec<_>>(),
-        ["pinned-a", "pinned-b", "regular-b", "regular-a"]
+        preferences.main_window.as_ref().unwrap().display_uuid,
+        "display-main"
     );
-    assert!(session.move_tab_within_partition(0, 3));
-    assert_eq!(
-        session
-            .tabs
-            .iter()
-            .map(|tab| tab.route_id.as_str())
-            .collect::<Vec<_>>(),
-        ["pinned-b", "pinned-a", "regular-b", "regular-a"]
-    );
+    assert!(matches!(
+        preferences.main_window.as_ref().unwrap().bounds,
+        PersistedWindowBounds::Maximized { .. }
+    ));
+    assert_eq!(preferences.appearance.color_scheme, "dark");
+    assert!(preferences.table_layouts.contains_key("users"));
+
+    let serialized = toml::to_string_pretty(&preferences).unwrap();
+    assert!(!serialized.contains("[[windows]]"));
+    assert!(!serialized.contains("pinned_tabs"));
+    assert!(!serialized.contains("active_tab"));
+    assert!(serialized.contains("future_scalar = \"keep-me\""));
 }
 
 #[test]
-fn queued_window_close_wins_over_final_session_patches_during_exit() {
-    let main = WindowSession::main();
-    let closed = WindowSession {
-        session_id: "shell-closed".to_owned(),
-        role: WindowSessionRole::Shell,
-        location: Some("/before-close".to_owned()),
-        ..WindowSession::default()
-    };
-    let open = WindowSession {
-        session_id: "shell-open".to_owned(),
-        role: WindowSessionRole::Shell,
-        location: Some("/before-exit".to_owned()),
-        ..WindowSession::default()
-    };
-    let mut preferences = ShellPreferences::default();
-    preferences.windows = vec![main, closed.clone(), open.clone()];
-
-    let mut closed_after = preferences.clone();
-    closed_after
-        .windows
-        .iter_mut()
-        .find(|session| session.session_id == closed.session_id)
-        .expect("待关闭窗口会话应当存在")
-        .location = Some("/final-close-state".to_owned());
-    let closed_patch = serde_json::json!({
-        "before": preferences,
-        "after": closed_after,
-    });
-    assert!(
-        apply_child_preference_command(
-            &mut preferences,
-            closed.session_id.as_str(),
-            ChildCommand::WindowSessionPatch {
-                patch: closed_patch,
-            },
-        )
-        .expect("关闭前的最终窗口会话 patch 应当有效")
-    );
-
-    let open_before = preferences.clone();
-    let mut open_after = open_before.clone();
-    open_after
-        .windows
-        .iter_mut()
-        .find(|session| session.session_id == open.session_id)
-        .expect("退出时仍打开的窗口会话应当存在")
-        .location = Some("/final-open-state".to_owned());
-    let open_patch = serde_json::json!({
-        "before": open_before,
-        "after": open_after,
-    });
-    assert!(
-        apply_child_preference_command(
-            &mut preferences,
-            open.session_id.as_str(),
-            ChildCommand::WindowSessionPatch { patch: open_patch },
-        )
-        .expect("退出时仍打开窗口的最终会话 patch 应当有效")
-    );
-    assert!(
-        apply_child_preference_command(
-            &mut preferences,
-            closed.session_id.as_str(),
-            ChildCommand::WindowClosed,
-        )
-        .expect("窗口关闭命令应当可以应用")
-    );
-
-    assert!(
-        preferences
-            .windows
-            .iter()
-            .all(|session| session.session_id != closed.session_id)
-    );
-    assert_eq!(
-        preferences
-            .windows
-            .iter()
-            .find(|session| session.session_id == open.session_id)
-            .and_then(|session| session.location.as_deref()),
-        Some("/final-open-state")
-    );
-}
-
-#[test]
-fn old_startup_display_config_reads_and_is_cleaned_on_next_save() {
-    let preferences: ShellPreferences = toml::from_str(
+fn retired_fields_are_cleaned_on_next_save() {
+    let mut preferences: ShellPreferences = toml::from_str(
         r#"
         pinned_tabs = ["/", "/users"]
         startup_display_uuid = "legacy-display"
@@ -240,21 +206,81 @@ fn old_startup_display_config_reads_and_is_cleaned_on_next_save() {
     )
     .expect("旧 workspace.toml 应当可以读取");
 
-    assert_eq!(preferences.pinned_tabs, ["/", "/users"]);
     assert_eq!(
         preferences.appearance,
         ShellAppearancePreferences::default()
     );
     assert!(preferences.main_window.is_none());
+    assert!(preferences.migrate_to_current());
 
     let serialized = toml::to_string_pretty(&preferences).expect("偏好应当可以重新序列化");
     assert!(!serialized.contains("startup_display_uuid"));
+    assert!(!serialized.contains("pinned_tabs"));
+}
+
+#[test]
+fn later_preference_write_retries_a_failed_session_migration() {
+    let file = TestPreferencesFile::new("retry-migration");
+    fs::write(
+        &file.0,
+        r#"
+        schema_version = 1
+        revision = 7
+        pinned_tabs = ["/legacy"]
+
+        [[windows]]
+        session_id = "main"
+        display_uuid = "display-main"
+
+        [windows.bounds]
+        state = "fullscreen"
+        x = 30
+        y = 40
+        width = 1200
+        height = 800
+
+        [[windows]]
+        session_id = "shell-extra"
+        active_tab = "/users"
+
+        [appearance]
+        theme_preset = "nexora"
+        color_scheme = "dark"
+        font_size = 18
+        component_size = "large"
+        "#,
+    )
+    .expect("应能写入历史偏好测试文件");
+    let store = UserConfigStore::<ShellPreferences>::at_path(&file.0);
+
+    let mut startup = store
+        .load_versioned_or_default()
+        .expect("schema 1 偏好应可加载");
+    assert!(startup.migrate_to_current());
+    assert!(
+        startup.main_window.is_some(),
+        "本次启动必须立即使用迁移结果"
+    );
+
+    store
+        .update_versioned(|latest| {
+            latest.migrate_to_current();
+            latest.account.remember_login = false;
+        })
+        .expect("后续普通偏好写入应重试并保存迁移");
+
+    let saved = fs::read_to_string(&file.0).expect("应能读取迁移后的偏好");
+    assert!(!saved.contains("[[windows]]"));
+    assert!(!saved.contains("pinned_tabs"));
+    assert!(saved.contains("display_uuid = \"display-main\""));
+    assert!(saved.contains("state = \"fullscreen\""));
+    assert!(saved.contains("color_scheme = \"dark\""));
+    assert!(saved.contains("remember_login = false"));
 }
 
 #[test]
 fn shell_preferences_serialize_round_trip() {
     let mut preferences = ShellPreferences::default();
-    preferences.pinned_tabs = vec!["/".to_owned(), "/reports".to_owned()];
     preferences.appearance = ShellAppearancePreferences {
         theme_preset: "nexora".to_owned(),
         color_scheme: "dark".to_owned(),
@@ -298,7 +324,7 @@ fn preference_field_updates_preserve_unrelated_fields() {
     preferences.appearance = original_appearance.clone();
     preferences.main_window = Some(original_window.clone());
 
-    preferences.pinned_tabs = vec!["/users".to_owned()];
+    preferences.account.remember_login = false;
 
     assert_eq!(preferences.appearance, original_appearance);
     assert_eq!(preferences.main_window, Some(original_window));

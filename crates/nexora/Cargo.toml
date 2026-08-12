@@ -34,7 +34,6 @@ desktop = [
     "dep:ui",
     "dep:url",
     "dep:updater",
-    "dep:uuid",
     "dep:contracts",
     "dep:oidc",
     "dep:reqwest",
@@ -85,7 +84,6 @@ tracing = { workspace = true, optional = true }
 ui = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 updater = { workspace = true, optional = true, features = ["runtime"] }
-uuid = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { workspace = true }
