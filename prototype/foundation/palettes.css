@@ -1,0 +1,137 @@
+/*
+ * 【多配色候选】供横向对比淘汰 —— 均未落地到真实主题
+ *
+ * 真源仍是 crates/theme/themes/nexora.json。本文件把「中性骨架」（背景/文字/边框/
+ * 语义色）固定，各配色方案只覆盖「强调色系」（primary / link / selection / sidebar
+ * 主色），这样对比时唯一变量就是主色，便于你干脆地保留/淘汰。
+ *
+ * 维度：data-theme = light|dark ，data-palette = linear|neutral|slate|teal
+ *   linear 为默认（不写 data-palette 时生效）。
+ */
+
+:root {
+  --radius: 6px;
+  --radius-lg: 8px;
+  --font-size-base: 14px;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+
+  /* ==== 中性骨架 · 亮色（所有配色共享，略带冷调）==== */
+  --background: #ffffff;
+  --foreground: #1a1a23;
+  --border: #e6e6ea;
+  --input-border: #d8d8de;
+  --muted-bg: #f4f4f6;
+  --muted-fg: #6a6a76;
+  --accent-bg: #f0f0f5;
+  --accent-fg: #1a1a23;
+  --secondary-bg: #ededf0;
+  --secondary-fg: #2a2a35;
+  --group-box-bg: #f7f7f9;
+  --group-box-fg: #1a1a23;
+  --popover-bg: #ffffff;
+  --popover-fg: #1a1a23;
+  --table-bg: #ffffff;
+  --tab-bg: #00000000;
+  --tab-active-bg: #ffffff;
+  --tab-active-fg: #1a1a23;
+  --tab-bar-bg: #f0f1f4;
+  --title-bar-bg: #f0f1f4;
+  --title-bar-border: #e6e6ea;
+  --sidebar-bg: #f4f5f7;
+  /* 三级明度台阶（中性，跨方案共享）：chrome 最沉 → canvas 居中 → surface 最亮 */
+  --canvas: #fafafb;
+  --surface: #ffffff;
+  --surface-2: #f4f4f6;
+  --shadow-sm: 0 1px 2px rgba(16,16,20,0.05), 0 1px 3px rgba(16,16,20,0.05);
+  --shadow-card: 0 1px 3px rgba(16,16,20,0.06), 0 4px 12px rgba(16,16,20,0.04);
+  --sidebar-fg: #2a2a35;
+  --sidebar-border: #e6e6ea;
+  --sidebar-accent-bg: #eeeef3;
+  --sidebar-accent-fg: #1a1a23;
+  /* 语义色（共享，收敛饱和度）*/
+  --danger-bg: #d64545;  --danger-fg: #ffffff;
+  --success-bg: #2f9e57; --success-fg: #ffffff;
+  --warning-bg: #c2790b; --warning-fg: #ffffff;
+  --info-bg: #0e7490;    --info-fg: #ffffff;
+
+  /* ==== 默认强调色 = linear 亮色 ==== */
+  --primary-bg: #5b5bd6;
+  --primary-hover-bg: #6a6ee6;
+  --primary-active-bg: #4d51c4;
+  --primary-fg: #ffffff;
+  --link-fg: #5b5bd6;
+  --link-hover-fg: #6a6ee6;
+  --link-active-fg: #4d51c4;
+  --selection-bg: #5b5bd633;
+  --sidebar-primary-bg: #5b5bd6;
+  --sidebar-primary-fg: #ffffff;
+}
+
+/* ==== 中性骨架 · 暗色（所有配色共享）==== */
+:root[data-theme="dark"] {
+  --background: #16161a;
+  --foreground: #ededf2;
+  --border: #2a2a33;
+  --input-border: #35353f;
+  --muted-bg: #1e1e24;
+  --muted-fg: #9a9aa6;
+  --accent-bg: #26262e;
+  --accent-fg: #ededf2;
+  --secondary-bg: #2a2a33;
+  --secondary-fg: #ededf2;
+  --group-box-bg: #1c1c22;
+  --group-box-fg: #ededf2;
+  --popover-bg: #1c1c22;
+  --popover-fg: #ededf2;
+  --table-bg: #1c1c22;
+  --tab-bg: #00000000;
+  --tab-active-bg: #1c1c22;
+  --tab-active-fg: #ededf2;
+  --tab-bar-bg: #0f0f12;
+  --title-bar-bg: #0f0f12;
+  --title-bar-border: #2a2a33;
+  --sidebar-bg: #0f0f12;
+  /* 三级明度台阶（暗色：越亮越浮起）*/
+  --canvas: #16161a;
+  --surface: #1c1c22;
+  --surface-2: #24242c;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.5), 0 6px 16px rgba(0,0,0,0.35);
+  --sidebar-fg: #d4d4dc;
+  --sidebar-border: #2a2a33;
+  --sidebar-accent-bg: #26262e;
+  --sidebar-accent-fg: #ededf2;
+  --danger-bg: #e05656;  --danger-fg: #ffffff;
+  --success-bg: #35c46a; --success-fg: #0c0c10;
+  --warning-bg: #e0a020; --warning-fg: #0c0c10;
+  --info-bg: #22b8cf;    --info-fg: #0c0c10;
+
+  /* 默认强调色 = linear 暗色 */
+  --primary-bg: #5b5fd6;
+  --primary-hover-bg: #6a6ee6;
+  --primary-active-bg: #4d51c4;
+  --primary-fg: #ffffff;
+  --link-fg: #a3a3f5;
+  --link-hover-fg: #b6b6f8;
+  --link-active-fg: #c4c4fa;
+  --selection-bg: #6a6ee64d;
+  --sidebar-primary-bg: #5b5fd6;
+  --sidebar-primary-fg: #ffffff;
+}
+/* ==== neutral · 中性无彩（近黑/近白主按钮，无品牌色）==== */
+:root[data-palette="neutral"] {
+  --primary-bg: #18181b;  --primary-hover-bg: #2a2a2e; --primary-active-bg: #000000; --primary-fg: #ffffff;
+  --link-fg: #18181b;     --link-hover-fg: #52525b;    --link-active-fg: #000000;
+  --selection-bg: #18181b1f;
+  --sidebar-primary-bg: #18181b; --sidebar-primary-fg: #ffffff;
+}
+:root[data-palette="neutral"][data-theme="dark"] {
+  --primary-bg: #fafafa;  --primary-hover-bg: #e4e4e7; --primary-active-bg: #ffffff; --primary-fg: #16161a;
+  --link-fg: #d4d4dc;     --link-hover-fg: #ededf2;    --link-active-fg: #ffffff;
+  --selection-bg: #fafafa26;
+  --sidebar-primary-bg: #fafafa; --sidebar-primary-fg: #16161a;
+}
+
+/* slate / teal 已淘汰：最终保留 linear（默认）+ neutral 两套内置配色。 */
+

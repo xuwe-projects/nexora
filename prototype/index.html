@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-palette="linear">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexora UI 原型索引</title>
+  <link rel="stylesheet" href="foundation/palettes.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font-family); background: var(--background); color: var(--foreground); padding: 56px; }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; }
+    .sub { margin-top: 8px; color: var(--muted-fg); font-size: 14px; line-height: 1.6; }
+    .grid { margin-top: 32px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    a.card { display: block; border: 1px solid var(--border); border-radius: var(--radius-lg);
+      padding: 20px; text-decoration: none; color: inherit; background: var(--group-box-bg); transition: border-color .15s; }
+    a.card:hover { border-color: var(--primary-bg); }
+    .card h3 { font-size: 16px; font-weight: 600; }
+    .card p { margin-top: 6px; font-size: 13px; color: var(--muted-fg); line-height: 1.5; }
+    .note { margin-top: 32px; font-size: 12px; color: var(--muted-fg); line-height: 1.7;
+      border-top: 1px solid var(--border); padding-top: 20px; }
+    .swatches { display: flex; gap: 8px; margin-top: 14px; }
+    .sw { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--muted-fg); }
+    .sw i { width: 30px; height: 30px; border-radius: 8px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Nexora UI 原型</h1>
+    <p class="sub">网页原型工作区。每个界面右上/顶部都有配色 + 明暗切换器，用于横向对比 4 套候选配色。
+      定稿后照 <code>mapping.md</code> 翻译成 gpui + gpui-component。</p>
+
+    <div class="swatches">
+      <div class="sw"><i style="background:#5b5bd6"></i>蓝紫 Linear（默认）</div>
+      <div class="sw"><i style="background:#18181b"></i>中性无彩</div>
+    </div>
+
+    <div class="grid">
+      <a class="card" href="screens/login-gate/index.html">
+        <h3>登录门禁</h3>
+        <p>全窗登录页：品牌、认证块、统一背景装饰、构建号。对应 crates/ui/src/login_gate.rs。</p>
+      </a>
+      <a class="card" href="screens/app-shell/index.html">
+        <h3>主 Shell + 用户列表（有状态 Feature）</h3>
+        <p>侧边栏 + CRUD 数据页：标题栏、命令面板、状态 Tabs、筛选、表格、滚动分页联动。</p>
+      </a>
+      <a class="card" href="screens/roles/index.html">
+        <h3>角色列表（无状态 Feature）</h3>
+        <p>对比示例：未配置状态维度，不渲染状态 Tabs；只有关键词筛选、静态小表。</p>
+      </a>
+      <a class="card" href="screens/settings/index.html">
+        <h3>设置窗口</h3>
+        <p>表单密集页：主题选择、颜色模式、字号、开关、下拉。验证配色在控件上的表现。</p>
+      </a>
+    </div>
+
+    <p class="note">
+      配色候选放在 <code>foundation/palettes.css</code>；中性骨架固定，各方案只换强调色，对比公平。<br>
+      真实主题真源是 <code>crates/theme/themes/nexora.json</code>，原型阶段不改动，定稿后再同步。
+    </p>
+  </div>
+</body>
+</html>

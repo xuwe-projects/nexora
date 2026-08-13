@@ -1,0 +1,26 @@
+/* 原型切换器工具条样式，固定在顶部居中。仅原型预览用。 */
+#proto-switcher {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; z-index: 9999;
+  padding: 6px 8px; border-radius: 10px;
+  background: rgba(20, 20, 26, 0.82); backdrop-filter: blur(8px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+#proto-switcher .sw-label { font-size: 11px; color: #9a9aa6; padding: 0 6px 0 4px; }
+#proto-switcher .sw-btn {
+  font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: #d4d4dc;
+}
+#proto-switcher .sw-btn:hover { background: rgba(255, 255, 255, 0.08); }
+#proto-switcher .sw-btn.active { background: #ffffff; color: #16161a; font-weight: 600; }
+#proto-switcher .sw-sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.15); margin: 0 6px; }
+#proto-switcher .sw-home { font-size: 12px; color: #9a9aa6; text-decoration: none; padding: 5px 8px; margin-left: 2px; }
+#proto-switcher .sw-home:hover { color: #ededf2; }
+
+/* 预览页统一背景 */
+body.proto-stage {
+  background: #6b7280; min-height: 100vh; margin: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px; padding: 72px 40px 40px;
+}

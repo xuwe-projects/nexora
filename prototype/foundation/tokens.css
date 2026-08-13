@@ -1,0 +1,118 @@
+/*
+ * Nexora 设计 token —— 唯一真源镜像
+ *
+ * 本文件由 crates/theme/themes/nexora.json 手工镜像而来，供 prototype/ 下的网页原型使用。
+ * 规则：原型里所有颜色、圆角、字号只能引用这里的变量，禁止出现裸十六进制色值。
+ * 这样网页原型和真实 gpui 主题共用同一套调色板，翻译到 gpui-component 时才能一一对应。
+ *
+ * 若 nexora.json 变更，必须同步更新本文件（它是镜像，不是新的真源）。
+ */
+
+:root {
+  /* 半径与字号（对应 gpui-component radius / Theme.font_size） */
+  --radius: 6px;
+  --radius-lg: 8px;
+  --font-size-base: 14px;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+
+  /* ---- Nexora Light（默认）---- */
+  --accent-bg: #edf2f7;
+  --accent-fg: #20242b;
+  --background: #ffffff;
+  --border: #dfe3e8;
+  --danger-bg: #dc2626;
+  --danger-fg: #ffffff;
+  --foreground: #16181d;
+  --group-box-bg: #f7f8fa;
+  --group-box-fg: #16181d;
+  --info-bg: #0891b2;
+  --info-fg: #ffffff;
+  --input-border: #cfd5dd;
+  --link-fg: #2563eb;
+  --link-active-fg: #1d4ed8;
+  --link-hover-fg: #1e40af;
+  --muted-bg: #f3f4f6;
+  --muted-fg: #68707d;
+  --popover-bg: #ffffff;
+  --popover-fg: #16181d;
+  --primary-bg: #2563eb;
+  --primary-active-bg: #1e40af;
+  --primary-fg: #ffffff;
+  --primary-hover-bg: #1d4ed8;
+  --scrollbar-bg: #00000000;
+  --scrollbar-thumb-bg: #98a2b3b3;
+  --scrollbar-thumb-hover-bg: #667085dd;
+  --secondary-bg: #e5e7eb;
+  --secondary-fg: #20242b;
+  --selection-bg: #3b82f680;
+  --sidebar-bg: #f7f8fa;
+  --sidebar-accent-bg: #e8edf4;
+  --sidebar-accent-fg: #20242b;
+  --sidebar-border: #dfe3e8;
+  --sidebar-fg: #20242b;
+  --sidebar-primary-bg: #2563eb;
+  --sidebar-primary-fg: #ffffff;
+  --success-bg: #16a34a;
+  --success-fg: #ffffff;
+  --table-bg: #f7f8fa;
+  --tab-bg: #00000000;
+  --tab-active-bg: #ffffff;
+  --tab-active-fg: #16181d;
+  --tab-bar-bg: #f7f8fa;
+  --title-bar-bg: #f7f8fa;
+  --title-bar-border: #dfe3e8;
+  --warning-bg: #d97706;
+  --warning-fg: #ffffff;
+}
+
+/* ---- Nexora Dark（[data-theme="dark"] 或 prefers-color-scheme）---- */
+:root[data-theme="dark"] {
+  --accent-bg: #2a2e35;
+  --accent-fg: #f3f4f6;
+  --background: #181a1f;
+  --border: #363a42;
+  --danger-bg: #ef4444;
+  --danger-fg: #ffffff;
+  --foreground: #f5f7fa;
+  --group-box-bg: #202329;
+  --group-box-fg: #f5f7fa;
+  --info-bg: #22d3ee;
+  --info-fg: #111317;
+  --input-border: #454a54;
+  --link-fg: #60a5fa;
+  --link-active-fg: #93c5fd;
+  --link-hover-fg: #bfdbfe;
+  --muted-bg: #24272e;
+  --muted-fg: #9aa1ad;
+  --popover-bg: #202329;
+  --popover-fg: #f5f7fa;
+  --primary-bg: #60a5fa;
+  --primary-active-bg: #3b82f6;
+  --primary-fg: #111317;
+  --primary-hover-bg: #93c5fd;
+  --scrollbar-bg: #00000000;
+  --scrollbar-thumb-bg: #5f6673b3;
+  --scrollbar-thumb-hover-bg: #858d9bdd;
+  --secondary-bg: #30343b;
+  --secondary-fg: #f3f4f6;
+  --selection-bg: #3b82f680;
+  --sidebar-bg: #14161a;
+  --sidebar-accent-bg: #2a2e35;
+  --sidebar-accent-fg: #f3f4f6;
+  --sidebar-border: #30343b;
+  --sidebar-fg: #e5e7eb;
+  --sidebar-primary-bg: #60a5fa;
+  --sidebar-primary-fg: #111317;
+  --success-bg: #22c55e;
+  --success-fg: #111317;
+  --table-bg: #202329;
+  --tab-bg: #00000000;
+  --tab-active-bg: #24272e;
+  --tab-active-fg: #f5f7fa;
+  --tab-bar-bg: #14161a;
+  --title-bar-bg: #14161a;
+  --title-bar-border: #30343b;
+  --warning-bg: #f59e0b;
+  --warning-fg: #111317;
+}

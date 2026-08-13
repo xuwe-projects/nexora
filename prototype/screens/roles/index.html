@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexora · 角色（无状态 Feature）原型</title>
+  <link rel="stylesheet" href="../../foundation/palettes.css" />
+  <link rel="stylesheet" href="../../foundation/titlebar.css" />
+  <link rel="stylesheet" href="../../foundation/switcher.css" />
+  <script src="../../foundation/switcher.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font-family); font-size: var(--font-size-base); color: var(--foreground); }
+    svg { display: block; }
+
+    .window {
+      width: 1080px; height: 720px; display: flex;
+      background: var(--background); color: var(--foreground);
+      border-radius: 10px; overflow: hidden; position: relative;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+    }
+
+    /* ==== 侧边栏 ==== */
+    .sidebar { width: 236px; flex: none; display: flex; flex-direction: column; overflow: hidden;
+      background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border);
+      transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+    /* 侧边栏 header 里的收起/展开按钮：和品牌在一起，一眼知道它管侧边栏 */
+    .sb-toggle { margin-left: auto; width: 28px; height: 28px; border-radius: 6px; flex: none;
+      display: inline-flex; align-items: center; justify-content: center; color: var(--muted-fg); cursor: pointer; }
+    .sb-toggle:hover { background: var(--sidebar-accent-bg); color: var(--sidebar-fg); }
+    .sb-toggle svg { width: 17px; height: 17px; }
+    .sb-brand { min-width: 0; }
+    /* macOS 交通灯浮在侧边栏左上（视觉见 titlebar.css）；侧边栏 header 下移让开 */
+    .traffic { position: absolute; top: 13px; left: 13px; z-index: 20; }
+    :root[data-os="macos"] .sb-header { padding-top: 40px; }
+    .sb-header { padding: 16px 14px 12px; display: flex; align-items: center; gap: 10px; }
+    .sb-logo { width: 30px; height: 30px; border-radius: 8px; flex: none;
+      background: linear-gradient(135deg, var(--sidebar-primary-bg), var(--link-active-fg));
+      color: var(--sidebar-primary-fg); display: flex; align-items: center; justify-content: center; font-weight: 700; }
+    .sb-title { font-size: 14px; font-weight: 600; color: var(--sidebar-fg); }
+    .sb-sub { font-size: 11px; color: var(--muted-fg); }
+
+    .sb-search { margin: 4px 12px 12px; display: flex; align-items: center; gap: 8px;
+      height: 32px; padding: 0 10px; border-radius: var(--radius);
+      background: var(--background); border: 1px solid var(--input-border); color: var(--muted-fg); font-size: 13px; cursor: text; }
+    .sb-search svg { width: 14px; height: 14px; flex: none; }
+    .sb-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--foreground); font-size: 13px; font-family: inherit; }
+    .sb-search input::placeholder { color: var(--muted-fg); }
+    /* 收起态：搜索塌成一个图标按钮，点击展开并聚焦 */
+    .sidebar.collapsed .sb-search { cursor: pointer; }
+    .sidebar.collapsed .sb-search:hover { background: var(--sidebar-accent-bg); }
+    /* 导航被过滤隐藏的条目 */
+    .sb-item.hide, .sb-section.hide { display: none; }
+
+    .sb-nav { flex: 1; overflow-y: auto; padding: 0 8px; }
+    .sb-section { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--muted-fg); padding: 12px 10px 6px; }
+    .sb-item { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px;
+      border-radius: var(--radius); color: var(--sidebar-fg); font-size: 13px; cursor: pointer; margin-bottom: 2px; }
+    .sb-item svg { width: 16px; height: 16px; flex: none; opacity: 0.85; }
+    .sb-item:hover { background: var(--sidebar-accent-bg); }
+    .sb-item.active { background: var(--sidebar-primary-bg); color: var(--sidebar-primary-fg); font-weight: 500; }
+    .sb-item.active svg { opacity: 1; }
+    .sb-badge { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+      background: var(--muted-bg); color: var(--muted-fg); }
+    .sb-item.active .sb-badge { background: rgba(255,255,255,0.22); color: var(--sidebar-primary-fg); }
+
+    .sb-footer { padding: 10px 12px; border-top: 1px solid var(--sidebar-border);
+      display: flex; align-items: center; gap: 10px; }
+    .sb-avatar { width: 30px; height: 30px; border-radius: 50%; flex: none;
+      background: var(--accent-bg); color: var(--accent-fg); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+    .sb-user { font-size: 13px; font-weight: 500; color: var(--sidebar-fg); }
+    .sb-role { font-size: 11px; color: var(--muted-fg); }
+    .sb-more { margin-left: auto; color: var(--muted-fg); }
+    .sb-more svg { width: 16px; height: 16px; }
+
+    /* 侧边栏收起态：只留图标 */
+    .sidebar.collapsed { width: 60px; }
+    /* macOS 交通灯一簇约 65px 宽，收起态不能比它窄，否则灯会溢出到主区 */
+    :root[data-os="macos"] .sidebar.collapsed { width: 72px; }
+    .sidebar.collapsed .sb-title, .sidebar.collapsed .sb-sub,
+    .sidebar.collapsed .sb-item .lbl, .sidebar.collapsed .sb-badge,
+    .sidebar.collapsed .sb-section, .sidebar.collapsed .sb-user,
+    .sidebar.collapsed .sb-role, .sidebar.collapsed .sb-more,
+    .sidebar.collapsed .sb-userinfo,
+    .sidebar.collapsed .sb-search .txt { display: none; }
+    .sidebar.collapsed .sb-header { flex-direction: column; gap: 8px; justify-content: center; padding-left: 0; padding-right: 0; }
+    .sidebar.collapsed .sb-toggle { margin-left: 0; }
+    .sidebar.collapsed .sb-search { justify-content: center; padding: 0; border: none; background: transparent; }
+    .sidebar.collapsed .sb-item { justify-content: center; padding: 0; }
+    .sidebar.collapsed .sb-footer { justify-content: center; gap: 0; padding-left: 0; padding-right: 0; }
+
+    /* ==== 主内容区 ==== */
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--canvas); }
+
+    /* 全局工具栏（独立一行，兼作标题栏拖拽区）：左 收起 / 中 全局搜索 / 右 通知等 + Win 控制 */
+    .globalbar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px;
+      padding: 0 8px 0 10px; background: var(--tab-bar-bg); border-bottom: 1px solid var(--border); }
+    .gb-left { display: flex; align-items: center; gap: 2px; }
+    .gb-center { flex: 1; display: flex; justify-content: center; }
+    .gb-right { display: flex; align-items: center; gap: 2px; align-self: stretch; }
+    .gsearch { width: 100%; max-width: 420px; height: 30px; display: flex; align-items: center; gap: 8px;
+      padding: 0 12px; border-radius: 8px; border: 1px solid var(--input-border); background: var(--surface);
+      color: var(--muted-fg); font-size: 13px; cursor: text; }
+    .gsearch svg { width: 14px; height: 14px; }
+    .gsearch .kbd { margin-left: auto; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--muted-bg); color: var(--muted-fg); }
+
+    /* 顶部 Feature 标签栏（对应 ApplicationTabStyle::Tab / opened_tabs / pinned_tabs） */
+    .tabbar { height: 42px; flex: none; display: flex; align-items: flex-end; gap: 3px;
+      padding: 0 10px 0 10px; background: var(--tab-bar-bg); border-bottom: 1px solid var(--border); }
+    .tab { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 12px;
+      border-radius: 7px 7px 0 0; font-size: 13px; color: var(--muted-fg); cursor: pointer; max-width: 190px; }
+    .tab svg.ico { width: 14px; height: 14px; flex: none; opacity: 0.8; }
+    .tab .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab:hover { background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--foreground); }
+    .tab.active { background: var(--surface); color: var(--foreground); font-weight: 500;
+      border: 1px solid var(--border); border-bottom-color: var(--surface); margin-bottom: -1px; }
+    .tab.active svg.ico { opacity: 1; }
+    .tab .close { width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-fg); }
+    .tab .close:hover { background: var(--muted-bg); color: var(--foreground); }
+    .tab .close svg { width: 11px; height: 11px; }
+    .tab .pin svg { width: 12px; height: 12px; color: var(--primary-bg); }
+    .tabbar .newtab { width: 26px; height: 26px; margin-bottom: 2px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-fg); cursor: pointer; }
+    .tabbar .newtab:hover { background: var(--surface); color: var(--foreground); }
+    .tabbar .newtab svg { width: 15px; height: 15px; }
+
+    /* 全局按钮区：钉在标签栏右侧，永远可见，可自由扩展（通知/更新/帮助/命令面板…） */
+    .tabbar .global { margin-left: auto; display: flex; align-items: center; gap: 2px; margin-bottom: 6px; padding-left: 8px; }
+    .gbtn { width: 30px; height: 30px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center;
+      color: var(--muted-fg); cursor: pointer; position: relative; }
+    .gbtn:hover { background: var(--surface); color: var(--foreground); }
+    .gbtn svg { width: 17px; height: 17px; }
+    .gbtn .dot { position: absolute; top: 5px; right: 6px; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--danger-bg); border: 1.5px solid var(--tab-bar-bg); }
+
+    /* 窗口控制按钮视觉见 titlebar.css；此处仅让它在全局栏内贴边撑满高度 */
+    .globalbar .winctl { align-self: stretch; }
+    :root[data-os="windows"] .globalbar { padding-right: 0; }
+
+    /* 面包屑细带：随激活标签变化的上下文，独立于内容、始终可见 */
+    /* 标签前的导航控制：后退 / 前进 / 刷新（刷新 = 重载当前 Feature） */
+    .tabnav { display: flex; align-items: center; gap: 1px; margin-bottom: 6px; margin-right: 8px; }
+    .tabnav .nb { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-fg); cursor: pointer; }
+    .tabnav .nb:hover { background: var(--surface); color: var(--foreground); }
+    .tabnav .nb.disabled { opacity: 0.35; pointer-events: none; }
+    .tabnav .nb svg { width: 16px; height: 16px; }
+
+    .content { flex: 1; min-height: 0; overflow: hidden; padding: 26px 30px; display: flex; flex-direction: column; }
+
+    /* 页头：直接落在画布上，不装盒 */
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.4px; display: flex; align-items: center; gap: 10px; }
+    .page-title .count { font-size: 13px; font-weight: 600; color: var(--muted-fg); background: var(--muted-bg); padding: 2px 9px; border-radius: 20px; }
+    .page-desc { margin-top: 6px; font-size: 13px; color: var(--muted-fg); }
+    .head-actions { display: flex; align-items: center; gap: 8px; }
+
+    .btn { height: 36px; padding: 0 14px; display: inline-flex; align-items: center; gap: 7px;
+      border-radius: var(--radius); font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; white-space: nowrap; }
+    .btn svg { width: 15px; height: 15px; }
+    .btn.primary { background: var(--primary-bg); color: var(--primary-fg); }
+    .btn.primary:hover { background: var(--primary-hover-bg); }
+    .btn.ghost { background: transparent; color: var(--muted-fg); }
+    .btn.ghost:hover { background: var(--accent-bg); color: var(--foreground); }
+    .btn.outline { background: transparent; border-color: var(--border); color: var(--foreground); }
+    .btn.outline:hover { background: var(--accent-bg); }
+    .icon-btn { width: 36px; height: 36px; padding: 0; justify-content: center; }
+
+    /* 快捷筛选标签（把统计融进来）+ 下方细分隔线 */
+    .quickbar { margin-top: 22px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); }
+    .qf { display: flex; align-items: center; gap: 7px; padding: 8px 12px; font-size: 13px; color: var(--muted-fg);
+      cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .qf:hover { color: var(--foreground); }
+    .qf.active { color: var(--foreground); font-weight: 600; border-bottom-color: var(--primary-bg); }
+    .qf .n { font-size: 11px; color: var(--muted-fg); background: var(--muted-bg); padding: 1px 7px; border-radius: 10px; }
+    .qf.active .n { color: var(--primary-fg); background: var(--primary-bg); }
+
+    /* 筛选/操作并成一行，落在画布上 */
+    .toolbar { margin-top: 18px; display: flex; align-items: flex-end; gap: 12px; }
+    /* 每个筛选项 = LabeledControl：小号 muted 标签在上、控件在下 */
+    .filter-field { display: flex; flex-direction: column; gap: 5px; }
+    .filter-field > .flabel { font-size: 12px; color: var(--muted-fg); }
+    .search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; width: 280px;
+      border-radius: var(--radius); border: 1px solid var(--input-border); background: var(--surface); color: var(--muted-fg); font-size: 13px; }
+    .search svg { width: 15px; height: 15px; }
+    .select { height: 36px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 130px;
+      border-radius: var(--radius); border: 1px solid var(--input-border); background: var(--surface); font-size: 13px; color: var(--foreground); }
+    .select svg { width: 14px; height: 14px; color: var(--muted-fg); }
+    .spacer { flex: 1; }
+
+    /* 表格：唯一浮起的主内容面 */
+    .table { margin-top: 16px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-card);
+      display: flex; flex-direction: column; min-height: 0; flex: 1; }
+    .tr { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr 40px; align-items: center; }
+    .thead { background: transparent; border-bottom: 1px solid var(--border); flex: none; }
+    /* 表体内部滚动：滚动即翻页，与底部分页器联动 */
+    .tbody { overflow-y: auto; flex: 1; min-height: 0; }
+    .thead .th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted-fg); padding: 12px 18px; }
+    .row { border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); transition: background .1s; }
+    .row:last-child { border-bottom: none; }
+    .row:hover { background: var(--accent-bg); }
+    .td { padding: 14px 18px; font-size: 13px; }
+    .td.name { display: flex; align-items: center; gap: 10px; font-weight: 500; }
+    .td .mini-av { width: 26px; height: 26px; border-radius: 50%; flex: none; background: var(--accent-bg);
+      color: var(--accent-fg); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+    .td .sub { font-size: 11px; color: var(--muted-fg); font-weight: 400; }
+    .td.muted { color: var(--muted-fg); }
+    .tag { font-size: 11px; padding: 2px 9px; border-radius: 20px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+    .tag::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .tag.ok { color: var(--success-bg); background: color-mix(in srgb, var(--success-bg) 14%, transparent); }
+    .tag.warn { color: var(--warning-bg); background: color-mix(in srgb, var(--warning-bg) 16%, transparent); }
+    .tag.off { color: var(--muted-fg); background: var(--muted-bg); }
+    .rowmore { color: var(--muted-fg); display: flex; justify-content: center; cursor: pointer; }
+    .rowmore svg { width: 16px; height: 16px; }
+
+    .pager { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; flex: none; font-size: 13px; color: var(--muted-fg); }
+    .pager .pages { display: flex; gap: 4px; }
+    .pager .pg { min-width: 30px; height: 30px; padding: 0 8px; border-radius: var(--radius);
+      border: 1px solid var(--border); background: var(--background); color: var(--foreground);
+      display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+    .pager .pg.active { background: var(--primary-bg); color: var(--primary-fg); border-color: var(--primary-bg); }
+
+    /* 命令面板 Dialog：点击搜索或 ⌘K 弹出（对应 gpui-component Dialog + Input + List） */
+    .cmdk-mask { position: absolute; inset: 0; background: rgba(10, 10, 14, 0.45); backdrop-filter: blur(2px);
+      display: none; align-items: flex-start; justify-content: center; padding-top: 88px; z-index: 100; }
+    .cmdk-mask.open { display: flex; animation: cmdk-fade 0.12s ease; }
+    @keyframes cmdk-fade { from { opacity: 0; } to { opacity: 1; } }
+    .cmdk { width: 560px; max-width: calc(100% - 48px); background: var(--popover-bg);
+      border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,0.4); overflow: hidden;
+      animation: cmdk-pop 0.14s cubic-bezier(0.34, 1.4, 0.7, 1); }
+    @keyframes cmdk-pop { from { transform: translateY(-8px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+    .cmdk-input { display: flex; align-items: center; gap: 10px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+    .cmdk-input svg { width: 18px; height: 18px; color: var(--muted-fg); flex: none; }
+    .cmdk-input input { flex: 1; border: none; outline: none; background: transparent; color: var(--foreground);
+      font-size: 15px; font-family: inherit; }
+    .cmdk-input input::placeholder { color: var(--muted-fg); }
+    .cmdk-input .esc { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: var(--muted-bg); color: var(--muted-fg); }
+    .cmdk-list { max-height: 320px; overflow-y: auto; padding: 8px; }
+    .cmdk-group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--muted-fg); padding: 8px 10px 4px; }
+    .cmdk-item { display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    .cmdk-item svg { width: 16px; height: 16px; color: var(--muted-fg); flex: none; }
+    .cmdk-item .meta { margin-left: auto; font-size: 11px; color: var(--muted-fg); }
+    .cmdk-item.active, .cmdk-item:hover { background: var(--accent-bg); }
+    .cmdk-item.active svg { color: var(--primary-bg); }
+  </style>
+</head>
+<body class="proto-stage">
+  <div class="window">
+    <!-- macOS 交通灯：系统原生绘制，浮在窗口左上（此处为示意） -->
+    <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+
+    <aside class="sidebar">
+      <div class="sb-header">
+        <div class="sb-logo">N</div>
+        <div class="sb-brand">
+          <div class="sb-title">Nexora</div>
+          <div class="sb-sub">Console</div>
+        </div>
+        <div class="sb-toggle" id="toggle-nav" title="收起 / 展开导航">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+        </div>
+      </div>
+      <div class="sb-search" id="nav-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input class="txt" type="text" placeholder="过滤导航…" />
+      </div>
+      <nav class="sb-nav">
+        <div class="sb-section">工作区</div>
+        <div class="sb-item" title="概览">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V21H3z"/></svg>
+          <span class="lbl">概览</span>
+        </div>
+        <div class="sb-item" title="用户">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span class="lbl">用户</span>
+          <span class="sb-badge">128</span>
+        </div>
+        <div class="sb-item active" title="角色">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <span class="lbl">角色</span>
+        </div>
+        <div class="sb-item" title="项目">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h6"/></svg>
+          <span class="lbl">项目</span>
+          <span class="sb-badge">7</span>
+        </div>
+        <div class="sb-section">系统</div>
+        <div class="sb-item" title="审计日志">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+          <span class="lbl">审计日志</span>
+        </div>
+        <div class="sb-item" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="lbl">设置</span>
+        </div>
+      </nav>
+      <div class="sb-footer">
+        <div class="sb-avatar">A</div>
+        <div class="sb-userinfo" style="min-width:0">
+          <div class="sb-user">Alice Chen</div>
+          <div class="sb-role">管理员</div>
+        </div>
+        <span class="sb-more">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+        </span>
+      </div>
+    </aside>
+    <main class="main">
+      <!-- 全局工具栏（独立一行 · 兼标题栏）：左 收起导航 / 中 全局搜索 / 右 通知等 + Win 控制 -->
+      <div class="globalbar">
+        <div class="gb-center">
+          <div class="gsearch">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <span>搜索或跳转到…</span>
+            <span class="kbd">⌘K</span>
+          </div>
+        </div>
+        <div class="gb-right">
+          <div class="gbtn" title="通知">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            <span class="dot"></span>
+          </div>
+          <div class="gbtn" title="检查更新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5A10 10 0 0 1 18.4 4.6L21.5 8M22 12.5a10 10 0 0 1-16.4 6.9L2.5 16"/></svg>
+          </div>
+          <div class="gbtn" title="帮助">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+          </div>
+          <div class="winctl">
+            <div class="wc" title="最小化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16"/></svg></div>
+            <div class="wc" title="最大化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></div>
+            <div class="wc close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabbar">
+        <!-- 标签前的导航控制：后退 / 前进 / 刷新（刷新 = 重载当前 Feature） -->
+        <div class="tabnav">
+          <div class="nb" title="后退"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></div>
+          <div class="nb disabled" title="前进"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></div>
+          <div class="nb" title="刷新当前页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>
+        </div>
+        <div class="tab">
+          <span class="pin"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 4v6l-2 4h10l-2-4V4z"/><path d="M12 14v6" stroke="currentColor" stroke-width="2"/></svg></span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V21H3z"/></svg>
+          <span class="t">概览</span>
+        </div>
+        <div class="tab">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <span class="t">用户</span>
+          <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div class="tab active">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          <span class="t">角色</span>
+          <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div class="tab">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          <span class="t">审计日志</span>
+          <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div class="newtab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      </div>
+
+      <div class="content">
+        <!-- 页头 -->
+        <div class="page-head">
+          <div>
+            <div class="page-title">角色 <span class="count">5</span></div>
+            <div class="page-desc">定义权限集合，并分配给工作区成员。</div>
+          </div>
+          <div class="head-actions">
+            <div class="btn primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              新建角色
+            </div>
+          </div>
+        </div>
+
+        <!-- 无状态 Tabs：角色 Feature 未配置状态维度，这里不渲染快捷筛选标签 -->
+
+        <!-- 筛选：只有关键词（无状态、无角色二级筛选）-->
+        <div class="toolbar">
+          <div class="filter-field">
+            <span class="flabel">关键词</span>
+            <div class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              搜索角色名称
+            </div>
+          </div>
+        </div>
+
+        <!-- 表格：角色列表（数量少，静态无滚动分页）-->
+        <div class="table" style="flex:none">
+          <div class="tr thead" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+            <div class="th">角色</div>
+            <div class="th">描述</div>
+            <div class="th">成员</div>
+            <div class="th"></div>
+          </div>
+          <div class="tbody" style="overflow:visible">
+            <div class="tr row" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+              <div class="td name"><span class="mini-av" style="border-radius:7px;background:color-mix(in srgb,var(--primary-bg) 16%,transparent);color:var(--primary-bg)">管</span>管理员</div>
+              <div class="td muted">完全访问：用户、角色、项目、系统设置与审计。</div>
+              <div class="td muted">4</div>
+              <div class="td rowmore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+            </div>
+            <div class="tr row" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+              <div class="td name"><span class="mini-av" style="border-radius:7px">开</span>开发者</div>
+              <div class="td muted">读写项目与任务，无系统设置与成员管理权限。</div>
+              <div class="td muted">68</div>
+              <div class="td rowmore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+            </div>
+            <div class="tr row" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+              <div class="td name"><span class="mini-av" style="border-radius:7px">审</span>审计员</div>
+              <div class="td muted">只读全部资源，可导出审计日志。</div>
+              <div class="td muted">6</div>
+              <div class="td rowmore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+            </div>
+            <div class="tr row" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+              <div class="td name"><span class="mini-av" style="border-radius:7px">访</span>访客</div>
+              <div class="td muted">只读被明确共享的项目。</div>
+              <div class="td muted">12</div>
+              <div class="td rowmore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+            </div>
+            <div class="tr row" style="grid-template-columns: 1.4fr 2.4fr 0.8fr 40px">
+              <div class="td name"><span class="mini-av" style="border-radius:7px">运</span>运维</div>
+              <div class="td muted">管理部署、更新与系统健康，不含成员管理。</div>
+              <div class="td muted">3</div>
+              <div class="td rowmore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <!-- 命令面板 Dialog -->
+    <div class="cmdk-mask" id="cmdk">
+      <div class="cmdk">
+        <div class="cmdk-input">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" placeholder="搜索用户、页面，或执行命令…" autofocus />
+          <span class="esc">Esc</span>
+        </div>
+        <div class="cmdk-list">
+          <div class="cmdk-group">跳转</div>
+          <div class="cmdk-item active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+            用户 <span class="meta">工作区</span>
+          </div>
+          <div class="cmdk-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            角色 <span class="meta">工作区</span>
+          </div>
+          <div class="cmdk-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+            审计日志 <span class="meta">系统</span>
+          </div>
+          <div class="cmdk-group">操作</div>
+          <div class="cmdk-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            新建用户 <span class="meta">⌘N</span>
+          </div>
+          <div class="cmdk-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+            打开设置 <span class="meta">⌘,</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    var sidebar = document.querySelector(".sidebar");
+    var cmdk = document.getElementById("cmdk");
+    document.addEventListener("click", function (e) {
+      if (e.target.closest("#toggle-nav")) sidebar.classList.toggle("collapsed");
+      if (e.target.closest(".gsearch")) cmdk.classList.add("open");
+      if (e.target === cmdk) cmdk.classList.remove("open");
+    });
+    document.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); cmdk.classList.toggle("open"); }
+      if (e.key === "Escape") cmdk.classList.remove("open");
+    });
+
+    // ===== 表格：内部滚动分页，与底部页码双向联动 =====
+    (function () {
+      var TOTAL = 128, PAGE_SIZE = 10;
+      var pageCount = Math.ceil(TOTAL / PAGE_SIZE);
+      var names = ["Alice Chen","Bob Wang","Carol Liu","David Zhao","Emma Sun","Frank Wu","Grace Li","Henry Ma","Ivy Xu","Jack Zhou"];
+      var roles = ["管理员","开发者","审计员","开发者","访客"];
+      var tags = [["ok","正常"],["ok","正常"],["warn","待激活"],["off","已停用"],["ok","正常"]];
+      var times = ["2 分钟前","1 小时前","3 天前","2 周前","昨天","刚刚","5 小时前"];
+      var tbody = document.getElementById("tbody");
+      var pages = document.getElementById("pages");
+      var info = document.getElementById("pager-info");
+      if (!tbody || !pages) return; // 无状态/静态表页面（如角色页）不启用滚动分页
+      var dots = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+      // 生成 128 行
+      var html = "";
+      for (var i = 0; i < TOTAL; i++) {
+        var nm = names[i % names.length], init = nm[0], t = tags[i % tags.length];
+        html += '<div class="tr row">'
+          + '<div class="td name"><span class="mini-av">' + init + '</span><div>' + nm + ' #' + (i+1)
+          + '<div class="sub">' + nm.split(" ")[0].toLowerCase() + (i+1) + '@nexora.dev</div></div></div>'
+          + '<div class="td muted">' + roles[i % roles.length] + '</div>'
+          + '<div class="td"><span class="tag ' + t[0] + '">' + t[1] + '</span></div>'
+          + '<div class="td muted">' + times[i % times.length] + '</div>'
+          + '<div class="td rowmore">' + dots + '</div></div>';
+      }
+      tbody.innerHTML = html;
+      info.textContent = "共 " + TOTAL + " 条 · 每页 " + PAGE_SIZE + " 条";
+
+      var current = 1, suppress = false;
+      function rowH() { var r = tbody.querySelector(".row"); return r ? r.offsetHeight : 56; }
+      function pageTop(p) { return (p - 1) * PAGE_SIZE * rowH(); }
+
+      // 构建页码（省略号策略：首、末、当前±1）
+      function buildPages() {
+        var want = {1:1, 2:1}; want[pageCount] = 1; want[pageCount-1] = 1;
+        want[current] = 1; want[current-1] = 1; want[current+1] = 1;
+        var items = '<span class="pg" data-go="prev">‹</span>';
+        var last = 0;
+        for (var p = 1; p <= pageCount; p++) {
+          if (!want[p]) continue;
+          if (last && p - last > 1) items += '<span class="pg" style="pointer-events:none;border:none;background:none">…</span>';
+          items += '<span class="pg' + (p === current ? ' active' : '') + '" data-go="' + p + '">' + p + '</span>';
+          last = p;
+        }
+        items += '<span class="pg" data-go="next">›</span>';
+        pages.innerHTML = items;
+      }
+
+      function setPage(p, scroll) {
+        p = Math.max(1, Math.min(pageCount, p));
+        if (p === current && !scroll) return;
+        current = p; buildPages();
+        if (scroll) { suppress = true; tbody.scrollTo({ top: pageTop(p), behavior: "smooth" });
+          setTimeout(function () { suppress = false; }, 350); }
+      }
+
+      // 点页码 → 表格滚到该页
+      pages.addEventListener("click", function (e) {
+        var el = e.target.closest("[data-go]"); if (!el) return;
+        var go = el.getAttribute("data-go");
+        if (go === "prev") setPage(current - 1, true);
+        else if (go === "next") setPage(current + 1, true);
+        else setPage(parseInt(go, 10), true);
+      });
+
+      // 滚动表格 → 页码跟随
+      tbody.addEventListener("scroll", function () {
+        if (suppress) return;
+        var p = Math.floor(tbody.scrollTop / (PAGE_SIZE * rowH())) + 1;
+        if (p !== current) { current = Math.max(1, Math.min(pageCount, p)); buildPages(); }
+      });
+
+      buildPages();
+    })();
+
+    // 侧边栏搜索：收起态点它 → 展开并聚焦；打字 → 过滤导航条目
+    var navSearch = document.getElementById("nav-search");
+    var navInput = navSearch.querySelector("input");
+    navSearch.addEventListener("click", function () {
+      if (sidebar.classList.contains("collapsed")) {
+        sidebar.classList.remove("collapsed");
+        setTimeout(function () { navInput.focus(); }, 220);
+      }
+    });
+    navInput.addEventListener("input", function () {
+      var q = navInput.value.trim().toLowerCase();
+      document.querySelectorAll(".sb-nav .sb-item").forEach(function (item) {
+        var label = (item.getAttribute("title") || "").toLowerCase();
+        item.classList.toggle("hide", q && label.indexOf(q) === -1);
+      });
+      // 分组标题：该组下无可见条目则隐藏
+      document.querySelectorAll(".sb-nav .sb-section").forEach(function (sec) {
+        var any = false, n = sec.nextElementSibling;
+        while (n && !n.classList.contains("sb-section")) {
+          if (n.classList.contains("sb-item") && !n.classList.contains("hide")) any = true;
+          n = n.nextElementSibling;
+        }
+        sec.classList.toggle("hide", !any);
+      });
+    });
+  </script>
+</body>
+</html>

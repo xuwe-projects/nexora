@@ -104,6 +104,64 @@ use nexora::{ApplicationOptions, ApplicationTabStyle};
 ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
 ```
 
+## Registering application themes
+
+Downstream applications can embed multiple gpui-component `ThemeSet` JSON files. Every preset must
+contain exactly one `light` and one `dark` theme. Stable IDs use ASCII `snake_case`; `nexora` and
+the legacy alias `xuwe` are reserved:
+
+```rust
+use nexora::{ApplicationOptions, ApplicationThemePreset};
+
+ApplicationOptions::new()
+    .theme_preset(ApplicationThemePreset::new(
+        "acme",
+        "Acme",
+        include_str!("../themes/acme.json"),
+    ))
+    .theme_preset(ApplicationThemePreset::new(
+        "ocean_blue",
+        "Ocean Blue",
+        include_str!("../themes/ocean-blue.json"),
+    ))
+    .default_theme_preset("acme")
+```
+
+`Application::validate()` and `run()` validate the JSON, IDs, light/dark pairing, and application
+default before entering the GPUI event loop. The default Settings window lists Nexora and every
+application preset. A selection updates the Shell, Features, Settings, and all existing or newly
+created windows, then persists through the shared Shell preferences.
+
+Startup priority is an existing valid user preference, then the application default, then Nexora.
+An existing valid Nexora preference remains selected after an upgrade adds a branded default. A
+removed preset falls back to the application default and the repaired ID is persisted. Resetting
+appearance also selects the application default and follows the system color scheme.
+
+A custom `SettingsWindow` should use the stable facade instead of mutating gpui-component's global
+Theme directly:
+
+```rust
+use gpui::App;
+use nexora::desktop::{
+    ColorScheme, default_theme_preset_id, set_color_scheme, set_theme_preset,
+    theme_presets, theme_selection,
+};
+
+fn select_brand_theme(cx: &mut App) -> Result<(), nexora::desktop::ThemeSelectionError> {
+    for preset in theme_presets(cx) {
+        println!("{}: {}", preset.id(), preset.label());
+    }
+    set_theme_preset("acme", cx)?;
+    set_color_scheme(ColorScheme::System, cx);
+    let _current = theme_selection(cx);
+    let _application_default = default_theme_preset_id(cx);
+    Ok(())
+}
+```
+
+Successful changes refresh all windows and persist automatically. An unknown ID returns a
+structured error without changing the current selection.
+
 ## Panel Header Actions
 
 Applications can install actions for the right side of the main panel header from

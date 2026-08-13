@@ -1,0 +1,120 @@
+/*
+ * 【提案配色】Linear 风蓝紫 —— 尚未落地到真实主题
+ *
+ * 这是对 Nexora 默认配色的改进提案，仅供 prototype 预览。真源仍是
+ * crates/theme/themes/nexora.json；确认采纳后再同步改真实主题。
+ *
+ * 设计意图（现代克制）：
+ * - 中性灰打底（略带冷调），主色统一为蓝紫，取代原来偏“企业蓝”的 #2563eb。
+ * - 暗色主按钮不再反转为“浅底深字”，改用较深蓝紫 + 白字，保证是明确的主操作
+ *   且白字对比达标（暗色 primary #5b5fd6 配白字 ≈ 4.8:1）。
+ * - 语义色（danger/success/warning/info）保持可识别但收敛饱和度。
+ */
+
+:root {
+  --radius: 6px;
+  --radius-lg: 8px;
+  --font-size-base: 14px;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+
+  /* ---- Linear 亮色 ---- */
+  --accent-bg: #f0f0f5;
+  --accent-fg: #1a1a23;
+  --background: #ffffff;
+  --border: #e6e6ea;
+  --danger-bg: #d64545;
+  --danger-fg: #ffffff;
+  --foreground: #1a1a23;
+  --group-box-bg: #f7f7f9;
+  --group-box-fg: #1a1a23;
+  --info-bg: #0e7490;
+  --info-fg: #ffffff;
+  --input-border: #d8d8de;
+  --link-fg: #5b5bd6;
+  --link-active-fg: #4d51c4;
+  --link-hover-fg: #6a6ee6;
+  --muted-bg: #f4f4f6;
+  --muted-fg: #6a6a76;
+  --popover-bg: #ffffff;
+  --popover-fg: #1a1a23;
+  --primary-bg: #5b5bd6;
+  --primary-active-bg: #4d51c4;
+  --primary-fg: #ffffff;
+  --primary-hover-bg: #6a6ee6;
+  --scrollbar-bg: #00000000;
+  --scrollbar-thumb-bg: #9a9aa6b3;
+  --scrollbar-thumb-hover-bg: #6a6a76dd;
+  --secondary-bg: #ededf0;
+  --secondary-fg: #2a2a35;
+  --selection-bg: #5b5bd633;
+  --sidebar-bg: #f7f7f9;
+  --sidebar-accent-bg: #eeeef3;
+  --sidebar-accent-fg: #1a1a23;
+  --sidebar-border: #e6e6ea;
+  --sidebar-fg: #2a2a35;
+  --sidebar-primary-bg: #5b5bd6;
+  --sidebar-primary-fg: #ffffff;
+  --success-bg: #2f9e57;
+  --success-fg: #ffffff;
+  --table-bg: #f7f7f9;
+  --tab-bg: #00000000;
+  --tab-active-bg: #ffffff;
+  --tab-active-fg: #1a1a23;
+  --tab-bar-bg: #f7f7f9;
+  --title-bar-bg: #f7f7f9;
+  --title-bar-border: #e6e6ea;
+  --warning-bg: #c2790b;
+  --warning-fg: #ffffff;
+}
+
+/* ---- Linear 暗色 ---- */
+:root[data-theme="dark"] {
+  --accent-bg: #26262e;
+  --accent-fg: #ededf2;
+  --background: #16161a;
+  --border: #2a2a33;
+  --danger-bg: #e05656;
+  --danger-fg: #ffffff;
+  --foreground: #ededf2;
+  --group-box-bg: #1c1c22;
+  --group-box-fg: #ededf2;
+  --info-bg: #22b8cf;
+  --info-fg: #0c0c10;
+  --input-border: #35353f;
+  --link-fg: #a3a3f5;
+  --link-active-fg: #c4c4fa;
+  --link-hover-fg: #b6b6f8;
+  --muted-bg: #1e1e24;
+  --muted-fg: #9a9aa6;
+  --popover-bg: #1c1c22;
+  --popover-fg: #ededf2;
+  --primary-bg: #5b5fd6;
+  --primary-active-bg: #4d51c4;
+  --primary-fg: #ffffff;
+  --primary-hover-bg: #6a6ee6;
+  --scrollbar-bg: #00000000;
+  --scrollbar-thumb-bg: #55555fb3;
+  --scrollbar-thumb-hover-bg: #7a7a86dd;
+  --secondary-bg: #2a2a33;
+  --secondary-fg: #ededf2;
+  --selection-bg: #6a6ee64d;
+  --sidebar-bg: #131317;
+  --sidebar-accent-bg: #26262e;
+  --sidebar-accent-fg: #ededf2;
+  --sidebar-border: #2a2a33;
+  --sidebar-fg: #d4d4dc;
+  --sidebar-primary-bg: #5b5fd6;
+  --sidebar-primary-fg: #ffffff;
+  --success-bg: #35c46a;
+  --success-fg: #0c0c10;
+  --table-bg: #1c1c22;
+  --tab-bg: #00000000;
+  --tab-active-bg: #1e1e24;
+  --tab-active-fg: #ededf2;
+  --tab-bar-bg: #131317;
+  --title-bar-bg: #131317;
+  --title-bar-border: #2a2a33;
+  --warning-bg: #e0a020;
+  --warning-fg: #0c0c10;
+}

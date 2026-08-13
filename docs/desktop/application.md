@@ -97,6 +97,60 @@ use nexora::{ApplicationOptions, ApplicationTabStyle};
 ApplicationOptions::new().tab_style(ApplicationTabStyle::Underline)
 ```
 
+## 注册应用主题
+
+下游应用可以把多个 gpui-component `ThemeSet` JSON 编译进二进制。每个预设必须恰好包含
+一个 `light` 和一个 `dark` 主题；稳定 ID 使用 ASCII `snake_case`，`nexora` 与历史别名
+`xuwe` 为框架保留值：
+
+```rust
+use nexora::{ApplicationOptions, ApplicationThemePreset};
+
+ApplicationOptions::new()
+    .theme_preset(ApplicationThemePreset::new(
+        "acme",
+        "Acme",
+        include_str!("../themes/acme.json"),
+    ))
+    .theme_preset(ApplicationThemePreset::new(
+        "ocean_blue",
+        "Ocean Blue",
+        include_str!("../themes/ocean-blue.json"),
+    ))
+    .default_theme_preset("acme")
+```
+
+Nexora 在 `Application::validate()` 和 `run()` 进入 GPUI 事件循环前校验 JSON、ID、浅深配对
+和默认主题。默认设置窗口会自动列出 Nexora 与全部应用主题；切换后 Shell、业务 Feature、
+Settings 和所有已打开或新建窗口同步更新，并写入 Shell 偏好。
+
+启动选择顺序为“已有有效用户偏好 → 应用默认主题 → Nexora”。旧用户保存的有效 Nexora
+选择不会因为应用后来增加品牌默认主题而改变；已删除主题的历史偏好会回退到应用默认主题并
+自动写回。重置外观时同样恢复应用默认主题和“跟随系统”模式。
+
+自定义 `SettingsWindow` 可以使用稳定 facade，不应直接修改 gpui-component 的全局 Theme：
+
+```rust
+use gpui::App;
+use nexora::desktop::{
+    ColorScheme, default_theme_preset_id, set_color_scheme, set_theme_preset,
+    theme_presets, theme_selection,
+};
+
+fn select_brand_theme(cx: &mut App) -> Result<(), nexora::desktop::ThemeSelectionError> {
+    for preset in theme_presets(cx) {
+        println!("{}: {}", preset.id(), preset.label());
+    }
+    set_theme_preset("acme", cx)?;
+    set_color_scheme(ColorScheme::System, cx);
+    let _current = theme_selection(cx);
+    let _application_default = default_theme_preset_id(cx);
+    Ok(())
+}
+```
+
+成功切换会自动刷新全部窗口并持久化；未知 ID 返回结构化错误且不改变当前选择。
+
 ## 主面板标题栏动作
 
 应用可以在 `Application::initialize` 中安装主面板标题栏右侧动作。Shell 会把这些动作渲染到

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexora · 登录门禁原型</title>
+  <link rel="stylesheet" href="../../foundation/palettes.css" />
+  <link rel="stylesheet" href="../../foundation/titlebar.css" />
+  <link rel="stylesheet" href="../../foundation/switcher.css" />
+  <script src="../../foundation/switcher.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font-family); font-size: var(--font-size-base); color: var(--foreground); }
+
+    /* 桌面窗口，锁定真实 900×640 视口 */
+    .window {
+      width: 900px; height: 640px;
+      background: var(--background);
+      border-radius: 10px; overflow: hidden; position: relative;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+    }
+    /* 全幅背景层：整窗一片，网格从左上淡出到右下，消除左右割裂 */
+    .backdrop { position: absolute; inset: 0; overflow: hidden; }
+    .backdrop .tint {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(900px 700px at 22% 30%, color-mix(in srgb, var(--primary-bg) 12%, transparent), transparent 60%),
+        radial-gradient(700px 600px at 8% 92%, color-mix(in srgb, var(--primary-bg) 7%, transparent), transparent 55%);
+    }
+    .backdrop .grid {
+      position: absolute; inset: -5%;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      /* 网格整幅贯穿，但向右侧认证区平滑淡出，不在中线裁断 */
+      mask-image: linear-gradient(105deg, #000 0%, #000 34%, transparent 62%);
+      -webkit-mask-image: linear-gradient(105deg, #000 0%, #000 34%, transparent 62%);
+      opacity: 0.7;
+    }
+    .backdrop .node {
+      position: absolute; width: 9px; height: 9px; border-radius: 50%;
+      background: var(--primary-bg);
+      box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary-bg) 14%, transparent);
+    }
+    .backdrop .link-line {
+      position: absolute; height: 1px; transform-origin: left center;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--primary-bg) 45%, transparent), transparent);
+    }
+
+    /* 顶部透明标题栏拖拽区 */
+    /* 标题栏：透明拖拽条，两端放平台控制（登录页专属场景：透明、无背景） */
+    .title-bar { position: absolute; top: 0; left: 0; right: 0; height: 38px; z-index: 6;
+      display: flex; align-items: center; padding-left: 13px; }
+    /* winctl 永远靠右：交通灯在 Windows 下 display:none，靠 margin-left:auto 才不会顶到左边 */
+    .title-bar .winctl { height: 100%; margin-left: auto; }
+    /* macOS 交通灯占据左上，品牌与右上操作下移让开 */
+    :root[data-os="macos"] .brand { top: 52px; }
+    :root[data-os="macos"] .top-actions { top: 48px; }
+
+    /* 左上品牌 */
+    .brand { position: absolute; left: 42px; top: 30px; display: flex; align-items: center; gap: 12px; z-index: 3; }
+    .brand .logo {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary-bg), var(--link-active-fg));
+      display: flex; align-items: center; justify-content: center;
+      color: var(--primary-fg); font-weight: 700; font-size: 18px;
+    }
+    .brand .name { font-size: 19px; font-weight: 600; color: var(--foreground); }
+
+    /* 右上操作 */
+    .top-actions { position: absolute; right: 30px; top: 34px; display: flex; gap: 4px; z-index: 3; }
+    .ghost-btn {
+      font-family: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 10px; border-radius: var(--radius); border: none; background: transparent;
+      color: var(--muted-fg); cursor: pointer;
+    }
+    .ghost-btn:hover { background: var(--accent-bg); color: var(--accent-fg); }
+    .ghost-btn svg { width: 15px; height: 15px; }
+
+    /* 认证区：浮在统一背景右侧，不再是独立的右半栏 */
+    .auth {
+      position: absolute; top: 0; bottom: 0; right: 0; width: 46%;
+      display: flex; align-items: center; padding: 0 64px 0 32px; z-index: 2;
+    }
+    .auth-inner { width: 100%; max-width: 340px; }
+    .eyebrow { font-size: 14px; font-weight: 600; color: var(--primary-bg); letter-spacing: 0.2px; }
+    .headline { margin-top: 14px; font-size: 40px; line-height: 1.08; font-weight: 700; color: var(--foreground); letter-spacing: -0.6px; }
+    .subtitle { margin-top: 18px; font-size: 15px; line-height: 1.6; color: var(--muted-fg); }
+
+    .primary-btn {
+      margin-top: 30px; width: 100%; height: 48px;
+      font-family: inherit; font-size: 15px; font-weight: 600;
+      border: none; border-radius: var(--radius);
+      background: var(--primary-bg); color: var(--primary-fg); cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .primary-btn:hover { background: var(--primary-hover-bg); }
+    .primary-btn:active { background: var(--primary-active-bg); }
+
+    .remember { margin-top: 16px; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--foreground); cursor: pointer; }
+    .remember input { width: 16px; height: 16px; accent-color: var(--primary-bg); }
+
+    .protection { margin-top: 24px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted-fg); }
+    .protection .check { width: 18px; height: 18px; color: var(--primary-bg); flex: none; }
+
+    /* 底部：版本 + 构建号（真实数据 version + build_number） */
+    .version { position: absolute; left: 42px; bottom: 26px; font-size: 13px; color: var(--muted-fg); z-index: 3; }
+    .version .build { color: var(--muted-fg); opacity: 0.75; }
+    .version .sep { margin: 0 8px; opacity: 0.5; }
+    .footer-links { position: absolute; right: 34px; bottom: 20px; display: flex; align-items: center; gap: 8px; font-size: 13px; z-index: 3; }
+    .footer-links a { color: var(--muted-fg); text-decoration: none; }
+    .footer-links a:hover { color: var(--link-hover-fg); }
+    .footer-links .dot { color: var(--muted-fg); }
+  </style>
+</head>
+<body class="proto-stage">
+  <div class="window">
+    <div class="backdrop">
+      <div class="tint"></div>
+      <div class="grid"></div>
+      <!-- 连线 + 节点：轻量点缀，暗示“统一身份网络” -->
+      <div class="link-line" style="left: 20%; top: 42%; width: 150px; transform: rotate(24deg);"></div>
+      <div class="link-line" style="left: 16%; top: 64%; width: 120px; transform: rotate(-18deg);"></div>
+      <div class="node" style="left: 20%; top: 42%;"></div>
+      <div class="node" style="left: 34%; top: 55%; width: 7px; height: 7px;"></div>
+      <div class="node" style="left: 16%; top: 64%; width: 7px; height: 7px;"></div>
+    </div>
+
+    <div class="title-bar">
+      <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="winctl">
+        <div class="wc" title="最小化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h16"/></svg></div>
+        <div class="wc" title="最大化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></div>
+        <div class="wc close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></div>
+      </div>
+    </div>
+
+    <div class="brand">
+      <div class="logo">N</div>
+      <div class="name">Nexora</div>
+    </div>
+
+    <div class="top-actions">
+      <button class="ghost-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5A10 10 0 0 1 18.4 4.6L21.5 8M22 12.5a10 10 0 0 1-16.4 6.9L2.5 16"/></svg>
+        检查更新
+      </button>
+      <button class="ghost-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        设置
+      </button>
+    </div>
+
+    <div class="auth">
+      <div class="auth-inner">
+        <div class="eyebrow">安全工作台</div>
+        <div class="headline">从这里开始</div>
+        <div class="subtitle">登录以访问你的项目、任务和团队工作区。</div>
+
+        <button class="primary-btn">使用 Nexora 账户登录</button>
+
+        <label class="remember">
+          <input type="checkbox" checked />
+          保持登录状态
+        </label>
+
+        <div class="protection">
+          <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          由 Nexora 统一身份认证保护
+        </div>
+      </div>
+    </div>
+
+    <div class="version">
+      <span>Console 0.1.0</span>
+      <span class="sep">·</span>
+      <span class="build">Build 142</span>
+    </div>
+    <div class="footer-links">
+      <a href="#">隐私</a>
+      <span class="dot">·</span>
+      <a href="#">帮助</a>
+    </div>
+  </div>
+</body>
+</html>

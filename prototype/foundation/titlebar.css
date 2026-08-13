@@ -1,0 +1,32 @@
+/*
+ * 共享窗口标题栏部件：macOS 交通灯 + Windows/Linux 控制按钮
+ *
+ * 铁律：原型里每个窗口页面都必须包含 TitleBar（对应 gpui-component TitleBar）。
+ * 本文件只定义两平台部件的「视觉」与「按平台显示」的逻辑；具体摆放位置由各页面按自身
+ * 场景决定（Shell 在全局栏两端；登录/设置在各自标题栏两端）。
+ *
+ * 用法：页面引入本文件 + switcher.js（提供 data-os），在标题栏区放：
+ *   <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>   // 左
+ *   <div class="winctl">…最小化/最大化/关闭…</div>                                   // 右
+ *
+ * 真实机制（见 crates/…/title_bar.rs）：
+ * - macOS 交通灯是系统原生绘制，app 只需 appears_transparent + 左侧留约 80px；此处圆点为示意。
+ * - Windows/Linux 控制按钮由 app 自绘（各约 35–42px），点击交给 WindowControlArea。
+ */
+
+/* macOS 交通灯：默认隐藏，仅 macOS 显示 */
+.traffic { display: none; gap: 8px; align-items: center; }
+.traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.traffic .r { background: #ff5f57; }
+.traffic .y { background: #febc2e; }
+.traffic .g { background: #28c840; }
+:root[data-os="macos"] .traffic { display: flex; }
+
+/* Windows/Linux 控制按钮：默认隐藏，仅 Windows 显示（close hover 变红） */
+.winctl { display: none; align-items: stretch; }
+:root[data-os="windows"] .winctl { display: flex; }
+.winctl .wc { width: 42px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--muted-fg); cursor: pointer; }
+.winctl .wc:hover { background: var(--accent-bg); color: var(--foreground); }
+.winctl .wc.close:hover { background: #e81123; color: #fff; }
+.winctl .wc svg { width: 12px; height: 12px; }
