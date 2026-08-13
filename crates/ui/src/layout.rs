@@ -5,9 +5,15 @@
 use gpui::{AnyElement, Context, IntoElement, Pixels, Window, div, prelude::*, px};
 use gpui_component::{ActiveTheme as _, TitleBar, scroll::ScrollableElement as _};
 
+/// 工作区右侧全局栏的固定高度，与视觉原型保持一致。
+pub const WORKSPACE_GLOBAL_BAR_HEIGHT: Pixels = px(44.0);
+
+/// 工作区右侧 Feature 标签栏的固定高度，与视觉原型保持一致。
+pub const WORKSPACE_TAB_BAR_HEIGHT: Pixels = px(42.0);
+
 /// 带窗口顶部栏和侧边导航的桌面工作区布局。
 ///
-/// 该组件负责创建官方 `TitleBar`，并组织“窗口顶部栏 + 左侧导航 + 主内容区”的桌面应用结构。
+/// 该组件负责创建官方 `TitleBar`，并组织“整窗高左侧导航 + 右侧窗口顶部栏 + 主内容区”的桌面应用结构。
 /// 它统一处理 macOS 全屏时的标题栏占位和内容滚动，但不保存业务导航状态，
 /// 也不理解具体 feature、标签页或菜单语义。
 pub struct WorkspaceLayout {
@@ -93,11 +99,11 @@ impl WorkspaceLayout {
 
     /// 将桌面工作区渲染为 GPUI 元素树。
     ///
-    /// 返回元素包含固定的桌面工作区结构：外层全尺寸容器、官方窗口顶部栏、左侧导航区域，
-    /// 以及可以按 feature 需要开启或关闭外层滚动的主内容区域；Sidebar 自己负责展开、折叠与动画。
-    /// macOS 全屏时会释放原本为交通灯保留的左侧空间；颜色和背景读取当前 `gpui-component` 主题，
-    /// 避免业务应用重复处理平台差异或写死视觉样式。
-    pub fn render<T>(self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
+    /// 返回元素包含固定的桌面工作区结构：Sidebar 从窗口顶边延伸到底边，右侧工作区依次放置
+    /// 44px 官方窗口顶部栏、42px Feature 标签栏和剩余主内容区域。主内容可以按 feature 需要
+    /// 开启或关闭外层滚动；Sidebar 自己负责展开、折叠与动画。颜色和背景读取当前
+    /// `gpui-component` 主题，避免业务应用重复处理平台差异或写死视觉样式。
+    pub fn render<T>(self, _window: &mut Window, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
@@ -113,14 +119,14 @@ impl WorkspaceLayout {
             content_scrollable,
         } = self;
         let title_bar = TitleBar::new()
-            .when(
-                cfg!(target_os = "macos") && window.is_fullscreen(),
-                |this| this.pl(px(0.0)),
-            )
+            // 交通灯位于整窗高 Sidebar 内；右侧标题栏不再为它重复保留左侧空白。
+            .pl(px(0.0))
+            .h(WORKSPACE_GLOBAL_BAR_HEIGHT)
             .border_b(px(0.0))
             .child(title_bar_content);
 
         let content_panel = div()
+            .debug_selector(|| "nexora-workspace-content".into())
             .flex_1()
             .min_w_0()
             .min_h_0()
@@ -131,11 +137,13 @@ impl WorkspaceLayout {
         } else {
             content_panel.overflow_hidden().into_any_element()
         };
-        let workspace_panels = div()
+        div()
             .flex()
             .size_full()
             .min_w_0()
             .min_h_0()
+            .bg(background)
+            .text_color(foreground)
             .child(sidebar)
             .child(
                 div()
@@ -146,21 +154,20 @@ impl WorkspaceLayout {
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(tab_bar_content)
+                    .child(title_bar)
+                    .child(
+                        div()
+                            .debug_selector(|| "nexora-workspace-tab-bar".into())
+                            .w_full()
+                            .h(WORKSPACE_TAB_BAR_HEIGHT)
+                            .flex_shrink_0()
+                            .child(tab_bar_content),
+                    )
                     .child(content_panel)
                     .when_some(panel_overlay, |this, panel_overlay| {
                         this.child(panel_overlay)
                     }),
-            );
-
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(background)
-            .text_color(foreground)
-            .child(title_bar)
-            .child(div().flex_1().min_w_0().min_h_0().child(workspace_panels))
+            )
             .into_any_element()
     }
 }

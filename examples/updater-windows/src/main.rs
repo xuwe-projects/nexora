@@ -8,7 +8,7 @@ use gpui_component::{
 };
 use nexora::{
     Application as _, ApplicationLogo, ApplicationOptions, FeatureElement,
-    NavigationContextExt as _, desktop,
+    FeatureReloadAvailability, NavigationContextExt as _, desktop,
 };
 
 #[derive(Default, nexora::Feature)]
@@ -22,6 +22,15 @@ use nexora::{
 struct UpdaterFeature;
 
 impl FeatureElement for UpdaterFeature {
+    fn reload_availability(&self) -> FeatureReloadAvailability {
+        FeatureReloadAvailability::Available
+    }
+
+    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        _ = desktop::check_for_updates(window, cx);
+        gpui::Task::ready(())
+    }
+
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let size = theme::component_size(cx);
         let update_button = desktop::check_for_updates_button("updater-windows-check", cx)

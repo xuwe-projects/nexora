@@ -23,9 +23,9 @@ use configuration::{ConfigurationError, UserConfigStore, VersionedConfiguration}
 use gpui::{Anchor, WindowHandle};
 use gpui::{
     AnyElement, AnyView, App, AssetSource, Bounds, ClickEvent, Context, Entity, Focusable as _,
-    Global, Image, ImageFormat, IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size,
-    Subscription, Task, WeakEntity, Window, WindowBounds, WindowOptions, div, img, point,
-    prelude::*, px, size,
+    Global, Image, ImageFormat, IntoElement as _, Keystroke, MouseButton, Pixels, Render,
+    ScrollHandle, Size, Subscription, Task, WeakEntity, Window, WindowBounds, WindowOptions, div,
+    img, point, prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size as ComponentSize,
@@ -36,6 +36,7 @@ use gpui_component::{
     dialog::{DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState},
+    kbd::Kbd,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{
         Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
@@ -4058,8 +4059,9 @@ impl ApplicationShell {
         }));
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
+        let reserves_macos_traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
         let search_active = self.sidebar_search_query(cx).is_some();
         let NavigationSearchResult {
             sections,
@@ -4082,6 +4084,7 @@ impl ApplicationShell {
                     .w_full()
                     .items_center()
                     .gap_2()
+                    .when(reserves_macos_traffic_lights, |this| this.pt_5())
                     .pb_3()
                     .border_b_1()
                     .border_color(sidebar_border)
@@ -4109,6 +4112,7 @@ impl ApplicationShell {
                 v_flex()
                     .w_full()
                     .gap_2()
+                    .when(reserves_macos_traffic_lights, |this| this.pt_5())
                     .px_2()
                     .pb_3()
                     .border_b_1()
@@ -4552,6 +4556,13 @@ impl ApplicationShell {
 
     fn render_global_title_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
         let toolbar_actions = shell_toolbar_actions(cx);
+        let search_shortcut = Keystroke::parse(if cfg!(target_os = "macos") {
+            "cmd-k"
+        } else {
+            "ctrl-k"
+        })
+        .expect("全局搜索快捷键必须是有效的 GPUI Keystroke");
+        let search_colors = cx.theme().semantic_tokens().colors;
         h_flex()
             .relative()
             .flex_1()
@@ -4561,12 +4572,32 @@ impl ApplicationShell {
             .justify_center()
             .child(
                 Button::new("open-global-search")
-                    .outline()
-                    .small()
+                    .debug_selector(|| "nexora-global-search-trigger".into())
                     .w(px(420.0))
                     .max_w_full()
-                    .icon(IconName::Search)
-                    .label("搜索或跳转到…")
+                    .h(px(30.0))
+                    .px_3()
+                    .rounded(px(8.0))
+                    .bg(search_colors.surface)
+                    .border_color(search_colors.input)
+                    .text_color(search_colors.muted_foreground)
+                    .child(
+                        h_flex()
+                            .size_full()
+                            .min_w_0()
+                            .gap_2()
+                            .justify_start()
+                            .child(Icon::new(IconName::Search).xsmall())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_left()
+                                    .child("搜索或跳转到…"),
+                            )
+                            .child(Kbd::new(search_shortcut)),
+                    )
                     .tooltip("全局搜索")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_search(SearchMode::Global, window, cx);
@@ -4595,11 +4626,11 @@ impl ApplicationShell {
         let title_bar_background = cx.theme().tokens.title_bar;
 
         h_flex()
-            .flex_1()
-            .h_full()
+            .w_full()
+            .h(px(42.0))
+            .flex_shrink_0()
             .min_w_0()
             .overflow_hidden()
-            .gap_2()
             .items_center()
             .child(
                 div()
@@ -4737,7 +4768,7 @@ impl ApplicationShell {
             });
 
         let layout = WorkspaceLayout::new(
-            self.render_sidebar(cx),
+            self.render_sidebar(window, cx),
             self.render_global_title_bar_content(cx),
             self.render_tab_bar_content(cx),
             active_feature,
