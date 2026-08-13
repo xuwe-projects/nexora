@@ -29,9 +29,9 @@ const FORBIDDEN_HTTP_CRATES: [&str; 7] = [
 ];
 const FORBIDDEN_RUNTIMES: [&str; 3] = ["async-std", "async_std", "smol"];
 const GPUI_COMPONENT_GIT: &str = "https://github.com/longbridge/gpui-component";
-const GPUI_COMPONENT_REV: &str = "031555662e99a1b5a549990b47f246d475b8288a";
+const GPUI_COMPONENT_REV: &str = "55b6bb88905d8e76cd23d9e3ebea3151dcdb84a0";
 const ZED_GIT: &str = "https://github.com/zed-industries/zed";
-const ZED_REV: &str = "1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba";
+const ZED_REV: &str = "cc053a4a6fa2fd0e8793201ed9099466af1be0b1";
 const GPUI_REPLACE: &str = "https://github.com/zed-industries/zed#gpui@0.2.2";
 const GPUI_MACROS_REPLACE: &str = "https://github.com/zed-industries/zed#gpui_macros@0.1.0";
 

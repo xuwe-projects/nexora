@@ -14,7 +14,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, FocusTrapElement as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::CancelDialog,
+    dialog::Cancel,
     h_flex, v_flex,
 };
 
@@ -133,7 +133,7 @@ impl RenderOnce for PanelDialog {
             .rounded(cx.theme().radius_lg)
             .shadow_xl()
             .refine_style(&self.style)
-            .on_action(move |_: &CancelDialog, window, cx| {
+            .on_action(move |_: &Cancel, window, cx| {
                 close_from_keyboard(&ClickEvent::default(), window, cx);
             })
             .child(
