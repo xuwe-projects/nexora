@@ -7,7 +7,8 @@ use gpui::{
     AppContext as _, Context, IntoElement, Modifiers, Render, TestAppContext, Window, div,
     prelude::*, px,
 };
-use ui::{FormDialog, FormDialogState, FormItem};
+use gpui_component::form::field;
+use ui::{FormDialog, FormDialogState};
 
 const FORM_DIALOG_SOURCE: &str = include_str!("../src/form_dialog.rs");
 const PANEL_DIALOG_SOURCE: &str = include_str!("../src/panel_dialog.rs");
@@ -44,7 +45,7 @@ impl Render for FormDialogTestRoot {
                 FormDialog::new("disabled-submit-form-dialog", self.state.clone())
                     .title("编辑用户")
                     .child(
-                        FormItem::new("名称").element(
+                        field().label("名称").child(
                             div()
                                 .debug_selector(|| "form-dialog-custom-content".into())
                                 .child("表单内容"),
@@ -71,12 +72,21 @@ impl Render for FormDialogGridRoot {
                 FormDialog::new("grid-form-dialog", self.state.clone())
                     .title("编辑资料")
                     .columns(2)
-                    .child(FormItem::new("名字").element(grid_control("form-dialog-first-field")))
-                    .child(FormItem::new("姓氏").element(grid_control("form-dialog-second-field")))
                     .child(
-                        FormItem::new("详细说明")
-                            .element(grid_control("form-dialog-full-row-field"))
-                            .full_row(),
+                        field()
+                            .label("名字")
+                            .child(grid_control("form-dialog-first-field")),
+                    )
+                    .child(
+                        field()
+                            .label("姓氏")
+                            .child(grid_control("form-dialog-second-field")),
+                    )
+                    .child(
+                        field()
+                            .label("详细说明")
+                            .col_span(2)
+                            .child(grid_control("form-dialog-full-row-field")),
                     )
                     .on_submit(|_, _, _| {}),
             )
@@ -119,7 +129,7 @@ impl Render for FormDialogCustomMaxHeightRoot {
                 FormDialog::new("custom-max-form-dialog", self.state.clone())
                     .title("短表单")
                     .child(
-                        FormItem::new("名称").element(
+                        field().label("名称").child(
                             div()
                                 .debug_selector(|| "form-dialog-custom-max-content".into())
                                 .child("短内容"),
@@ -398,10 +408,10 @@ fn source_contract_applies_business_disabled_state_to_submit_only() {
     assert!(!FORM_DIALOG_SOURCE.contains(&format!("fn form_dialog_{}(", "height")));
     assert!(!FORM_DIALOG_SOURCE.contains(&format!(".h(relative({}))", "ratio")));
     assert!(FORM_DIALOG_SOURCE.contains(".max_w(relative(0.92))"));
-    assert!(FORM_DIALOG_SOURCE.contains("pub fn error(mut self"));
-    assert!(FORM_DIALOG_SOURCE.contains("pub fn full_row(mut self"));
-    assert!(FORM_DIALOG_SOURCE.contains("LabeledControl::new(self.label, control)"));
-    assert!(FORM_DIALOG_SOURCE.contains("this.col_span(self.columns as u16)"));
+    assert!(FORM_DIALOG_SOURCE.contains("form::{Field, v_form}"));
+    assert!(FORM_DIALOG_SOURCE.contains("v_form()"));
+    assert!(!FORM_DIALOG_SOURCE.contains("FormItem"));
+    assert!(!FORM_DIALOG_SOURCE.contains("FormItemControl"));
     assert!(PANEL_DIALOG_SOURCE.contains(".debug_selector(|| \"panel-dialog-content\".into())"));
     assert!(PANEL_DIALOG_SOURCE.contains(".flex_auto()"));
     assert!(PANEL_DIALOG_SOURCE.contains(".overflow_y_scroll()"));

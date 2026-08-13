@@ -1,20 +1,23 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyView, Context, Div, Entity, IntoElement, Render, SharedString, Window, div, prelude::*, px,
+    AnyView, App, Context, Div, Entity, IntoElement, Render, SharedString, Window, div, prelude::*,
+    px,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    form::{field, v_form},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, NumberInput},
     v_flex,
 };
 use nexora::{
     Application as _, ApplicationOptions, Feature, FeatureElement,
     desktop::{
-        CrudPanel, CrudPanelToolbar, Event, FormDialog, FormDialogState, FormItem, LabeledControl,
+        CrudPanel, CrudPanelToolbar, FormDialog, FormDialogState, FormFieldEvent, FormFieldState,
         SidebarRegion, TableCell, TableHeaderCell,
     },
 };
@@ -38,11 +41,10 @@ impl FeatureElement for HomeFeature {
         let username_input = cx.new(|cx| InputState::new(window, cx).placeholder("例如 alice"));
         let age_input = cx.new(|cx| InputState::new(window, cx).placeholder("例如 28"));
         let username_check_executor = cx.background_executor().clone();
-        let username_field = LabeledControl::input("username", "用户名", &username_input)
-            .description("使用字母开头，可包含小写字母、数字和下划线。")
+        let username_field = FormFieldState::input("username", &username_input)
             .required("请输入用户名")
             .pattern(r"^[a-z][a-z0-9_]{2,15}$", "用户名格式不正确")
-            .on_change(move |event: Event<SharedString>| {
+            .on_change(move |event: FormFieldEvent<SharedString>| {
                 let executor = username_check_executor.clone();
                 let value = event.value().clone();
                 let target = event.current_target().clone();
@@ -56,19 +58,13 @@ impl FeatureElement for HomeFeature {
                 }
             })
             .build(window, cx);
-        let age_field = LabeledControl::number_input::<i64>("age", "年龄", &age_input)
-            .description("字段值在业务侧直接转换为 i64。")
+        let age_field = FormFieldState::number_input::<i64>("age", &age_input)
             .required("请输入年龄")
             .parse_error("请输入有效的整数")
             .build(window, cx);
-        let accepted_field = LabeledControl::checkbox(
-            "accepted",
-            "确认阅读校验规则",
-            "desktop-basic-accepted",
-            false,
-        )
-        .required("请先确认校验规则")
-        .build(window, cx);
+        let accepted_field = FormFieldState::checkbox("accepted", false)
+            .required("请先确认校验规则")
+            .build(window, cx);
         let form_state = cx.new(|cx| {
             FormDialogState::new(cx)
                 .field(&username_field)
@@ -80,6 +76,8 @@ impl FeatureElement for HomeFeature {
         self.form_state = Some(form_state.clone());
         self.dialog_layer = Some(cx.new(|_| ShowcaseDialogLayer {
             state: form_state,
+            username_input,
+            age_input,
             username_field,
             age_field,
             accepted_field,
@@ -98,15 +96,17 @@ impl FeatureElement for HomeFeature {
             .as_ref()
             .expect("desktop_basic 搜索输入必须先完成 initialize");
 
-        let search_filter = LabeledControl::new(
-            "组件筛选",
-            Input::new(search_input)
-                .with_size(component_size)
-                .cleanable(true),
-        )
-        .description("静态示例控件，不会发起查询。")
-        .width(px(280.0))
-        .with_size(component_size);
+        let search_filter = v_form().child(
+            field()
+                .label("组件筛选")
+                .description("静态示例控件，不会发起查询。")
+                .w(px(280.0))
+                .child(
+                    Input::new(search_input)
+                        .with_size(component_size)
+                        .cleanable(true),
+                ),
+        );
 
         let open_form_action = Button::new("desktop-basic-open-form-dialog")
             .primary()
@@ -144,9 +144,11 @@ impl HomeFeature {
 
 struct ShowcaseDialogLayer {
     state: Entity<FormDialogState>,
-    username_field: Entity<LabeledControl<SharedString>>,
-    age_field: Entity<LabeledControl<i64>>,
-    accepted_field: Entity<LabeledControl<bool>>,
+    username_input: Entity<InputState>,
+    age_input: Entity<InputState>,
+    username_field: Entity<FormFieldState<SharedString>>,
+    age_field: Entity<FormFieldState<i64>>,
+    accepted_field: Entity<FormFieldState<bool>>,
     success: Option<SharedString>,
 }
 
@@ -154,13 +156,57 @@ impl Render for ShowcaseDialogLayer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let component_size = theme::component_size(cx);
         let state = self.state.clone();
+        let username_error = self.username_field.read(cx).visible_error().cloned();
+        let age_error = self.age_field.read(cx).visible_error().cloned();
+        let accepted_error = self.accepted_field.read(cx).visible_error().cloned();
+        let accepted = self
+            .accepted_field
+            .read(cx)
+            .value()
+            .copied()
+            .unwrap_or(false);
+        let accepted_field = self.accepted_field.clone();
 
         let mut dialog = FormDialog::new("desktop-basic-form-dialog", self.state.clone())
             .title("FormDialog 示例")
             .description("失焦会显示字段错误；提交会等待已经运行的用户名检查。")
-            .child(FormItem::field(&self.username_field))
-            .child(FormItem::field(&self.age_field))
-            .child(FormItem::field(&self.accepted_field))
+            .child(
+                field()
+                    .label("用户名")
+                    .description("使用字母开头，可包含小写字母、数字和下划线。")
+                    .required(true)
+                    .child(field_control(
+                        Input::new(&self.username_input).with_size(component_size),
+                        username_error,
+                        cx,
+                    )),
+            )
+            .child(
+                field()
+                    .label("年龄")
+                    .description("字段值在业务侧直接转换为 i64。")
+                    .required(true)
+                    .child(field_control(
+                        NumberInput::new(&self.age_input).with_size(component_size),
+                        age_error,
+                        cx,
+                    )),
+            )
+            .child(
+                field().label("确认").required(true).child(field_control(
+                    Checkbox::new("desktop-basic-accepted")
+                        .with_size(component_size)
+                        .label("确认阅读校验规则")
+                        .checked(accepted)
+                        .on_click(move |checked, window, cx| {
+                            accepted_field.update(cx, |field, cx| {
+                                field.update_checkbox(*checked, window, cx);
+                            });
+                        }),
+                    accepted_error,
+                    cx,
+                )),
+            )
             .submit_label("提交")
             .with_size(component_size);
 
@@ -183,6 +229,19 @@ impl Render for ShowcaseDialogLayer {
     }
 }
 
+fn field_control(
+    control: impl IntoElement,
+    error: Option<SharedString>,
+    cx: &mut App,
+) -> impl IntoElement {
+    v_flex()
+        .gap_1()
+        .child(control)
+        .when_some(error, |this, error| {
+            this.child(div().text_xs().text_color(cx.theme().danger).child(error))
+        })
+}
+
 fn showcase_content(cx: &mut Context<HomeFeature>) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -197,9 +256,9 @@ fn showcase_content(cx: &mut Context<HomeFeature>) -> impl IntoElement {
                     cx,
                 ))
                 .child(showcase_card(
-                    "LabeledControl",
-                    "通用“标签 + 控件”容器，适合筛选项和轻量设置项。",
-                    "上方工具栏里的筛选输入由它包裹。",
+                    "Form 与 Field",
+                    "官方表单负责标签、说明、必填语义与字段布局。",
+                    "上方工具栏里的筛选输入由官方 Field 组合。",
                     cx,
                 ))
                 .child(showcase_card(

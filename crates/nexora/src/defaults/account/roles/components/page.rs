@@ -1,12 +1,11 @@
 //! 默认角色管理页面状态。
 
-use gpui::{
-    Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*, px,
-};
+use gpui::{Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*};
 use gpui_component::{
     Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
+    form::{field, v_form},
     h_flex,
     input::{Input, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
@@ -18,7 +17,7 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, LabeledControl, api_session,
+        AccountClientError, CrudPanel, api_session,
         contract::{PermissionResponse, RoleResponse},
     },
 };
@@ -269,17 +268,17 @@ impl Render for RolesPage {
             |page, filter, cx| page.set_kind_filter(filter, cx),
             component_size,
         );
-        let keyword_filter = LabeledControl::new(
-            "关键词",
-            Input::new(&self.keyword_input)
-                .with_size(component_size)
-                .cleanable(true)
-                .disabled(self.loading || editor_busy),
-        )
-        .width(px(280.0))
-        .with_size(component_size);
-        let kind_filter = LabeledControl::new("类型", kind_filter)
-            .width(px(160.0))
+        let filters = v_form()
+            .columns(2)
+            .child(
+                field().label("关键词").child(
+                    Input::new(&self.keyword_input)
+                        .with_size(component_size)
+                        .cleanable(true)
+                        .disabled(self.loading || editor_busy),
+                ),
+            )
+            .child(field().label("类型").child(kind_filter))
             .with_size(component_size);
 
         let content = v_flex()
@@ -342,8 +341,7 @@ impl Render for RolesPage {
                 self.loading || editor_busy,
                 cx.listener(|this, _, _, cx| this.load(cx)),
             )
-            .filter(keyword_filter)
-            .filter(kind_filter)
+            .filter(filters)
             .action(query_action)
             .action(create_role_action)
             .with_size(component_size)

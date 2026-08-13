@@ -9,10 +9,11 @@ use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
-    input::{InputEvent, InputState},
+    form::field,
+    input::{Input, InputEvent, InputState},
     v_flex,
 };
-use ui::{FormDialog, FormDialogState, FormItem};
+use ui::{FormDialog, FormDialogState};
 
 use contracts::patch::PatchField;
 
@@ -368,16 +369,12 @@ impl Render for RoleEditor {
         FormDialog::new("default-role-editor-form-dialog", self.form.clone())
             .title(format!("管理 {}", role.name))
             .description("保存角色信息与权限设置。")
-            .child(
-                FormItem::new("角色名称")
-                    .input(&self.edit_name)
-                    .disabled(immutable || self.saving || !can_write),
-            )
-            .child(
-                FormItem::new("说明")
-                    .input(&self.edit_description)
-                    .disabled(immutable || self.saving || !can_write),
-            )
+            .child(field().label("角色名称").child(
+                Input::new(&self.edit_name).disabled(immutable || self.saving || !can_write),
+            ))
+            .child(field().label("说明").child(
+                Input::new(&self.edit_description).disabled(immutable || self.saving || !can_write),
+            ))
             .section(content)
             .submit_label("保存角色")
             .submit_disabled(immutable || !can_write || !can_read_permissions)

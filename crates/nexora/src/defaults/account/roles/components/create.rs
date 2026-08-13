@@ -10,10 +10,11 @@ use gpui_component::{
     Disableable as _, Sizable as _, StyledExt as _,
     alert::Alert,
     checkbox::Checkbox,
-    input::{InputEvent, InputState},
+    form::field,
+    input::{Input, InputEvent, InputState},
     v_flex,
 };
-use ui::{FormDialog, FormDialogState, FormItem};
+use ui::{FormDialog, FormDialogState};
 
 use crate::{
     defaults::account::has_permission,
@@ -209,15 +210,15 @@ impl Render for RoleCreateDialog {
             .description("填写信息后创建角色。")
             .section(status_section)
             .child(
-                FormItem::new("角色名称")
-                    .required()
-                    .input(&self.role_name)
-                    .disabled(self.saving),
+                field()
+                    .label("角色名称")
+                    .required(true)
+                    .child(Input::new(&self.role_name).disabled(self.saving)),
             )
             .child(
-                FormItem::new("说明")
-                    .input(&self.description)
-                    .disabled(self.saving),
+                field()
+                    .label("说明")
+                    .child(Input::new(&self.description).disabled(self.saving)),
             )
             .section(permissions_section)
             .submit_label("创建角色")

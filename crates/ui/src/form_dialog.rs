@@ -14,16 +14,13 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputContentType, InputState, NumberInput},
-    v_flex,
+    form::{Field, v_form},
+    h_flex, v_flex,
 };
 
-use crate::{AnyFormField, FieldValue, LabeledControl, PanelDialog};
+use crate::{AnyFormFieldState, FieldValue, FormFieldState, PanelDialog};
 
 type DialogHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 const DEFAULT_FORM_DIALOG_PANEL_HEIGHT_RATIO: f32 = 0.8;
 
 /// 表单字段在打开对话框时的原值与当前草稿。
@@ -89,333 +86,10 @@ pub struct FormDialogState {
     focus_handle: FocusHandle,
     previous_focus: Option<WeakFocusHandle>,
     fields: BTreeMap<String, FormFieldDraft>,
-    validation_fields: Vec<AnyFormField>,
+    validation_fields: Vec<AnyFormFieldState>,
     open: bool,
     submitting: bool,
     confirming_discard: bool,
-}
-
-/// 标准表单项控件。
-///
-/// 该类型覆盖默认 CRUD 表单里最常见的输入控件，并在渲染时接收 [`Size`]，让上层
-/// [`FormDialog`] 可以统一控制表单密度。复杂业务控件仍可通过 [`Self::element`] 直接传入
-/// 自定义 GPUI 元素。
-pub struct FormItemControl {
-    kind: FormItemControlKind,
-}
-
-enum FormItemControlKind {
-    Element(AnyElement),
-    Input {
-        state: Entity<InputState>,
-        password: bool,
-        disabled: bool,
-    },
-    NumberInput {
-        state: Entity<InputState>,
-        disabled: bool,
-    },
-    Checkbox {
-        id: ElementId,
-        checked: bool,
-        disabled: bool,
-        on_click: CheckboxHandler,
-    },
-}
-
-impl FormItemControl {
-    /// 使用自定义元素作为表单项控件。
-    pub fn element(element: impl IntoElement) -> Self {
-        Self {
-            kind: FormItemControlKind::Element(element.into_any_element()),
-        }
-    }
-
-    /// 使用官方文本输入框作为控件。
-    pub fn input(state: &Entity<InputState>) -> Self {
-        Self {
-            kind: FormItemControlKind::Input {
-                state: state.clone(),
-                password: false,
-                disabled: false,
-            },
-        }
-    }
-
-    /// 使用官方密码输入框作为控件。
-    ///
-    /// 该控件会启用密码切换按钮和语义化密码类型；如果需要默认隐藏内容，请在创建
-    /// [`InputState`] 时调用 `masked(true)`。
-    pub fn password_input(state: &Entity<InputState>) -> Self {
-        Self {
-            kind: FormItemControlKind::Input {
-                state: state.clone(),
-                password: true,
-                disabled: false,
-            },
-        }
-    }
-
-    /// 使用官方数值输入框作为控件。
-    pub fn number_input(state: &Entity<InputState>) -> Self {
-        Self {
-            kind: FormItemControlKind::NumberInput {
-                state: state.clone(),
-                disabled: false,
-            },
-        }
-    }
-
-    /// 使用官方复选框作为控件。
-    pub fn checkbox(
-        id: impl Into<ElementId>,
-        checked: bool,
-        on_click: impl Fn(&bool, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        Self {
-            kind: FormItemControlKind::Checkbox {
-                id: id.into(),
-                checked,
-                disabled: false,
-                on_click: Rc::new(on_click),
-            },
-        }
-    }
-
-    /// 设置标准控件禁用状态；自定义元素需要在传入前自行处理禁用态。
-    #[must_use]
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        match &mut self.kind {
-            FormItemControlKind::Element(_) => {}
-            FormItemControlKind::Input {
-                disabled: current, ..
-            }
-            | FormItemControlKind::NumberInput {
-                disabled: current, ..
-            }
-            | FormItemControlKind::Checkbox {
-                disabled: current, ..
-            } => *current = disabled,
-        }
-        self
-    }
-
-    fn render(self, size: Size, _window: &mut Window, _cx: &mut App) -> AnyElement {
-        match self.kind {
-            FormItemControlKind::Element(element) => element,
-            FormItemControlKind::Input {
-                state,
-                password,
-                disabled,
-            } => {
-                let input = Input::new(&state).with_size(size).disabled(disabled);
-                if password {
-                    input
-                        .mask_toggle()
-                        .content_type(InputContentType::Password)
-                        .into_any_element()
-                } else {
-                    input.into_any_element()
-                }
-            }
-            FormItemControlKind::NumberInput { state, disabled } => NumberInput::new(&state)
-                .with_size(size)
-                .disabled(disabled)
-                .into_any_element(),
-            FormItemControlKind::Checkbox {
-                id,
-                checked,
-                disabled,
-                on_click,
-            } => Checkbox::new(id)
-                .with_size(size)
-                .checked(checked)
-                .disabled(disabled)
-                .on_click(move |checked, window, cx| {
-                    on_click(checked, window, cx);
-                })
-                .into_any_element(),
-        }
-    }
-}
-
-/// 标准表单项。
-///
-/// `FormItem` 负责表单专用的控件构造、禁用状态、尺寸传递与 [`FormDialog`] 网格语义；
-/// 标签、说明、必填标记、控件和错误文本的通用垂直视觉布局委托给
-/// [`crate::LabeledControl`]。控件可以用 [`FormItemControl`] 的常用构造器声明，也可以
-/// 直接传入完全自定义元素。
-///
-/// # Examples
-///
-/// ```no_run
-/// # use gpui::Entity;
-/// # use gpui_component::input::InputState;
-/// # use ui::FormItem;
-/// # fn item(name: &Entity<InputState>) -> FormItem {
-/// FormItem::new("角色名称")
-///     .description("显示在角色列表中的名称")
-///     .required()
-///     .input(name)
-/// # }
-/// ```
-#[derive(IntoElement)]
-pub struct FormItem {
-    label: SharedString,
-    description: Option<SharedString>,
-    required: bool,
-    error: Option<SharedString>,
-    control: Option<FormItemControl>,
-    typed_field: bool,
-    full_row: bool,
-    size: Size,
-}
-
-impl FormItem {
-    /// 创建一个带标签的表单项。
-    pub fn new(label: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            description: None,
-            required: false,
-            error: None,
-            control: None,
-            typed_field: false,
-            full_row: false,
-            size: Size::default(),
-        }
-    }
-
-    /// 设置表单项说明。
-    #[must_use]
-    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// 标记该字段为必填。
-    #[must_use]
-    pub fn required(mut self) -> Self {
-        self.required = true;
-        self
-    }
-
-    /// 设置控件下方的错误文本。
-    ///
-    /// 该方法直接复用 [`LabeledControl::error`] 的展示语义，不会自动修改控件边框、验证状
-    /// 态或输入数据。
-    #[must_use]
-    pub fn error(mut self, error: impl Into<SharedString>) -> Self {
-        self.error = Some(error.into());
-        self
-    }
-
-    /// 设置表单项控件。
-    #[must_use]
-    pub fn control(mut self, control: FormItemControl) -> Self {
-        self.control = Some(control);
-        self
-    }
-
-    /// 使用类型化 [`LabeledControl<V>`] 字段 Entity 作为完整表单项。
-    ///
-    /// 该方法不会再次套一层视觉字段容器；字段自身负责渲染标签、说明、必填标记、控件和
-    /// 错误消息。泛型 `V` 来自字段构造器，字段事件回调也会保持同一个业务值类型。
-    #[must_use]
-    pub fn field<V: FieldValue>(field: &Entity<LabeledControl<V>>) -> Self {
-        Self {
-            label: SharedString::default(),
-            description: None,
-            required: false,
-            error: None,
-            control: Some(FormItemControl::element(field.clone())),
-            typed_field: true,
-            full_row: false,
-            size: Size::default(),
-        }
-    }
-
-    /// 使用自定义元素作为控件。
-    #[must_use]
-    pub fn element(self, element: impl IntoElement) -> Self {
-        self.control(FormItemControl::element(element))
-    }
-
-    /// 使用官方文本输入框作为控件。
-    #[must_use]
-    pub fn input(self, state: &Entity<InputState>) -> Self {
-        self.control(FormItemControl::input(state))
-    }
-
-    /// 使用官方密码输入框作为控件。
-    #[must_use]
-    pub fn password_input(self, state: &Entity<InputState>) -> Self {
-        self.control(FormItemControl::password_input(state))
-    }
-
-    /// 使用官方数值输入框作为控件。
-    #[must_use]
-    pub fn number_input(self, state: &Entity<InputState>) -> Self {
-        self.control(FormItemControl::number_input(state))
-    }
-
-    /// 使用官方复选框作为控件。
-    #[must_use]
-    pub fn checkbox(
-        self,
-        id: impl Into<ElementId>,
-        checked: bool,
-        on_click: impl Fn(&bool, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.control(FormItemControl::checkbox(id, checked, on_click))
-    }
-
-    /// 设置标准控件禁用状态；自定义元素需要在传入前自行处理禁用态。
-    #[must_use]
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.control = self.control.map(|control| control.disabled(disabled));
-        self
-    }
-
-    /// 让当前字段在多列表单中跨越整行。
-    ///
-    /// 该设置只作用于 [`FormDialog`] 的字段网格：当 `FormDialog::columns(n)` 大于 1 时，
-    /// 当前 `FormItem` 会跨越全部列；`columns(1)` 时效果与普通字段一致。非字段型整行内容
-    /// 仍应使用 [`FormDialog::section`]，例如角色列表、权限列表或 Alert 提示。
-    #[must_use]
-    pub fn full_row(mut self) -> Self {
-        self.full_row = true;
-        self
-    }
-}
-
-impl gpui_component::Sizable for FormItem {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.size = size.into();
-        self
-    }
-}
-
-impl RenderOnce for FormItem {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let control = self
-            .control
-            .map(|control| control.render(self.size, window, cx))
-            .unwrap_or_else(|| div().into_any_element());
-
-        if self.typed_field {
-            return control;
-        }
-
-        LabeledControl::new(self.label, control)
-            .with_size(self.size)
-            .when_some(self.description, |this, description| {
-                this.description(description)
-            })
-            .when(self.required, LabeledControl::required)
-            .when_some(self.error, |this, error| this.error(error))
-            .into_any_element()
-    }
 }
 
 impl FormDialogState {
@@ -432,13 +106,13 @@ impl FormDialogState {
         }
     }
 
-    /// 注册一个由 [`LabeledControl<V>`] 管理的类型化字段。
+    /// 注册一个由 [`FormFieldState<V>`] 管理的类型化字段。
     ///
     /// `FormDialog` 提交时会等待该字段已存在的最新异步事件任务，然后执行声明式规则并读取
     /// 已有异步事件错误。注册只擦除聚合所需能力，不会破坏字段事件回调的泛型类型安全。
     #[must_use]
-    pub fn field<V: FieldValue>(mut self, field: &Entity<LabeledControl<V>>) -> Self {
-        self.validation_fields.push(AnyFormField::new(field));
+    pub fn field<V: FieldValue>(mut self, field: &Entity<FormFieldState<V>>) -> Self {
+        self.validation_fields.push(AnyFormFieldState::new(field));
         self
     }
 
@@ -620,16 +294,15 @@ impl FormDialogState {
 /// 组件固定提供标题、可选描述、纵向可滚动内容区以及“取消/提交”操作。`on_submit` 是必需
 /// 回调且没有默认业务实现；未设置自定义 `on_cancel` 时，组件使用
 /// [`FormDialogState`] 的脏字段确认与关闭行为。
-///
-/// [`FormItem::full_row`] 只影响通过 [`Self::child`] 添加的标准字段在多列网格中的跨度；
-/// [`Self::section`] 适合权限列表、角色列表、Alert 等不属于单个字段的整行自定义区域。
+/// 字段布局直接使用 `gpui_component::form::Field`，由官方 `Form` 处理标签、说明、必填标记、
+/// 多列与列跨度。Nexora 只保留 Panel 范围、草稿、校验任务、提交和取消流程。
 #[derive(IntoElement)]
 pub struct FormDialog {
     id: ElementId,
     state: Entity<FormDialogState>,
     title: Option<AnyElement>,
     description: Option<SharedString>,
-    items: Vec<FormItem>,
+    fields: Vec<Field>,
     sections: Vec<AnyElement>,
     columns: usize,
     size: Size,
@@ -644,16 +317,15 @@ pub struct FormDialog {
 impl FormDialog {
     /// 创建一个带默认取消/提交操作的表单对话框。
     ///
-    /// `state` 必须是调用方长期持有的状态 Entity。调用方可以通过 [`Self::child`] 添加
-    /// [`FormItem`]，通过 [`Self::section`] 插入角色列表等自定义区域，并用 [`Self::on_submit`]
-    /// 绑定提交逻辑。
+    /// `state` 必须是调用方长期持有的状态 Entity。调用方通过 [`Self::child`] 添加官方
+    /// `Field`，通过 [`Self::section`] 插入角色列表等整行自定义区域。
     pub fn new(id: impl Into<ElementId>, state: Entity<FormDialogState>) -> Self {
         Self {
             id: id.into(),
             state,
             title: None,
             description: None,
-            items: Vec::new(),
+            fields: Vec::new(),
             sections: Vec::new(),
             columns: 1,
             size: Size::default(),
@@ -678,29 +350,22 @@ impl FormDialog {
         self
     }
 
-    /// 设置表单项列数。
-    ///
-    /// 列数只作用于通过 [`Self::child`] 添加的标准表单项；通过 [`Self::section`] 添加的自定义
-    /// 区域始终占据整行。单个字段需要跨越全部列时，在对应 [`FormItem`] 上调用
-    /// [`FormItem::full_row`]。
+    /// 设置官方表单的列数。
     pub fn columns(mut self, columns: usize) -> Self {
         self.columns = columns.max(1);
         self
     }
 
-    /// 添加一个标准表单项。
-    ///
-    /// 字段默认占据当前表单网格的一列；调用 [`FormItem::full_row`] 后会在多列表单中跨越
-    /// 全部列。
-    pub fn child(mut self, item: FormItem) -> Self {
-        self.items.push(item);
+    /// 添加一个官方表单字段。
+    pub fn child(mut self, field: Field) -> Self {
+        self.fields.push(field);
         self
     }
 
     /// 添加一段自定义表单内容。
     ///
-    /// 适合权限列表、角色列表、警告提示或其他不能自然表达为单个字段的内容。若内容本身
-    /// 仍是单个字段，只是需要在多列网格中占据整行，应使用 [`FormItem::full_row`]。
+    /// 适合权限列表、角色列表、警告提示或其他不能自然表达为单个字段的内容。单个字段需要
+    /// 跨越多列时，直接使用官方 `Field::col_span`。
     pub fn section(mut self, section: impl IntoElement) -> Self {
         self.sections.push(section.into_any_element());
         self
@@ -871,36 +536,18 @@ impl RenderOnce for FormDialog {
         let cancel_from_close = cancel.clone();
         let cancel_from_button = cancel;
         let size = self.size;
-        let item_elements = self
-            .items
-            .into_iter()
-            .map(|item| {
-                let full_row = item.full_row;
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .when(self.columns > 1 && full_row, |this| {
-                        this.col_span(self.columns as u16)
-                    })
-                    .child(item.with_size(size))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        let items = if item_elements.is_empty() {
+        let form = if self.fields.is_empty() {
             None
-        } else if self.columns > 1 {
+        } else {
             Some(
-                div()
-                    .grid()
-                    .grid_cols(self.columns as u16)
-                    .gap_4()
-                    .children(item_elements)
+                v_form()
+                    .columns(self.columns)
+                    .children(self.fields)
+                    .with_size(size)
                     .into_any_element(),
             )
-        } else {
-            Some(v_flex().gap_4().children(item_elements).into_any_element())
         };
-        let body = items.into_iter().chain(self.sections).collect::<Vec<_>>();
+        let body = form.into_iter().chain(self.sections).collect::<Vec<_>>();
 
         let dialog = PanelDialog::new(self.id, focus_handle)
             .title(title)

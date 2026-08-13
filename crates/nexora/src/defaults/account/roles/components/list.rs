@@ -3,9 +3,12 @@
 use gpui::{IntoElement, RenderOnce, WeakEntity, div, prelude::*};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
-    button::Button, h_flex, tag::Tag, v_flex,
+    button::Button,
+    group_box::{GroupBox, GroupBoxVariants as _},
+    h_flex,
+    tag::Tag,
+    v_flex,
 };
-use ui::Card;
 
 use crate::desktop::contract::RoleResponse;
 
@@ -42,9 +45,9 @@ impl RenderOnce for RolesList {
             let role_id = role.id;
             let page = self.page.clone();
             let selected = self.selected_role_id == Some(role_id);
-            Card::new()
+            GroupBox::new()
+                .outline()
                 .w_full()
-                .p_3()
                 .border_color(if selected {
                     cx.theme().primary
                 } else {

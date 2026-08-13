@@ -10,11 +10,11 @@ use gpui::{
     prelude::*,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, StyledExt as _, button::Button,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, StyledExt as _,
+    button::Button,
+    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex, v_flex,
 };
-
-use crate::Card;
 
 const REFRESH_ICON_PATH: &str = "icons/rotate-ccw.svg";
 
@@ -104,7 +104,8 @@ impl RenderOnce for CrudPanelToolbar {
             return div().into_any_element();
         }
 
-        Card::new()
+        GroupBox::new()
+            .outline()
             .w_full()
             .flex_shrink_0()
             .overflow_hidden()
@@ -279,7 +280,7 @@ impl RenderOnce for CrudPanel {
             .gap_4()
             .p_5()
             .child(
-                Card::new().w_full().flex_shrink_0().p_4().child(
+                GroupBox::new().fill().w_full().flex_shrink_0().child(
                     h_flex()
                         .w_full()
                         .min_w_0()

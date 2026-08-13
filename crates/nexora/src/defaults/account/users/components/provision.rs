@@ -7,12 +7,13 @@ use gpui_component::{
     Disableable as _, Sizable as _, StyledExt as _,
     alert::Alert,
     checkbox::Checkbox,
+    form::field,
     h_flex,
-    input::{InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     spinner::Spinner,
     v_flex,
 };
-use ui::{FormDialog, FormDialogState, FormItem};
+use ui::{FormDialog, FormDialogState};
 
 use crate::{
     defaults::account::has_permission,
@@ -250,36 +251,36 @@ impl Render for ProvisionUserDialog {
             .columns(2)
             .section(status_section)
             .child(
-                FormItem::new("登录用户名")
+                field()
+                    .label("登录用户名")
                     .description("用于登录系统的唯一用户名。")
-                    .required()
-                    .input(&self.username)
-                    .disabled(self.saving),
+                    .required(true)
+                    .child(Input::new(&self.username).disabled(self.saving)),
             )
             .child(
-                FormItem::new("邮箱")
+                field()
+                    .label("邮箱")
                     .description("用于接收账号相关通知。")
-                    .required()
-                    .input(&self.email)
-                    .disabled(self.saving),
+                    .required(true)
+                    .child(Input::new(&self.email).disabled(self.saving)),
             )
             .child(
-                FormItem::new("名字")
-                    .required()
-                    .input(&self.given_name)
-                    .disabled(self.saving),
+                field()
+                    .label("名字")
+                    .required(true)
+                    .child(Input::new(&self.given_name).disabled(self.saving)),
             )
             .child(
-                FormItem::new("姓氏")
-                    .required()
-                    .input(&self.family_name)
-                    .disabled(self.saving),
+                field()
+                    .label("姓氏")
+                    .required(true)
+                    .child(Input::new(&self.family_name).disabled(self.saving)),
             )
             .child(
-                FormItem::new("展示名称")
+                field()
+                    .label("展示名称")
                     .description("可选；省略时使用名字与姓氏。")
-                    .input(&self.display_name)
-                    .disabled(self.saving),
+                    .child(Input::new(&self.display_name).disabled(self.saving)),
             )
             .section(roles_section)
             .submit_label("创建用户")

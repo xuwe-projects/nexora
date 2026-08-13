@@ -1,27 +1,18 @@
-//! 通用字段标签容器和表单字段状态。
+//! 无视觉表单字段状态。
 //!
-//! `LabeledControl<()>` 保留原有纯视觉模式，只负责“标签、可选说明、控件、可选错误”的纵向
-//! 排列；`LabeledControl<V>` 是有状态字段 Entity，负责把 gpui-component 输入控件的原始
-//! 状态转换为业务值 `V`，并保存声明式规则错误、异步事件错误和字段生命周期。
+//! 本模块只负责值转换、规则校验、异步字段事件与任务生命周期。标签、说明、必填标记、
+//! 列布局和输入控件均由调用方通过 `gpui_component::form::Field` 与官方控件组合。
 
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
 use gpui::{
-    AnyElement, App, Context, ElementId, Entity, IntoElement, ParentElement as _, Pixels, Render,
-    RenderOnce, SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div, prelude::*,
+    App, AppContext as _, Context, Entity, SharedString, Subscription, Task, WeakEntity, Window,
 };
-use gpui_component::{
-    ActiveTheme as _, Sizable as _, Size,
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputContentType, InputEvent, InputState, NumberInput},
-    label::Label,
-    v_flex,
-};
+use gpui_component::input::{InputEvent, InputState};
 use regex::Regex;
 
 type EventFuture = Pin<Box<dyn Future<Output = ()>>>;
-type FieldEventHandler<V> = Rc<dyn Fn(Event<V>) -> EventFuture>;
+type FieldEventHandler<V> = Rc<dyn Fn(FormFieldEvent<V>) -> EventFuture>;
 type ResetFormField = Rc<dyn Fn(&mut App)>;
 type TakePendingFieldTask = Rc<dyn Fn(&mut App) -> Option<Task<()>>>;
 type ValidateFormField = Rc<dyn Fn(&mut App) -> bool>;
@@ -31,12 +22,12 @@ type FocusFormField = Rc<dyn Fn(&mut Window, &mut App)>;
 ///
 /// 泛型 `V` 是当前字段声明的业务值类型，例如 `SharedString`、`i64`、`f64`、`bool` 或
 /// `Option<i64>`。事件持有发生当时的值快照，后续输入继续变化不会改变已经发出的事件。
-pub struct Event<V> {
+pub struct FormFieldEvent<V> {
     value: V,
-    current_target: LabeledControlTarget<V>,
+    current_target: FormFieldTarget<V>,
 }
 
-impl<V> Event<V> {
+impl<V> FormFieldEvent<V> {
     /// 返回事件发生时的业务值快照引用。
     pub fn value(&self) -> &V {
         &self.value
@@ -48,7 +39,7 @@ impl<V> Event<V> {
     }
 
     /// 返回当前字段目标，业务异步回调可用它设置或清除当前字段的事件错误。
-    pub fn current_target(&self) -> &LabeledControlTarget<V> {
+    pub fn current_target(&self) -> &FormFieldTarget<V> {
         &self.current_target
     }
 }
@@ -57,13 +48,13 @@ impl<V> Event<V> {
 ///
 /// 目标对象只弱关联字段 Entity 和事件 revision。字段已销毁、对话框关闭或字段产生了更新
 /// revision 后，回调结果会在应用阶段被丢弃，慢请求不会覆盖新值的错误状态。
-pub struct LabeledControlTarget<V> {
+pub struct FormFieldTarget<V> {
     revision: u64,
     command: Rc<RefCell<EventCommand>>,
-    field: WeakEntity<LabeledControl<V>>,
+    field: WeakEntity<FormFieldState<V>>,
 }
 
-impl<V> Clone for LabeledControlTarget<V> {
+impl<V> Clone for FormFieldTarget<V> {
     fn clone(&self) -> Self {
         Self {
             revision: self.revision,
@@ -73,7 +64,7 @@ impl<V> Clone for LabeledControlTarget<V> {
     }
 }
 
-impl<V: 'static> LabeledControlTarget<V> {
+impl<V: 'static> FormFieldTarget<V> {
     /// 设置当前异步事件来源的错误消息。
     ///
     /// 该方法不需要 `cx`；消息会在事件 future 结束后回到字段 Entity 上应用。它只影响异步
@@ -102,9 +93,9 @@ enum EventCommand {
 /// 可注册到 `FormDialogState` 的类型擦除字段句柄。
 ///
 /// 该类型只擦除表单聚合需要的生命周期、等待、校验和聚焦能力；字段事件本身仍由
-/// `LabeledControl<V>` 的泛型 API 保持编译期类型安全。
+/// `FormFieldState<V>` 的泛型 API 保持编译期类型安全。
 #[derive(Clone)]
-pub struct AnyFormField {
+pub struct AnyFormFieldState {
     key: SharedString,
     reset: ResetFormField,
     take_pending_task: TakePendingFieldTask,
@@ -112,9 +103,9 @@ pub struct AnyFormField {
     focus: FocusFormField,
 }
 
-impl AnyFormField {
+impl AnyFormFieldState {
     /// 从一个有状态字段 Entity 创建可注册到表单对话框的擦除句柄。
-    pub fn new<V: FieldValue>(field: &Entity<LabeledControl<V>>) -> Self {
+    pub fn new<V: FieldValue>(field: &Entity<FormFieldState<V>>) -> Self {
         let key = SharedString::from(format!("field-{}", field.entity_id()));
         let field_for_reset = field.clone();
         let field_for_task = field.clone();
@@ -159,45 +150,16 @@ impl AnyFormField {
     }
 }
 
-/// 通用的“标签 + 控件”视觉容器，或类型化表单字段 Entity。
+/// 类型化、无视觉的表单字段状态。
 ///
-/// `V` 表示有状态字段的业务值类型。纯视觉模式使用默认类型参数 `()`，通过
-/// [`Self::new`] 构造；类型化字段通过 [`Self::input`]、[`Self::password_input`]、
-/// [`Self::number_input`] 或 [`Self::checkbox`] 构造 builder，并在初始化阶段调用
-/// `build(window, cx)` 得到长期持有的 Entity。
-pub struct LabeledControl<V = ()> {
-    inner: LabeledControlInner<V>,
-}
-
-enum LabeledControlInner<V> {
-    Visual(VisualControl),
-    Field(Box<FieldState<V>>),
-}
-
-struct VisualControl {
-    label: SharedString,
-    child: AnyElement,
-    description: Option<SharedString>,
-    required: bool,
-    error: Option<SharedString>,
-    width: Option<Pixels>,
-    size: Size,
-}
-
-struct VisualRenderData {
-    label: SharedString,
-    child: AnyElement,
-    description: Option<SharedString>,
-    required: bool,
-    error: Option<SharedString>,
-    width: Option<Pixels>,
-    size: Size,
+/// `V` 是业务值类型。调用方在初始化阶段通过 [`Self::input`]、[`Self::number_input`] 或
+/// [`Self::checkbox`] 创建长期持有的 Entity，并在渲染时自行组合官方 `Field` 与控件。
+pub struct FormFieldState<V = ()> {
+    field: FieldState<V>,
 }
 
 struct FieldState<V> {
     key: SharedString,
-    label: SharedString,
-    description: Option<SharedString>,
     control: FieldControl,
     rules: Vec<Rule>,
     parse_error: Option<SharedString>,
@@ -213,21 +175,12 @@ struct FieldState<V> {
     on_blur: Vec<FieldEventHandler<V>>,
     pending_task: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
-    size: Size,
 }
 
 enum FieldControl {
-    Input {
-        state: Entity<InputState>,
-        password: bool,
-    },
-    NumberInput {
-        state: Entity<InputState>,
-    },
-    Checkbox {
-        id: ElementId,
-        checked: bool,
-    },
+    Input { state: Entity<InputState> },
+    NumberInput { state: Entity<InputState> },
+    Checkbox { checked: bool },
 }
 
 enum Rule {
@@ -239,10 +192,8 @@ enum Rule {
 ///
 /// 构造器只在组件初始化阶段使用。调用 `build(window, cx)` 后会创建字段 Entity、订阅输入事件
 /// 并保存异步任务生命周期；不要在 `render` 中重新 build 字段。
-pub struct LabeledControlBuilder<V> {
+pub struct FormFieldStateBuilder<V> {
     key: SharedString,
-    label: SharedString,
-    description: Option<SharedString>,
     control: FieldControl,
     rules: Vec<Rule>,
     parse_error: Option<SharedString>,
@@ -251,158 +202,46 @@ pub struct LabeledControlBuilder<V> {
     on_blur: Vec<FieldEventHandler<V>>,
 }
 
-impl LabeledControl<()> {
-    /// 创建一个带必需标签和必需控件的纯视觉字段容器。
-    ///
-    /// `label` 渲染在控件上方，`child` 可以是任意 GPUI 元素。该模式不保存业务状态、不执行
-    /// 声明式校验，也不会触发类型化事件。
-    pub fn new(label: impl Into<SharedString>, child: impl IntoElement) -> Self {
-        Self {
-            inner: LabeledControlInner::Visual(VisualControl {
-                label: label.into(),
-                child: child.into_any_element(),
-                description: None,
-                required: false,
-                error: None,
-                width: None,
-                size: Size::default(),
-            }),
-        }
-    }
-
-    /// 创建绑定 gpui-component `Input` 的文本字段构造器。
+impl FormFieldState<()> {
+    /// 创建绑定官方 `InputState` 的文本字段状态构造器。
     pub fn input(
         key: impl Into<SharedString>,
-        label: impl Into<SharedString>,
         state: &Entity<InputState>,
-    ) -> LabeledControlBuilder<SharedString> {
-        LabeledControlBuilder::new(
+    ) -> FormFieldStateBuilder<SharedString> {
+        FormFieldStateBuilder::new(
             key,
-            label,
             FieldControl::Input {
                 state: state.clone(),
-                password: false,
             },
         )
     }
 
-    /// 创建绑定 gpui-component `Input` 密码语义的文本字段构造器。
-    pub fn password_input(
-        key: impl Into<SharedString>,
-        label: impl Into<SharedString>,
-        state: &Entity<InputState>,
-    ) -> LabeledControlBuilder<SharedString> {
-        LabeledControlBuilder::new(
-            key,
-            label,
-            FieldControl::Input {
-                state: state.clone(),
-                password: true,
-            },
-        )
-    }
-
-    /// 创建绑定 gpui-component `NumberInput` 的数值字段构造器。
+    /// 创建绑定官方 `NumberInput` 所使用 `InputState` 的数值字段状态构造器。
     ///
     /// 数值控件内部仍使用 `InputState` 保存编辑中的原始文本；只有当前文本能转换为 `V` 时，
     /// 才会更新业务值并触发类型化事件。非空非法文本会在失焦或提交时显示 `parse_error`。
     pub fn number_input<V: NumberFieldValue>(
         key: impl Into<SharedString>,
-        label: impl Into<SharedString>,
         state: &Entity<InputState>,
-    ) -> LabeledControlBuilder<V> {
-        LabeledControlBuilder::new(
+    ) -> FormFieldStateBuilder<V> {
+        FormFieldStateBuilder::new(
             key,
-            label,
             FieldControl::NumberInput {
                 state: state.clone(),
             },
         )
     }
 
-    /// 创建使用 gpui-component `Checkbox` 的布尔字段构造器。
-    pub fn checkbox(
-        key: impl Into<SharedString>,
-        label: impl Into<SharedString>,
-        id: impl Into<ElementId>,
-        checked: bool,
-    ) -> LabeledControlBuilder<bool> {
-        LabeledControlBuilder::new(
-            key,
-            label,
-            FieldControl::Checkbox {
-                id: id.into(),
-                checked,
-            },
-        )
+    /// 创建由官方 `Checkbox` 点击事件驱动的布尔字段状态构造器。
+    pub fn checkbox(key: impl Into<SharedString>, checked: bool) -> FormFieldStateBuilder<bool> {
+        FormFieldStateBuilder::new(key, FieldControl::Checkbox { checked })
     }
 }
 
-impl LabeledControl<()> {
-    /// 设置标签和控件之间的辅助说明文本。
-    #[must_use]
-    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
-        if let LabeledControlInner::Visual(visual) = &mut self.inner {
-            visual.description = Some(description.into());
-        }
-        self
-    }
-
-    /// 在标签旁显示必填星号。
-    #[must_use]
-    pub fn required(mut self) -> Self {
-        if let LabeledControlInner::Visual(visual) = &mut self.inner {
-            visual.required = true;
-        }
-        self
-    }
-
-    /// 设置控件下方的错误文本。
-    #[must_use]
-    pub fn error(mut self, error: impl Into<SharedString>) -> Self {
-        if let LabeledControlInner::Visual(visual) = &mut self.inner {
-            visual.error = Some(error.into());
-        }
-        self
-    }
-
-    /// 设置容器固定像素宽度。
-    #[must_use]
-    pub fn width(mut self, width: impl Into<Pixels>) -> Self {
-        if let LabeledControlInner::Visual(visual) = &mut self.inner {
-            visual.width = Some(width.into());
-        }
-        self
-    }
-}
-
-impl gpui_component::Sizable for LabeledControl<()> {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        if let LabeledControlInner::Visual(visual) = &mut self.inner {
-            visual.size = size.into();
-        }
-        self
-    }
-}
-
-impl IntoElement for LabeledControl<()> {
-    type Element = gpui::ViewElement<Self>;
-
-    fn into_element(self) -> Self::Element {
-        gpui::ViewElement::new(self)
-    }
-}
-
-impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
-    fn new(
-        key: impl Into<SharedString>,
-        label: impl Into<SharedString>,
-        control: FieldControl,
-    ) -> Self {
+impl<V: Clone + PartialEq + 'static> FormFieldStateBuilder<V> {
+    fn new(key: impl Into<SharedString>, control: FieldControl) -> Self {
         Self {
             key: key.into(),
-            label: label.into(),
-            description: None,
             control,
             rules: Vec::new(),
             parse_error: None,
@@ -410,13 +249,6 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
             on_change: Vec::new(),
             on_blur: Vec::new(),
         }
-    }
-
-    /// 设置字段说明文本。
-    #[must_use]
-    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
-        self.description = Some(description.into());
-        self
     }
 
     /// 添加必填规则。
@@ -441,7 +273,7 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
     #[must_use]
     pub fn pattern(mut self, regex: &str, message: impl Into<SharedString>) -> Self {
         self.rules.push(Rule::Pattern(
-            Regex::new(regex).expect("LabeledControl::pattern 应收到合法 regex"),
+            Regex::new(regex).expect("FormFieldState::pattern 应收到合法 regex"),
             message.into(),
         ));
         self
@@ -460,7 +292,7 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
     #[must_use]
     pub fn on_input<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Event<V>) -> Fut + 'static,
+        F: Fn(FormFieldEvent<V>) -> Fut + 'static,
         Fut: Future<Output = ()> + 'static,
     {
         self.on_input
@@ -472,7 +304,7 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
     #[must_use]
     pub fn on_change<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Event<V>) -> Fut + 'static,
+        F: Fn(FormFieldEvent<V>) -> Fut + 'static,
         Fut: Future<Output = ()> + 'static,
     {
         self.on_change
@@ -484,7 +316,7 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
     #[must_use]
     pub fn on_blur<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Event<V>) -> Fut + 'static,
+        F: Fn(FormFieldEvent<V>) -> Fut + 'static,
         Fut: Future<Output = ()> + 'static,
     {
         self.on_blur
@@ -497,16 +329,14 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
         self,
         window: &mut Window,
         cx: &mut Context<T>,
-    ) -> Entity<LabeledControl<V>>
+    ) -> Entity<FormFieldState<V>>
     where
         V: FieldValue,
     {
         cx.new(|field_cx| {
-            let mut field = LabeledControl {
-                inner: LabeledControlInner::Field(Box::new(FieldState {
+            let mut field = FormFieldState {
+                field: FieldState {
                     key: self.key,
-                    label: self.label,
-                    description: self.description,
                     control: self.control,
                     rules: self.rules,
                     parse_error: self.parse_error,
@@ -522,8 +352,7 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
                     on_blur: self.on_blur,
                     pending_task: None,
                     subscriptions: Vec::new(),
-                    size: Size::default(),
-                })),
+                },
             };
             field.initialize_value(field_cx);
             field.subscribe_input(window, field_cx);
@@ -532,10 +361,10 @@ impl<V: Clone + PartialEq + 'static> LabeledControlBuilder<V> {
     }
 }
 
-impl<V: FieldValue> LabeledControl<V> {
+impl<V: FieldValue> FormFieldState<V> {
     /// 返回字段稳定标识。
-    pub fn key(&self) -> Option<&SharedString> {
-        self.field().map(|field| &field.key)
+    pub fn key(&self) -> &SharedString {
+        &self.field.key
     }
 
     /// 返回最后一次成功转换得到的业务值。
@@ -543,13 +372,15 @@ impl<V: FieldValue> LabeledControl<V> {
     /// 数值字段当前原始文本非法时，该值仍是最后一次成功值；提交校验会额外检查当前原始
     /// 文本，不能用旧业务值绕过转换错误。
     pub fn value(&self) -> Option<&V> {
-        self.field().and_then(|field| field.value.as_ref())
+        self.field.value.as_ref()
     }
 
     /// 返回当前应展示的错误消息，声明式规则错误优先于异步事件错误。
     pub fn visible_error(&self) -> Option<&SharedString> {
-        self.field()
-            .and_then(|field| field.rule_error.as_ref().or(field.event_error.as_ref()))
+        self.field
+            .rule_error
+            .as_ref()
+            .or(self.field.event_error.as_ref())
     }
 
     /// 返回字段是否存在任一来源的错误。
@@ -557,24 +388,8 @@ impl<V: FieldValue> LabeledControl<V> {
         self.visible_error().is_some()
     }
 
-    fn field(&self) -> Option<&FieldState<V>> {
-        match &self.inner {
-            LabeledControlInner::Field(field) => Some(field),
-            LabeledControlInner::Visual(_) => None,
-        }
-    }
-
-    fn field_mut(&mut self) -> Option<&mut FieldState<V>> {
-        match &mut self.inner {
-            LabeledControlInner::Field(field) => Some(field),
-            LabeledControlInner::Visual(_) => None,
-        }
-    }
-
     fn initialize_value(&mut self, cx: &mut Context<Self>) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
+        let field = &mut self.field;
         let raw = field.raw_text(cx);
         if let Ok(value) = V::parse_field_value(&raw, field.control.is_checkbox()) {
             field.value = Some(value.clone());
@@ -583,9 +398,7 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn subscribe_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
+        let field = &mut self.field;
         let (FieldControl::Input { state, .. } | FieldControl::NumberInput { state }) =
             &field.control
         else {
@@ -604,9 +417,7 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn handle_input_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
+        let field = &mut self.field;
         field.revision += 1;
         let parsed = field.parse_current(cx);
         if let Ok(value) = parsed {
@@ -620,9 +431,7 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn handle_blur_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
+        let field = &mut self.field;
         field.touched = true;
         field.showing_error = true;
         field.validate_rules(cx);
@@ -637,9 +446,7 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn validate_for_submit(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(field) = self.field_mut() else {
-            return true;
-        };
+        let field = &mut self.field;
         field.touched = true;
         field.showing_error = true;
         field.validate_rules(cx);
@@ -648,9 +455,7 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn reset_validation(&mut self, cx: &mut Context<Self>) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
+        let field = &mut self.field;
         field.revision += 1;
         field.pending_task = None;
         field.touched = false;
@@ -661,19 +466,37 @@ impl<V: FieldValue> LabeledControl<V> {
     }
 
     fn take_pending_task(&mut self) -> Option<Task<()>> {
-        self.field_mut().and_then(|field| field.pending_task.take())
+        self.field.pending_task.take()
     }
 
     fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(field) = self.field() else {
-            return;
-        };
-        match &field.control {
+        match &self.field.control {
             FieldControl::Input { state, .. } | FieldControl::NumberInput { state } => {
                 state.update(cx, |state, cx| state.focus(window, cx));
             }
             FieldControl::Checkbox { .. } => {}
         }
+    }
+
+    /// 把官方 `Checkbox` 点击事件产生的新值写入字段状态并触发类型化事件。
+    pub fn update_checkbox(&mut self, checked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let FieldControl::Checkbox { checked: current } = &mut self.field.control else {
+            return;
+        };
+        *current = checked;
+        self.field.revision += 1;
+        if let Ok(value) = V::parse_field_value(&checked.to_string().into(), true) {
+            self.field.value = Some(value.clone());
+            self.field.committed_value = Some(value.clone());
+            self.field
+                .run_handlers(EventKind::Input, value.clone(), window, cx);
+            self.field
+                .run_handlers(EventKind::Change, value, window, cx);
+        }
+        if self.field.showing_error {
+            self.field.validate_rules(cx);
+        }
+        cx.notify();
     }
 }
 
@@ -728,7 +551,7 @@ impl<V: FieldValue> FieldState<V> {
         kind: EventKind,
         value: V,
         _window: &mut Window,
-        cx: &mut Context<LabeledControl<V>>,
+        cx: &mut Context<FormFieldState<V>>,
     ) {
         let handlers = match kind {
             EventKind::Input => self.on_input.clone(),
@@ -740,15 +563,15 @@ impl<V: FieldValue> FieldState<V> {
         }
 
         let revision = self.revision;
-        let task = cx.spawn(async move |field: WeakEntity<LabeledControl<V>>, cx| {
+        let task = cx.spawn(async move |field: WeakEntity<FormFieldState<V>>, cx| {
             let command = Rc::new(RefCell::new(EventCommand::None));
             for handler in handlers {
-                let target = LabeledControlTarget {
+                let target = FormFieldTarget {
                     revision,
                     command: command.clone(),
                     field: field.clone(),
                 };
-                handler(Event {
+                handler(FormFieldEvent {
                     value: value.clone(),
                     current_target: target,
                 })
@@ -756,9 +579,7 @@ impl<V: FieldValue> FieldState<V> {
             }
             let command = command.replace(EventCommand::None);
             let _ = field.update(cx, |field, cx| {
-                let Some(field) = field.field_mut() else {
-                    return;
-                };
+                let field = &mut field.field;
                 if field.revision != revision {
                     return;
                 }
@@ -889,150 +710,3 @@ impl NumberFieldValue for i64 {}
 impl NumberFieldValue for f64 {}
 impl NumberFieldValue for Option<i64> {}
 impl NumberFieldValue for Option<f64> {}
-
-impl RenderOnce for LabeledControl<()> {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        match self.inner {
-            LabeledControlInner::Visual(visual) => render_visual_control(
-                VisualRenderData {
-                    label: visual.label,
-                    child: visual.child,
-                    description: visual.description,
-                    required: visual.required,
-                    error: visual.error,
-                    width: visual.width,
-                    size: visual.size,
-                },
-                cx,
-            ),
-            LabeledControlInner::Field(_) => div().into_any_element(),
-        }
-    }
-}
-
-impl<V: FieldValue> Render for LabeledControl<V> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(field) = self.field_mut() else {
-            return div().into_any_element();
-        };
-        let size = field.size;
-        let has_error = field.rule_error.is_some() || field.event_error.is_some();
-        let control = match &mut field.control {
-            FieldControl::Input { state, password } => {
-                let input = Input::new(state).with_size(size).bordered(true);
-                let input = if *password {
-                    input.mask_toggle().content_type(InputContentType::Password)
-                } else {
-                    input
-                };
-                input
-                    .when(has_error, |this| this.border_color(cx.theme().danger))
-                    .into_any_element()
-            }
-            FieldControl::NumberInput { state } => NumberInput::new(state)
-                .with_size(size)
-                .when(has_error, |this| this.border_color(cx.theme().danger))
-                .into_any_element(),
-            FieldControl::Checkbox { id, checked } => {
-                let id = id.clone();
-                Checkbox::new(id)
-                    .with_size(size)
-                    .checked(*checked)
-                    .on_click(cx.listener(|this, checked, window, cx| {
-                        if let Some(field) = this.field_mut() {
-                            if let FieldControl::Checkbox { checked: state, .. } =
-                                &mut field.control
-                            {
-                                *state = *checked;
-                            }
-                            field.revision += 1;
-                            let value = *checked;
-                            if let Ok(value) = V::parse_field_value(&value.to_string().into(), true)
-                            {
-                                field.value = Some(value.clone());
-                                field.committed_value = Some(value.clone());
-                                field.run_handlers(EventKind::Input, value.clone(), window, cx);
-                                field.run_handlers(EventKind::Change, value, window, cx);
-                            }
-                            if field.showing_error {
-                                field.validate_rules(cx);
-                            }
-                            cx.notify();
-                        }
-                    }))
-                    .into_any_element()
-            }
-        };
-        let error = field
-            .rule_error
-            .clone()
-            .or_else(|| field.event_error.clone());
-        render_visual_control(
-            VisualRenderData {
-                label: field.label.clone(),
-                child: control,
-                description: field.description.clone(),
-                required: field
-                    .rules
-                    .iter()
-                    .any(|rule| matches!(rule, Rule::Required(_))),
-                error,
-                width: None,
-                size,
-            },
-            cx,
-        )
-    }
-}
-
-fn render_visual_control(data: VisualRenderData, cx: &mut App) -> AnyElement {
-    v_flex()
-        .debug_selector(|| "labeled-control".into())
-        .w_full()
-        .min_w_0()
-        .map(|this| match data.size {
-            Size::XSmall => this.gap_0p5(),
-            Size::Large => this.gap_2(),
-            Size::Small | Size::Medium | Size::Size(_) => this.gap_1(),
-        })
-        .when_some(data.width, |this, width| this.w(width))
-        .child(
-            h_flex()
-                .debug_selector(|| "labeled-control-label".into())
-                .gap_1()
-                .child(
-                    Label::new(data.label)
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground),
-                )
-                .when(data.required, |this| {
-                    this.child(
-                        div()
-                            .debug_selector(|| "labeled-control-required".into())
-                            .text_xs()
-                            .text_color(cx.theme().danger)
-                            .child("*"),
-                    )
-                }),
-        )
-        .when_some(data.description, |this, description| {
-            this.child(
-                div()
-                    .debug_selector(|| "labeled-control-description".into())
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(description),
-            )
-        })
-        .child(data.child)
-        .when_some(data.error, |this, error| {
-            this.child(
-                div()
-                    .debug_selector(|| "labeled-control-error".into())
-                    .text_xs()
-                    .text_color(cx.theme().danger)
-                    .child(error),
-            )
-        })
-        .into_any_element()
-}

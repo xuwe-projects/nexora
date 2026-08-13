@@ -1,12 +1,13 @@
 //! 默认用户管理页面状态。
 
 use gpui::{
-    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*, px,
+    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*,
 };
 use gpui_component::{
     Disableable as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
+    form::{field, v_form},
     input::{Input, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
     v_flex,
@@ -15,7 +16,7 @@ use gpui_component::{
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, LabeledControl, api_session,
+        AccountClientError, CrudPanel, api_session,
         contract::{RoleResponse, UpdateUserStatusRequest, UserStatus},
     },
 };
@@ -335,20 +336,18 @@ impl Render for UsersPage {
             |page, filter, cx| page.set_type_filter(filter, cx),
             component_size,
         );
-        let keyword_filter = LabeledControl::new(
-            "关键词",
-            Input::new(&self.keyword_input)
-                .with_size(component_size)
-                .cleanable(true)
-                .disabled(self.loading),
-        )
-        .width(px(280.0))
-        .with_size(component_size);
-        let status_filter = LabeledControl::new("状态", status_filter)
-            .width(px(160.0))
-            .with_size(component_size);
-        let type_filter = LabeledControl::new("类型", type_filter)
-            .width(px(160.0))
+        let filters = v_form()
+            .columns(3)
+            .child(
+                field().label("关键词").child(
+                    Input::new(&self.keyword_input)
+                        .with_size(component_size)
+                        .cleanable(true)
+                        .disabled(self.loading),
+                ),
+            )
+            .child(field().label("状态").child(status_filter))
+            .child(field().label("类型").child(type_filter))
             .with_size(component_size);
 
         let content = v_flex()
@@ -379,9 +378,7 @@ impl Render for UsersPage {
                 self.loading,
                 cx.listener(|this, _, _, cx| this.refresh(cx)),
             )
-            .filter(keyword_filter)
-            .filter(status_filter)
-            .filter(type_filter)
+            .filter(filters)
             .action(query_action)
             .action(create_user_action)
             .with_size(component_size)

@@ -2,9 +2,6 @@
 //!
 //! 该 crate 用于沉淀跨桌面应用复用的 UI 组件、主题、布局工具和视觉资源。
 
-/// 桌面工作区中用于承载表格、表单和摘要的内容卡片。
-pub mod card;
-
 /// 基于 gpui-component 组合实现的级联选择器。
 pub mod cascader;
 
@@ -20,8 +17,8 @@ pub mod data_table_layout;
 /// 桌面应用中可复用的布局组件。
 pub mod layout;
 
-/// 通用的“标签 + 控件”字段容器。
-pub mod labeled_control;
+/// 无视觉表单字段状态。
+pub mod form_field_state;
 
 /// 桌面应用未登录时复用的认证门禁。
 pub mod login_gate;
@@ -44,7 +41,6 @@ pub mod table_cell;
 /// 窗口级 Dialog、Sheet 与 Notification 遮罩层组合。
 pub mod window_layers;
 
-pub use card::Card;
 pub use cascader::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
 };
@@ -57,10 +53,10 @@ pub use data_table_layout::{
     DataTableColumnLayout, DataTableLayout, DataTableLayoutError, DataTableLayoutKey,
     apply_data_table_layout, capture_data_table_layout, data_table_layout_from_event,
 };
-pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft, FormItem, FormItemControl};
-pub use labeled_control::{
-    AnyFormField, Event, FieldValue, FieldValueParseError, LabeledControl, LabeledControlBuilder,
-    LabeledControlTarget, NumberFieldValue,
+pub use form_dialog::{FormDialog, FormDialogState, FormFieldDraft};
+pub use form_field_state::{
+    AnyFormFieldState, FieldValue, FieldValueParseError, FormFieldEvent, FormFieldState,
+    FormFieldStateBuilder, FormFieldTarget, NumberFieldValue,
 };
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;

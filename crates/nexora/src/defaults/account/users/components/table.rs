@@ -18,7 +18,7 @@ use crate::{
     desktop::contract::{UserResponse, UserStatus, UserType},
     persistent_crud_table_state,
 };
-use ui::{Card, CrudTableDelegate, TableCell};
+use ui::{CrudTableDelegate, TableCell};
 
 use super::UsersPage;
 
@@ -282,13 +282,11 @@ impl UserTypeFilter {
 
 impl Render for UsersTable {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().w_full().flex_1().min_h_0().child(
-            Card::new().size_full().overflow_hidden().child(
-                DataTable::new(&self.state)
-                    .stripe(true)
-                    .bordered(true)
-                    .with_size(px(USER_TABLE_ROW_HEIGHT)),
-            ),
+        div().w_full().flex_1().min_h_0().overflow_hidden().child(
+            DataTable::new(&self.state)
+                .stripe(true)
+                .bordered(true)
+                .with_size(px(USER_TABLE_ROW_HEIGHT)),
         )
     }
 }
