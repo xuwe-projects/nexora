@@ -1,26 +1,25 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, Context, Div, Entity, IntoElement, Render, SharedString, Window, div, prelude::*,
-    px,
+    AnyView, App, Context, Entity, IntoElement, Render, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, IconName, Sizable as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    form::{field, v_form},
-    h_flex,
+    form::field,
     input::{Input, InputState, NumberInput},
     v_flex,
 };
 use nexora::{
     Application as _, ApplicationOptions, Feature, FeatureElement,
     desktop::{
-        CrudPanel, CrudPanelToolbar, FormDialog, FormDialogState, FormFieldEvent, FormFieldState,
-        SidebarRegion, TableCell, TableHeaderCell,
+        CrudListState, CrudPage, CrudPanel, FormDialog, FormDialogState, FormFieldEvent,
+        FormFieldState, PageQuery,
     },
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Feature)]
 #[nexora(
@@ -32,6 +31,7 @@ use nexora::{
 )]
 struct HomeFeature {
     search_input: Option<Entity<InputState>>,
+    showcase: Option<Entity<CrudListState<ShowcaseRow, ShowcaseQuery>>>,
     form_state: Option<Entity<FormDialogState>>,
     dialog_layer: Option<Entity<ShowcaseDialogLayer>>,
 }
@@ -73,6 +73,24 @@ impl FeatureElement for HomeFeature {
         });
         self.search_input =
             Some(cx.new(|cx| InputState::new(window, cx).placeholder("筛选组件名称")));
+        let showcase = CrudListState::create(
+            ShowcaseQuery::default(),
+            |query| async move {
+                let rows = showcase_rows();
+                let total = rows.len();
+                Ok(CrudPage::new(
+                    rows,
+                    query.page.page,
+                    query.page.page_size,
+                    total,
+                ))
+            },
+            window,
+            cx,
+        )
+        .expect("desktop_basic 查询必须可序列化");
+        showcase.update(cx, CrudListState::load_current);
+        self.showcase = Some(showcase);
         self.form_state = Some(form_state.clone());
         self.dialog_layer = Some(cx.new(|_| ShowcaseDialogLayer {
             state: form_state,
@@ -95,18 +113,20 @@ impl FeatureElement for HomeFeature {
             .search_input
             .as_ref()
             .expect("desktop_basic 搜索输入必须先完成 initialize");
+        let showcase = self
+            .showcase
+            .as_ref()
+            .expect("desktop_basic CRUD 状态必须先完成 initialize");
 
-        let search_filter = v_form().child(
-            field()
-                .label("组件筛选")
-                .description("静态示例控件，不会发起查询。")
-                .w(px(280.0))
-                .child(
-                    Input::new(search_input)
-                        .with_size(component_size)
-                        .cleanable(true),
-                ),
-        );
+        let search_filter = field()
+            .label("组件筛选")
+            .description("静态示例控件，不会发起查询。")
+            .w(px(280.0))
+            .child(
+                Input::new(search_input)
+                    .with_size(component_size)
+                    .cleanable(true),
+            );
 
         let open_form_action = Button::new("desktop-basic-open-form-dialog")
             .primary()
@@ -117,15 +137,15 @@ impl FeatureElement for HomeFeature {
                 this.open_form_dialog(window, cx);
             }));
 
-        CrudPanel::new("Nexora 组件 Showcase", showcase_content(cx))
-            .description("通过 nexora::desktop facade 展示轻量、可组合的桌面组件。")
-            .toolbar(
-                CrudPanelToolbar::new()
-                    .filter(search_filter)
-                    .action(open_form_action),
-            )
-            .refresh("desktop-basic-refresh", false, false, |_, _, _| {})
-            .with_size(component_size)
+        CrudPanel::new(
+            "desktop-basic-showcase",
+            "Nexora 组件 Showcase",
+            showcase.clone(),
+        )
+        .description("通过 nexora::desktop facade 展示轻量、可组合的桌面组件。")
+        .filter(search_filter)
+        .header_action(open_form_action)
+        .with_size(component_size)
     }
 }
 
@@ -242,172 +262,49 @@ fn field_control(
         })
 }
 
-fn showcase_content(cx: &mut Context<HomeFeature>) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .min_h_0()
-        .gap_4()
-        .child(
-            showcase_grid()
-                .child(showcase_card(
-                    "CrudPanel",
-                    "三段式资源页面骨架：摘要、工具栏和主体内容。",
-                    "当前页面本身就是 CrudPanel 示例。",
-                    cx,
-                ))
-                .child(showcase_card(
-                    "Form 与 Field",
-                    "官方表单负责标签、说明、必填语义与字段布局。",
-                    "上方工具栏里的筛选输入由官方 Field 组合。",
-                    cx,
-                ))
-                .child(showcase_card(
-                    "SidebarRegion",
-                    "Sidebar 插槽里的稳定交互区域，不会隐式注入 hover 或点击语义。",
-                    "下面的品牌与上下文区域共用这个组件。",
-                    cx,
-                )),
-        )
-        .child(sidebar_region_example(cx))
-        .child(table_cell_example(cx))
+#[derive(Clone, Default, Serialize, Deserialize, nexora::CrudQuery)]
+#[nexora(page_size(default = 25, min = 15, max = 100, options = [15, 25, 50, 100]))]
+struct ShowcaseQuery {
+    #[nexora(pagination)]
+    #[serde(flatten)]
+    page: PageQuery,
+    #[nexora(filter(label = "关键词", placeholder = "组件名称", control = "input"))]
+    keyword: Option<String>,
 }
 
-fn showcase_grid() -> Div {
-    div().grid().grid_cols(3).gap_3().w_full().max_w_full()
-}
-
-fn showcase_card(
-    title: &'static str,
-    description: &'static str,
-    note: &'static str,
-    cx: &mut Context<HomeFeature>,
-) -> impl IntoElement {
-    div()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().background)
-        .p_4()
-        .child(div().text_sm().font_semibold().child(title))
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(description),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(note),
-        )
-}
-
-fn sidebar_region_example(cx: &mut Context<HomeFeature>) -> impl IntoElement {
-    let theme = cx.theme();
-
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.background)
-        .p_4()
-        .child(div().text_sm().font_semibold().child("SidebarRegion 示例"))
-        .child(
-            h_flex()
-                .gap_3()
-                .child(
-                    SidebarRegion::new("desktop-basic-brand-region")
-                        .gap_3()
-                        .rounded(theme.radius)
-                        .border_1()
-                        .border_color(theme.border)
-                        .p_3()
-                        .child(div().size_6().rounded_full().bg(theme.primary))
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .gap_0p5()
-                                .child(div().text_sm().font_semibold().child("Nexora"))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child("品牌区域"),
-                                ),
-                        ),
-                )
-                .child(
-                    SidebarRegion::new("desktop-basic-context-region")
-                        .gap_3()
-                        .rounded(theme.radius)
-                        .border_1()
-                        .border_color(theme.border)
-                        .p_3()
-                        .child(div().text_sm().font_semibold().child("当前工作区")),
-                ),
-        )
-}
-
-fn table_cell_example(cx: &mut Context<HomeFeature>) -> impl IntoElement {
-    let theme = cx.theme();
-
-    div()
-        .flex()
-        .flex_col()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.background)
-        .overflow_hidden()
-        .child(
-            div()
-                .grid()
-                .grid_cols(3)
-                .h(px(40.0))
-                .border_b_1()
-                .border_color(theme.border)
-                .bg(theme.tokens.group_box)
-                .child(TableHeaderCell::new("组件").left())
-                .child(TableHeaderCell::new("用途").left())
-                .child(TableHeaderCell::new("状态").right()),
-        )
-        .child(table_row(
-            "TableCell",
-            "正文单元格对齐",
-            TableCell::new("Ready").right(),
-            cx,
-        ))
-        .child(table_row(
-            "FormDialog",
-            "Panel 内表单遮罩",
-            TableCell::new("Interactive").right(),
-            cx,
-        ))
-}
-
-fn table_row(
-    name: &'static str,
+#[derive(Clone, nexora::CrudTableRow)]
+struct ShowcaseRow {
+    #[nexora(row_id, skip)]
+    id: &'static str,
+    #[nexora(column(title = "组件", width = 180.))]
+    component: &'static str,
+    #[nexora(column(title = "用途", width = 340.))]
     usage: &'static str,
-    status: TableCell,
-    cx: &mut Context<HomeFeature>,
-) -> impl IntoElement {
-    div()
-        .grid()
-        .grid_cols(3)
-        .h(px(44.0))
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .child(TableCell::new(name).left())
-        .child(TableCell::new(usage).left())
-        .child(status)
+    #[nexora(column(title = "状态", width = 120., align = "right"))]
+    status: &'static str,
+}
+
+fn showcase_rows() -> Vec<ShowcaseRow> {
+    vec![
+        ShowcaseRow {
+            id: "crud-panel",
+            component: "CrudPanel",
+            usage: "强类型分页、缓存与表格骨架",
+            status: "Ready",
+        },
+        ShowcaseRow {
+            id: "form-field",
+            component: "Form / Field",
+            usage: "官方字段布局与无视觉校验状态",
+            status: "Ready",
+        },
+        ShowcaseRow {
+            id: "sidebar-region",
+            component: "SidebarRegion",
+            usage: "Sidebar 插槽稳定交互区域",
+            status: "Ready",
+        },
+    ]
 }
 
 struct DesktopBasicApplication;

@@ -339,6 +339,31 @@ fn with_table_fixture(
 }
 
 #[gpui::test]
+fn sparse_rows_use_total_as_logical_count_and_keep_current_page_selection_rows(
+    cx: &mut TestAppContext,
+) {
+    let current = vec![TestRow::new(21, "第二页")];
+    let delegate = CrudTableDelegate::new(Vec::new()).selection(CrudTableSelection::new(
+        Vec::new(),
+        |_, _, _| {},
+        |_, _, _| {},
+    ));
+    let mut delegate = delegate;
+    delegate.replace_sparse_rows(
+        40,
+        current,
+        [
+            (0, TestRow::new(1, "第一页")),
+            (20, TestRow::new(21, "第二页")),
+        ],
+    );
+
+    assert_eq!(cx.read(|cx| delegate.rows_count(cx)), 40);
+    assert_eq!(delegate.rows().len(), 1);
+    assert_eq!(delegate.rows()[0].id, 21);
+}
+
+#[gpui::test]
 fn row_checkbox_dispatches_single_row_selection_event(cx: &mut TestAppContext) {
     with_table_fixture(
         cx,

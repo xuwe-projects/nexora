@@ -1,324 +1,307 @@
-//! 标准 CRUD Panel 骨架。
-//!
-//! 本模块提供三段式资源管理 Panel：顶部摘要卡片、可选筛选/操作工具栏，以及默认填满剩余
-//! 高度的主内容区。分页、虚拟滚动和数据加载策略仍由调用方传入的表格或列表组件负责。
-
-use std::rc::Rc;
+//! 强类型标准 CRUD 资源管理 Panel。
 
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div,
-    prelude::*,
+    AnyElement, App, ElementId, Entity, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    Window, div, prelude::*,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, Size, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Sizable as _, Size, StyledExt as _,
+    alert::Alert,
     button::Button,
-    group_box::{GroupBox, GroupBoxVariants as _},
-    h_flex, v_flex,
+    form::{Field, v_form},
+    h_flex,
+    pagination::Pagination,
+    table::DataTable,
+    v_flex,
 };
 
-const REFRESH_ICON_PATH: &str = "icons/rotate-ccw.svg";
+use crate::{CrudListState, CrudTableRow};
 
-type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
-struct CrudRefreshAction {
-    id: String,
-    loading: bool,
-    disabled: bool,
-    on_click: ClickHandler,
-}
-
-/// CRUD Panel 中位于标题摘要下方的可选工具栏。
+/// 标准单主数据集分页列表的默认 Panel。
 ///
-/// 工具栏分为两个区域：左侧/上方的筛选条件区，以及右侧/下方的操作区。调用方可以只提供
-/// 其中一个区域；如果两个区域都为空，工具栏会渲染为空元素，配合 [`CrudPanel`] 使用时则会
-/// 直接省略整张工具栏卡片。
-#[derive(Default, IntoElement)]
-pub struct CrudPanelToolbar {
-    filters: Vec<AnyElement>,
-    actions: Vec<AnyElement>,
-}
-
-impl CrudPanelToolbar {
-    /// 创建一个没有筛选条件和操作按钮的工具栏。
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// 添加一个筛选条件控件。
-    ///
-    /// 控件通常是 `Input`、`Select`、`Combobox`、日期选择器或自定义筛选组合。工具栏只负
-    /// 责排列和换行，不解释控件的业务语义。
-    #[must_use]
-    pub fn filter(mut self, filter: impl IntoElement) -> Self {
-        self.filters.push(filter.into_any_element());
-        self
-    }
-
-    /// 批量添加筛选条件控件。
-    ///
-    /// 该方法适合调用方已经按权限、配置或资源类型生成了一组筛选控件的场景。
-    #[must_use]
-    pub fn filters<E>(mut self, filters: impl IntoIterator<Item = E>) -> Self
-    where
-        E: IntoElement,
-    {
-        self.filters
-            .extend(filters.into_iter().map(IntoElement::into_any_element));
-        self
-    }
-
-    /// 添加一个操作控件。
-    ///
-    /// 操作通常是查询、创建、导入、导出或批量操作按钮。多个操作会按添加顺序排列在工具栏
-    /// 的操作区。
-    #[must_use]
-    pub fn action(mut self, action: impl IntoElement) -> Self {
-        self.actions.push(action.into_any_element());
-        self
-    }
-
-    /// 批量添加操作控件。
-    ///
-    /// 该方法适合调用方根据选择状态、权限或资源状态生成一组操作按钮的场景。
-    #[must_use]
-    pub fn actions<E>(mut self, actions: impl IntoIterator<Item = E>) -> Self
-    where
-        E: IntoElement,
-    {
-        self.actions
-            .extend(actions.into_iter().map(IntoElement::into_any_element));
-        self
-    }
-
-    /// 返回工具栏是否没有任何可见内容。
-    pub fn is_empty(&self) -> bool {
-        self.filters.is_empty() && self.actions.is_empty()
-    }
-}
-
-impl RenderOnce for CrudPanelToolbar {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let has_filters = !self.filters.is_empty();
-        let has_actions = !self.actions.is_empty();
-        if !has_filters && !has_actions {
-            return div().into_any_element();
-        }
-
-        GroupBox::new()
-            .outline()
-            .w_full()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .child(
-                v_flex()
-                    .w_full()
-                    .when(has_filters, |this| {
-                        this.child(
-                            h_flex()
-                                .w_full()
-                                .flex_wrap()
-                                .gap_2()
-                                .p_3()
-                                .children(self.filters),
-                        )
-                    })
-                    .when(has_actions, |this| {
-                        this.child(
-                            h_flex()
-                                .w_full()
-                                .flex_wrap()
-                                .justify_end()
-                                .gap_2()
-                                .px_3()
-                                .py_3()
-                                .when(has_filters, |this| {
-                                    this.border_t_1().border_color(cx.theme().border)
-                                })
-                                .children(self.actions),
-                        )
-                    }),
-            )
-            .into_any_element()
-    }
-}
-
-/// 标准 CRUD 资源管理 Panel 布局。
-///
-/// Panel 固定由顶部摘要卡片、可选 [`CrudPanelToolbar`] 和主内容区组成。主内容区会以
-/// `flex_1` 和 `min_h_0` 填满剩余高度，因此传入的 `DataTable`、虚拟列表或自定义内容可以在自身内部
-/// 管理 Y 轴滚动与无限加载。
+/// `R` 必须实现 [`CrudTableRow`]，`Q` 必须实现 [`contracts::crud_query::CrudQuery`]；因此任意
+/// 内容不能再伪装成 CRUD Panel。筛选字段直接接收官方 [`Field`]，表格和分页也使用官方组件。
 #[derive(IntoElement)]
-pub struct CrudPanel {
+pub struct CrudPanel<R, Q>
+where
+    R: CrudTableRow,
+    Q: contracts::crud_query::CrudQuery,
+{
+    id: ElementId,
     title: SharedString,
     description: Option<SharedString>,
-    refresh: Option<CrudRefreshAction>,
-    toolbar: CrudPanelToolbar,
-    content: AnyElement,
+    state: Entity<CrudListState<R, Q>>,
+    quick_filters: Vec<AnyElement>,
+    fields: Vec<Field>,
+    header_actions: Vec<AnyElement>,
+    toolbar_actions: Vec<AnyElement>,
+    filter_columns: usize,
     size: Size,
 }
 
-impl CrudPanel {
-    /// 创建一个带标题和主内容区的 CRUD Panel。
-    ///
-    /// `content` 是底部主体区域，通常传入表格、列表或一个包含错误提示与表格的垂直布局。
-    pub fn new(title: impl Into<SharedString>, content: impl IntoElement) -> Self {
+impl<R, Q> CrudPanel<R, Q>
+where
+    R: CrudTableRow,
+    Q: contracts::crud_query::CrudQuery,
+{
+    /// 创建绑定强类型列表状态的 CRUD Panel。
+    pub fn new(
+        id: impl Into<ElementId>,
+        title: impl Into<SharedString>,
+        state: Entity<CrudListState<R, Q>>,
+    ) -> Self {
         Self {
+            id: id.into(),
             title: title.into(),
             description: None,
-            refresh: None,
-            toolbar: CrudPanelToolbar::new(),
-            content: content.into_any_element(),
+            state,
+            quick_filters: Vec::new(),
+            fields: Vec::new(),
+            header_actions: Vec::new(),
+            toolbar_actions: Vec::new(),
+            filter_columns: 1,
             size: Size::default(),
         }
     }
 
-    /// 设置顶部摘要卡片中的描述文本。
-    ///
-    /// 描述适合展示资源说明、已加载数量、当前筛选结果数量等只读摘要。
+    /// 设置标题下方的资源说明。
     #[must_use]
     pub fn description(mut self, description: impl Into<SharedString>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// 设置顶部摘要卡片右侧的刷新按钮。
-    ///
-    /// 刷新按钮使用项目统一的 `rotate-ccw.svg` 图标。建议把它用于重新拉取当前资源数据；
-    /// 针对筛选条件的“查询/应用筛选”操作应作为工具栏 action 传入，避免页面级刷新与查询语
-    /// 义混在一起。
+    /// 添加由 `CrudQuery` 快速筛选字段驱动的官方控件。
     #[must_use]
-    pub fn refresh(
-        mut self,
-        id: impl Into<String>,
-        loading: bool,
-        disabled: bool,
-        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.refresh = Some(CrudRefreshAction {
-            id: id.into(),
-            loading,
-            disabled,
-            on_click: Rc::new(on_click),
-        });
+    pub fn quick_filter(mut self, filter: impl IntoElement) -> Self {
+        self.quick_filters.push(filter.into_any_element());
         self
     }
 
-    /// 替换整块可选工具栏。
-    ///
-    /// 如果传入的工具栏没有筛选条件和操作按钮，渲染时会省略工具栏卡片。
+    /// 添加官方 `Form` 使用的筛选字段。
     #[must_use]
-    pub fn toolbar(mut self, toolbar: CrudPanelToolbar) -> Self {
-        self.toolbar = toolbar;
+    pub fn filter(mut self, field: Field) -> Self {
+        self.fields.push(field);
         self
     }
 
-    /// 向默认工具栏添加一个筛选条件控件。
-    ///
-    /// 这是 [`CrudPanelToolbar::filter`] 的便捷转发，适合页面只需要少量筛选控件时直接链式调
-    /// 用。
+    /// 设置标准筛选表单列数。
     #[must_use]
-    pub fn filter(mut self, filter: impl IntoElement) -> Self {
-        self.toolbar = self.toolbar.filter(filter);
+    pub fn filter_columns(mut self, columns: usize) -> Self {
+        self.filter_columns = columns.max(1);
         self
     }
 
-    /// 向默认工具栏批量添加筛选条件控件。
-    ///
-    /// 这是 [`CrudPanelToolbar::filters`] 的便捷转发。
+    /// 添加创建、导出等页面主操作。
     #[must_use]
-    pub fn filters<E>(mut self, filters: impl IntoIterator<Item = E>) -> Self
-    where
-        E: IntoElement,
-    {
-        self.toolbar = self.toolbar.filters(filters);
+    pub fn header_action(mut self, action: impl IntoElement) -> Self {
+        self.header_actions.push(action.into_any_element());
         self
     }
 
-    /// 向默认工具栏添加一个操作控件。
-    ///
-    /// 这是 [`CrudPanelToolbar::action`] 的便捷转发，适合页面只需要少量操作按钮时直接链式调
-    /// 用。
+    /// 添加导入、重置、批量处理等辅助操作。
     #[must_use]
-    pub fn action(mut self, action: impl IntoElement) -> Self {
-        self.toolbar = self.toolbar.action(action);
+    pub fn toolbar_action(mut self, action: impl IntoElement) -> Self {
+        self.toolbar_actions.push(action.into_any_element());
         self
     }
 
-    /// 向默认工具栏批量添加操作控件。
-    ///
-    /// 这是 [`CrudPanelToolbar::actions`] 的便捷转发。
-    #[must_use]
-    pub fn actions<E>(mut self, actions: impl IntoIterator<Item = E>) -> Self
-    where
-        E: IntoElement,
-    {
-        self.toolbar = self.toolbar.actions(actions);
-        self
-    }
-
-    /// 返回当前 Panel 是否会渲染工具栏卡片。
-    pub fn has_toolbar(&self) -> bool {
-        !self.toolbar.is_empty()
+    /// 返回当前 Panel 是否会渲染筛选表单。
+    pub fn has_filters(&self) -> bool {
+        !self.fields.is_empty()
     }
 }
 
-impl gpui_component::Sizable for CrudPanel {
+impl<R, Q> gpui_component::Sizable for CrudPanel<R, Q>
+where
+    R: CrudTableRow,
+    Q: contracts::crud_query::CrudQuery,
+{
     fn with_size(mut self, size: impl Into<Size>) -> Self {
         self.size = size.into();
         self
     }
 }
 
-impl RenderOnce for CrudPanel {
+impl<R, Q> RenderOnce for CrudPanel<R, Q>
+where
+    R: CrudTableRow,
+    Q: contracts::crud_query::CrudQuery,
+{
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let has_toolbar = !self.toolbar.is_empty();
+        let state = self.state.read(cx);
+        let total = state.total();
+        let page = state.visible_page() as usize;
+        let total_pages = state.total_pages() as usize;
+        let page_size = state.page_size();
+        let loading = state.is_loading();
+        let refreshing = state.is_refreshing();
+        let error = state.visible_error().cloned();
+        let table_state = state.table_state().clone();
+        let has_rows = !state.current_rows().is_empty();
+        let weak_for_page = self.state.downgrade();
+        let weak_for_retry = self.state.downgrade();
+        let id = self.id.clone();
         let size = self.size;
+        let has_quick_filters = !self.quick_filters.is_empty();
+        let has_fields = !self.fields.is_empty();
+        let has_toolbar_actions = !self.toolbar_actions.is_empty();
+
+        let header = h_flex()
+            .w_full()
+            .min_w_0()
+            .items_start()
+            .justify_between()
+            .gap_4()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().text_xl().font_bold().child(self.title))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("共 {total} 条")),
+                            ),
+                    )
+                    .when_some(self.description, |this, description| {
+                        this.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(description),
+                        )
+                    }),
+            )
+            .when(!self.header_actions.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .flex_wrap()
+                        .justify_end()
+                        .gap_2()
+                        .children(self.header_actions),
+                )
+            });
+
+        let controls = v_flex()
+            .w_full()
+            .gap_3()
+            .when(has_quick_filters, |this| {
+                this.child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(self.quick_filters),
+                )
+            })
+            .when(has_fields, |this| {
+                this.child(
+                    v_form()
+                        .columns(self.filter_columns)
+                        .children(self.fields)
+                        .with_size(size),
+                )
+            })
+            .when(has_toolbar_actions, |this| {
+                this.child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .justify_end()
+                        .gap_2()
+                        .children(self.toolbar_actions),
+                )
+            });
+
+        let table = DataTable::new(&table_state)
+            .stripe(true)
+            .bordered(true)
+            .with_size(size);
+        let body = v_flex()
+            .w_full()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .when_some(error.clone(), |this, error| {
+                let message = error.message().clone();
+                this.child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            Alert::error((id.clone(), "load-error"), message).title("数据加载失败"),
+                        )
+                        .when(error.is_retryable(), |this| {
+                            this.child(
+                                Button::new((id.clone(), "retry"))
+                                    .outline()
+                                    .with_size(size)
+                                    .label("重试")
+                                    .on_click(move |_, _, cx| {
+                                        _ = weak_for_retry.update(cx, |state, cx| {
+                                            state.retry_visible(cx);
+                                        });
+                                    }),
+                            )
+                        }),
+                )
+            })
+            .when(refreshing, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("正在刷新当前页…"),
+                )
+            })
+            .when(!error.is_some() || has_rows || loading, |this| {
+                this.child(div().w_full().flex_1().min_h_0().child(table))
+            });
 
         v_flex()
+            .id(self.id)
             .size_full()
             .min_h_0()
             .gap_4()
             .p_5()
-            .child(
-                GroupBox::new().fill().w_full().flex_shrink_0().child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .justify_between()
-                        .gap_4()
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_1()
-                                .child(div().text_xl().font_bold().child(self.title))
-                                .when_some(self.description, |this, description| {
-                                    this.child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(description),
-                                    )
-                                }),
-                        )
-                        .when_some(self.refresh, |this, action| {
-                            let on_click = action.on_click;
-                            this.child(
-                                Button::new(action.id)
-                                    .outline()
-                                    .with_size(size)
-                                    .icon(Icon::default().path(REFRESH_ICON_PATH))
-                                    .label("刷新")
-                                    .loading(action.loading)
-                                    .disabled(action.loading || action.disabled)
-                                    .on_click(move |event, window, cx| {
-                                        on_click(event, window, cx);
-                                    }),
-                            )
-                        }),
-                ),
+            .child(header)
+            .when(
+                has_quick_filters || has_fields || has_toolbar_actions,
+                |this| this.child(controls),
             )
-            .when(has_toolbar, |this| this.child(self.toolbar))
-            .child(v_flex().w_full().flex_1().min_h_0().child(self.content))
+            .child(body)
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "第 {page} / {total_pages} 页 · 每页 {page_size} 条"
+                            )),
+                    )
+                    .child(
+                        Pagination::new((id, "pagination"))
+                            .current_page(page)
+                            .total_pages(total_pages)
+                            .with_size(size)
+                            .disabled(loading)
+                            .on_click(move |page, _, cx| {
+                                _ = weak_for_page.update(cx, |state, cx| {
+                                    state.go_to_page(*page as u32, cx);
+                                });
+                            }),
+                    ),
+            )
     }
 }

@@ -243,13 +243,11 @@ fn parse_crud_query(input: &DeriveInput) -> Result<ParsedCrudQuery> {
                 "同一个字段不能同时承担分页、排序和筛选职责",
             ));
         }
-        if is_pagination {
-            if pagination.replace(ident.clone()).is_some() {
-                return Err(Error::new_spanned(
-                    field,
-                    "CrudQuery 必须且只能声明一个 pagination 字段",
-                ));
-            }
+        if is_pagination && pagination.replace(ident.clone()).is_some() {
+            return Err(Error::new_spanned(
+                field,
+                "CrudQuery 必须且只能声明一个 pagination 字段",
+            ));
         }
         if is_sort {
             if sort.is_some() {

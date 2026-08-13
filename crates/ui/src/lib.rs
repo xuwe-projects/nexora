@@ -8,6 +8,9 @@ pub mod cascader;
 /// 标准 CRUD 资源管理 Panel 骨架。
 pub mod crud_panel;
 
+/// 标准 CRUD 分页列表的查询、缓存、选择与异步加载状态。
+pub mod crud_list_state;
+
 /// 标准 CRUD 数据表增强能力。
 pub mod crud_table;
 
@@ -44,7 +47,8 @@ pub mod window_layers;
 pub use cascader::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
 };
-pub use crud_panel::{CrudPanel, CrudPanelToolbar};
+pub use crud_list_state::{CrudListState, CrudListStateError, CrudLoadError, CrudPage};
+pub use crud_panel::CrudPanel;
 pub use crud_table::{
     CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
     RowSelectionEvent,

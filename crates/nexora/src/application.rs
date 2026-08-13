@@ -229,7 +229,7 @@ pub struct ShellToolbarAction {
 #[derive(Clone)]
 enum ShellToolbarRenderer {
     Standard {
-        icon: Icon,
+        icon: Box<Icon>,
         tooltip: gpui::SharedString,
         badge: usize,
         disabled: bool,
@@ -255,7 +255,7 @@ impl ShellToolbarAction {
             id: id.into(),
             order,
             render: ShellToolbarRenderer::Standard {
-                icon: icon.into(),
+                icon: Box::new(icon.into()),
                 tooltip: tooltip.into(),
                 badge: 0,
                 disabled: false,
@@ -341,7 +341,7 @@ impl ShellToolbarAction {
                 let button = Button::new(self.id.clone())
                     .ghost()
                     .xsmall()
-                    .icon(icon.clone())
+                    .icon(icon.as_ref().clone())
                     .tooltip(tooltip.clone())
                     .loading(*loading)
                     .disabled(*disabled || *loading)

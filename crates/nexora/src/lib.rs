@@ -51,6 +51,8 @@ pub use application::{
 pub use application_info::ApplicationInfo;
 #[cfg(feature = "derive")]
 pub use contracts::CrudQuery;
+#[cfg(feature = "derive")]
+pub use contracts::pagination::PageQuery;
 #[cfg(feature = "desktop")]
 pub use global_search::{
     SearchAction, SearchActionError, SearchHistoryEntry, SearchItem, SearchMode, SearchProvider,

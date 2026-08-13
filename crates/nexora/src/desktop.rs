@@ -35,15 +35,16 @@ pub use ::updater::{
     UpdateManifestSignature, UpdateRelease, UpdateSession, UpdateTarget, Updater,
     report_health_from_env_args, run_sidecar_from_env_args,
 };
+pub use contracts::pagination::PageQuery;
 pub use theme::{ColorScheme, ThemePresetMetadata, ThemeSelection, ThemeSelectionError};
 pub use ui::{
     Cascader, CascaderEvent, CascaderOption, CascaderSelection, CascaderState, CascaderValueError,
-    CrudPanel, CrudPanelToolbar, CrudTableDelegate, CrudTableRow, CrudTableSelection,
-    DataTableColumnLayout, DataTableLayout, DataTableLayoutError, DataTableLayoutKey, FieldValue,
-    FieldValueParseError, FormDialog, FormDialogState, FormFieldDraft, FormFieldEvent,
-    FormFieldState, FormFieldStateBuilder, FormFieldTarget, LoadedRowsSelectionEvent,
-    NumberFieldValue, RowSelectionEvent, SidebarRegion, TableCell, TableCellVerticalAlign,
-    TableHeaderCell,
+    CrudListState, CrudListStateError, CrudLoadError, CrudPage, CrudPanel, CrudTableDelegate,
+    CrudTableRow, CrudTableSelection, DataTableColumnLayout, DataTableLayout, DataTableLayoutError,
+    DataTableLayoutKey, FieldValue, FieldValueParseError, FormDialog, FormDialogState,
+    FormFieldDraft, FormFieldEvent, FormFieldState, FormFieldStateBuilder, FormFieldTarget,
+    LoadedRowsSelectionEvent, NumberFieldValue, RowSelectionEvent, SidebarRegion, TableCell,
+    TableCellVerticalAlign, TableHeaderCell,
 };
 
 /// 返回当前应用已注册的全部主题预设元数据。

@@ -1,13 +1,14 @@
 //! 默认用户管理页面状态。
 
 use gpui::{
-    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*,
+    Anchor, App, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*,
 };
 use gpui_component::{
-    Disableable as _, IconName, Sizable as _,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
+    h_flex,
     input::{Input, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
     v_flex,
@@ -16,7 +17,7 @@ use gpui_component::{
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, api_session,
+        AccountClientError, api_session,
         contract::{RoleResponse, UpdateUserStatusRequest, UserStatus},
     },
 };
@@ -124,6 +125,10 @@ impl UsersPage {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.load_page(1, UserLoadMode::Replace, cx);
+    }
+
+    pub(in crate::defaults::account::users) fn reload(&mut self, cx: &mut Context<Self>) {
+        self.refresh(cx);
     }
 
     fn load_page(&mut self, page: u32, mode: UserLoadMode, cx: &mut Context<Self>) {
@@ -367,21 +372,48 @@ impl Render for UsersPage {
             })
             .child(self.users_table.clone());
 
-        CrudPanel::new("用户管理", content)
-            .description(format!(
-                "已加载 {loaded_count} / {} 个本地用户 · 当前显示 {visible_count} 个",
-                self.total.max(0),
-            ))
-            .refresh(
-                "refresh-default-account-users",
-                self.loading,
-                self.loading,
-                cx.listener(|this, _, _, cx| this.refresh(cx)),
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_4()
+            .p_5()
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_xl().font_bold().child("用户管理"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "已加载 {loaded_count} / {} 个本地用户 · 当前显示 {visible_count} 个",
+                                        self.total.max(0),
+                                    )),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("refresh-default-account-users")
+                                    .outline()
+                                    .with_size(component_size)
+                                    .label("刷新")
+                                    .loading(self.loading)
+                                    .disabled(self.loading)
+                                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                            )
+                            .child(create_user_action),
+                    ),
             )
-            .filter(filters)
-            .action(query_action)
-            .action(create_user_action)
-            .with_size(component_size)
+            .child(filters)
+            .child(h_flex().w_full().justify_end().child(query_action))
+            .child(content)
     }
 }
 

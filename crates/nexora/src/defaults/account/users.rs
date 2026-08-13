@@ -7,8 +7,8 @@ use gpui::{
 };
 
 use crate::{
-    Feature, FeatureElement, FeatureInstance, FeatureMetadata, FeatureRuntimeError, NoPath,
-    NoQuery, RouteMatch,
+    Feature, FeatureElement, FeatureInstance, FeatureMetadata, FeatureReloadAvailability,
+    FeatureRuntimeError, NoPath, NoQuery, RouteMatch,
 };
 
 use self::components::{ProvisionUserDialog, UserRoleEditor, UsersPage};
@@ -80,6 +80,17 @@ impl FeatureElement for DefaultUsersFeature {
         if let Some(page) = &self.page {
             page.update(cx, UsersPage::load_if_needed);
         }
+    }
+
+    fn reload_availability(&self) -> FeatureReloadAvailability {
+        FeatureReloadAvailability::Available
+    }
+
+    fn reload(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        if let Some(page) = &self.page {
+            page.update(cx, UsersPage::reload);
+        }
+        gpui::Task::ready(())
     }
 
     fn panel_overlay(&self) -> Option<AnyView> {

@@ -1,8 +1,10 @@
 //! 默认角色管理页面状态。
 
-use gpui::{Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, prelude::*};
+use gpui::{
+    Anchor, Context, Entity, Render, Subscription, Task, WeakEntity, Window, div, prelude::*,
+};
 use gpui_component::{
-    Disableable as _, IconName, Sizable as _,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     form::{field, v_form},
@@ -17,7 +19,7 @@ use std::collections::BTreeSet;
 use crate::{
     defaults::account::has_permission,
     desktop::{
-        AccountClientError, CrudPanel, api_session,
+        AccountClientError, api_session,
         contract::{PermissionResponse, RoleResponse},
     },
 };
@@ -123,6 +125,12 @@ impl RolesPage {
             });
         }));
         cx.notify();
+    }
+
+    pub(in crate::defaults::account::roles) fn reload(&mut self, cx: &mut Context<Self>) {
+        if !self.loading {
+            self.load(cx);
+        }
     }
 
     fn open_create_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -328,23 +336,50 @@ impl Render for RolesPage {
                 },
             );
 
-        CrudPanel::new("角色与权限", content)
-            .description(format!(
-                "{} 个角色 · 当前显示 {} 个 · {} 项可分配权限",
-                self.roles.len(),
-                filtered_roles.len(),
-                self.permissions.len()
-            ))
-            .refresh(
-                "refresh-default-account-roles",
-                self.loading,
-                self.loading || editor_busy,
-                cx.listener(|this, _, _, cx| this.load(cx)),
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_4()
+            .p_5()
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_xl().font_bold().child("角色与权限"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} 个角色 · 当前显示 {} 个 · {} 项可分配权限",
+                                        self.roles.len(),
+                                        filtered_roles.len(),
+                                        self.permissions.len()
+                                    )),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("refresh-default-account-roles")
+                                    .outline()
+                                    .with_size(component_size)
+                                    .label("刷新")
+                                    .loading(self.loading)
+                                    .disabled(self.loading || editor_busy)
+                                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                            )
+                            .child(create_role_action),
+                    ),
             )
-            .filter(filters)
-            .action(query_action)
-            .action(create_role_action)
-            .with_size(component_size)
+            .child(filters)
+            .child(h_flex().w_full().justify_end().child(query_action))
+            .child(content)
     }
 }
 

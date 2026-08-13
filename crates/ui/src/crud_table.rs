@@ -4,7 +4,7 @@
 //! 行数据可以通过 [`CrudTableRow`] 描述默认列、正文渲染与导出文本，调用方也可以继续直接
 //! 实现原生 `TableDelegate`，不需要经过本模块。
 
-use std::{collections::HashSet, fmt::Display, hash::Hash, rc::Rc};
+use std::{collections::HashSet, fmt::Display, hash::Hash, ops::Range, rc::Rc};
 
 use gpui::{
     AnyElement, App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -13,6 +13,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     checkbox::Checkbox,
+    skeleton::Skeleton,
     table::{Column, TableDelegate, TableState},
     v_flex,
 };
@@ -84,6 +85,8 @@ type LoadMoreHandler<R> = Rc<dyn Fn(&mut Window, &mut Context<TableState<CrudTab
 type RowSelectionHandler<R> = Rc<dyn Fn(RowSelectionEvent<R>, &mut Window, &mut App)>;
 type LoadedRowsSelectionHandler<R> = Rc<dyn Fn(LoadedRowsSelectionEvent<R>, &mut Window, &mut App)>;
 type RowSelectable<R> = Rc<dyn Fn(&R, &App) -> bool>;
+type VisibleRowsHandler<R> =
+    Rc<dyn Fn(Range<usize>, &mut Window, &mut Context<TableState<CrudTableDelegate<R>>>)>;
 
 const SELECTION_COLUMN_KEY: &str = "__nexora_crud_table_selection";
 const SELECTION_COLUMN_WIDTH: f32 = 42.0;
@@ -176,10 +179,12 @@ impl<R: CrudTableRow> CrudTableSelection<R> {
 pub struct CrudTableDelegate<R: CrudTableRow> {
     columns: Vec<Column>,
     rows: Vec<R>,
+    sparse_rows: Option<Vec<Option<R>>>,
     total: usize,
     loading: bool,
     loading_more: bool,
     load_more: Option<LoadMoreHandler<R>>,
+    visible_rows_handler: Option<VisibleRowsHandler<R>>,
     selection: Option<CrudTableSelection<R>>,
     action_columns: Vec<CrudActionColumn<R>>,
     empty_title: SharedString,
@@ -203,10 +208,12 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
         Self {
             columns,
             rows,
+            sparse_rows: None,
             total,
             loading: false,
             loading_more: false,
             load_more: None,
+            visible_rows_handler: None,
             selection: None,
             action_columns: Vec::new(),
             empty_title: SharedString::new("暂无数据"),
@@ -243,7 +250,42 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
     pub fn replace_rows(&mut self, rows: Vec<R>) {
         validate_loaded_row_ids(&rows);
         self.rows = rows;
+        self.sparse_rows = None;
         self.total = self.rows.len();
+    }
+
+    /// 使用总逻辑行数和已缓存位置替换表格的稀疏行快照。
+    ///
+    /// `current_rows` 用于当前页表头全选语义；`loaded_rows` 中的索引以整个查询结果为基准。
+    /// 未提供的位置由官方 [`Skeleton`] 渲染，等待可见范围回调加载对应页。
+    ///
+    /// # Panics
+    ///
+    /// 已加载业务 ID 重复或逻辑索引超出 `total` 时 panic。
+    pub fn replace_sparse_rows(
+        &mut self,
+        total: usize,
+        current_rows: Vec<R>,
+        loaded_rows: impl IntoIterator<Item = (usize, R)>,
+    ) {
+        let loaded_rows = loaded_rows.into_iter().collect::<Vec<_>>();
+        let rows = loaded_rows
+            .iter()
+            .map(|(_, row)| row.clone())
+            .collect::<Vec<_>>();
+        validate_loaded_row_ids(&rows);
+        validate_loaded_row_ids(&current_rows);
+        let mut sparse_rows = vec![None; total];
+        for (index, row) in loaded_rows {
+            assert!(
+                index < total,
+                "CrudTableDelegate::replace_sparse_rows 的逻辑索引必须小于 total",
+            );
+            sparse_rows[index] = Some(row);
+        }
+        self.rows = current_rows;
+        self.sparse_rows = Some(sparse_rows);
+        self.total = total;
     }
 
     /// 追加一批行数据。
@@ -542,6 +584,18 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
         self
     }
 
+    /// 注册官方 DataTable 可见逻辑行范围变化回调。
+    ///
+    /// 标准 [`crate::CrudListState`] 使用该入口按页加载稀疏 Skeleton 所在范围。
+    #[must_use]
+    pub fn on_visible_rows_changed(
+        mut self,
+        handler: impl Fn(Range<usize>, &mut Window, &mut Context<TableState<Self>>) + 'static,
+    ) -> Self {
+        self.visible_rows_handler = Some(Rc::new(handler));
+        self
+    }
+
     /// 设置空表格标题。
     #[must_use]
     pub fn empty_title(mut self, title: impl Into<SharedString>) -> Self {
@@ -561,6 +615,13 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
             .iter()
             .find(|action| action.column.key.as_ref() == key)
     }
+
+    fn row_at(&self, row_ix: usize) -> Option<&R> {
+        self.sparse_rows.as_ref().map_or_else(
+            || self.rows.get(row_ix),
+            |rows| rows.get(row_ix).and_then(Option::as_ref),
+        )
+    }
 }
 
 impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
@@ -569,7 +630,7 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.rows.len()
+        self.sparse_rows.as_ref().map_or(self.rows.len(), Vec::len)
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -620,7 +681,7 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        let id = self.rows.get(row_ix).map_or_else(
+        let id = self.row_at(row_ix).map_or_else(
             || format!("nexora-crud-row-missing-{row_ix}"),
             Self::display_row_element_id,
         );
@@ -634,8 +695,14 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(row) = self.rows.get(row_ix) else {
-            return div().into_any_element();
+        let Some(row) = self.row_at(row_ix) else {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .px_2()
+                .child(Skeleton::new())
+                .into_any_element();
         };
         let column_key = self.columns[col_ix].key.clone();
         if self.is_selection_column_key(column_key.as_ref()) {
@@ -685,8 +752,19 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
         }
     }
 
+    fn visible_rows_changed(
+        &mut self,
+        visible_range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        if let Some(handler) = self.visible_rows_handler.clone() {
+            handler(visible_range, window, cx);
+        }
+    }
+
     fn cell_text(&self, row_ix: usize, col_ix: usize, cx: &App) -> String {
-        let Some(row) = self.rows.get(row_ix) else {
+        let Some(row) = self.row_at(row_ix) else {
             return String::new();
         };
         let column_key = self.columns[col_ix].key.as_ref();
