@@ -49,6 +49,9 @@ src/features/users/components/table.rs
   feature 私有薄包装；只有前四项不能满足时，才允许纯 GPUI 自定义。
 - 已有标准组件时禁止重复实现输入框、按钮、选择器、标签页、弹层、菜单、侧边栏、表格、
   列表、树、分页、通知、加载状态等控件。
+- 字段视觉布局统一使用锁定版本的官方 `Form`/`Field`、`v_form()`、`h_form()` 与 `field()`；
+  不得恢复公共 Card、FormItem 或 LabeledControl 视觉 API。分组语义使用官方 GroupBox，普通
+  排版使用布局容器；业务字段转换、异步校验和服务器错误留在无视觉状态模型。
 - `div()`、`h_flex()`、`v_flex()` 可以用于普通布局和内容组合，但不得用来模拟已有语义控件
   及其 hover、focus、selected、disabled、loading、键盘导航等行为。
 - 纯 GPUI 自定义前必须明确记录：检查过的候选组件；无法满足的具体行为；为什么不能通过
@@ -87,7 +90,8 @@ src/features/users/components/table.rs
   默认实现显式添加。
 - 创建和编辑业务资源默认使用 `nexora::desktop::FormDialog`。表单输入、异步任务与草稿状态
   放在独立 Entity 中，遮罩只覆盖当前 Feature Panel；通过 `FormDialogState` 暴露脏字段和
-  草稿，默认取消保留未保存确认，提交逻辑必须由业务组件实现。
+  草稿，默认取消保留未保存确认，提交逻辑必须由业务组件实现；可见字段内容组合官方
+  Form/Field，FormDialog 不再拥有重复字段布局职责。
 
 ## 保持服务端组合权属于应用
 

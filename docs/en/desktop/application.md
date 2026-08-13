@@ -162,37 +162,35 @@ fn select_brand_theme(cx: &mut App) -> Result<(), nexora::desktop::ThemeSelectio
 Successful changes refresh all windows and persist automatically. An unknown ID returns a
 structured error without changing the current selection.
 
-## Panel Header Actions
+## Global Toolbar Actions and Search Providers
 
-Applications can install actions for the right side of the main panel header from
-`Application::initialize`. The Shell renders these actions on every business Feature `PanelHeader`,
-before the built-in current-tab pin toggle:
+Applications can install window-level actions on the right side of the global title bar from
+`Application::initialize`. Page-local create, export, and filter actions remain inside Features:
 
 ```rust
 use gpui::App;
-use gpui_component::{Sizable as _, button::Button};
-use nexora::{PanelHeaderAction, install_panel_header_actions};
+use nexora::{ShellToolbarAction, install_shell_toolbar_actions};
 
 fn initialize(&mut self, cx: &mut App) {
-    install_panel_header_actions(
-        vec![PanelHeaderAction::new(|_cx| {
-            Button::new("open-tasks")
-                .small()
-                .label("Tasks")
-                .on_click(|_, _, _| {
-                    // Trigger navigation, open a dialog, or dispatch an application action here.
-                })
-        })],
+    install_shell_toolbar_actions(
+        vec![ShellToolbarAction::new(
+            "open-tasks",
+            10,
+            gpui_component::IconName::List,
+            "Tasks",
+            |_, _, _| {
+                // Open a real window-level capability here.
+            },
+        )],
         cx,
     );
 }
 ```
 
-The `PanelHeaderAction` render closure receives the current `App` context while the header is being
-rendered. It should only read state and build elements; navigation, dialogs, network requests, or
-business side effects should live in the element event callbacks. Calling
-`install_panel_header_actions` again replaces the previous list, and passing an empty list clears the
-installed actions.
+Use `ShellToolbarAction::custom` only for controlled official Popover/Menu compositions. Calling the
+installer again replaces the previous list and duplicate stable IDs are rejected. Extend global
+search with `install_search_providers`; providers can independently implement asynchronous
+`on_change`, `on_search`, and cross-restart `on_resolve_history` callbacks.
 
 ## Automatic Account detection
 

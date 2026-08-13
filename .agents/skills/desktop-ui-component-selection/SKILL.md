@@ -74,7 +74,7 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 | 星级或评分输入 | `Rating` | `rating` | 评分、优先级、满意度使用。 |
 | 开关式按钮状态 | `Toggle` | `toggle` | 工具栏中的 bold、preview、pin 等开关动作使用。 |
 | 按钮动作 | `Button` | `button` | 明确命令、提交、取消、工具按钮使用。 |
-| 通用字段标签容器 | `nexora::desktop::LabeledControl` | 项目封装 | CRUD 筛选项、简单表单字段和设置字段需要“label/description/control/error”纵向布局时使用；先给 child 自身设置 `.with_size(theme::component_size(cx))`，再传入容器。 |
+| 字段标签、说明、必填与列跨度 | 官方 `Form` / `Field` | `form` | 使用 `v_form()`、`h_form()`、`field()` 与 Field builder；不得增加重复视觉包装。 |
 
 ## 弹层、菜单与临时界面
 
@@ -96,7 +96,7 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 | --- | --- | --- | --- |
 | 普通表格 | `Table` | `table` | 简单二维数据展示使用。 |
 | 高性能数据表、排序、复杂行列 | `DataTable` | `data-table` | 数据量大、表格交互多时优先用它。 |
-| 标准 CRUD 资源管理 Panel | `nexora::desktop::{CrudPanel, CrudPanelToolbar}` | 项目封装 | 标题/描述加刷新、可选筛选/操作区、表格或列表主体的 Feature Panel 优先使用；没有筛选和操作时不渲染工具栏卡片。 |
+| 标准 CRUD 资源管理 Panel | `nexora::desktop::CrudPanel<Row, Query>` | 项目封装 | 仅用于 `Row: CrudTableRow`、`Query: CrudQuery` 的单主数据集；筛选使用官方 Form/Field，刷新走 Feature 生命周期。 |
 | 标准 CRUD DataTable | `#[derive(nexora::CrudTableRow)]` + `CrudTableDelegate<T>` | 项目封装 | 行结构字段声明列；delegate 继续接入原生 `DataTable`，操作列用 `action_column`，复杂场景保留手写 `TableDelegate`。 |
 | CRUD 表格表头 | `nexora::desktop::TableHeaderCell` | 项目封装 | `DataTable` 的 `render_th` 默认用它让表头水平、垂直居中；需要按列语义覆盖时使用 `.left()`、`.center()`、`.right()` 或完全自定义表头元素。 |
 | CRUD 表格正文单元格 | `nexora::desktop::TableCell` | 项目封装 | `DataTable` 的 `render_td` 优先用它；默认垂直居中、水平靠左，可用 `.left()`、`.center()`、`.right()` 和 `.top()`、`.middle()`、`.bottom()` 覆盖；网格线优先使用 `DataTable::bordered(true)` 等原生表格样式。 |
@@ -160,11 +160,11 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
   `nexora::desktop::{CrudPanel, CrudPanelToolbar}`；查询、创建、导入、导出等命令放入工具栏
   action 区，顶部刷新只负责重新拉取当前数据，并通过 `.with_size(theme::component_size(cx))`
   跟随设置中的组件尺寸。
-- CRUD 工具栏筛选字段、`FormItem` 内部字段布局和设置页简单字段优先使用
-  `nexora::desktop::LabeledControl` 表达通用“标签、说明、控件、错误”结构；它不保存业务状
-  态，不会自动给任意 child 传递 Size，固定宽度只用 `.width(px(...))` 表达。
+- CRUD 筛选字段、创建/编辑表单和设置页字段统一使用官方 `Form`/`Field`；required 外观、label、
+  description、visible 与 col_span 不得再由 Nexora 视觉容器重复实现。业务值转换、异步校验和
+  服务器错误属于无视觉字段状态，不能通过自定义布局控件承载。
 - 所有实现了 `gpui_component::Sizable` 的按钮、输入、下拉、TabBar、`CrudPanel` 与
-  `FormDialog` 都应优先使用 `theme::component_size(cx)`；除非当前交互明确是紧凑表格行或
+  `FormDialog` 内官方表单控件都应优先使用 `theme::component_size(cx)`；除非当前交互明确是紧凑表格行或
   图标小按钮，不要在业务页面硬编码 `.small()`、`.medium()` 等尺寸。
 - CRUD 资源表格优先用 `CrudTableRow` 派生宏加 `CrudTableDelegate<T>`；它只增强
   gpui-component `DataTable` 的常规样板，不改变 `Column`、`TableState` 和 `TableDelegate`

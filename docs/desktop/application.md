@@ -151,34 +151,34 @@ fn select_brand_theme(cx: &mut App) -> Result<(), nexora::desktop::ThemeSelectio
 
 成功切换会自动刷新全部窗口并持久化；未知 ID 返回结构化错误且不改变当前选择。
 
-## 主面板标题栏动作
+## 全局工具栏动作与搜索 Provider
 
-应用可以在 `Application::initialize` 中安装主面板标题栏右侧动作。Shell 会把这些动作渲染到
-所有业务 Feature 的 `PanelHeader` 右侧，并放在框架内置的“置顶当前标签页”按钮之前：
+应用可以在 `Application::initialize` 中安装主窗口右侧全局工具动作。标准构造器使用官方
+Button、Icon、Tooltip 与 Badge；页面级创建、导出或筛选操作仍留在 Feature 内：
 
 ```rust
 use gpui::App;
-use gpui_component::{Sizable as _, button::Button};
-use nexora::{PanelHeaderAction, install_panel_header_actions};
+use nexora::{ShellToolbarAction, install_shell_toolbar_actions};
 
 fn initialize(&mut self, cx: &mut App) {
-    install_panel_header_actions(
-        vec![PanelHeaderAction::new(|_cx| {
-            Button::new("open-tasks")
-                .small()
-                .label("任务")
-                .on_click(|_, _, _| {
-                    // 在这里触发导航、打开弹窗或派发应用动作。
-                })
-        })],
+    install_shell_toolbar_actions(
+        vec![ShellToolbarAction::new(
+            "open-tasks",
+            10,
+            gpui_component::IconName::List,
+            "任务中心",
+            |_, _, _| {
+                // 在这里打开窗口级能力。
+            },
+        )],
         cx,
     );
 }
 ```
 
-`PanelHeaderAction` 的渲染闭包会在标题栏渲染时收到当前 `App` 上下文。闭包应只读取状态并构造
-元素；导航、弹窗、网络请求或业务副作用应放在按钮等元素自己的事件回调中。再次调用
-`install_panel_header_actions` 会完整替换上一次安装的列表，传入空列表可清空已安装动作。
+`ShellToolbarAction::custom` 只用于官方 Popover/Menu 等受控组合。再次安装会完整替换上一次
+列表，重复稳定 ID 会被拒绝。全局搜索使用 `install_search_providers` 扩展；每个 Provider 可按
+模式实现异步 `on_change`、`on_search` 和跨重启 `on_resolve_history`，互相独立 loading 与失败。
 
 ## Account 自动发现
 

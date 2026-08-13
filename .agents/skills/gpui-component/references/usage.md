@@ -1,8 +1,8 @@
-# gpui-component 使用指南
+# gpui-component Usage Guide
 
-**目录：** [初始化](#初始化) · [组件类型](#组件类型) · [常用组件](#常用组件)（Button、Input、Select、Checkbox、Icon、Dialog、Notification、Tabs、Tooltip、Form、List）· [主题](#主题) · [布局辅助函数](#布局辅助函数) · [遮罩层](#遮罩层dialogsheetnotification) · [共享 trait](#共享-trait)
+**Contents:** [Setup](#setup) · [Component Types](#component-types) · [Common Components](#common-components) (Button, Input, Select, Checkbox, Icon, Dialog, Notification, Tabs, Tooltip, Form, List) · [Theming](#theming) · [Layout Helpers](#layout-helpers) · [Overlay Layers](#overlay-layers-dialogs-sheets-notifications) · [Shared Traits](#shared-traits)
 
-## 初始化
+## Setup
 
 ### 1. Cargo.toml
 
@@ -11,38 +11,37 @@
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" } # 可选图标
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" } # optional icons
 ```
 
-### 2. 初始化代码
+### 2. Initialization
 
 ```rust
 fn main() {
     gpui_platform::application()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx| {
-            gpui_component::init(cx); // 必须首先调用
+            gpui_component::init(cx); // MUST be first
 
             cx.spawn(async move |cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
                     let view = cx.new(|_| MyApp);
-                    cx.new(|cx| Root::new(view, window, cx)) // 用 Root 包装首层视图
-                }).expect("无法打开窗口");
+                    cx.new(|cx| Root::new(view, window, cx)) // Root wraps first view
+                }).expect("Failed to open window");
             }).detach();
         });
 }
 ```
 
-每个窗口的第一层子元素都**必须使用 `Root`**。`Root` 保存 Dialog、Sheet 和 Notification
-状态，但不会自动把遮罩层加入业务元素树；业务根视图仍须按本文“遮罩层”章节显式渲染。
+**`Root` is required** as the first-level child of every window — it enables dialogs, sheets, and notifications.
 
 ---
 
-## 组件类型
+## Component Types
 
-### 无状态组件（大多数组件）
+### Stateless (most components)
 
-直接在 `render` 中使用，无需保存状态：
+Used directly in `render`, no stored state:
 
 ```rust
 use gpui_component::button::Button;
@@ -50,14 +49,14 @@ use gpui_component::button::Button;
 impl Render for MyView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Button::new("btn").primary().label("Submit")
-            .on_click(|_, _, _| tracing::debug!("按钮已点击"))
+            .on_click(|_, _, _| println!("clicked"))
     }
 }
 ```
 
-### 有状态组件（Input、Select、Combobox 等）
+### Stateful (Input, Select, Combobox, etc.)
 
-需要在视图中保存一个 `Entity<State>`：
+Require an `Entity<State>` stored in your view:
 
 ```rust
 use gpui_component::input::{Input, InputState};
@@ -69,7 +68,7 @@ struct MyView {
 impl MyView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            name: cx.new(|cx| InputState::new(window, cx).placeholder("你的姓名")),
+            name: cx.new(|cx| InputState::new(window, cx).placeholder("Your name")),
         }
     }
 }
@@ -83,40 +82,40 @@ impl Render for MyView {
 
 ---
 
-## 常用组件
+## Common Components
 
 ### Button
 
 ```rust
 use gpui_component::button::{Button, ButtonGroup};
 
-// 变体
-Button::new("btn").label("默认")
-Button::new("btn").primary().label("主要")
-Button::new("btn").danger().label("删除")
-Button::new("btn").warning().label("警告")
-Button::new("btn").success().label("成功")
-Button::new("btn").ghost().label("幽灵")
-Button::new("btn").link().label("链接")
+// Variants
+Button::new("btn").label("Default")
+Button::new("btn").primary().label("Primary")
+Button::new("btn").danger().label("Delete")
+Button::new("btn").warning().label("Warning")
+Button::new("btn").success().label("Success")
+Button::new("btn").ghost().label("Ghost")
+Button::new("btn").link().label("Link")
 
-// 状态
-Button::new("btn").label("文本").disabled(true)
-Button::new("btn").label("文本").loading(true)
-Button::new("btn").label("文本").selected(true)
+// States
+Button::new("btn").label("Text").disabled(true)
+Button::new("btn").label("Text").loading(true)
+Button::new("btn").label("Text").selected(true)
 
-// 带图标
-Button::new("btn").icon(IconName::Plus).label("添加")
+// With icon
+Button::new("btn").icon(IconName::Plus).label("Add")
 
-// 尺寸
+// Sizes
 Button::new("btn").xsmall().label("XS")
 Button::new("btn").small().label("S")
 Button::new("btn").large().label("L")
 
-// 按钮组
+// Group
 ButtonGroup::new("group")
     .child(Button::new("a").label("A"))
     .child(Button::new("b").label("B"))
-    .on_click(|indices, _, _| { /* 已选择的索引 */ })
+    .on_click(|indices, _, _| { /* selected indices */ })
 ```
 
 ### Input
@@ -124,30 +123,30 @@ ButtonGroup::new("group")
 ```rust
 use gpui_component::input::{Input, InputState};
 
-// 在 new/init 中创建状态
+// State setup (in new/init)
 let input = cx.new(|cx| InputState::new(window, cx)
-    .placeholder("请输入文本……")
-    .default_value("你好")
+    .placeholder("Enter text...")
+    .default_value("Hello")
 );
 
-// 渲染
+// Render
 Input::new(&input)
-Input::new(&input).cleanable(true)           // 清除按钮
+Input::new(&input).cleanable(true)           // clear button
 Input::new(&input).disabled(true)
 Input::new(&input).prefix(Icon::new(IconName::Search).small())
 Input::new(&input).suffix(Button::new("b").ghost().icon(IconName::X).xsmall())
 Input::new(&input).content_type(InputContentType::Password)
-Input::new(&input).mask_toggle()             // 密码可见性切换
-Input::new(&input).appearance(false)         // 移除默认边框和背景
+Input::new(&input).mask_toggle()             // password reveal toggle
+Input::new(&input).appearance(false)         // remove default border/bg
 
-// 读取值
+// Reading value
 let value = input.read(cx).value();
 
-// 事件
+// Events
 cx.subscribe_in(&input, window, |view, state, event, window, cx| {
     match event {
         InputEvent::Change => { let v = state.read(cx).value(); }
-        InputEvent::PressEnter { .. } => { /* 提交 */ }
+        InputEvent::PressEnter { .. } => { /* submit */ }
         InputEvent::Focus | InputEvent::Blur => {}
     }
 });
@@ -158,16 +157,16 @@ cx.subscribe_in(&input, window, |view, state, event, window, cx| {
 ```rust
 use gpui_component::select::{Select, SelectState};
 
-// 简单字符串列表
+// Simple string list
 let state = cx.new(|cx| {
-    SelectState::new(vec!["苹果", "橙子", "香蕉"], Some(IndexPath::default()), window, cx)
+    SelectState::new(vec!["Apple", "Orange", "Banana"], Some(IndexPath::default()), window, cx)
 });
 
-// 渲染
+// Render
 Select::new(&state)
-Select::new(&state).placeholder("请选择")
+Select::new(&state).placeholder("Pick one")
 
-// 读取选中项
+// Reading selection
 let selected = state.read(cx).selected_item();
 ```
 
@@ -176,7 +175,7 @@ let selected = state.read(cx).selected_item();
 ```rust
 use gpui_component::{Checkbox, Switch};
 
-// 无状态受控组件
+// Stateless (controlled)
 Checkbox::new("cb").checked(self.checked)
     .on_click(|checked, _, cx| { /* &bool */ })
 
@@ -197,17 +196,17 @@ Icon::new(IconName::Plus).large().text_color(cx.theme().primary)
 ### Dialog
 
 ```rust
-use gpui_component::WindowExt as _;
+use gpui_component::dialog::Dialog;
 
-// 从窗口上下文打开
-window.open_dialog(cx, |dialog, _, cx| {
-    dialog
-        .title("确认")
-        .child(div().child("确定要继续吗？"))
+// Open from window context
+window.open_modal(cx, |modal, _, cx| {
+    modal
+        .title("Confirm")
+        .child(div().child("Are you sure?"))
         .footer(|this, _, cx| {
-            this.child(Button::new("cancel").label("取消"))
-                .child(Button::new("ok").primary().label("确定")
-                    .on_click(|_, window, cx| { window.close_dialog(cx); }))
+            this.child(Button::new("cancel").label("Cancel"))
+                .child(Button::new("ok").primary().label("OK")
+                    .on_click(|_, window, cx| { window.close_modal(cx); }))
         })
 });
 ```
@@ -215,12 +214,12 @@ window.open_dialog(cx, |dialog, _, cx| {
 ### Notification
 
 ```rust
-// 简单字符串消息
-window.push_notification("保存成功！", cx);
+// Simple string message
+window.push_notification("Saved successfully!", cx);
 
-// 带类型变体
+// With type variant
 window.push_notification(
-    Notification::new("上传完成").info().message("文件已上传"),
+    Notification::new("Upload complete").info().message("File uploaded"),
     cx,
 );
 ```
@@ -231,22 +230,22 @@ window.push_notification(
 use gpui_component::tab::{Tab, TabBar};
 
 TabBar::new("tabs")
-    .child(Tab::new("tab1").child("概览"))
-    .child(Tab::new("tab2").child("设置"))
-    .child(Tab::new("tab3").child("日志"))
+    .child(Tab::new("tab1").child("Overview"))
+    .child(Tab::new("tab2").child("Settings"))
+    .child(Tab::new("tab3").child("Logs"))
 ```
 
 ### Tooltip
 
 ```rust
-// 在任何带 .id() 的元素上添加 .tooltip()：
+// On any element with .id(), add .tooltip():
 div()
     .id("my-btn")
-    .tooltip(|window, cx| Tooltip::new("删除项目").build(window, cx))
-    .child("删除")
+    .tooltip(|window, cx| Tooltip::new("Delete item").build(window, cx))
+    .child("Delete")
 
-// 或直接在 Button 上使用：
-Button::new("btn").icon(IconName::Trash).tooltip("删除")
+// Or on a Button directly:
+Button::new("btn").icon(IconName::Trash).tooltip("Delete")
 ```
 
 ### Form
@@ -254,43 +253,43 @@ Button::new("btn").icon(IconName::Trash).tooltip("删除")
 ```rust
 use gpui_component::form::{v_form, h_form, field};
 
-// 垂直表单
+// Vertical form
 v_form()
-    .child(field().label("姓名").child(Input::new(&self.name)))
-    .child(field().label("邮箱").child(Input::new(&self.email)))
-    .child(Button::new("submit").primary().label("提交"))
+    .child(field().label("Name").child(Input::new(&self.name)))
+    .child(field().label("Email").child(Input::new(&self.email)))
+    .child(Button::new("submit").primary().label("Submit"))
 
-// 水平标签对齐
+// Horizontal label alignment
 h_form()
-    .child(field().label("用户名").child(Input::new(&self.username)))
+    .child(field().label("Username").child(Input::new(&self.username)))
 ```
 
-### List（可搜索、虚拟化）
+### List (searchable, virtualized)
 
 ```rust
 use gpui_component::list::{List, ListState, ListDelegate, ListItem, ListEvent};
 
-// 为数据类型实现 ListDelegate，然后：
+// Implement ListDelegate for your data type, then:
 let list_state = cx.new(|cx| ListState::new(MyDelegate::new(), window, cx));
 
-// 渲染
+// Render
 List::new(&list_state)
-// 事件
+// Events
 cx.subscribe(&list_state, |this, _, event, cx| {
     if let ListEvent::Select(index_path) = event {
-        // 处理选择
+        // handle selection
     }
 });
 ```
 
 ---
 
-## 主题
+## Theming
 
 ```rust
 use gpui_component::ActiveTheme as _;
 
-// 访问颜色
+// Access colors
 cx.theme().primary
 cx.theme().background
 cx.theme().foreground
@@ -299,53 +298,53 @@ cx.theme().surface
 cx.theme().muted
 cx.theme().destructive
 
-// 在样式中使用
+// Use in styles
 div()
     .bg(cx.theme().surface)
     .text_color(cx.theme().foreground)
     .border_color(cx.theme().border)
 ```
 
-### 切换主题
+### Switch Theme
 
 ```rust
 use gpui_component::Theme;
 
-// 切换浅色/深色模式
+// Toggle light/dark
 cx.update_global::<Theme, _>(|theme, cx| {
     theme.toggle_mode(cx);
 });
 
-// 加载具名主题
+// Load a named theme
 Theme::global_mut(cx).apply_config(&theme_config);
 ```
 
 ---
 
-## 布局辅助函数
+## Layout Helpers
 
-gpui-component 为 GPUI 扩展了便捷的布局方法：
+gpui-component extends GPUI with convenient layout methods:
 
 ```rust
 h_flex()    // div().flex().flex_row().items_center()
 v_flex()    // div().flex().flex_col()
 
-// 常用模式
+// Common patterns
 h_flex().gap_2().items_center()
     .child(Icon::new(IconName::User))
-    .child(label("用户名"))
+    .child(label("Username"))
 
 v_flex().gap_4().p_4()
     .child(Input::new(&self.name))
     .child(Input::new(&self.email))
-    .child(Button::new("submit").primary().label("提交"))
+    .child(Button::new("submit").primary().label("Submit"))
 ```
 
 ---
 
-## 遮罩层（Dialog、Sheet、Notification）
+## Overlay Layers (Dialogs, Sheets, Notifications)
 
-要渲染遮罩层，请在第一层视图的 `render` 中加入以下内容：
+To render overlays, add these to your first-level view's render:
 
 ```rust
 impl Render for MyApp {
@@ -353,23 +352,22 @@ impl Render for MyApp {
         div()
             .size_full()
             .child(self.main_content(window, cx))
-            .children(Root::render_sheet_layer(window, cx))
-            .children(Root::render_dialog_layer(window, cx))
-            .children(Root::render_notification_layer(window, cx))
+            .children(Root::render_dialog_layer(cx))
+            .children(Root::render_sheet_layer(cx))
+            .children(Root::render_notification_layer(cx))
     }
 }
 ```
 
 ---
 
-## 共享 trait
+## Shared Traits
 
-所有组件都遵循构建器模式 `Component::new("id").method().method()`：
+All components follow the builder pattern `Component::new("id").method().method()`:
+- `Sizable`: `.xsmall()` / `.small()` / `.medium()` (default) / `.large()`
+- `Disableable`: `.disabled(bool)`
+- `Selectable`: `.selected(bool)`
+- `Styled`: any GPUI style methods (`.w()`, `.bg()`, `.p_2()`, etc.)
 
-- `Sizable`：`.xsmall()` / `.small()` / `.medium()`（默认）/ `.large()`
-- `Disableable`：`.disabled(bool)`
-- `Selectable`：`.selected(bool)`
-- `Styled`：任意 GPUI 样式方法（`.w()`、`.bg()`、`.p_2()` 等）
-
-对于本文未覆盖的组件，请从以下地址获取文档：
+For any component not covered here, fetch its doc from:
 `https://longbridge.github.io/gpui-component/docs/components/{name}.md`
