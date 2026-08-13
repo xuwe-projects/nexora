@@ -157,6 +157,11 @@ pub struct ApplicationOptions {
     /// 运行器会在进入 GPUI 事件循环前把它和框架、组件库的默认资源合并。该字段用于
     /// 应用自定义 SVG 图标、图片或其他通过 `svg().path(...)`、`img(...)` 读取的资源。
     pub application_assets: Option<ApplicationAssets>,
+    /// 已完成启动前校验、需要安装到 gpui-component 的应用主题目录。
+    ///
+    /// 普通下游应用应通过上层 `nexora::ApplicationOptions` 注册主题；直接使用该底层运行时
+    /// 时可以传入 [`theme::ThemeCatalog`]，目录会在应用 [`Application::initialize`] 前安装。
+    pub theme_catalog: theme::ThemeCatalog,
 }
 
 impl Default for ApplicationOptions {
@@ -170,6 +175,7 @@ impl Default for ApplicationOptions {
             window_min_size: None,
             startup_display_uuid: None,
             application_assets: None,
+            theme_catalog: theme::ThemeCatalog::default(),
         }
     }
 }
@@ -403,6 +409,7 @@ where
 {
     let plan = runtime_plan(desktop_application.options());
     let application_assets = desktop_application.options().application_assets.clone();
+    let theme_catalog = desktop_application.options().theme_catalog.clone();
 
     application()
         .with_assets(DesktopAssets {
@@ -413,7 +420,7 @@ where
         .with_quit_mode(plan.quit_mode)
         .run(move |cx| {
             gpui_component::init(cx);
-            theme::init(cx);
+            theme::init_with_catalog(theme_catalog, cx);
             desktop_application.initialize(cx);
 
             if !plan.open_startup_window {
@@ -429,6 +436,7 @@ where
                 window_min_size,
                 startup_display_uuid,
                 application_assets: _,
+                theme_catalog: _,
             } = std::mem::take(desktop_application.options_mut());
 
             let mut window_options = window_options.unwrap_or_default();

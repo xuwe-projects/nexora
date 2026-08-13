@@ -5,8 +5,15 @@ use std::borrow::Cow;
 use gpui::{AssetSource, Context, Empty, IntoElement, SharedString, Window, px, size};
 use nexora::{
     Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, ApplicationTabStyle,
-    FeatureElement, WindowElement,
+    ApplicationThemePreset, FeatureElement, WindowElement,
 };
+
+const CUSTOM_THEME: &str = r##"{
+    "themes": [
+        { "name": "Light", "mode": "light", "colors": { "background": "#ffffff" } },
+        { "name": "Dark", "mode": "dark", "colors": { "background": "#000000" } }
+    ]
+}"##;
 
 #[derive(Default, nexora::Feature)]
 #[nexora(title = "首页", path = "/")]
@@ -83,6 +90,8 @@ fn default_options_are_immediately_usable() {
     assert!(!options.sidebar_search);
     assert!(options.tray_enabled);
     assert!(options.application_identity_override.is_none());
+    assert!(options.theme_presets.is_empty());
+    assert!(options.default_theme_preset.is_none());
     assert_eq!(options.window_size, Some(size(px(900.0), px(640.0))));
     assert_eq!(options.window_min_size, Some(size(px(640.0), px(480.0))));
     assert!(
@@ -112,7 +121,13 @@ fn option_builders_replace_framework_defaults() {
         .daemon_mode(true)
         .tray_enabled(false)
         .application_identity("com.example.nexora-studio")
-        .startup_display_uuid("display-1");
+        .startup_display_uuid("display-1")
+        .theme_preset(ApplicationThemePreset::new(
+            "studio",
+            "Studio",
+            CUSTOM_THEME,
+        ))
+        .default_theme_preset("studio");
 
     assert_eq!(options.application_name, "Nexora Studio");
     assert_eq!(options.application_version.as_deref(), Some("2.0.0"));
@@ -136,6 +151,8 @@ fn option_builders_replace_framework_defaults() {
         Some("com.example.nexora-studio")
     );
     assert_eq!(options.startup_display_uuid.as_deref(), Some("display-1"));
+    assert_eq!(options.theme_presets[0].id(), "studio");
+    assert_eq!(options.default_theme_preset.as_deref(), Some("studio"));
 }
 
 #[test]
@@ -213,4 +230,29 @@ fn validation_accepts_discovered_initial_feature() {
     ConfiguredApplication { initial_path: "/" }
         .validate()
         .expect("派生 Feature 应当可以由 Application 自动发现");
+}
+
+struct InvalidThemeApplication;
+
+impl nexora::Application for InvalidThemeApplication {
+    fn options(&self) -> ApplicationOptions {
+        ApplicationOptions::new()
+            .theme_preset(ApplicationThemePreset::new("acme", "Acme", "{"))
+            .default_theme_preset("acme")
+    }
+}
+
+#[test]
+fn validation_rejects_invalid_theme_before_startup() {
+    let error = InvalidThemeApplication
+        .validate()
+        .expect_err("非法主题必须在进入 GPUI 事件循环前失败");
+
+    assert!(matches!(
+        error,
+        ApplicationError::InvalidThemeConfiguration {
+            preset_id: Some(ref preset_id),
+            ..
+        } if preset_id == "acme"
+    ));
 }

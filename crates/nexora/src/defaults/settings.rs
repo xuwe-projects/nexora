@@ -12,7 +12,7 @@ use gpui_component::{
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
-use theme::{ColorScheme, ThemePreset};
+use theme::ColorScheme;
 
 use crate::{
     __private::{SettingsWindowRegistration, WindowRegistration},
@@ -189,7 +189,7 @@ where
     T: 'static,
 {
     let header_style = settings_header_style();
-    let mut pages = vec![appearance_setting_page(font_size_slider.clone())];
+    let mut pages = vec![appearance_setting_page(font_size_slider.clone(), cx)];
     if crate::desktop::updater_available(cx) {
         pages.push(update_setting_page());
     }
@@ -226,7 +226,20 @@ fn update_setting_page() -> SettingPage {
         )
 }
 
-fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage {
+fn appearance_setting_page<T>(font_size_slider: Entity<SliderState>, cx: &Context<T>) -> SettingPage
+where
+    T: 'static,
+{
+    let theme_options = crate::desktop::theme_presets(cx)
+        .map(|preset| {
+            (
+                SharedString::from(preset.id()),
+                SharedString::from(preset.label()),
+            )
+        })
+        .collect();
+    let default_theme_preset = SharedString::from(crate::desktop::default_theme_preset_id(cx));
+
     SettingPage::new("外观")
         .header_style(&settings_header_style())
         .icon(Icon::new(IconName::Palette))
@@ -238,24 +251,16 @@ fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage
                 SettingItem::new(
                     "主题预设",
                     SettingField::dropdown(
-                        ThemePreset::ALL
-                            .into_iter()
-                            .map(|preset| {
-                                (
-                                    SharedString::from(preset.id()),
-                                    SharedString::from(preset.label()),
-                                )
-                            })
-                            .collect(),
-                        |cx: &App| SharedString::from(theme::selection(cx).preset().id()),
+                        theme_options,
+                        |cx: &App| {
+                            SharedString::from(crate::desktop::theme_selection(cx).preset_id())
+                        },
                         |value: SharedString, cx: &mut App| {
-                            if let Some(preset) = ThemePreset::from_id(value.as_ref()) {
-                                theme::set_preset(preset, cx);
-                                persist_current_appearance_preferences(cx);
-                            }
+                            crate::desktop::set_theme_preset(value.as_ref(), cx)
+                                .expect("设置页主题选项必须来自已注册目录");
                         },
                     )
-                    .default_value(SharedString::from(ThemePreset::default().id())),
+                    .default_value(default_theme_preset),
                 )
                 .description("决定应用在浅色和深色模式下使用的配色风格。"),
                 SettingItem::new(
@@ -273,8 +278,7 @@ fn appearance_setting_page(font_size_slider: Entity<SliderState>) -> SettingPage
                         |cx: &App| SharedString::from(theme::selection(cx).color_scheme().id()),
                         |value: SharedString, cx: &mut App| {
                             if let Some(scheme) = ColorScheme::from_id(value.as_ref()) {
-                                theme::set_color_scheme(scheme, cx);
-                                persist_current_appearance_preferences(cx);
+                                crate::desktop::set_color_scheme(scheme, cx);
                             }
                         },
                     )

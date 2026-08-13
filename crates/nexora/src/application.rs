@@ -308,6 +308,12 @@ pub enum ApplicationTabStyle {
     Segmented,
 }
 
+/// 下游应用随二进制注册的一组浅色与深色主题预设。
+///
+/// 预设由稳定 ID、设置页显示名称和内嵌 `gpui-component` `ThemeSet` JSON 构成。JSON
+/// 会在 [`Application::validate`] 与 [`Application::run`] 进入原生事件循环前严格校验。
+pub type ApplicationThemePreset = theme::ThemePresetSource;
+
 /// 当前 Linux 桌面或平台无法提供可用托盘宿主时的安全降级策略。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TrayUnavailablePolicy {
@@ -401,6 +407,15 @@ pub struct ApplicationOptions {
     pub application_identity_override: Option<String>,
     /// 平台不支持托盘时的降级策略。
     pub tray_unavailable_policy: TrayUnavailablePolicy,
+    /// 下游应用按注册顺序提供的主题预设。
+    ///
+    /// 每个预设必须拥有唯一稳定 ID，并恰好包含一个浅色与一个深色主题。内置 `nexora`
+    /// 主题无需重复注册且始终作为最终兜底。
+    pub theme_presets: Vec<ApplicationThemePreset>,
+    /// 首次安装或用户历史主题失效时使用的应用默认主题 ID。
+    ///
+    /// 为 `None` 时使用内置 `nexora`；显式 ID 必须出现在 [`Self::theme_presets`] 中。
+    pub default_theme_preset: Option<String>,
 }
 
 impl Default for ApplicationOptions {
@@ -427,6 +442,8 @@ impl Default for ApplicationOptions {
             tray_enabled: true,
             application_identity_override: None,
             tray_unavailable_policy: TrayUnavailablePolicy::NotifyAndMinimize,
+            theme_presets: Vec::new(),
+            default_theme_preset: None,
         }
     }
 }
@@ -498,6 +515,24 @@ impl ApplicationOptions {
     /// 设置托盘宿主不可用时的安全降级策略。
     pub const fn tray_unavailable_policy(mut self, policy: TrayUnavailablePolicy) -> Self {
         self.tray_unavailable_policy = policy;
+        self
+    }
+
+    /// 注册一组随应用发布的浅色与深色主题。
+    ///
+    /// 可以多次调用；默认设置窗口会把内置 Nexora 放在首项，并按调用顺序追加下游预设。
+    /// 主题 ID、显示名称和 JSON 会在应用启动前统一校验。
+    pub fn theme_preset(mut self, preset: ApplicationThemePreset) -> Self {
+        self.theme_presets.push(preset);
+        self
+    }
+
+    /// 设置首次安装及失效用户偏好的应用默认主题预设 ID。
+    ///
+    /// 已有且仍有效的用户选择继续优先。该 ID 未注册时 [`Application::validate`] 与
+    /// [`Application::run`] 会返回 [`ApplicationError::InvalidThemeConfiguration`]。
+    pub fn default_theme_preset(mut self, preset_id: impl Into<String>) -> Self {
+        self.default_theme_preset = Some(preset_id.into());
         self
     }
 
@@ -574,7 +609,11 @@ impl ApplicationOptions {
         self
     }
 
-    fn into_desktop_options(self, default_window_title: &str) -> DesktopApplicationOptions {
+    fn into_desktop_options(
+        self,
+        default_window_title: &str,
+        theme_catalog: theme::ThemeCatalog,
+    ) -> DesktopApplicationOptions {
         let mut this = self.default_native_window_title(default_window_title);
         let window_options = this.window_options.take();
         DesktopApplicationOptions {
@@ -586,6 +625,7 @@ impl ApplicationOptions {
             window_min_size: this.window_min_size,
             startup_display_uuid: this.startup_display_uuid,
             application_assets: this.application_assets,
+            theme_catalog,
         }
     }
 }
@@ -634,6 +674,15 @@ pub enum ApplicationError {
     #[error("无法加载应用发布信息：{message}")]
     InvalidReleaseMetadata {
         /// 不包含秘密或文件正文的失败原因。
+        message: String,
+    },
+
+    /// 下游应用注册的主题预设或默认主题 ID 无法通过启动前校验。
+    #[error("应用主题配置无效：{message}")]
+    InvalidThemeConfiguration {
+        /// 与错误直接相关的预设 ID；注册表级错误可能没有单一 ID。
+        preset_id: Option<String>,
+        /// 不包含完整主题 JSON 的安全错误说明。
         message: String,
     },
 }
@@ -712,6 +761,7 @@ struct PreparedApplication {
     initial_route: RouteMatch,
     account_registry: AppRegistry,
     account_initial_route: RouteMatch,
+    theme_catalog: theme::ThemeCatalog,
 }
 
 const MAIN_WINDOW_BOUNDS_SAVE_DELAY: Duration = Duration::from_millis(120);
@@ -907,7 +957,7 @@ pub struct ShellAppearancePreferences {
 impl Default for ShellAppearancePreferences {
     fn default() -> Self {
         Self {
-            theme_preset: theme::ThemePreset::default().id().to_owned(),
+            theme_preset: theme::NEXORA_THEME_PRESET_ID.to_owned(),
             color_scheme: theme::ColorScheme::default().id().to_owned(),
             font_size: i64::from(theme::DEFAULT_FONT_SIZE),
             component_size: theme::DEFAULT_COMPONENT_SIZE.as_str().to_owned(),
@@ -918,18 +968,19 @@ impl Default for ShellAppearancePreferences {
 impl ShellAppearancePreferences {
     fn from_theme(cx: &App) -> Self {
         Self {
-            theme_preset: theme::selection(cx).preset().id().to_owned(),
+            theme_preset: theme::selection(cx).preset_id().to_owned(),
             color_scheme: theme::selection(cx).color_scheme().id().to_owned(),
             font_size: i64::from(theme::font_size(cx)),
             component_size: theme::component_size(cx).as_str().to_owned(),
         }
     }
 
-    fn theme_selection(&self) -> theme::ThemeSelection {
-        let preset = theme::ThemePreset::from_id(self.theme_preset.as_str()).unwrap_or_default();
+    fn theme_selection(&self, prefer_saved_theme: bool, cx: &App) -> theme::ThemeSelection {
+        let persisted_id = prefer_saved_theme.then_some(self.theme_preset.as_str());
+        let preset_id = theme::resolve_preset_id(persisted_id, cx);
         let color_scheme =
             theme::ColorScheme::from_id(self.color_scheme.as_str()).unwrap_or_default();
-        theme::ThemeSelection::new(preset, color_scheme)
+        theme::ThemeSelection::new(preset_id.to_owned(), color_scheme)
     }
 
     fn font_size(&self) -> u16 {
@@ -1405,12 +1456,26 @@ fn install_shell_preferences_runtime(
     }
 }
 
-/// 把偏好文件中的外观设置恢复到当前 GPUI 主题运行时。
+/// 把一份已有偏好文件中的外观设置恢复到当前 GPUI 主题运行时。
 ///
-/// 未知主题预设、颜色模式和组件尺寸会回退到默认值；字号会限制在 theme crate 声明的
-/// 安全范围内，因此损坏的外观字段不会阻止应用启动。
+/// 未知主题预设会回退到应用默认主题，历史 `xuwe` 会迁移到 `nexora`；未知颜色模式和
+/// 组件尺寸会回退到安全默认值，字号会限制在 theme crate 声明的合法范围内。
 pub fn restore_appearance_preferences(preferences: &ShellPreferences, cx: &mut App) {
-    theme::set_selection(preferences.appearance.theme_selection(), cx);
+    restore_initial_appearance_preferences(preferences, true, cx);
+}
+
+fn restore_initial_appearance_preferences(
+    preferences: &ShellPreferences,
+    prefer_saved_theme: bool,
+    cx: &mut App,
+) {
+    theme::set_selection(
+        preferences
+            .appearance
+            .theme_selection(prefer_saved_theme, cx),
+        cx,
+    )
+    .expect("恢复后的主题选择必须来自已注册目录");
     theme::set_font_size(preferences.appearance.font_size(), cx);
     theme::set_component_size(preferences.appearance.component_size(), cx);
 }
@@ -1494,6 +1559,14 @@ fn should_update_main_window_placement(
 fn prepare_application(
     options: &ApplicationOptions,
 ) -> Result<PreparedApplication, ApplicationError> {
+    let theme_catalog = theme::ThemeCatalog::new(
+        &options.theme_presets,
+        options.default_theme_preset.as_deref(),
+    )
+    .map_err(|error| ApplicationError::InvalidThemeConfiguration {
+        preset_id: error.preset_id().map(str::to_owned),
+        message: error.to_string(),
+    })?;
     let registry = AppRegistry::discover_for_application(false)?;
     let initial_route = registry
         .resolve(options.initial_path.as_str())
@@ -1521,6 +1594,7 @@ fn prepare_application(
         initial_route,
         account_registry,
         account_initial_route,
+        theme_catalog,
     })
 }
 
@@ -1534,6 +1608,7 @@ where
         initial_route,
         account_registry,
         account_initial_route,
+        theme_catalog,
     } = prepare_application(&options)?;
     let locale = options.locale.clone();
     let configured_application_name = options.application_name.clone();
@@ -1568,11 +1643,18 @@ where
     let tab_style = options.tab_style;
     let sidebar_search = options.sidebar_search;
     let mut preferences_store = ShellPreferences::for_local_application(application_name.as_str());
+    let preferences_file_existed = preferences_store
+        .as_ref()
+        .is_some_and(|store| store.path().exists());
+    let mut shell_preferences_loaded = false;
     let mut shell_preferences = match preferences_store
         .as_ref()
         .map(UserConfigStore::load_versioned_or_default)
     {
-        Some(Ok(preferences)) => preferences,
+        Some(Ok(preferences)) => {
+            shell_preferences_loaded = preferences_file_existed;
+            preferences
+        }
         Some(Err(error @ ConfigurationError::UnsupportedSchema { .. })) => {
             tracing::warn!(error = %error, "偏好 schema 来自更高版本，本次运行不会覆盖该文件");
             preferences_store = None;
@@ -1590,7 +1672,8 @@ where
     {
         tracing::warn!(error = %error, "无法保存迁移后的 Shell 用户偏好");
     }
-    let mut desktop_options = options.into_desktop_options(application_name.as_str());
+    let mut desktop_options =
+        options.into_desktop_options(application_name.as_str(), theme_catalog);
     if tray_enabled {
         desktop_options.daemon_mode = true;
     }
@@ -1607,6 +1690,7 @@ where
         sidebar_search,
         preferences_store,
         shell_preferences,
+        shell_preferences_loaded,
         process: Some(process),
         application_identity: application_identity_value,
         tray_enabled,
@@ -1634,6 +1718,7 @@ struct ApplicationAdapter<A> {
     sidebar_search: bool,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
     shell_preferences: ShellPreferences,
+    shell_preferences_loaded: bool,
     process: Option<::desktop::process::ProcessBootstrap>,
     application_identity: String,
     tray_enabled: bool,
@@ -1926,7 +2011,14 @@ where
             self.preferences_store.clone(),
             cx,
         );
-        restore_appearance_preferences(&self.shell_preferences, cx);
+        restore_initial_appearance_preferences(
+            &self.shell_preferences,
+            self.shell_preferences_loaded,
+            cx,
+        );
+        if ShellAppearancePreferences::from_theme(cx) != self.shell_preferences.appearance {
+            persist_current_appearance_preferences(cx);
+        }
         restore_main_window_options(&mut self.options, &self.shell_preferences, cx);
         let application_name = self.application_info.application_name().to_owned();
         cx.set_global(self.application_info.clone());

@@ -10,7 +10,14 @@ use nexora::__private::{
     AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
     ShellPreferences, restore_appearance_preferences, restore_main_window_options,
 };
-use theme::{ColorScheme, ThemePreset, ThemeSelection};
+use theme::{ColorScheme, NEXORA_THEME_PRESET_ID, ThemeSelection};
+
+const CUSTOM_THEME: &str = r##"{
+    "themes": [
+        { "name": "Light", "mode": "light", "colors": { "background": "#ffffff" } },
+        { "name": "Dark", "mode": "dark", "colors": { "background": "#000000" } }
+    ]
+}"##;
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<gpui::Pixels> {
     Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
@@ -45,10 +52,7 @@ fn shell_preferences_default_to_safe_values() {
     let preferences = ShellPreferences::default();
 
     assert_eq!(preferences.schema_version, 2);
-    assert_eq!(
-        preferences.appearance.theme_preset,
-        ThemePreset::default().id()
-    );
+    assert_eq!(preferences.appearance.theme_preset, NEXORA_THEME_PRESET_ID);
     assert_eq!(
         preferences.appearance.color_scheme,
         ColorScheme::default().id()
@@ -509,7 +513,7 @@ fn appearance_preferences_restore_theme_font_and_component_size(cx: &mut TestApp
 
         assert_eq!(
             theme::selection(cx),
-            ThemeSelection::new(ThemePreset::Nexora, ColorScheme::Dark)
+            ThemeSelection::new(NEXORA_THEME_PRESET_ID, ColorScheme::Dark)
         );
         assert_eq!(Theme::global(cx).mode, ThemeMode::Dark);
         assert_eq!(theme::font_size(cx), 18);
@@ -535,6 +539,37 @@ fn invalid_appearance_preferences_fall_back_to_defaults(cx: &mut TestAppContext)
         assert_eq!(theme::selection(cx), ThemeSelection::default());
         assert_eq!(theme::font_size(cx), theme::MAX_FONT_SIZE);
         assert_eq!(theme::component_size(cx), theme::DEFAULT_COMPONENT_SIZE);
+    });
+}
+
+#[gpui::test]
+fn missing_saved_theme_falls_back_to_application_default_without_losing_other_appearance(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        theme::init_with_catalog(
+            theme::ThemeCatalog::new(
+                &[theme::ThemePresetSource::new("acme", "Acme", CUSTOM_THEME)],
+                Some("acme"),
+            )
+            .unwrap(),
+            cx,
+        );
+        let mut preferences = ShellPreferences::default();
+        preferences.appearance = ShellAppearancePreferences {
+            theme_preset: "removed_theme".to_owned(),
+            color_scheme: "dark".to_owned(),
+            font_size: 18,
+            component_size: "large".to_owned(),
+        };
+
+        restore_appearance_preferences(&preferences, cx);
+
+        assert_eq!(theme::selection(cx).preset_id(), "acme");
+        assert_eq!(theme::selection(cx).color_scheme(), ColorScheme::Dark);
+        assert_eq!(theme::font_size(cx), 18);
+        assert_eq!(theme::component_size(cx), Size::Large);
     });
 }
 
