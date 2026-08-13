@@ -4454,27 +4454,21 @@ impl ApplicationShell {
                         cx.notify();
                     })),
             )
-            .when(
-                reload_availability != crate::FeatureReloadAvailability::Unavailable,
-                |this| {
-                    this.child(
-                        Button::new("tabs-reload")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::default().path("icons/rotate-ccw.svg"))
-                            .loading(reload_loading)
-                            .disabled(
-                                reload_loading
-                                    || reload_availability
-                                        == crate::FeatureReloadAvailability::Disabled,
-                            )
-                            .tooltip("刷新当前页面")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.reload_active_feature(window, cx);
-                            })),
+            .child(
+                Button::new("tabs-reload")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::default().path("icons/rotate-ccw.svg"))
+                    .loading(reload_loading)
+                    .disabled(
+                        reload_loading
+                            || reload_availability != crate::FeatureReloadAvailability::Available,
                     )
-                },
+                    .tooltip("刷新当前页面")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.reload_active_feature(window, cx);
+                    })),
             )
             .into_any_element()
     }

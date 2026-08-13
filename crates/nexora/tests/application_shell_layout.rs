@@ -27,6 +27,11 @@ fn tab_bar_keeps_navigation_prefix_feature_icons_and_open_page_suffix() {
     for action in ["tabs-back", "tabs-forward", "tabs-reload"] {
         assert!(prefix.contains(action), "标签栏前缀缺少 {action}");
     }
+    assert!(
+        !prefix.contains(".when("),
+        "刷新入口必须始终留在 prefix，不支持刷新时仅禁用"
+    );
+    assert!(prefix.contains("!= crate::FeatureReloadAvailability::Available"));
 
     let suffix = APPLICATION_SOURCE
         .split_once("fn render_tab_bar_suffix")
