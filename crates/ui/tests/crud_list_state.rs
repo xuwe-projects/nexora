@@ -178,6 +178,42 @@ fn add_list(
 }
 
 #[gpui::test]
+fn app_aware_loader_resolves_context_when_each_request_starts(cx: &mut TestAppContext) {
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    let root = cx.add_window(|window, cx| {
+        let list = CrudListState::create_with_app(
+            TestQuery::new(1),
+            move |query, _app| {
+                captured.borrow_mut().push(query.page.page);
+                async move {
+                    Ok(CrudPage::new(
+                        vec![TestRow {
+                            id: u64::from(query.page.page),
+                        }],
+                        query.page.page,
+                        query.page.page_size,
+                        100,
+                    ))
+                }
+            },
+            window,
+            cx,
+        )
+        .unwrap();
+        TestRoot { list }
+    });
+    let list = root.read_with(cx, |root, _| root.list.clone()).unwrap();
+
+    cx.update_entity(&list, CrudListState::load_current);
+    cx.run_until_parked();
+    cx.update_entity(&list, |list, cx| list.go_to_page(2, cx));
+    cx.run_until_parked();
+
+    assert_eq!(*requests.borrow(), [1, 2]);
+}
+
+#[gpui::test]
 fn initial_page_and_cache_hit_do_not_reload(cx: &mut TestAppContext) {
     let requests = Rc::new(RefCell::new(Vec::new()));
     let list = add_list(cx, TestQuery::new(5), requests.clone());

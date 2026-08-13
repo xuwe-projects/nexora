@@ -8,14 +8,14 @@ use std::{
 };
 
 use contracts::crud_query::CrudQuery;
-use gpui::{AppContext as _, Context, Entity, SharedString, Task, WeakEntity, Window};
+use gpui::{App, AppContext as _, Context, Entity, SharedString, Task, WeakEntity, Window};
 use gpui_component::table::TableState;
 use thiserror::Error;
 
 use crate::{CrudTableDelegate, CrudTableRow, CrudTableSelection};
 
 type LoadFuture<R> = Pin<Box<dyn Future<Output = Result<CrudPage<R>, CrudLoadError>>>>;
-type LoadHandler<R, Q> = Rc<dyn Fn(Q) -> LoadFuture<R>>;
+type LoadHandler<R, Q> = Rc<dyn Fn(Q, &App) -> LoadFuture<R>>;
 
 /// 一次标准 CRUD 分页请求返回的数据。
 #[derive(Clone)]
@@ -168,6 +168,35 @@ where
         F: Fn(Q) -> Fut + 'static,
         Fut: Future<Output = Result<CrudPage<R>, CrudLoadError>> + 'static,
     {
+        Self::create_with_delegate(
+            query,
+            move |query, _| on_load(query),
+            |delegate| delegate,
+            false,
+            window,
+            cx,
+        )
+    }
+
+    /// 创建在每次请求开始时都可读取最新应用上下文的列表状态 Entity。
+    ///
+    /// 本入口适合需要从当前登录会话解析短期凭据或当前工厂作用域的加载器；调用方必须在
+    /// 返回 Future 前完成上下文读取，不能把 `&App` 捕获进异步任务。
+    ///
+    /// # Errors
+    ///
+    /// 查询的自定义 `Serialize` 实现无法生成缓存身份时返回错误。
+    pub fn create_with_app<T, F, Fut>(
+        query: Q,
+        on_load: F,
+        window: &mut Window,
+        cx: &mut Context<T>,
+    ) -> Result<Entity<Self>, CrudListStateError>
+    where
+        T: 'static,
+        F: Fn(Q, &App) -> Fut + 'static,
+        Fut: Future<Output = Result<CrudPage<R>, CrudLoadError>> + 'static,
+    {
         Self::create_with_delegate(query, on_load, |delegate| delegate, false, window, cx)
     }
 
@@ -189,7 +218,14 @@ where
         F: Fn(Q) -> Fut + 'static,
         Fut: Future<Output = Result<CrudPage<R>, CrudLoadError>> + 'static,
     {
-        Self::create_with_delegate(query, on_load, |delegate| delegate, true, window, cx)
+        Self::create_with_delegate(
+            query,
+            move |query, _| on_load(query),
+            |delegate| delegate,
+            true,
+            window,
+            cx,
+        )
     }
 
     /// 使用调用方配置过操作列和空状态的 delegate 创建列表状态 Entity。
@@ -209,7 +245,7 @@ where
     ) -> Result<Entity<Self>, CrudListStateError>
     where
         T: 'static,
-        F: Fn(Q) -> Fut + 'static,
+        F: Fn(Q, &App) -> Fut + 'static,
         Fut: Future<Output = Result<CrudPage<R>, CrudLoadError>> + 'static,
         C: FnOnce(CrudTableDelegate<R>) -> CrudTableDelegate<R> + 'static,
     {
@@ -218,7 +254,7 @@ where
         let cache_identity = query
             .cache_identity()
             .map_err(CrudListStateError::InvalidCacheIdentity)?;
-        let loader: LoadHandler<R, Q> = Rc::new(move |query| Box::pin(on_load(query)));
+        let loader: LoadHandler<R, Q> = Rc::new(move |query, cx| Box::pin(on_load(query, cx)));
 
         Ok(cx.new(move |state_cx| {
             let weak_state: WeakEntity<Self> = state_cx.entity().downgrade();
@@ -564,8 +600,9 @@ where
         let revision = self.revision;
         let identity = self.cache_identity.clone();
         let request_query = query.clone();
+        let load = loader(request_query.clone(), cx);
         let task = cx.spawn(async move |state, cx| {
-            let result = loader(request_query.clone()).await;
+            let result = load.await;
             let _ = state.update(cx, |state, cx| {
                 state.complete_load(revision, identity, page, request_query, result, cx);
             });
