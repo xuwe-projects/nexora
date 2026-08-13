@@ -49,6 +49,7 @@ const SKILL_SOURCES: &[SkillSource] = &[
     skill_source!("publish-nexora-release/agents/openai.yaml"),
     skill_source!("gpui-component/SKILL.md"),
     skill_source!("gpui-component/agents/openai.yaml"),
+    skill_source!("gpui-component/references/SOURCE.md"),
     skill_source!("gpui-component/references/style-guide.md"),
     skill_source!("gpui-component/references/usage.md"),
     skill_source!("gpui-desktop-development/SKILL.md"),

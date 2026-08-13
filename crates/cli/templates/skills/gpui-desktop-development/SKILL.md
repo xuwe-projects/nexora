@@ -105,7 +105,8 @@ struct B {
 - 只在单个 feature 内复用或增强的组件放在该 feature 模块；只有多个 feature 已经真实复用时，才提升到共享 UI 边界。
 - 不要仅因一小段 `div()` 相似就制造公共组件；抽取对象必须具有稳定的产品语义或交互契约。
 - 重复组件存在少量合法差异时，使用命名清晰的 variant 或 builder API，不要堆积难以理解的布尔参数。
-- `Card` 等名称只是语义示例。每次实现前检查当前 `gpui-component` 版本；确认不存在后再自行设计。
+- 分组语义使用官方 `GroupBox::fill()` / `GroupBox::outline()`，普通排版使用布局容器；不得恢复
+  公共 `Card`、`FormItem` 或 `LabeledControl` 视觉 API。
 
 ## 4. 选择组件层级
 

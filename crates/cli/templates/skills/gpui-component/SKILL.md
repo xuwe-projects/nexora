@@ -14,6 +14,9 @@ description: 指导所有 GPUI 可见 UI 实现中正确使用 gpui-component �
 
 ## 文档
 
+- **锁定参考来源**：先读 [references/SOURCE.md](references/SOURCE.md)，确认实际 revision 与已知冲突。
+- **锁定源码**：复杂 builder、事件、状态和可见行为必须核对 Cargo.lock 指向的 checkout；
+  `usage.md` 仅作快速快照，不能覆盖锁定源码。
 - **完整参考**：获取 `https://longbridge.github.io/gpui-component/llms-full.txt`
 - **单个组件 API**：获取 `https://longbridge.github.io/gpui-component/docs/components/{name}.md`
   - 例如 `button.md`、`input.md`、`select.md`、`dialog.md`、`data-table.md`
@@ -69,7 +72,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 | `Stepper` | `stepper::Stepper` | 无状态。递增/递减 |
 | `ColorPicker` | `color_picker::{ColorPicker, ColorPickerState}` | 有状态。颜色选择器 |
 | `DatePicker` | `time::date_picker::{DatePicker, DatePickerState}` | 有状态。日期选择器 |
-| `Form` | `form::{v_form, h_form, field}` | 表单字段的布局容器 |
+| `Form` / `Field` | `form::{v_form, h_form, field}` | 官方字段布局、label、description、required、visible 与 col_span |
 
 ### 展示与反馈
 
@@ -95,7 +98,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 
 | 组件 | 导入路径 | 说明 |
 |------|----------|------|
-| `Dialog` | `dialog::Dialog` + `WindowExt` | 通过 `window.open_dialog(...)` 打开，使用 `close_dialog(...)` 关闭 |
+| `Dialog` | `dialog::Dialog` + `WindowExt` | 锁定源码通过 `window.open_dialog(...)` 打开，使用 `close_dialog(...)` 关闭 |
 | `AlertDialog` | `WindowExt` | 通过 `window.open_alert_dialog(...)` 打开 |
 | `Sheet` | `sheet::Sheet` + `WindowExt` | 侧边面板，通过 `window.open_sheet(...)` 打开 |
 | `Notification` | `notification::Notification` + `WindowExt` | 通过 `window.push_notification(...)` 推送 |
@@ -116,7 +119,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 | `Collapsible` | `collapsible::Collapsible` | 单个可折叠区域 |
 | `GroupBox` | `group_box::GroupBox` | 带标签的容器 |
 | `Resizable` | `resizable::Resizable` | 可拖动分隔面板 |
-| `Scrollable` | `scroll::Scrollbar` | 自定义滚动条 |
+| `Scrollable` | `scroll::ScrollableElement` | 为内容提供官方滚动条与滚动容器扩展 |
 | `FocusTrap` | `focus_trap::FocusTrap` | 模态框的键盘焦点约束 |
 
 ### 数据展示
@@ -127,6 +130,7 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 | `Table` | `table::{Table, ...}` | 简单表格 |
 | `VirtualList` | `{v_virtual_list, h_virtual_list}` | 高性能大列表 |
 | `List` | `list::{List, ListState, ListDelegate}` | 有状态。可搜索列表 |
+| `SearchableList` | `searchable_list::{SearchableListState, SearchableListDelegate, ...}` | 搜索、键盘游标和选择语义 |
 | `Tree` | `tree::{Tree, TreeState, TreeDelegate}` | 有状态。层级结构 |
 | `DescriptionList` | `description_list::DescriptionList` | 键值对列表 |
 | `Settings` | `settings::Settings` | 设置面板 |
@@ -141,4 +145,5 @@ Button::new("id").primary().label("OK").on_click(|_, _, _| {})
 ## 参考文件
 
 - [usage.md](references/usage.md) — 初始化模式、组件类型和常用示例
+- [SOURCE.md](references/SOURCE.md) — 快照来源、revision、校验值和已知 API 冲突
 - [style-guide.md](references/style-guide.md) — 贡献者代码风格
