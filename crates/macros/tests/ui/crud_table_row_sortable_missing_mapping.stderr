@@ -1,0 +1,6 @@
+error: 可排序列必须声明 sort(asc = Sort::Asc, desc = Sort::Desc) 服务端映射
+ --> tests/ui/crud_table_row_sortable_missing_mapping.rs:7:5
+  |
+7 | /     #[nexora(column(sortable))]
+8 | |     name: String,
+  | |________________^

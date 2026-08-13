@@ -14,7 +14,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     checkbox::Checkbox,
     skeleton::Skeleton,
-    table::{Column, TableDelegate, TableState},
+    table::{Column, ColumnSort, TableDelegate, TableState},
     v_flex,
 };
 
@@ -33,6 +33,13 @@ pub trait CrudTableRow: Clone + 'static {
     /// 和其显示文本都必须唯一。
     type Id: Clone + Eq + Hash + Display + 'static;
 
+    /// 当前行所有可排序列使用的服务端排序枚举。
+    ///
+    /// 没有可排序列时使用 [`contracts::crud_query::NoCrudSort`]。派生宏会从
+    /// `sort(asc = ..., desc = ...)` 的枚举路径推导该类型，并确保同一行的所有排序列使用
+    /// 同一种排序契约。
+    type Sort: Clone + PartialEq + serde::Serialize + 'static;
+
     /// 返回当前行的稳定业务 ID。
     ///
     /// 该 ID 用于行 Element ID、选择列状态和选择事件。实现必须保证同一批已加载行中 ID
@@ -44,6 +51,14 @@ pub trait CrudTableRow: Clone + 'static {
     /// 返回值沿用 gpui-component 的 [`Column`]，因此列宽、排序、固定列和选择行为都仍然
     /// 由官方组件解释。
     fn columns() -> Vec<Column>;
+
+    /// 将列 key 与表头排序方向映射成服务端查询枚举。
+    ///
+    /// [`CrudTableDelegate`] 只把该值交给 [`crate::CrudListState`] 重新请求第一页，不会在
+    /// 客户端对当前缓存行进行排序。`Default` 必须返回 `None`。
+    fn server_sort(_key: &str, _sort: CrudColumnSort) -> Option<Self::Sort> {
+        None
+    }
 
     /// 返回指定列的表头水平对齐方式。
     ///
@@ -79,6 +94,18 @@ pub trait CrudTableRow: Clone + 'static {
     fn cell_text(&self, key: &str, cx: &App) -> String;
 }
 
+/// 标准 CRUD 表头可产生的三态服务端排序方向。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CrudColumnSort {
+    /// 恢复查询本身的默认排序。
+    #[default]
+    Default,
+    /// 使用列声明的升序枚举值。
+    Ascending,
+    /// 使用列声明的降序枚举值。
+    Descending,
+}
+
 type ActionRenderer<R> = Rc<dyn Fn(&R, &mut Window, &mut App) -> AnyElement>;
 type ActionText<R> = Rc<dyn Fn(&R, &App) -> String>;
 type LoadMoreHandler<R> = Rc<dyn Fn(&mut Window, &mut Context<TableState<CrudTableDelegate<R>>>)>;
@@ -87,6 +114,13 @@ type LoadedRowsSelectionHandler<R> = Rc<dyn Fn(LoadedRowsSelectionEvent<R>, &mut
 type RowSelectable<R> = Rc<dyn Fn(&R, &App) -> bool>;
 type VisibleRowsHandler<R> =
     Rc<dyn Fn(Range<usize>, &mut Window, &mut Context<TableState<CrudTableDelegate<R>>>)>;
+type SortChangeHandler<R> = Rc<
+    dyn Fn(
+        Option<<R as CrudTableRow>::Sort>,
+        &mut Window,
+        &mut Context<TableState<CrudTableDelegate<R>>>,
+    ),
+>;
 
 const SELECTION_COLUMN_KEY: &str = "__nexora_crud_table_selection";
 const SELECTION_COLUMN_WIDTH: f32 = 42.0;
@@ -185,6 +219,7 @@ pub struct CrudTableDelegate<R: CrudTableRow> {
     loading_more: bool,
     load_more: Option<LoadMoreHandler<R>>,
     visible_rows_handler: Option<VisibleRowsHandler<R>>,
+    sort_change_handler: Option<SortChangeHandler<R>>,
     selection: Option<CrudTableSelection<R>>,
     action_columns: Vec<CrudActionColumn<R>>,
     empty_title: SharedString,
@@ -214,6 +249,7 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
             loading_more: false,
             load_more: None,
             visible_rows_handler: None,
+            sort_change_handler: None,
             selection: None,
             action_columns: Vec::new(),
             empty_title: SharedString::new("暂无数据"),
@@ -596,6 +632,19 @@ impl<R: CrudTableRow> CrudTableDelegate<R> {
         self
     }
 
+    /// 注册服务端排序变化回调。
+    ///
+    /// 回调值为 `None` 时表示恢复 Query 默认排序；其他值来自行类型的显式升降序映射。
+    /// delegate 本身不会调整任何已加载行的顺序。
+    #[must_use]
+    pub fn on_sort_change(
+        mut self,
+        handler: impl Fn(Option<R::Sort>, &mut Window, &mut Context<TableState<Self>>) + 'static,
+    ) -> Self {
+        self.sort_change_handler = Some(Rc::new(handler));
+        self
+    }
+
     /// 设置空表格标题。
     #[must_use]
     pub fn empty_title(mut self, title: impl Into<SharedString>) -> Self {
@@ -635,6 +684,30 @@ impl<R: CrudTableRow> TableDelegate for CrudTableDelegate<R> {
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
         self.columns[col_ix].clone()
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        let Some(column) = self.columns.get(col_ix) else {
+            return;
+        };
+        let direction = match sort {
+            ColumnSort::Default => CrudColumnSort::Default,
+            ColumnSort::Ascending => CrudColumnSort::Ascending,
+            ColumnSort::Descending => CrudColumnSort::Descending,
+        };
+        let server_sort = R::server_sort(column.key.as_ref(), direction);
+        if direction != CrudColumnSort::Default && server_sort.is_none() {
+            return;
+        }
+        if let Some(handler) = self.sort_change_handler.clone() {
+            handler(server_sort, window, cx);
+        }
     }
 
     fn render_th(

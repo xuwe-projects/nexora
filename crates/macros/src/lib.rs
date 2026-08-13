@@ -140,7 +140,8 @@ pub fn derive_settings(input: TokenStream) -> TokenStream {
 /// 字段通过 `#[nexora(column(...))]` 声明为可见列，默认 key 和显示名都来自字段名。字段
 /// 属性支持常用 gpui-component `Column` builder，包括 `width`、`min_width`、
 /// `max_width`、`sortable`、`fixed_left`、`resizable`、`movable` 与 `selectable`，并额
-/// 外支持正文与表头对齐以及自定义 `render`/`text` 函数。
+/// 外支持正文与表头对齐以及自定义 `render`/`text` 函数。可排序列必须通过
+/// `sort(asc = Sort::Asc, desc = Sort::Desc)` 显式映射服务端排序枚举。
 #[proc_macro_derive(CrudTableRow, attributes(nexora))]
 pub fn derive_crud_table_row(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

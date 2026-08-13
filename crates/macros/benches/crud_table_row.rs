@@ -151,6 +151,16 @@ mod desktop {
         Bottom,
     }
 
+    #[derive(Clone, PartialEq)]
+    pub struct NoCrudSort;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum CrudColumnSort {
+        Default,
+        Ascending,
+        Descending,
+    }
+
     pub struct TableCell;
 
     impl TableCell {
@@ -171,10 +181,15 @@ mod desktop {
 
     pub trait CrudTableRow: Clone + 'static {
         type Id: Clone + Eq + Hash + Display + 'static;
+        type Sort: Clone + PartialEq + 'static;
 
         fn row_id(&self) -> &Self::Id;
 
         fn columns() -> Vec<Column>;
+
+        fn server_sort(_key: &str, _sort: CrudColumnSort) -> Option<Self::Sort> {
+            None
+        }
 
         fn header_alignment(_key: &str) -> TextAlign {
             TextAlign::Center
@@ -194,11 +209,22 @@ mod desktop {
     }
 }
 
+#[derive(Clone, PartialEq)]
+enum CitySort {
+    NameAsc,
+    NameDesc,
+}
+
 #[derive(Clone, nexora_macros::CrudTableRow)]
 struct DerivedCityRow {
     #[nexora(row_id, column(name = "ID", width = 64., min_width = 48., fixed_left))]
     id: u64,
-    #[nexora(column(title = "城市", width = 160., sortable))]
+    #[nexora(column(
+        title = "城市",
+        width = 160.,
+        sortable,
+        sort(asc = CitySort::NameAsc, desc = CitySort::NameDesc)
+    ))]
     name: String,
     #[nexora(column(
         key = "status",
@@ -240,6 +266,7 @@ struct HandwrittenCityRow {
 
 impl desktop::CrudTableRow for HandwrittenCityRow {
     type Id = u64;
+    type Sort = CitySort;
 
     fn row_id(&self) -> &Self::Id {
         &self.id
@@ -259,6 +286,14 @@ impl desktop::CrudTableRow for HandwrittenCityRow {
                 .text_center()
                 .resizable(false),
         ]
+    }
+
+    fn server_sort(key: &str, sort: desktop::CrudColumnSort) -> Option<Self::Sort> {
+        match (key, sort) {
+            ("name", desktop::CrudColumnSort::Ascending) => Some(CitySort::NameAsc),
+            ("name", desktop::CrudColumnSort::Descending) => Some(CitySort::NameDesc),
+            _ => None,
+        }
     }
 
     fn header_alignment(_key: &str) -> __private::gpui::TextAlign {

@@ -108,6 +108,8 @@ pub mod __private {
     pub use gpui_component;
     #[cfg(feature = "desktop")]
     pub use inventory;
+    #[cfg(feature = "desktop")]
+    pub use serde_json;
 
     #[cfg(feature = "desktop")]
     use crate::{

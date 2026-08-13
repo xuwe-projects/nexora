@@ -115,6 +115,16 @@ mod desktop {
         Bottom,
     }
 
+    #[derive(Clone, PartialEq)]
+    pub struct NoCrudSort;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum CrudColumnSort {
+        Default,
+        Ascending,
+        Descending,
+    }
+
     pub struct TableCell;
 
     impl TableCell {
@@ -135,10 +145,15 @@ mod desktop {
 
     pub trait CrudTableRow: Clone + 'static {
         type Id: Clone + Eq + Hash + Display + 'static;
+        type Sort: Clone + PartialEq + 'static;
 
         fn row_id(&self) -> &Self::Id;
 
         fn columns() -> Vec<Column>;
+
+        fn server_sort(_key: &str, _sort: CrudColumnSort) -> Option<Self::Sort> {
+            None
+        }
 
         fn header_alignment(_key: &str) -> TextAlign {
             TextAlign::Center

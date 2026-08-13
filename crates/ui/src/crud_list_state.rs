@@ -123,9 +123,10 @@ struct FailedPage<Q> {
 pub struct CrudListState<R, Q>
 where
     R: CrudTableRow,
-    Q: CrudQuery,
+    Q: CrudQuery<Sort = R::Sort>,
 {
     query: Q,
+    default_sort: Option<Q::Sort>,
     cache_identity: String,
     pages: BTreeMap<u32, Vec<R>>,
     total: usize,
@@ -145,7 +146,7 @@ where
 impl<R, Q> CrudListState<R, Q>
 where
     R: CrudTableRow,
-    Q: CrudQuery,
+    Q: CrudQuery<Sort = R::Sort>,
 {
     /// 创建使用默认 `CrudTableDelegate` 的列表状态 Entity。
     ///
@@ -209,6 +210,7 @@ where
         C: FnOnce(CrudTableDelegate<R>) -> CrudTableDelegate<R> + 'static,
     {
         query.normalize();
+        let default_sort = query.sort().cloned();
         let cache_identity = query
             .cache_identity()
             .map_err(CrudListStateError::InvalidCacheIdentity)?;
@@ -217,10 +219,19 @@ where
         Ok(cx.new(move |state_cx| {
             let weak_state: WeakEntity<Self> = state_cx.entity().downgrade();
             let visible_state = weak_state.clone();
+            let sort_state = weak_state.clone();
             let mut delegate = configure_delegate(CrudTableDelegate::new(Vec::new()));
             delegate = delegate.on_visible_rows_changed(move |range, _, cx| {
                 _ = visible_state.update(cx, |state, state_cx| {
                     state.load_visible_range(range.start, range.end, state_cx);
+                });
+            });
+            delegate = delegate.on_sort_change(move |sort, _, cx| {
+                _ = sort_state.update(cx, |state, state_cx| {
+                    let sort = sort.or_else(|| state.default_sort.clone());
+                    if state.set_sort(sort, state_cx).is_ok() {
+                        state.load_current(state_cx);
+                    }
                 });
             });
             if selectable {
@@ -242,7 +253,7 @@ where
             }
             let table_state = state_cx.new(|table_cx| {
                 TableState::new(delegate, window, table_cx)
-                    .sortable(false)
+                    .sortable(true)
                     .col_movable(true)
                     .col_resizable(true)
                     .col_selectable(false)
@@ -250,6 +261,7 @@ where
             });
             Self {
                 query,
+                default_sort,
                 cache_identity,
                 pages: BTreeMap::new(),
                 total: 0,

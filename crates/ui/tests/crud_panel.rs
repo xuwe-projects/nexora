@@ -12,6 +12,7 @@ struct TestRow {
 
 impl CrudTableRow for TestRow {
     type Id = u64;
+    type Sort = contracts::crud_query::NoCrudSort;
 
     fn row_id(&self) -> &Self::Id {
         &self.id
@@ -82,7 +83,7 @@ fn crud_panel_type_contract_accepts_row_and_query() {
     fn assert_panel_type<R, Q>()
     where
         R: CrudTableRow,
-        Q: CrudQuery,
+        Q: CrudQuery<Sort = R::Sort>,
     {
         let _ = std::any::type_name::<CrudPanel<R, Q>>();
     }

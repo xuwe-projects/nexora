@@ -8,7 +8,14 @@ use gpui::{
 use gpui_component::table::Column;
 use serde::Serialize;
 use serde_json::{Value, json};
-use ui::{CrudListState, CrudLoadError, CrudPage, CrudTableRow};
+use ui::{CrudColumnSort, CrudListState, CrudLoadError, CrudPage, CrudTableRow};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TestSort {
+    NameAsc,
+    NameDesc,
+}
 
 #[derive(Clone)]
 struct TestRow {
@@ -17,13 +24,22 @@ struct TestRow {
 
 impl CrudTableRow for TestRow {
     type Id = u64;
+    type Sort = TestSort;
 
     fn row_id(&self) -> &Self::Id {
         &self.id
     }
 
     fn columns() -> Vec<Column> {
-        vec![Column::new("id", "ID")]
+        vec![Column::new("id", "ID").sortable()]
+    }
+
+    fn server_sort(key: &str, sort: CrudColumnSort) -> Option<Self::Sort> {
+        match (key, sort) {
+            ("id", CrudColumnSort::Ascending) => Some(TestSort::NameAsc),
+            ("id", CrudColumnSort::Descending) => Some(TestSort::NameDesc),
+            _ => None,
+        }
     }
 
     fn render_cell(&self, _: &str, _: &mut Window, _: &mut App) -> gpui::AnyElement {
@@ -40,6 +56,7 @@ struct TestQuery {
     #[serde(flatten)]
     page: PageQuery,
     keyword: Option<String>,
+    sort: Option<TestSort>,
 }
 
 impl TestQuery {
@@ -50,12 +67,13 @@ impl TestQuery {
                 page_size: 15,
             },
             keyword: None,
+            sort: None,
         }
     }
 }
 
 impl CrudQuery for TestQuery {
-    type Sort = contracts::crud_query::NoCrudSort;
+    type Sort = TestSort;
 
     fn pagination(&self) -> &PageQuery {
         &self.page
@@ -66,10 +84,12 @@ impl CrudQuery for TestQuery {
     }
 
     fn sort(&self) -> Option<&Self::Sort> {
-        None
+        self.sort.as_ref()
     }
 
-    fn set_sort(&mut self, _: Option<Self::Sort>) {}
+    fn set_sort(&mut self, sort: Option<Self::Sort>) {
+        self.sort = sort;
+    }
 
     fn metadata() -> &'static contracts::crud_query::CrudQueryMetadata {
         static FILTERS: &[contracts::crud_query::CrudFilterMetadata] =
@@ -97,7 +117,7 @@ impl CrudQuery for TestQuery {
                     options: &[15, 25, 50, 100],
                 },
                 filters: FILTERS,
-                sort_field: None,
+                sort_field: Some("sort"),
             };
         &METADATA
     }
@@ -216,4 +236,28 @@ fn changing_filter_invalidates_cache_and_returns_to_first_page(cx: &mut TestAppC
         assert!(!list.has_current_page());
         assert!(!list.loaded_once());
     });
+}
+
+#[gpui::test]
+fn changing_server_sort_invalidates_cache_loads_first_page_and_never_reorders_locally(
+    cx: &mut TestAppContext,
+) {
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let list = add_list(cx, TestQuery::new(4), requests.clone());
+    cx.update_entity(&list, CrudListState::load_current);
+    cx.run_until_parked();
+
+    cx.update_entity(&list, |list, cx| {
+        list.set_sort(Some(TestSort::NameDesc), cx).unwrap();
+        assert_eq!(list.current_page(), 1);
+        assert!(!list.has_current_page());
+        assert!(list.current_rows().is_empty());
+        list.load_current(cx);
+    });
+    cx.run_until_parked();
+
+    let requests = requests.borrow();
+    let last = requests.last().expect("排序应发起新的服务端请求");
+    assert_eq!(last.page.page, 1);
+    assert_eq!(last.sort, Some(TestSort::NameDesc));
 }

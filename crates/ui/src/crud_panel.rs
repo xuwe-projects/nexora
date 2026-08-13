@@ -25,7 +25,7 @@ use crate::{CrudListState, CrudTableRow};
 pub struct CrudPanel<R, Q>
 where
     R: CrudTableRow,
-    Q: contracts::crud_query::CrudQuery,
+    Q: contracts::crud_query::CrudQuery<Sort = R::Sort>,
 {
     id: ElementId,
     title: SharedString,
@@ -42,7 +42,7 @@ where
 impl<R, Q> CrudPanel<R, Q>
 where
     R: CrudTableRow,
-    Q: contracts::crud_query::CrudQuery,
+    Q: contracts::crud_query::CrudQuery<Sort = R::Sort>,
 {
     /// 创建绑定强类型列表状态的 CRUD Panel。
     pub fn new(
@@ -115,7 +115,7 @@ where
 impl<R, Q> gpui_component::Sizable for CrudPanel<R, Q>
 where
     R: CrudTableRow,
-    Q: contracts::crud_query::CrudQuery,
+    Q: contracts::crud_query::CrudQuery<Sort = R::Sort>,
 {
     fn with_size(mut self, size: impl Into<Size>) -> Self {
         self.size = size.into();
@@ -126,7 +126,7 @@ where
 impl<R, Q> RenderOnce for CrudPanel<R, Q>
 where
     R: CrudTableRow,
-    Q: contracts::crud_query::CrudQuery,
+    Q: contracts::crud_query::CrudQuery<Sort = R::Sort>,
 {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.state.read(cx);

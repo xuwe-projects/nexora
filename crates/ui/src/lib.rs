@@ -50,7 +50,7 @@ pub use cascader::{
 pub use crud_list_state::{CrudListState, CrudListStateError, CrudLoadError, CrudPage};
 pub use crud_panel::CrudPanel;
 pub use crud_table::{
-    CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
+    CrudColumnSort, CrudTableDelegate, CrudTableRow, CrudTableSelection, LoadedRowsSelectionEvent,
     RowSelectionEvent,
 };
 pub use data_table_layout::{

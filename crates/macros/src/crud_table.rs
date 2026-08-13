@@ -19,6 +19,7 @@ struct ColumnArguments {
     min_width: Option<Expr>,
     max_width: Option<Expr>,
     sort: Option<ColumnSortMode>,
+    server_sort: Option<ServerSortMapping>,
     fixed_left: bool,
     resizable: Option<bool>,
     movable: Option<bool>,
@@ -28,6 +29,11 @@ struct ColumnArguments {
     vertical_align: Option<VerticalAlign>,
     render: Option<ExprPath>,
     text: Option<ExprPath>,
+}
+
+struct ServerSortMapping {
+    ascending: ExprPath,
+    descending: ExprPath,
 }
 
 #[derive(Clone, Copy)]
@@ -99,12 +105,15 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
         .iter()
         .map(|field| expand_render_cell_arm(field, &nexora));
     let text_arms = fields.iter().map(expand_cell_text_arm);
+    let server_sort_arms = fields.iter().filter_map(expand_server_sort_arm);
+    let sort_type = infer_sort_type(&fields, &nexora)?;
     let row_id_ident = &parsed.row_id.field_ident;
     let row_id_ty = &parsed.row_id.ty;
 
     Ok(quote! {
         impl #nexora::desktop::CrudTableRow for #ident {
             type Id = #row_id_ty;
+            type Sort = #sort_type;
 
             fn row_id(&self) -> &Self::Id {
                 &self.#row_id_ident
@@ -112,6 +121,16 @@ pub(crate) fn expand_crud_table_row(input: DeriveInput) -> Result<TokenStream> {
 
             fn columns() -> ::std::vec::Vec<#nexora::__private::gpui_component::table::Column> {
                 ::std::vec![#(#column_definitions),*]
+            }
+
+            fn server_sort(
+                key: &str,
+                sort: #nexora::desktop::CrudColumnSort,
+            ) -> ::core::option::Option<Self::Sort> {
+                match (key, sort) {
+                    #(#server_sort_arms,)*
+                    _ => ::core::option::Option::None,
+                }
             }
 
             fn header_alignment(key: &str) -> #nexora::__private::gpui::TextAlign {
@@ -261,6 +280,18 @@ fn parse_field(field: &Field) -> Result<ParsedField> {
         .name
         .take()
         .unwrap_or_else(|| LitStr::new(default_name, field_ident.span()));
+    if arguments.sort.is_some() && arguments.server_sort.is_none() {
+        return Err(Error::new_spanned(
+            field,
+            "可排序列必须声明 sort(asc = Sort::Asc, desc = Sort::Desc) 服务端映射",
+        ));
+    }
+    if arguments.sort.is_none() && arguments.server_sort.is_some() {
+        return Err(Error::new_spanned(
+            field,
+            "sort(asc = ..., desc = ...) 必须与 sortable、ascending 或 descending 同时声明",
+        ));
+    }
 
     Ok(ParsedField {
         column: Some(ColumnField {
@@ -350,6 +381,42 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
         set_sort(arguments, ColumnSortMode::Ascending(meta.path.span()))
     } else if meta.path.is_ident("descending") {
         set_sort(arguments, ColumnSortMode::Descending(meta.path.span()))
+    } else if meta.path.is_ident("sort") {
+        if arguments.server_sort.is_some() {
+            return Err(meta.error("sort(...) 只能声明一次"));
+        }
+        let mut ascending = None;
+        let mut descending = None;
+        meta.parse_nested_meta(|nested| {
+            if nested.path.is_ident("asc") {
+                set_once(
+                    &mut ascending,
+                    nested.value()?.parse::<ExprPath>()?,
+                    nested.path.span(),
+                    "sort.asc",
+                )
+            } else if nested.path.is_ident("desc") {
+                set_once(
+                    &mut descending,
+                    nested.value()?.parse::<ExprPath>()?,
+                    nested.path.span(),
+                    "sort.desc",
+                )
+            } else {
+                Err(nested.error("sort(...) 只支持 asc 和 desc"))
+            }
+        })?;
+        let Some(ascending) = ascending else {
+            return Err(meta.error("sort(...) 必须声明 asc = Sort::Asc"));
+        };
+        let Some(descending) = descending else {
+            return Err(meta.error("sort(...) 必须声明 desc = Sort::Desc"));
+        };
+        arguments.server_sort = Some(ServerSortMapping {
+            ascending,
+            descending,
+        });
+        Ok(())
     } else if meta.path.is_ident("fixed_left") {
         arguments.fixed_left = parse_bool_or_true(&meta)?;
         Ok(())
@@ -410,7 +477,7 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
             "text",
         )
     } else {
-        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、render 和 text"))
+        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、sort(...)、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、render 和 text"))
     }
 }
 
@@ -589,6 +656,69 @@ fn expand_cell_text_arm(field: &ColumnField) -> TokenStream {
     }
 
     quote!(#key => ::std::string::ToString::to_string(&self.#field_ident))
+}
+
+fn expand_server_sort_arm(field: &ColumnField) -> Option<TokenStream> {
+    let mapping = field.arguments.server_sort.as_ref()?;
+    let key = &field.key;
+    let ascending = &mapping.ascending;
+    let descending = &mapping.descending;
+    let nexora = nexora_path();
+    Some(quote! {
+        (#key, #nexora::desktop::CrudColumnSort::Ascending) =>
+            ::core::option::Option::Some(#ascending),
+        (#key, #nexora::desktop::CrudColumnSort::Descending) =>
+            ::core::option::Option::Some(#descending)
+    })
+}
+
+fn infer_sort_type(fields: &[ColumnField], nexora: &TokenStream) -> Result<TokenStream> {
+    let mut inferred: Option<(TokenStream, String)> = None;
+    for expression in fields
+        .iter()
+        .filter_map(|field| {
+            field
+                .arguments
+                .server_sort
+                .as_ref()
+                .map(|mapping| [&mapping.ascending, &mapping.descending])
+        })
+        .flatten()
+    {
+        if expression.qself.is_some() || expression.path.segments.len() < 2 {
+            return Err(Error::new_spanned(
+                expression,
+                "排序枚举值必须使用 SortType::Variant 路径",
+            ));
+        }
+        let segments = expression
+            .path
+            .segments
+            .iter()
+            .take(expression.path.segments.len() - 1)
+            .collect::<Vec<_>>();
+        let sort_type = if expression.path.leading_colon.is_some() {
+            quote!(::#(#segments)::* )
+        } else {
+            quote!(#(#segments)::* )
+        };
+        let identity = sort_type.to_string();
+        if let Some((_, expected)) = &inferred {
+            if expected != &identity {
+                return Err(Error::new_spanned(
+                    expression,
+                    "同一个 CrudTableRow 的所有排序列必须使用同一种排序枚举",
+                ));
+            }
+        } else {
+            inferred = Some((sort_type, identity));
+        }
+    }
+
+    Ok(inferred.map_or_else(
+        || quote!(#nexora::desktop::NoCrudSort),
+        |(sort_type, _)| sort_type,
+    ))
 }
 
 fn expand_align(align: Align, nexora: &TokenStream) -> TokenStream {

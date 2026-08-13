@@ -145,6 +145,16 @@ mod desktop {
         Bottom,
     }
 
+    #[derive(Clone, PartialEq)]
+    pub struct NoCrudSort;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum CrudColumnSort {
+        Default,
+        Ascending,
+        Descending,
+    }
+
     pub struct TableCell;
 
     impl TableCell {
@@ -165,10 +175,15 @@ mod desktop {
 
     pub trait CrudTableRow: Clone + 'static {
         type Id: Clone + Eq + Hash + Display + 'static;
+        type Sort: Clone + PartialEq + 'static;
 
         fn row_id(&self) -> &Self::Id;
 
         fn columns() -> Vec<Column>;
+
+        fn server_sort(_key: &str, _sort: CrudColumnSort) -> Option<Self::Sort> {
+            None
+        }
 
         fn header_alignment(_key: &str) -> TextAlign {
             TextAlign::Center
@@ -190,18 +205,40 @@ mod desktop {
 
 use desktop::CrudTableRow as _;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CitySort {
+    NameAsc,
+    NameDesc,
+    CodeAsc,
+    CodeDesc,
+    OrderAsc,
+    OrderDesc,
+}
+
 #[derive(Clone, nexora_macros::CrudTableRow)]
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., min_width = 48., fixed_left))]
     id: u64,
-    #[nexora(column(title = "城市", width = 160., sortable))]
+    #[nexora(column(
+        title = "城市",
+        width = 160.,
+        sortable,
+        sort(asc = CitySort::NameAsc, desc = CitySort::NameDesc)
+    ))]
     name: String,
-    #[nexora(column(title = "代码", width = 96., ascending, vertical_align = "top"))]
+    #[nexora(column(
+        title = "代码",
+        width = 96.,
+        ascending,
+        sort(asc = CitySort::CodeAsc, desc = CitySort::CodeDesc),
+        vertical_align = "top"
+    ))]
     code: String,
     #[nexora(column(
         title = "排序",
         width = 80.,
         descending,
+        sort(asc = CitySort::OrderAsc, desc = CitySort::OrderDesc),
         align = "right",
         vertical_align = "bottom"
     ))]
@@ -262,6 +299,18 @@ fn crud_table_row_derive_generates_columns_rendering_and_text_accessors() {
     assert_eq!(columns[1].sort, Some("default"));
     assert_eq!(columns[2].sort, Some("ascending"));
     assert_eq!(columns[3].sort, Some("descending"));
+    assert_eq!(
+        CityRow::server_sort("name", desktop::CrudColumnSort::Ascending),
+        Some(CitySort::NameAsc)
+    );
+    assert_eq!(
+        CityRow::server_sort("name", desktop::CrudColumnSort::Descending),
+        Some(CitySort::NameDesc)
+    );
+    assert_eq!(
+        CityRow::server_sort("name", desktop::CrudColumnSort::Default),
+        None
+    );
     assert_eq!(columns[3].align, __private::gpui::TextAlign::Right);
     assert_eq!(columns[4].key, "status");
     assert_eq!(columns[4].align, __private::gpui::TextAlign::Center);

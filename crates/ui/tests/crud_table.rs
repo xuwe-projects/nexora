@@ -44,6 +44,7 @@ impl TestRow {
 
 impl CrudTableRow for TestRow {
     type Id = u64;
+    type Sort = contracts::crud_query::NoCrudSort;
 
     fn row_id(&self) -> &Self::Id {
         &self.id
@@ -100,6 +101,7 @@ struct DisplayIdRow {
 
 impl CrudTableRow for DisplayIdRow {
     type Id = DisplayOnlyId;
+    type Sort = contracts::crud_query::NoCrudSort;
 
     fn row_id(&self) -> &Self::Id {
         &self.id
