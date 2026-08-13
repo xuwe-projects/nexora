@@ -7,6 +7,8 @@
 pub mod account;
 /// 不分页集合资源共享的响应包装。
 pub mod collection;
+/// 标准 CRUD 列表共享的查询元数据与强类型请求契约。
+pub mod crud_query;
 /// 所有 API 失败响应共享的稳定错误结构。
 pub mod error;
 /// 服务健康检查的公开响应契约。
@@ -15,3 +17,11 @@ pub mod health;
 pub mod pagination;
 /// HTTP PATCH 请求共享的字段更新语义。
 pub mod patch;
+
+pub use macros::CrudQuery;
+
+/// 派生宏生成代码使用的稳定依赖转发；业务代码不应直接依赖本模块。
+#[doc(hidden)]
+pub mod __private {
+    pub use serde_json;
+}

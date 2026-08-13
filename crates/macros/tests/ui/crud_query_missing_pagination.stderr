@@ -1,0 +1,7 @@
+error: CrudQuery 必须声明一个 #[nexora(pagination)] 字段
+ --> tests/ui/crud_query_missing_pagination.rs:2:1
+  |
+2 | / struct Query {
+3 | |     value: String,
+4 | | }
+  | |_^

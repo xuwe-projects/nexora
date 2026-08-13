@@ -14,6 +14,7 @@ use syn::{
     spanned::Spanned as _,
 };
 
+mod crud_query;
 mod crud_table;
 
 /// 为类型生成 Nexora Feature 元数据实现。
@@ -145,6 +146,20 @@ pub fn derive_crud_table_row(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     crud_table::expand_crud_table_row(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// 为标准 CRUD 列表请求生成分页、筛选和排序元数据。
+///
+/// 结构体必须具有一个 `#[nexora(pagination)]` 的 `PageQuery` 字段；只有显式声明
+/// `#[nexora(filter(...))]` 的字段会进入筛选 UI。可选的 `#[nexora(sort)]` 字段必须是
+/// `Option<T>`，从而允许表头按升序、降序和请求默认排序循环。
+#[proc_macro_derive(CrudQuery, attributes(nexora))]
+pub fn derive_crud_query(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    crud_query::expand_crud_query(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -873,6 +888,16 @@ pub(crate) fn nexora_path() -> proc_macro2::TokenStream {
             quote!(::#ident)
         }
         Ok(FoundCrate::Itself) | Err(_) => quote!(::nexora),
+    }
+}
+
+pub(crate) fn contracts_path() -> proc_macro2::TokenStream {
+    match crate_name("contracts") {
+        Ok(FoundCrate::Name(name)) => {
+            let ident = Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        Ok(FoundCrate::Itself) | Err(_) => quote!(::contracts),
     }
 }
 

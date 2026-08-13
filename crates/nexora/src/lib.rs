@@ -47,6 +47,8 @@ pub use application::{
 };
 #[cfg(feature = "desktop")]
 pub use application_info::ApplicationInfo;
+#[cfg(feature = "derive")]
+pub use contracts::CrudQuery;
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]

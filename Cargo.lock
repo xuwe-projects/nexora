@@ -1505,6 +1505,7 @@ dependencies = [
 name = "contracts"
 version = "0.35.0"
 dependencies = [
+ "nexora-macros",
  "serde",
  "serde_json",
 ]

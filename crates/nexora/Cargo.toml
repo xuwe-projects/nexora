@@ -17,7 +17,7 @@ categories = ["gui"]
 
 [features]
 default = ["desktop", "derive"]
-derive = ["dep:macros"]
+derive = ["dep:contracts", "dep:macros"]
 desktop = [
     "dep:actions",
     "dep:desktop",
@@ -34,7 +34,6 @@ desktop = [
     "dep:ui",
     "dep:url",
     "dep:updater",
-    "dep:contracts",
     "dep:oidc",
     "dep:reqwest",
     "dep:sha2",
