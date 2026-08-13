@@ -43,7 +43,10 @@ pub enum CrudFilterPresentation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrudFilterTrigger {
     /// 输入停止三百毫秒后提交，按 Enter 时立即提交。
-    Debounce { milliseconds: u64 },
+    Debounce {
+        /// 停止输入后等待的毫秒数。
+        milliseconds: u64,
+    },
     /// 控件值变化后立即提交。
     Immediate,
     /// 只更新筛选草稿，由显式查询按钮提交。
@@ -156,6 +159,10 @@ pub trait CrudQuery: Clone + Serialize + 'static {
     ///
     /// 页大小、筛选和排序仍参与身份；因此跳页可以复用缓存，改变筛选、排序或页大小会自然
     /// 进入新的缓存分区。序列化失败只可能来自调用方自定义 serde 实现，此时返回错误。
+    ///
+    /// # Errors
+    ///
+    /// 调用方的自定义 [`Serialize`] 实现无法生成 JSON 时返回原始序列化错误。
     fn cache_identity(&self) -> Result<String, serde_json::Error> {
         let mut query = self.clone();
         query.pagination_mut().page = 1;

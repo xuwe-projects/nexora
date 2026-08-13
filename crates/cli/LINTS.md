@@ -49,6 +49,7 @@ nexora lint --format json
 | `nexora::global_refresh_scope` | warning | 非主题模块不应调用 `refresh_windows()` 扩大刷新范围。 |
 | `nexora::hardcoded_visual_color` | warning | `theme` crate 之外的 GPUI 代码不直接调用 `rgb()`、`rgba()`、`hsl()` 或 `hsla()`。 |
 | `nexora::icon_button_without_tooltip` | warning | 纯图标 Button 必须提供 Tooltip、可见文本或可访问名称。 |
+| `nexora::manual_table_delegate` | warning | 应用标准列表禁止手写 `TableDelegate`，复杂能力缺口需要紧邻中文理由豁免。 |
 | `nexora::non_gpui_global_state` | error | GPUI crate 禁止使用 `static mut`、`thread_local!` 或静态锁保存应用状态。 |
 | `nexora::render_side_effect` | error | `render()` 中禁止直接创建 Entity、订阅、启动任务、修改 Global 或执行 I/O。 |
 | `nexora::unstable_element_id` | warning | ElementId 不使用列表位置、时间戳或随机值。 |
@@ -81,3 +82,12 @@ syn = { version = "2", features = ["full"] }
 ```
 
 豁免只表达经过审查的例外，不应作为消除未知警告的快捷方式。
+
+复杂表格确实超出 `CrudPanel`/`CrudTableRow` 能力时，可以在对应 impl 前声明：
+
+```rust
+// nexora-lint: allow(nexora::manual_table_delegate) reason="主从树表需要跨行分组表头，标准单列表不支持"
+impl TableDelegate for ProjectTreeTable {}
+```
+
+`reason` 必须非空并包含中文；英文或空理由不会抑制警告。

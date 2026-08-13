@@ -44,7 +44,7 @@ pub use ui::{
     DataTableLayoutError, DataTableLayoutKey, FieldValue, FieldValueParseError, FormDialog,
     FormDialogState, FormFieldDraft, FormFieldEvent, FormFieldState, FormFieldStateBuilder,
     FormFieldTarget, LoadedRowsSelectionEvent, NumberFieldValue, RowSelectionEvent, SidebarRegion,
-    TableCell, TableCellVerticalAlign, TableHeaderCell,
+    TableCell, TableCellVerticalAlign, TableHeaderCell, TableSwitchCell,
 };
 
 /// 返回当前应用已注册的全部主题预设元数据。

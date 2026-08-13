@@ -36,7 +36,10 @@ pub enum SearchMode {
     /// 仅打开可导航页面的模式。
     OpenPage,
     /// 应用定义的稳定扩展模式。
-    Custom(String),
+    Custom(
+        /// 应用定义并负责保持稳定的模式 ID。
+        String,
+    ),
 }
 
 impl SearchMode {
@@ -87,7 +90,10 @@ pub enum SearchAction {
     /// 保持弹层与当前结果不变。
     KeepOpen,
     /// 替换输入并触发一次 `on_change`，不触发 `on_search`。
-    ReplaceQuery(String),
+    ReplaceQuery(
+        /// 写回搜索输入框的新查询文本。
+        String,
+    ),
     /// 保留输入与模式，只刷新当前项所属 Provider。
     RefreshProvider,
     /// 保留输入与模式，刷新全部 Provider。
@@ -420,6 +426,10 @@ impl gpui::Global for SearchProviderRegistry {}
 ///
 /// 后一次安装完整替换前一次列表；内置页面 Provider 不受影响。重复 Provider ID 会
 /// panic，避免结果与历史身份不确定。
+///
+/// # Panics
+///
+/// `providers` 中存在重复稳定 ID 时 panic，避免搜索结果和历史项无法确定归属。
 pub fn install_search_providers(mut providers: Vec<SearchProvider>, cx: &mut App) {
     providers.sort_by(|left, right| {
         left.order()

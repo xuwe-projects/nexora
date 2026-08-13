@@ -5,8 +5,8 @@ use std::{collections::HashSet, fs, path::Path};
 use proc_macro2::Span;
 use syn::{
     Attribute, Expr, ExprAsync, ExprCall, ExprClosure, ExprMacro, ExprMethodCall, ImplItemFn,
-    ItemConst, ItemEnum, ItemFn, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType, ItemUnion,
-    Lit, Meta, ReturnType, Signature, Stmt, TraitItem, Type, Visibility,
+    ItemConst, ItemEnum, ItemFn, ItemImpl, ItemMod, ItemStatic, ItemStruct, ItemTrait, ItemType,
+    ItemUnion, Lit, Meta, ReturnType, Signature, Stmt, TraitItem, Type, Visibility,
     spanned::Spanned as _,
     visit::{self, Visit},
 };
@@ -108,6 +108,7 @@ fn check_file(
         uses_axum: member.uses_dependency("axum"),
         uses_sqlx: member.uses_dependency("sqlx") && source.contains(concat!("sqlx", "::")),
         is_contract: member.is_contract(),
+        enforce_standard_table: !matches!(member.name(), "nexora" | "ui"),
     };
     let mut source_rules = SourceRuleVisitor::new(&source, relative, profile, report);
     source_rules.visit_file(&syntax);
@@ -329,6 +330,7 @@ struct SourceProfile {
     uses_axum: bool,
     uses_sqlx: bool,
     is_contract: bool,
+    enforce_standard_table: bool,
 }
 
 struct SourceRuleVisitor<'a> {
@@ -340,6 +342,7 @@ struct SourceRuleVisitor<'a> {
     uses_axum: bool,
     uses_sqlx: bool,
     is_contract: bool,
+    enforce_standard_table: bool,
     has_body_limit: bool,
     in_render: bool,
     deferred_depth: usize,
@@ -364,6 +367,7 @@ impl<'a> SourceRuleVisitor<'a> {
             uses_axum: profile.uses_axum,
             uses_sqlx: profile.uses_sqlx,
             is_contract: profile.is_contract,
+            enforce_standard_table: profile.enforce_standard_table,
             has_body_limit: source.contains("DefaultBodyLimit"),
             in_render: false,
             deferred_depth: 0,
@@ -393,8 +397,37 @@ impl<'a> SourceRuleVisitor<'a> {
         lines[start..end].iter().any(|candidate| {
             candidate.contains("nexora-lint: allow(")
                 && candidate.contains(rule)
-                && candidate.contains("reason=")
+                && candidate.split_once("reason=").is_some_and(|(_, reason)| {
+                    contains_chinese(reason) && !reason.trim().is_empty()
+                })
         })
+    }
+
+    fn check_manual_table_delegate(&mut self, node: &ItemImpl) {
+        if !self.enforce_standard_table {
+            return;
+        }
+        let Some((_, trait_path, _)) = &node.trait_ else {
+            return;
+        };
+        if !trait_path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "TableDelegate")
+        {
+            return;
+        }
+
+        let diagnostic = self
+            .warning(
+                "nexora::manual_table_delegate",
+                trait_path.span(),
+                "应用手写了 gpui-component TableDelegate，标准分页列表必须使用 CrudTableRow 与 CrudListState",
+            )
+            .with_help(
+                "迁移到 CrudPanel<Row, Query>；确有复杂表格能力缺口时，在 impl 紧邻上一行添加带中文原因的局部豁免",
+            );
+        self.push(diagnostic, trait_path.span());
     }
 
     fn error(&self, rule: &'static str, span: Span, message: impl Into<String>) -> Diagnostic {
@@ -990,6 +1023,11 @@ impl<'ast> Visit<'ast> for SourceRuleVisitor<'_> {
             self.visit_attribute(attribute);
         }
         self.visit_function_body(&node.sig.ident, &node.block);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
+        self.check_manual_table_delegate(node);
+        visit::visit_item_impl(self, node);
     }
 
     fn visit_item_mod(&mut self, node: &'ast ItemMod) {

@@ -108,7 +108,11 @@ impl CrudLoadError {
 pub enum CrudListStateError {
     /// 查询无法生成稳定缓存身份。
     #[error("无法生成 CRUD 查询缓存身份")]
-    InvalidCacheIdentity(#[source] serde_json::Error),
+    InvalidCacheIdentity(
+        /// 调用方 Query 自定义序列化失败的原始错误。
+        #[source]
+        serde_json::Error,
+    ),
 }
 
 struct FailedPage<Q> {

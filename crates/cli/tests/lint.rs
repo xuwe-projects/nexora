@@ -380,6 +380,62 @@ syn = { workspace = true }
 }
 
 #[test]
+fn manual_table_delegate_requires_adjacent_chinese_reason() {
+    let fixture = valid_workspace("manual-table-delegate");
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! 手写表格 delegate 规则测试。
+
+struct ProjectTreeTable;
+
+impl TableDelegate for ProjectTreeTable {}
+
+fn main() {}
+"#,
+    );
+
+    let denied = fixture.run(&["--deny-warnings"]);
+    let stdout = String::from_utf8_lossy(&denied.stdout);
+    assert!(!denied.status.success());
+    assert!(stdout.contains("nexora::manual_table_delegate"));
+
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! 手写表格 delegate 规则测试。
+
+struct ProjectTreeTable;
+
+// nexora-lint: allow(nexora::manual_table_delegate) reason="主从树表需要跨行分组表头，标准单列表不支持"
+impl TableDelegate for ProjectTreeTable {}
+
+fn main() {}
+"#,
+    );
+    let allowed = fixture.run(&["--deny-warnings"]);
+    assert!(
+        allowed.status.success(),
+        "中文理由豁免应通过：\n{}",
+        String::from_utf8_lossy(&allowed.stdout),
+    );
+
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! 手写表格 delegate 规则测试。
+
+struct ProjectTreeTable;
+
+// nexora-lint: allow(nexora::manual_table_delegate) reason="custom grouped header"
+impl TableDelegate for ProjectTreeTable {}
+
+fn main() {}
+"#,
+    );
+    let english = fixture.run(&["--deny-warnings"]);
+    assert!(!english.status.success());
+    assert!(String::from_utf8_lossy(&english.stdout).contains("nexora::manual_table_delegate"));
+}
+
+#[test]
 fn contract_models_cannot_leak_database_types() {
     let fixture = Fixture::new("contract-model");
     fixture.write(

@@ -38,6 +38,9 @@ pub mod sidebar_region;
 /// 桌面数据表表头辅助组件。
 pub mod table_header;
 
+/// 数据表中显式受控的布尔开关单元格。
+pub mod table_switch_cell;
+
 /// 桌面数据表正文单元格辅助组件。
 pub mod table_cell;
 
@@ -67,4 +70,5 @@ pub use panel_dialog::PanelDialog;
 pub use sidebar_region::SidebarRegion;
 pub use table_cell::{TableCell, TableCellVerticalAlign};
 pub use table_header::TableHeaderCell;
+pub use table_switch_cell::TableSwitchCell;
 pub use window_layers::window_layers;
