@@ -27,6 +27,8 @@ mod application_info;
 #[cfg(feature = "desktop")]
 mod defaults;
 #[cfg(feature = "desktop")]
+mod global_search;
+#[cfg(feature = "desktop")]
 mod metadata;
 #[cfg(feature = "desktop")]
 mod registry;
@@ -41,14 +43,19 @@ pub mod server;
 #[cfg(feature = "desktop")]
 pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
-    ApplicationTabStyle, ApplicationThemePreset, PanelHeaderAction, PersistentDataTableDelegate,
-    TrayUnavailablePolicy, install_panel_header_actions, persistent_crud_table_state,
+    ApplicationTabStyle, ApplicationThemePreset, PersistentDataTableDelegate, ShellToolbarAction,
+    TrayUnavailablePolicy, install_shell_toolbar_actions, persistent_crud_table_state,
     persistent_data_table_state, reset_data_table_layout,
 };
 #[cfg(feature = "desktop")]
 pub use application_info::ApplicationInfo;
 #[cfg(feature = "derive")]
 pub use contracts::CrudQuery;
+#[cfg(feature = "desktop")]
+pub use global_search::{
+    SearchAction, SearchActionError, SearchHistoryEntry, SearchItem, SearchMode, SearchProvider,
+    SearchProviderError, SearchRequest, SearchSection, install_search_providers,
+};
 #[cfg(all(feature = "desktop", feature = "derive"))]
 pub use macros::LoginFeature;
 #[cfg(feature = "derive")]
@@ -72,8 +79,8 @@ pub use route::{
 };
 #[cfg(feature = "desktop")]
 pub use runtime::{
-    FeatureContextExt, FeatureElement, FeatureInstance, FeatureRoute, FeatureRuntimeError, NoPath,
-    NoQuery,
+    FeatureContextExt, FeatureElement, FeatureInstance, FeatureReloadAvailability, FeatureRoute,
+    FeatureRuntimeError, NoPath, NoQuery,
 };
 #[cfg(feature = "desktop")]
 pub use runtime::{

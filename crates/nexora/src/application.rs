@@ -22,21 +22,25 @@ use configuration::{ConfigurationError, UserConfigStore, VersionedConfiguration}
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, AssetSource, Bounds, Context, Entity, Global, Image, ImageFormat,
-    IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size, Subscription, Task,
-    WeakEntity, Window, WindowBounds, WindowOptions, div, img, point, prelude::*, px, size,
+    AnyElement, AnyView, App, AssetSource, Bounds, ClickEvent, Context, Entity, Focusable as _,
+    Global, Image, ImageFormat, IntoElement as _, MouseButton, Pixels, Render, ScrollHandle, Size,
+    Subscription, Task, WeakEntity, Window, WindowBounds, WindowOptions, div, img, point,
+    prelude::*, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size as ComponentSize,
     StyledExt as _, TitleBar, WindowExt as _,
     alert::Alert,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    badge::Badge,
     button::{Button, ButtonVariants as _, Toggle},
     dialog::{DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
-    sidebar::{Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem},
+    sidebar::{
+        Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
+        SidebarToggleButton,
+    },
     tab::{Tab, TabBar},
     table::{Column, TableDelegate, TableEvent, TableState},
     v_flex,
@@ -48,8 +52,13 @@ use pinyin::ToPinyin as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ui::{
-    CrudTableDelegate, CrudTableRow, DataTableLayoutError, DataTableLayoutKey, PanelHeader,
-    SidebarRegion, apply_data_table_layout, data_table_layout_from_event, layout::WorkspaceLayout,
+    CrudTableDelegate, CrudTableRow, DataTableLayoutError, DataTableLayoutKey, SidebarRegion,
+    apply_data_table_layout, data_table_layout_from_event, layout::WorkspaceLayout,
+};
+
+use crate::global_search::{
+    SearchAction, SearchDialog, SearchHistoryEntry, SearchItem, SearchMode, SearchProvider,
+    SearchSection, installed_search_providers,
 };
 
 /// 让手写 `TableDelegate` 暴露其稳定列集合，以接入 Nexora 列布局持久化。
@@ -204,67 +213,188 @@ impl ApplicationLogo {
     }
 }
 
-/// 主面板标题栏右侧动作的渲染器。
+type ShellToolbarClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+/// 主窗口全局工具栏中的稳定应用动作。
 ///
-/// 应用可以在启动阶段安装一组动作，Nexora Shell 会在所有业务页面的
-/// `PanelHeader` 右侧渲染这些动作。渲染闭包只应读取应用状态并构造元素；导航、
-/// 弹窗或业务操作等副作用应放在元素自身的事件回调中。
+/// 标准构造器使用 gpui-component 官方 `Button`、`Icon`、`Tooltip` 与 `Badge`。需要
+/// `Popover`、`Menu` 或受控复杂内容时可使用 [`Self::custom`] 返回官方组件组合。
 #[derive(Clone)]
-pub struct PanelHeaderAction {
-    render: Rc<dyn Fn(&mut App) -> AnyElement>,
+pub struct ShellToolbarAction {
+    id: String,
+    order: i32,
+    render: ShellToolbarRenderer,
 }
 
-impl PanelHeaderAction {
-    /// 创建一个主面板标题栏右侧动作。
+#[derive(Clone)]
+enum ShellToolbarRenderer {
+    Standard {
+        icon: Icon,
+        tooltip: gpui::SharedString,
+        badge: usize,
+        disabled: bool,
+        loading: bool,
+        on_click: ShellToolbarClickHandler,
+    },
+    Custom(Rc<dyn Fn(&mut App) -> AnyElement>),
+}
+
+impl ShellToolbarAction {
+    /// 创建一个使用官方图标按钮的全局工具动作。
     ///
-    /// `render` 会在标题栏渲染时收到当前 [`App`] 上下文，并返回可插入
-    /// `PanelHeader` 的任意 GPUI 元素。动作对象可以被克隆，便于一次安装多个
-    /// 页面共享的入口。
+    /// `id` 必须在当前应用安装的动作中唯一，`order` 越小越靠左。回调只应执行窗口级或
+    /// 跨 Feature 能力；创建、导出和筛选等页面级操作应留在 Feature 内部。
+    pub fn new(
+        id: impl Into<String>,
+        order: i32,
+        icon: impl Into<Icon>,
+        tooltip: impl Into<gpui::SharedString>,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            order,
+            render: ShellToolbarRenderer::Standard {
+                icon: icon.into(),
+                tooltip: tooltip.into(),
+                badge: 0,
+                disabled: false,
+                loading: false,
+                on_click: Rc::new(on_click),
+            },
+        }
+    }
+
+    /// 创建一个受控自定义工具动作。
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use gpui::{div, App, ParentElement as _};
-    /// # use nexora::PanelHeaderAction;
-    /// let action = PanelHeaderAction::new(|_cx: &mut App| div().child("Action"));
-    /// ```
-    pub fn new<E>(render: impl Fn(&mut App) -> E + 'static) -> Self
+    /// 该入口用于官方 `Popover`、`Menu` 或需要读取动态应用状态的组合。自定义渲染仍必须
+    /// 使用 gpui-component 的语义组件，不应自行模拟按钮、焦点或键盘行为。
+    pub fn custom<E>(
+        id: impl Into<String>,
+        order: i32,
+        render: impl Fn(&mut App) -> E + 'static,
+    ) -> Self
     where
         E: gpui::IntoElement,
     {
         Self {
-            render: Rc::new(move |cx| render(cx).into_any_element()),
+            id: id.into(),
+            order,
+            render: ShellToolbarRenderer::Custom(Rc::new(move |cx| render(cx).into_any_element())),
         }
     }
 
+    /// 设置标准图标动作的数量徽章；零值不展示。
+    #[must_use]
+    pub fn badge(mut self, badge: usize) -> Self {
+        if let ShellToolbarRenderer::Standard { badge: current, .. } = &mut self.render {
+            *current = badge;
+        }
+        self
+    }
+
+    /// 设置标准图标动作的禁用状态。
+    #[must_use]
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        if let ShellToolbarRenderer::Standard {
+            disabled: current, ..
+        } = &mut self.render
+        {
+            *current = disabled;
+        }
+        self
+    }
+
+    /// 设置标准图标动作的加载状态；加载期间自动禁止重复触发。
+    #[must_use]
+    pub fn loading(mut self, loading: bool) -> Self {
+        if let ShellToolbarRenderer::Standard {
+            loading: current, ..
+        } = &mut self.render
+        {
+            *current = loading;
+        }
+        self
+    }
+
+    /// 返回动作的稳定 ID。
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    /// 返回动作排序值。
+    pub const fn order(&self) -> i32 {
+        self.order
+    }
+
     fn render(&self, cx: &mut App) -> AnyElement {
-        (self.render)(cx)
+        match &self.render {
+            ShellToolbarRenderer::Standard {
+                icon,
+                tooltip,
+                badge,
+                disabled,
+                loading,
+                on_click,
+            } => {
+                let on_click = on_click.clone();
+                let button = Button::new(self.id.clone())
+                    .ghost()
+                    .xsmall()
+                    .icon(icon.clone())
+                    .tooltip(tooltip.clone())
+                    .loading(*loading)
+                    .disabled(*disabled || *loading)
+                    .on_click(move |event, window, cx| on_click(event, window, cx));
+                if *badge == 0 {
+                    button.into_any_element()
+                } else {
+                    Badge::new()
+                        .count(*badge)
+                        .small()
+                        .child(button)
+                        .into_any_element()
+                }
+            }
+            ShellToolbarRenderer::Custom(render) => render(cx),
+        }
     }
 }
 
 #[derive(Clone, Default)]
-struct PanelHeaderActionRegistry {
-    actions: Vec<PanelHeaderAction>,
+struct ShellToolbarActionRegistry {
+    actions: Vec<ShellToolbarAction>,
 }
 
-impl Global for PanelHeaderActionRegistry {}
+impl Global for ShellToolbarActionRegistry {}
 
-/// 安装应用级主面板标题栏右侧动作。
+/// 安装应用级主窗口全局工具动作。
 ///
-/// 后一次安装会完整替换前一次安装的动作列表，适合应用在启动阶段集中声明稳定入口。
-/// 传入空列表会清空已安装动作。动作会渲染在业务页面标题栏右侧，并位于框架内置的
-/// 当前标签页置顶按钮之前。
-pub fn install_panel_header_actions(actions: Vec<PanelHeaderAction>, cx: &mut App) {
-    let registry = PanelHeaderActionRegistry { actions };
-    if cx.has_global::<PanelHeaderActionRegistry>() {
-        *cx.global_mut::<PanelHeaderActionRegistry>() = registry;
+/// 后一次安装会完整替换前一次安装的列表。传入空列表会清空应用动作。
+///
+/// # Panics
+///
+/// 动作列表包含重复稳定 ID 时 panic。
+pub fn install_shell_toolbar_actions(mut actions: Vec<ShellToolbarAction>, cx: &mut App) {
+    actions.sort_by(|left, right| {
+        left.order()
+            .cmp(&right.order())
+            .then_with(|| left.id().cmp(right.id()))
+    });
+    let mut ids = HashSet::new();
+    for action in &actions {
+        assert!(ids.insert(action.id()), "ShellToolbarAction ID 不能重复");
+    }
+    let registry = ShellToolbarActionRegistry { actions };
+    if cx.has_global::<ShellToolbarActionRegistry>() {
+        *cx.global_mut::<ShellToolbarActionRegistry>() = registry;
     } else {
         cx.set_global(registry);
     }
 }
 
-fn panel_header_actions(cx: &mut App) -> Vec<AnyElement> {
-    cx.try_global::<PanelHeaderActionRegistry>()
+fn shell_toolbar_actions(cx: &mut App) -> Vec<AnyElement> {
+    cx.try_global::<ShellToolbarActionRegistry>()
         .map(|registry| registry.actions.clone())
         .unwrap_or_default()
         .into_iter()
@@ -765,7 +895,7 @@ struct PreparedApplication {
 }
 
 const MAIN_WINDOW_BOUNDS_SAVE_DELAY: Duration = Duration::from_millis(120);
-const SHELL_PREFERENCES_SCHEMA_VERSION: u32 = 2;
+const SHELL_PREFERENCES_SCHEMA_VERSION: u32 = 3;
 const MAIN_WINDOW_SESSION_ID: &str = "main";
 
 /// Shell 写入 `workspace.toml` 的用户偏好快照。
@@ -789,6 +919,12 @@ pub struct ShellPreferences {
     pub main_window: Option<MainWindowPlacement>,
     /// Account 登录偏好与恢复许可；其中不包含任何 token 或安全存储内容。
     pub account: AccountPreferences,
+    /// 用户主动选择的 Sidebar 折叠偏好；临时窄窗口折叠不得写入该值。
+    pub sidebar_collapsed: bool,
+    /// 是否允许框架持久化成功执行的全局搜索项。
+    pub search_history_enabled: bool,
+    /// 按 Account 稳定用户 ID 隔离的最近搜索历史，每个分区最多 20 条。
+    pub search_history: BTreeMap<String, Vec<String>>,
     /// 当前 schema 尚未识别的字段，读取和重写时原样保留。
     #[serde(flatten)]
     unknown_fields: BTreeMap<String, toml::Value>,
@@ -813,6 +949,9 @@ impl Default for ShellPreferences {
             appearance: ShellAppearancePreferences::default(),
             main_window: None,
             account: AccountPreferences::default(),
+            sidebar_collapsed: false,
+            search_history_enabled: true,
+            search_history: BTreeMap::new(),
             unknown_fields: BTreeMap::new(),
             legacy_windows: None,
             legacy_pinned_tabs: None,
@@ -1232,6 +1371,17 @@ impl ShellPreferences {
         if before.account != after.account {
             self.account = after.account.clone();
         }
+        if before.sidebar_collapsed != after.sidebar_collapsed {
+            self.sidebar_collapsed = after.sidebar_collapsed;
+        }
+        if before.search_history_enabled != after.search_history_enabled {
+            self.search_history_enabled = after.search_history_enabled;
+        }
+        merge_changed_map(
+            &mut self.search_history,
+            &before.search_history,
+            &after.search_history,
+        );
         merge_changed_map(
             &mut self.table_layouts,
             &before.table_layouts,
@@ -2250,6 +2400,9 @@ struct ApplicationShell {
     pinned_tabs: Vec<ShellRoute>,
     tab_context_route: Option<ShellRoute>,
     tab_scroll_handle: ScrollHandle,
+    reload_tasks: HashMap<String, Task<()>>,
+    sidebar_collapsed: bool,
+    sidebar_focus_task: Option<Task<()>>,
     navigation_history: Vec<ShellRoute>,
     navigation_history_index: usize,
     expanded_navigation_groups: HashSet<&'static str>,
@@ -2410,6 +2563,108 @@ impl SearchableTitle {
 
 fn normalize_search_text(value: &str) -> String {
     value.trim().to_lowercase()
+}
+
+fn feature_search_section(
+    registry: &AppRegistry,
+    account_enabled: bool,
+    request: &crate::SearchRequest,
+    shell: WeakEntity<ApplicationShell>,
+    cx: &App,
+) -> SearchSection {
+    let query = normalize_search_text(request.query.as_str());
+    let index = NavigationSearchIndex::new(registry);
+    let items = registry
+        .navigation_features()
+        .filter(|metadata| {
+            ApplicationShell::feature_visible_for_account(account_enabled, *metadata, cx)
+        })
+        .filter(|metadata| query.is_empty() || index.feature_matches(*metadata, query.as_str()))
+        .filter(|metadata| !metadata.path().contains('{'))
+        .map(|metadata| feature_search_item(metadata, shell.clone()));
+    SearchSection::new("nexora.pages", "页面").items(items)
+}
+
+fn feature_search_item(
+    metadata: FeatureMetadata,
+    shell: WeakEntity<ApplicationShell>,
+) -> SearchItem {
+    let path = metadata.path().to_owned();
+    let action_path = path.clone();
+    SearchItem::new(
+        "nexora.features",
+        metadata.id(),
+        metadata.title(),
+        move |_, _, cx| {
+            let path = action_path.clone();
+            let shell = shell.clone();
+            Task::ready(
+                match shell.update_in(cx, |this, window, cx| {
+                    let route = this
+                        .registry
+                        .resolve(path.as_str())
+                        .map_err(|error| crate::SearchActionError::new(error.to_string(), true))?;
+                    this.navigate_to_route_in(ShellRoute::new(route), true, window, cx)
+                        .map_err(|error| crate::SearchActionError::new(error.to_string(), true))
+                }) {
+                    Ok(Ok(())) => Ok(SearchAction::Close),
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(crate::SearchActionError::new("页面窗口已经关闭", false)),
+                },
+            )
+        },
+    )
+    .description(path)
+    .icon(feature_icon(metadata.icon()))
+}
+
+pub(crate) fn record_search_history(account_id: &str, entry: SearchHistoryEntry, cx: &mut App) {
+    update_shell_preferences(cx, |preferences| {
+        if !preferences.search_history_enabled {
+            return;
+        }
+        let history = preferences
+            .search_history
+            .entry(account_id.to_owned())
+            .or_default();
+        let key = entry.stable_key();
+        history.retain(|current| current != &key);
+        history.insert(0, key);
+        history.truncate(20);
+    });
+}
+
+pub(crate) fn search_history_for_account(account_id: &str, cx: &App) -> Vec<SearchHistoryEntry> {
+    let preferences = shell_preferences_snapshot(cx);
+    if !preferences.search_history_enabled {
+        return Vec::new();
+    }
+    preferences
+        .search_history
+        .get(account_id)
+        .into_iter()
+        .flat_map(|entries| entries.iter())
+        .filter_map(|entry| SearchHistoryEntry::from_stable_key(entry))
+        .collect()
+}
+
+pub(crate) fn remove_search_history(account_id: &str, entry: &SearchHistoryEntry, cx: &mut App) {
+    update_shell_preferences(cx, |preferences| {
+        let Some(history) = preferences.search_history.get_mut(account_id) else {
+            return;
+        };
+        let key = entry.stable_key();
+        history.retain(|candidate| candidate != &key);
+        if history.is_empty() {
+            preferences.search_history.remove(account_id);
+        }
+    });
+}
+
+pub(crate) fn clear_search_history(account_id: &str, cx: &mut App) {
+    update_shell_preferences(cx, |preferences| {
+        preferences.search_history.remove(account_id);
+    });
 }
 
 impl ApplicationShell {
@@ -2657,6 +2912,7 @@ impl ApplicationShell {
             })
         });
         let sidebar_search_index = sidebar_search.then(|| NavigationSearchIndex::new(&registry));
+        let sidebar_collapsed = shell_preferences_snapshot(cx).sidebar_collapsed;
 
         let expanded_navigation_groups = registry
             .navigation_group_ancestors(initial_route.route().target().id())
@@ -2679,6 +2935,9 @@ impl ApplicationShell {
             pinned_tabs,
             tab_context_route: None,
             tab_scroll_handle: ScrollHandle::new(),
+            reload_tasks: HashMap::new(),
+            sidebar_collapsed,
+            sidebar_focus_task: None,
             navigation_history: vec![active_route],
             navigation_history_index: 0,
             expanded_navigation_groups,
@@ -2722,6 +2981,7 @@ impl ApplicationShell {
         self.auth_identity = auth_identity;
         if authenticated {
             if identity_changed {
+                self.reload_tasks.clear();
                 for (_, mut instance) in self.feature_instances.drain() {
                     instance.close(window, cx);
                 }
@@ -2731,6 +2991,7 @@ impl ApplicationShell {
             self.sidebar_footer = self.registry.create_sidebar_footer(window, cx);
             self.activate_selected_feature(window, cx);
         } else {
+            self.reload_tasks.clear();
             for (_, mut instance) in self.feature_instances.drain() {
                 instance.close(window, cx);
             }
@@ -2771,10 +3032,6 @@ impl ApplicationShell {
         }
     }
 
-    fn active_path(&self) -> &str {
-        self.active_route.path()
-    }
-
     fn active_key(&self) -> &str {
         self.active_route.identity()
     }
@@ -2798,6 +3055,7 @@ impl ApplicationShell {
     }
 
     fn close_feature_instance(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.reload_tasks.remove(path);
         let Some(mut instance) = self.feature_instances.remove(path) else {
             return;
         };
@@ -3774,6 +4032,32 @@ impl ApplicationShell {
             .into_any_element()
     }
 
+    fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.sidebar_collapsed == collapsed {
+            return;
+        }
+        self.sidebar_collapsed = collapsed;
+        update_shell_preferences(cx, |preferences| {
+            preferences.sidebar_collapsed = collapsed;
+        });
+        cx.notify();
+    }
+
+    fn expand_sidebar_and_focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_sidebar_collapsed(false, cx);
+        let Some(input) = self.sidebar_search_input.clone() else {
+            return;
+        };
+        let timer = cx.background_executor().timer(Duration::from_millis(220));
+        self.sidebar_focus_task = Some(cx.spawn_in(window, async move |this, cx| {
+            timer.await;
+            _ = this.update_in(cx, |this, window, cx| {
+                input.read(cx).focus_handle(cx).focus(window, cx);
+                this.sidebar_focus_task = None;
+            });
+        }));
+    }
+
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar_border = cx.theme().sidebar_border;
         let search_active = self.sidebar_search_query(cx).is_some();
@@ -3792,15 +4076,62 @@ impl ApplicationShell {
                     )))
                 })
                 .collect::<Vec<_>>();
-        let header = v_flex()
-            .w_full()
-            .gap_2()
-            .px_2()
-            .pb_3()
-            .border_b_1()
-            .border_color(sidebar_border)
-            .child(self.render_sidebar_header_content(cx))
-            .children(self.render_sidebar_search(cx));
+        let header =
+            if self.sidebar_collapsed {
+                v_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .pb_3()
+                    .border_b_1()
+                    .border_color(sidebar_border)
+                    .child(
+                        SidebarToggleButton::new()
+                            .collapsed(true)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_sidebar_collapsed(false, cx);
+                            })),
+                    )
+                    .when(self.sidebar_search_input.is_some(), |this| {
+                        this.child(
+                            Button::new("expand-sidebar-search")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Search)
+                                .tooltip("展开并搜索导航")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.expand_sidebar_and_focus_search(window, cx);
+                                })),
+                        )
+                    })
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .px_2()
+                    .pb_3()
+                    .border_b_1()
+                    .border_color(sidebar_border)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(self.render_sidebar_header_content(cx)),
+                            )
+                            .child(SidebarToggleButton::new().collapsed(false).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.set_sidebar_collapsed(true, cx);
+                                }),
+                            )),
+                    )
+                    .children(self.render_sidebar_search(cx))
+                    .into_any_element()
+            };
         let empty_navigation = (search_active && !has_navigation_results).then(|| {
             SidebarGroup::new("").child(
                 SidebarMenu::new().child(SidebarMenuItem::new("未找到匹配的导航").disable(true)),
@@ -3837,8 +4168,10 @@ impl ApplicationShell {
         };
 
         Sidebar::new("nexora-sidebar")
-            .size_full()
-            .collapsible(SidebarCollapsible::None)
+            .h_full()
+            .w(px(236.0))
+            .collapsible(SidebarCollapsible::Icon)
+            .collapsed(self.sidebar_collapsed)
             .header(header)
             .children(navigation_groups)
             .children(empty_navigation)
@@ -4045,14 +4378,221 @@ impl ApplicationShell {
             )
     }
 
-    fn render_title_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn active_reload_availability(&self, cx: &App) -> crate::FeatureReloadAvailability {
+        self.feature_instances
+            .get(self.active_key())
+            .map(|instance| instance.reload_availability(cx))
+            .unwrap_or_default()
+    }
+
+    fn reload_active_feature(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active_key = self.active_key().to_owned();
+        if self.reload_tasks.contains_key(active_key.as_str())
+            || self.active_reload_availability(cx) != crate::FeatureReloadAvailability::Available
+        {
+            return;
+        }
+        let Some(instance) = self.feature_instances.get(self.active_key()) else {
+            return;
+        };
+        let reload = instance.reload(window, cx);
+        let completed_key = active_key.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            reload.await;
+            _ = this.update_in(cx, |this, _, cx| {
+                this.reload_tasks.remove(completed_key.as_str());
+                cx.notify();
+            });
+        });
+        self.reload_tasks.insert(active_key, task);
+        cx.notify();
+    }
+
+    fn render_tab_bar_prefix(&self, cx: &mut Context<Self>) -> AnyElement {
+        let can_navigate_back = self.can_navigate_back();
+        let can_navigate_forward = self.can_navigate_forward();
+        let reload_availability = self.active_reload_availability(cx);
+        let reload_loading = self.reload_tasks.contains_key(self.active_key());
+
+        h_flex()
+            .mx_1()
+            .flex_shrink_0()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new("tabs-back")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ArrowLeft)
+                    .disabled(!can_navigate_back)
+                    .tooltip("后退")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        match this.navigate_back_in(window, cx) {
+                            Ok(()) => this.navigation_error = None,
+                            Err(error) => this.navigation_error = Some(error.to_string()),
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("tabs-forward")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ArrowRight)
+                    .disabled(!can_navigate_forward)
+                    .tooltip("前进")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        match this.navigate_forward_in(window, cx) {
+                            Ok(()) => this.navigation_error = None,
+                            Err(error) => this.navigation_error = Some(error.to_string()),
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when(
+                reload_availability != crate::FeatureReloadAvailability::Unavailable,
+                |this| {
+                    this.child(
+                        Button::new("tabs-reload")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::default().path("icons/rotate-ccw.svg"))
+                            .loading(reload_loading)
+                            .disabled(
+                                reload_loading
+                                    || reload_availability
+                                        == crate::FeatureReloadAvailability::Disabled,
+                            )
+                            .tooltip("刷新当前页面")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.reload_active_feature(window, cx);
+                            })),
+                    )
+                },
+            )
+            .into_any_element()
+    }
+
+    fn render_tab_bar_suffix(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("open-feature-search")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Plus)
+            .tooltip("打开页面")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_search(SearchMode::OpenPage, window, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn account_partition_id(&self, cx: &App) -> String {
+        #[cfg(feature = "desktop")]
+        if self.account_enabled {
+            return crate::account::client::login_profile(cx)
+                .map(|profile| profile.user.id.clone())
+                .unwrap_or_else(|| "anonymous".to_owned());
+        }
+        "anonymous".to_owned()
+    }
+
+    fn feature_search_provider(&self, cx: &Context<Self>) -> SearchProvider {
+        let registry = self.registry.clone();
+        let resolver_registry = self.registry.clone();
+        let account_enabled = self.account_enabled;
+        let resolver_account_enabled = self.account_enabled;
+        let shell = cx.entity().downgrade();
+        let resolver_shell = shell.clone();
+        SearchProvider::new("nexora.features", i32::MIN)
+            .modes([SearchMode::Global, SearchMode::OpenPage])
+            .on_change(move |request, _, cx| {
+                let registry = registry.clone();
+                let shell = shell.clone();
+                Task::ready(Ok(vec![feature_search_section(
+                    &registry,
+                    account_enabled,
+                    &request,
+                    shell,
+                    cx,
+                )]))
+            })
+            .on_resolve_history(move |_mode, item_id, _, cx| {
+                let item = resolver_registry
+                    .navigation_features()
+                    .find(|metadata| metadata.id() == item_id)
+                    .filter(|metadata| !metadata.path().contains('{'))
+                    .filter(|metadata| {
+                        Self::feature_visible_for_account(resolver_account_enabled, *metadata, cx)
+                    })
+                    .map(|metadata| feature_search_item(metadata, resolver_shell.clone()));
+                Task::ready(Ok(item))
+            })
+    }
+
+    fn open_search(&mut self, mode: SearchMode, window: &mut Window, cx: &mut Context<Self>) {
+        let mut providers = vec![self.feature_search_provider(cx)];
+        if mode != SearchMode::OpenPage {
+            providers.extend(installed_search_providers(cx));
+        }
+        let account_id = self.account_partition_id(cx);
+        let search = cx.new(|cx| SearchDialog::new(mode, account_id, providers, window, cx));
+        let search_for_dialog = search.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("全局搜索")
+                .w(px(680.0))
+                .max_w(px(760.0))
+                .overlay(true)
+                .overlay_closable(true)
+                .child(search_for_dialog.clone())
+        });
+        search.update(cx, |search, cx| search.start(window, cx));
+    }
+
+    fn render_global_title_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let toolbar_actions = shell_toolbar_actions(cx);
+        h_flex()
+            .relative()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .items_center()
+            .justify_center()
+            .child(
+                Button::new("open-global-search")
+                    .outline()
+                    .small()
+                    .w(px(420.0))
+                    .max_w_full()
+                    .icon(IconName::Search)
+                    .label("搜索或跳转到…")
+                    .tooltip("全局搜索")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_search(SearchMode::Global, window, cx);
+                    })),
+            )
+            .when(!toolbar_actions.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .absolute()
+                        .right_0()
+                        .h_full()
+                        .items_center()
+                        .gap_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .children(toolbar_actions),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_tab_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
         let opened_tabs = self.opened_tabs.clone();
         let pinned_tabs = self.pinned_tabs.clone();
         let active_tab_index = self.tab_index(&self.active_route);
         let shell = cx.entity().downgrade();
         let title_bar_background = cx.theme().tokens.title_bar;
-        let can_navigate_back = self.can_navigate_back();
-        let can_navigate_forward = self.can_navigate_forward();
 
         h_flex()
             .flex_1()
@@ -4082,52 +4622,6 @@ impl ApplicationShell {
                             .overflow_hidden()
                             .items_center()
                             .child(
-                                h_flex()
-                                    .mx_1()
-                                    .flex_shrink_0()
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation();
-                                    })
-                                    .child(
-                                        Button::new("tabs-back")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::ArrowLeft)
-                                            .disabled(!can_navigate_back)
-                                            .tooltip("后退")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                match this.navigate_back_in(window, cx) {
-                                                    Ok(()) => this.navigation_error = None,
-                                                    Err(error) => {
-                                                        this.navigation_error =
-                                                            Some(error.to_string())
-                                                    }
-                                                }
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("tabs-forward")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::ArrowRight)
-                                            .disabled(!can_navigate_forward)
-                                            .tooltip("前进")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                match this.navigate_forward_in(window, cx) {
-                                                    Ok(()) => this.navigation_error = None,
-                                                    Err(error) => {
-                                                        this.navigation_error =
-                                                            Some(error.to_string())
-                                                    }
-                                                }
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
-                            .child(
                                 div()
                                     .id("nexora-tabs-zone")
                                     .relative()
@@ -4141,6 +4635,8 @@ impl ApplicationShell {
                                             .w_full()
                                             .h_full()
                                             .with_size(theme::component_size(cx))
+                                            .prefix(self.render_tab_bar_prefix(cx))
+                                            .suffix(self.render_tab_bar_suffix(cx))
                                             .track_scroll(&self.tab_scroll_handle)
                                             .menu(!opened_tabs.is_empty())
                                             .when_some(active_tab_index, |this, index| {
@@ -4197,89 +4693,7 @@ impl ApplicationShell {
                         }
                     }),
             )
-            .child(
-                div()
-                    .id("titlebar-drag-space")
-                    .flex_none()
-                    .w(px(54.0))
-                    .min_w(px(54.0))
-                    .h_full(),
-            )
             .into_any_element()
-    }
-
-    fn breadcrumb_items(&self) -> Vec<(String, Option<String>)> {
-        let active_id = self.active_target_id();
-        let Some(active_metadata) = self
-            .registry
-            .features()
-            .iter()
-            .find(|metadata| metadata.id() == active_id)
-            .copied()
-        else {
-            return vec![(self.active_route.title(), None)];
-        };
-        let groups = self.registry.navigation_group_ancestors(active_id);
-        let section = self.registry.feature_section(active_metadata);
-        let section_path = self
-            .registry
-            .navigation_features()
-            .find(|metadata| {
-                metadata.group().is_none()
-                    && self.registry.feature_section(*metadata) == section
-                    && !metadata.path().contains(':')
-            })
-            .map(|metadata| metadata.path().to_owned());
-        let mut items = vec![(section.to_owned(), section_path)];
-        items.extend(
-            groups
-                .into_iter()
-                .map(|metadata| (metadata.title().to_owned(), None)),
-        );
-        items.push((self.active_route.title(), None));
-        items
-    }
-
-    fn render_panel_header(&self, cx: &mut Context<Self>) -> PanelHeader {
-        let breadcrumb = self.breadcrumb_items().into_iter().fold(
-            Breadcrumb::new(),
-            |breadcrumb, (label, path)| {
-                let item = match path {
-                    Some(path) if path != self.active_path() => BreadcrumbItem::new(label)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if let Err(error) = this.open_path(path.as_str(), window, cx) {
-                                this.navigation_error = Some(error.to_string());
-                            }
-                            cx.notify();
-                        })),
-                    _ => BreadcrumbItem::new(label),
-                };
-                breadcrumb.child(item)
-            },
-        );
-        let active_route = self.active_route.clone();
-        let pinned = self.is_route_pinned(&active_route);
-        let actions = panel_header_actions(cx);
-
-        PanelHeader::new(breadcrumb).actions(actions).action(
-            Toggle::new("panel-pin-current-tab")
-                .small()
-                .checked(pinned)
-                .icon(if pinned {
-                    IconName::StarFill
-                } else {
-                    IconName::Star
-                })
-                .tooltip(if pinned {
-                    "取消置顶当前标签"
-                } else {
-                    "置顶当前标签"
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_pin_route(&active_route);
-                    cx.notify();
-                })),
-        )
     }
 
     fn render_active_feature(&self) -> AnyElement {
@@ -4324,12 +4738,10 @@ impl ApplicationShell {
 
         let layout = WorkspaceLayout::new(
             self.render_sidebar(cx),
-            self.render_title_bar_content(cx),
+            self.render_global_title_bar_content(cx),
+            self.render_tab_bar_content(cx),
             active_feature,
         )
-        .with_sidebar_width(px(224.0))
-        .with_sidebar_width_range(px(208.0)..px(300.0))
-        .with_panel_header(self.render_panel_header(cx))
         .with_content_scrollable(self.active_content_scrollable());
         let layout = match self.render_active_panel_overlay(cx) {
             Some(overlay) => layout.with_panel_overlay(overlay),

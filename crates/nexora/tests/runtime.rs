@@ -11,9 +11,9 @@ use gpui::{
 };
 use nexora::__private::{install_navigation_handler, remove_navigation_handler};
 use nexora::{
-    AppRegistry, FeatureContextExt as _, FeatureElement, FeatureRoute, FeatureRuntimeError,
-    NavigationContextExt as _, NavigationRequestError, Path, Query, RouteExtractError,
-    WindowContextExt as _, WindowElement, WindowRuntimeError,
+    AppRegistry, FeatureContextExt as _, FeatureElement, FeatureReloadAvailability, FeatureRoute,
+    FeatureRuntimeError, NavigationContextExt as _, NavigationRequestError, Path, Query,
+    RouteExtractError, WindowContextExt as _, WindowElement, WindowRuntimeError,
 };
 use serde::Deserialize;
 
@@ -161,6 +161,15 @@ impl FeatureElement for RuntimeFeature {
         self.overlay.clone()
     }
 
+    fn reload_availability(&self) -> FeatureReloadAvailability {
+        FeatureReloadAvailability::Available
+    }
+
+    fn reload(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> gpui::Task<()> {
+        self.events.push("reload");
+        gpui::Task::ready(())
+    }
+
     fn initialize(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Path(path) = cx.path();
         let Query(query) = cx.query();
@@ -243,6 +252,20 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
         cx.read_entity(&feature, |feature, _| feature.events.clone()),
         ["initialize", "activated"]
     );
+    assert_eq!(
+        window
+            .update(cx, |_, _, cx| instance.reload_availability(cx))
+            .unwrap(),
+        FeatureReloadAvailability::Available
+    );
+    let _reload = window
+        .update(cx, |_, window, cx| instance.reload(window, cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read_entity(&feature, |feature, _| feature.events.clone()),
+        ["initialize", "activated", "reload"]
+    );
 
     let updated_route = registry.resolve("/runtime/42?tab=roles").unwrap();
     window
@@ -266,7 +289,7 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
     );
     assert_eq!(
         cx.read_entity(&feature, |feature, _| feature.events.clone()),
-        ["initialize", "activated", "route_changed"]
+        ["initialize", "activated", "reload", "route_changed"]
     );
     assert_eq!(
         cx.read_entity(&observer, |observer, _| observer.notifications),
@@ -282,7 +305,7 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
         .unwrap();
     assert_eq!(
         cx.read_entity(&feature, |feature, _| feature.events.clone()),
-        ["initialize", "activated", "route_changed"]
+        ["initialize", "activated", "reload", "route_changed"]
     );
 
     let invalid_route = registry.resolve("/runtime/42?page=invalid").unwrap();
@@ -306,7 +329,7 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
     );
     assert_eq!(
         cx.read_entity(&feature, |feature, _| feature.events.clone()),
-        ["initialize", "activated", "route_changed"]
+        ["initialize", "activated", "reload", "route_changed"]
     );
 
     window
@@ -324,6 +347,7 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
         [
             "initialize",
             "activated",
+            "reload",
             "route_changed",
             "deactivated",
             "closing"
@@ -343,6 +367,7 @@ fn runtime_creates_typed_entity_and_dispatches_lifecycle(cx: &mut TestAppContext
         [
             "initialize",
             "activated",
+            "reload",
             "route_changed",
             "deactivated",
             "closing"

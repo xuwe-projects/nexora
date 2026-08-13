@@ -32,9 +32,6 @@ pub mod form_dialog;
 /// 受右侧主面板边界约束的模态对话框。
 pub mod panel_dialog;
 
-/// 桌面工作区右侧主面板的统一顶部栏。
-pub mod panel_header;
-
 /// Sidebar Header/Footer 中由应用自行控制交互视觉的稳定区域。
 pub mod sidebar_region;
 
@@ -67,7 +64,6 @@ pub use labeled_control::{
 };
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
-pub use panel_header::PanelHeader;
 pub use sidebar_region::SidebarRegion;
 pub use table_cell::{TableCell, TableCellVerticalAlign};
 pub use table_header::TableHeaderCell;

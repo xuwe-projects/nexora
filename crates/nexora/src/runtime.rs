@@ -6,7 +6,7 @@ use std::{any::Any, collections::HashMap};
 use std::rc::Rc;
 
 use gpui::{
-    AnyView, App, AppContext as _, Context, EntityId, Global, IntoElement, Render, Window,
+    AnyView, App, AppContext as _, Context, EntityId, Global, IntoElement, Render, Task, Window,
     WindowId, WindowOptions,
 };
 use serde::Deserialize;
@@ -161,6 +161,23 @@ pub trait FeatureElement: Feature + Sized + Render {
         None
     }
 
+    /// 返回当前 Feature 是否支持由 Shell 触发刷新。
+    ///
+    /// 默认不可用，因此没有真实刷新能力的页面不会显示可点击的占位操作。实现可在加载中、
+    /// 权限不足或业务状态暂时不允许刷新时返回 [`FeatureReloadAvailability::Disabled`]。
+    fn reload_availability(&self) -> FeatureReloadAvailability {
+        FeatureReloadAvailability::Unavailable
+    }
+
+    /// 刷新当前 Feature 并返回可等待的任务。
+    ///
+    /// 默认立即返回成功；只有 [`Self::reload_availability`] 为
+    /// [`FeatureReloadAvailability::Available`] 时 Shell 才会调用本方法。实现应保留当前
+    /// 路由、筛选、页码、分页大小和子视图，并在自身页面内展示失败反馈。
+    fn reload(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Task<()> {
+        Task::ready(())
+    }
+
     /// 在 Entity 已创建且强类型路由已绑定后执行一次初始化。
     ///
     /// 子 Entity、订阅、焦点句柄和需要随页面释放而取消的任务应在这里创建；不要在
@@ -189,6 +206,18 @@ pub trait FeatureElement: Feature + Sized + Render {
     ///
     /// 该方法只用于通知式清理，不应承担“是否允许关闭”的确认逻辑。
     fn closing(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+}
+
+/// Feature 面向 Shell 声明的刷新可用状态。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FeatureReloadAvailability {
+    /// 页面没有真实刷新能力，Shell 不显示可点击的刷新命令。
+    #[default]
+    Unavailable,
+    /// 页面可以立即开始刷新。
+    Available,
+    /// 页面具有刷新能力，但当前暂时禁用。
+    Disabled,
 }
 
 /// 在 Feature 自身的 GPUI 上下文中读取当前强类型路由。
@@ -731,6 +760,8 @@ struct FeatureVTable {
     ) -> Result<(), FeatureRuntimeError>,
     close: fn(&AnyView, &mut Window, &mut App),
     panel_overlay: fn(&AnyView, &App) -> Option<AnyView>,
+    reload_availability: fn(&AnyView, &App) -> FeatureReloadAvailability,
+    reload: fn(&AnyView, &mut Window, &mut App) -> Task<()>,
 }
 
 /// 一个由 Nexora 创建并完成类型擦除的 Feature 页面实例。
@@ -762,6 +793,24 @@ impl FeatureInstance {
     /// 因此不会覆盖 Sidebar 或窗口级 TitleBar，并能通过自身 Entity 通知独立刷新。
     pub fn panel_overlay(&self, cx: &App) -> Option<AnyView> {
         (self.vtable.panel_overlay)(&self.view, cx)
+    }
+
+    /// 返回当前实例的刷新可用状态。
+    pub fn reload_availability(&self, cx: &App) -> FeatureReloadAvailability {
+        if self.closed {
+            return FeatureReloadAvailability::Unavailable;
+        }
+        (self.vtable.reload_availability)(&self.view, cx)
+    }
+
+    /// 触发当前实例的强类型刷新生命周期。
+    ///
+    /// 已关闭实例或当前不可刷新时立即完成而不调用业务 Feature。
+    pub fn reload(&self, window: &mut Window, cx: &mut App) -> Task<()> {
+        if self.closed || self.reload_availability(cx) != FeatureReloadAvailability::Available {
+            return Task::ready(());
+        }
+        (self.vtable.reload)(&self.view, window, cx)
     }
 
     /// 激活尚未处于活动状态的页面实例。
@@ -888,6 +937,8 @@ where
             change_route: change_feature_route::<F>,
             close: close_feature::<F>,
             panel_overlay: feature_panel_overlay::<F>,
+            reload_availability: feature_reload_availability::<F>,
+            reload: reload_feature::<F>,
         },
         active: false,
         closed: false,
@@ -945,6 +996,20 @@ where
     F: FeatureElement,
 {
     feature_entity::<F>(view).read(cx).panel_overlay()
+}
+
+fn feature_reload_availability<F>(view: &AnyView, cx: &App) -> FeatureReloadAvailability
+where
+    F: FeatureElement,
+{
+    feature_entity::<F>(view).read(cx).reload_availability()
+}
+
+fn reload_feature<F>(view: &AnyView, window: &mut Window, cx: &mut App) -> Task<()>
+where
+    F: FeatureElement,
+{
+    feature_entity::<F>(view).update(cx, |feature, cx| feature.reload(window, cx))
 }
 
 fn deactivate_feature<F>(view: &AnyView, window: &mut Window, cx: &mut App)

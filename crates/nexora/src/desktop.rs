@@ -21,10 +21,14 @@ pub use crate::account::client::{
     oidc_config, retry_recovery, set_remember_login, sign_out, start_login,
 };
 pub use crate::application::{
-    PanelHeaderAction, PersistentDataTableDelegate, install_panel_header_actions,
+    PersistentDataTableDelegate, ShellToolbarAction, install_shell_toolbar_actions,
     persistent_crud_table_state, persistent_data_table_state, reset_data_table_layout,
 };
 pub use crate::application_info::{ApplicationInfo, application_info};
+pub use crate::global_search::{
+    SearchAction, SearchActionError, SearchHistoryEntry, SearchItem, SearchMode, SearchProvider,
+    SearchProviderError, SearchRequest, SearchSection, install_search_providers,
+};
 pub use ::updater::{
     CancellationToken, ReleaseStatus, SignedUpdateManifest, StagedUpdate, TrustedPublicKey,
     UpdateArtifact, UpdateChannel, UpdateConfig, UpdateError, UpdateEvent, UpdateManifest,

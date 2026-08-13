@@ -51,7 +51,10 @@ impl Drop for TestPreferencesFile {
 fn shell_preferences_default_to_safe_values() {
     let preferences = ShellPreferences::default();
 
-    assert_eq!(preferences.schema_version, 2);
+    assert_eq!(preferences.schema_version, 3);
+    assert!(!preferences.sidebar_collapsed);
+    assert!(preferences.search_history_enabled);
+    assert!(preferences.search_history.is_empty());
     assert_eq!(preferences.appearance.theme_preset, NEXORA_THEME_PRESET_ID);
     assert_eq!(
         preferences.appearance.color_scheme,
@@ -123,7 +126,7 @@ fn schema_zero_preferences_keep_main_geometry_and_drop_legacy_tabs() {
 
     assert_eq!(preferences.schema_version, 0);
     assert!(preferences.migrate_to_current());
-    assert_eq!(preferences.schema_version, 2);
+    assert_eq!(preferences.schema_version, 3);
     let main = preferences.main_window.as_ref().expect("应保留主窗口位置");
     assert_eq!(main.display_uuid, "display-legacy");
     assert_eq!(
@@ -181,7 +184,7 @@ fn schema_one_extracts_only_main_window_and_clears_all_sessions() {
     .expect("schema 1 窗口会话应当可读");
 
     assert!(preferences.migrate_to_current());
-    assert_eq!(preferences.schema_version, 2);
+    assert_eq!(preferences.schema_version, 3);
     assert_eq!(
         preferences.main_window.as_ref().unwrap().display_uuid,
         "display-main"
@@ -300,11 +303,18 @@ fn shell_preferences_serialize_round_trip() {
             height: 800,
         },
     });
+    preferences.sidebar_collapsed = true;
+    preferences.search_history.insert(
+        "account-1".to_owned(),
+        vec!["open_page\u{1f}nexora.features\u{1f}users".to_owned()],
+    );
 
     let serialized = toml::to_string_pretty(&preferences).expect("偏好应当可以序列化");
     let decoded: ShellPreferences = toml::from_str(serialized.as_str()).expect("偏好应当可以读取");
 
     assert_eq!(decoded, preferences);
+    assert!(!serialized.contains("query"));
+    assert!(!serialized.contains("搜索用户"));
 }
 
 #[test]
