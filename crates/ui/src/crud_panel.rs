@@ -1,13 +1,13 @@
 //! 强类型标准 CRUD 资源管理 Panel。
 
 use gpui::{
-    AnyElement, App, ElementId, Entity, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Window, div, prelude::*,
+    AnyElement, App, ElementId, Entity, IntoElement, ParentElement as _, RenderOnce, Role,
+    SharedString, Window, div, prelude::*,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Sizable as _, Size, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _,
     alert::Alert,
-    button::Button,
+    button::{Button, ButtonVariants as _},
     form::{Field, v_form},
     h_flex,
     pagination::Pagination,
@@ -16,6 +16,68 @@ use gpui_component::{
 };
 
 use crate::{CrudListState, CrudTableRow};
+
+fn single_page_navigation_button(
+    id: ElementId,
+    label: &'static str,
+    icon: IconName,
+    reverse: bool,
+    size: Size,
+    debug_selector: &'static str,
+) -> Button {
+    Button::new(id)
+        .debug_selector(move || debug_selector.to_owned())
+        .ghost()
+        .compact()
+        .with_size(size)
+        .disabled(true)
+        .tooltip(label)
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .flex_nowrap()
+                .when(reverse, |this| this.flex_row_reverse())
+                .child(SharedString::from(label))
+                .child(Icon::new(icon)),
+        )
+}
+
+fn single_page_pagination(id: ElementId, size: Size, loading: bool) -> impl IntoElement {
+    h_flex()
+        .id(id.clone())
+        .role(Role::Navigation)
+        .aria_label("Pagination")
+        .px_2()
+        .py_2()
+        .gap_1()
+        .items_center()
+        .child(single_page_navigation_button(
+            (id.clone(), "previous").into(),
+            "上一页",
+            IconName::ChevronLeft,
+            true,
+            size,
+            "crud-panel-pagination-previous",
+        ))
+        .child(
+            Button::new((id.clone(), "page-1"))
+                .debug_selector(|| "crud-panel-pagination-page-1".to_owned())
+                .outline()
+                .compact()
+                .with_size(size)
+                .disabled(loading)
+                .label("1"),
+        )
+        .child(single_page_navigation_button(
+            (id, "next").into(),
+            "下一页",
+            IconName::ChevronRight,
+            false,
+            size,
+            "crud-panel-pagination-next",
+        ))
+}
 
 /// 标准单主数据集分页列表的默认 Panel。
 ///
@@ -142,6 +204,7 @@ where
         let weak_for_page = self.state.downgrade();
         let weak_for_retry = self.state.downgrade();
         let id = self.id.clone();
+        let pagination_id: ElementId = (id.clone(), "pagination").into();
         let size = self.size;
         let has_quick_filters = !self.quick_filters.is_empty();
         let has_fields = !self.fields.is_empty();
@@ -290,18 +353,22 @@ where
                                 "第 {page} / {total_pages} 页 · 每页 {page_size} 条"
                             )),
                     )
-                    .child(
-                        Pagination::new((id, "pagination"))
+                    .child(if total_pages == 1 {
+                        single_page_pagination(pagination_id, size, loading).into_any_element()
+                    } else {
+                        Pagination::new(pagination_id)
                             .current_page(page)
                             .total_pages(total_pages)
+                            .visible_pages(5)
                             .with_size(size)
                             .disabled(loading)
                             .on_click(move |page, _, cx| {
                                 _ = weak_for_page.update(cx, |state, cx| {
                                     state.go_to_page(*page as u32, cx);
                                 });
-                            }),
-                    ),
+                            })
+                            .into_any_element()
+                    }),
             )
     }
 }

@@ -2,6 +2,8 @@
 
 #[path = "lint/cargo.rs"]
 mod cargo;
+#[path = "lint/crud_table.rs"]
+mod crud_table;
 #[path = "lint/diagnostic.rs"]
 mod diagnostic;
 #[path = "lint/source.rs"]

@@ -1,0 +1,5 @@
+error: 状态列必须声明 render = Self::render_status
+ --> tests/ui/crud_table_row_status_missing_render.rs:7:21
+  |
+7 |     #[nexora(column(status, text = Self::status_text))]
+  |                     ^^^^^^

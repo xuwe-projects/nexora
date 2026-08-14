@@ -21,7 +21,8 @@ pub use crate::account::client::{
     oidc_config, retry_recovery, set_remember_login, sign_out, start_login,
 };
 pub use crate::application::{
-    PersistentDataTableDelegate, ShellToolbarAction, install_shell_toolbar_actions,
+    PersistentDataTableDelegate, ShellToolbarAction, ShellToolbarOptions,
+    install_shell_toolbar_actions, install_shell_toolbar_actions_with_options,
     persistent_crud_table_state, persistent_data_table_state, reset_data_table_layout,
 };
 pub use crate::application_info::{ApplicationInfo, application_info};

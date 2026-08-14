@@ -1,9 +1,17 @@
 use contracts::{crud_query::CrudQuery, pagination::PageQuery};
-use gpui::{App, IntoElement as _, ParentElement as _, SharedString, TextAlign, Window, div};
+use gpui::{
+    App, Context, IntoElement as _, ParentElement as _, Render, SharedString, TestAppContext,
+    TextAlign, Window, div, prelude::*, px,
+};
 use gpui_component::{form::field, table::Column};
 use serde::Serialize;
 use serde_json::Value;
-use ui::{CrudPanel, CrudTableRow, TableCell, TableCellVerticalAlign, TableHeaderCell};
+use ui::{
+    CrudListState, CrudPage, CrudPanel, CrudTableRow, TableCell, TableCellVerticalAlign,
+    TableHeaderCell,
+};
+
+const CRUD_PANEL_SOURCE: &str = include_str!("../src/crud_panel.rs");
 
 #[derive(Clone)]
 struct TestRow {
@@ -125,4 +133,69 @@ fn table_cell_is_left_and_vertically_centered_by_default_and_customizable() {
         TableCell::new(div()).bottom().vertical_alignment(),
         TableCellVerticalAlign::Bottom
     );
+}
+
+struct CrudPanelTestRoot {
+    state: gpui::Entity<CrudListState<TestRow, TestQuery>>,
+}
+
+impl CrudPanelTestRoot {
+    fn new(total: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = CrudListState::create(
+            TestQuery {
+                page: PageQuery::default(),
+            },
+            move |_| async move {
+                Ok(CrudPage::new(
+                    vec![TestRow { id: 1 }],
+                    1,
+                    PageQuery::default().page_size,
+                    total,
+                ))
+            },
+            window,
+            cx,
+        )
+        .expect("测试查询应能创建 CRUD 列表状态");
+        state.update(cx, CrudListState::load_current);
+        Self { state }
+    }
+}
+
+impl Render for CrudPanelTestRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        div().size(px(800.)).child(CrudPanel::new(
+            "pagination-test",
+            "分页测试",
+            self.state.clone(),
+        ))
+    }
+}
+
+#[gpui::test]
+fn single_page_pagination_renders_current_page_between_navigation_buttons(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_root, cx) = cx.add_window_view(|window, cx| CrudPanelTestRoot::new(1, window, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+
+    let previous = cx
+        .debug_bounds("crud-panel-pagination-previous")
+        .expect("单页分页应显示上一页按钮");
+    let current = cx
+        .debug_bounds("crud-panel-pagination-page-1")
+        .expect("单页分页应显示当前页 1");
+    let next = cx
+        .debug_bounds("crud-panel-pagination-next")
+        .expect("单页分页应显示下一页按钮");
+
+    assert!(previous.origin.x < current.origin.x);
+    assert!(current.origin.x < next.origin.x);
+}
+
+#[test]
+fn multi_page_pagination_explicitly_keeps_five_visible_page_buttons() {
+    assert!(CRUD_PANEL_SOURCE.contains(".visible_pages(5)"));
 }

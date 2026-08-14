@@ -436,6 +436,329 @@ fn main() {}
 }
 
 #[test]
+fn crud_table_columns_reject_merged_business_fields() {
+    let fixture = valid_workspace("crud-table-merged-column");
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! CRUD 合并列规则测试。
+
+#[derive(Clone, CrudTableRow)]
+struct UserRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(render = Self::render_name, text = Self::name_text))]
+    name: String,
+    #[nexora(column)]
+    username: String,
+}
+
+impl UserRow {
+    fn render_name(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(
+            v_flex()
+                .child(row.name.clone())
+                .child(row.username.clone()),
+        )
+    }
+
+    fn name_text(row: &Self, _cx: &App) -> String {
+        row.name.clone()
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    let output = fixture.run(&["--deny-warnings"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success());
+    assert!(stdout.contains("nexora::crud_table_merged_column"));
+    assert!(stdout.contains("username"));
+}
+
+#[test]
+fn crud_table_columns_reject_multiline_and_opaque_row_renderers() {
+    let fixture = valid_workspace("crud-table-unsafe-renderers");
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! CRUD 多行与整行泄露规则测试。
+
+#[derive(Clone, CrudTableRow)]
+struct MultilineRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(render = Self::render_name, text = Self::name_text))]
+    name: String,
+}
+
+impl MultilineRow {
+    fn render_name(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(v_flex().child(row.name.clone()))
+    }
+
+    fn name_text(row: &Self, _cx: &App) -> String {
+        row.name.clone()
+    }
+}
+
+#[derive(Clone, CrudTableRow)]
+struct OpaqueRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(render = Self::render_name, text = Self::name_text))]
+    name: String,
+}
+
+impl OpaqueRow {
+    fn render_name(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        render_opaque_row(row)
+    }
+
+    fn name_text(row: &Self, _cx: &App) -> String {
+        row.name.clone()
+    }
+}
+
+fn render_opaque_row(_row: &OpaqueRow) -> TableCell {
+    TableCell::new("opaque")
+}
+
+fn main() {}
+"#,
+    );
+
+    let output = fixture.run(&["--deny-warnings"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success());
+    assert!(stdout.contains("纵向、折行或多行"));
+    assert!(stdout.contains("完整行"));
+}
+
+#[test]
+fn crud_table_status_rules_reject_invalid_components_and_colors() {
+    let fixture = valid_workspace("crud-table-invalid-status");
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! CRUD 状态组件规则测试。
+
+enum WorkflowStatus {
+    Pending,
+    Failed,
+}
+
+#[derive(Clone, CrudTableRow)]
+struct BooleanStatusRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(status, render = Self::render_enabled, text = Self::enabled_text))]
+    enabled: bool,
+}
+
+impl BooleanStatusRow {
+    fn render_enabled(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(row.enabled.to_string())
+    }
+
+    fn enabled_text(row: &Self, _cx: &App) -> String {
+        row.enabled.to_string()
+    }
+}
+
+#[derive(Clone, CrudTableRow)]
+struct MissingTagRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(status, render = Self::render_status, text = Self::status_text))]
+    status: WorkflowStatus,
+}
+
+impl MissingTagRow {
+    fn render_status(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(match row.status {
+            WorkflowStatus::Pending => "等待",
+            WorkflowStatus::Failed => "失败",
+        })
+    }
+
+    fn status_text(_row: &Self, _cx: &App) -> String {
+        String::new()
+    }
+}
+
+#[derive(Clone, CrudTableRow)]
+struct InvalidTagRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(status, render = Self::render_state, text = Self::state_text))]
+    state: WorkflowStatus,
+}
+
+#[derive(Clone, CrudTableRow)]
+struct ColorTagRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(status, render = Self::render_status, text = Self::status_text))]
+    status: WorkflowStatus,
+}
+
+impl ColorTagRow {
+    fn render_status(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        let tag = match row.status {
+            WorkflowStatus::Pending => Tag::color(ColorName::Blue),
+            WorkflowStatus::Failed => Tag::color(ColorName::Red),
+        };
+        TableCell::new(tag)
+    }
+
+    fn status_text(_row: &Self, _cx: &App) -> String {
+        String::new()
+    }
+}
+
+impl InvalidTagRow {
+    fn render_state(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        let tag = match row.state {
+            WorkflowStatus::Pending => Tag::secondary(),
+            WorkflowStatus::Failed => Tag::secondary(),
+        };
+        TableCell::new(tag.outline())
+    }
+
+    fn state_text(_row: &Self, _cx: &App) -> String {
+        String::new()
+    }
+}
+
+#[derive(Clone, CrudTableRow)]
+struct MissingMarkerRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(render = Self::render_status, text = Self::status_text))]
+    status: WorkflowStatus,
+}
+
+impl MissingMarkerRow {
+    fn render_status(_row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(Tag::success().child("完成"))
+    }
+
+    fn status_text(_row: &Self, _cx: &App) -> String {
+        String::new()
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    let output = fixture.run(&["--deny-warnings"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(!output.status.success());
+    for rule in [
+        "nexora::crud_table_boolean_status_without_switch",
+        "nexora::crud_table_status_without_tag",
+        "nexora::crud_table_invalid_status_tag",
+    ] {
+        assert!(stdout.contains(rule), "missing {rule} in:\n{stdout}");
+    }
+    assert!(
+        stdout
+            .matches("nexora::crud_table_invalid_status_tag")
+            .count()
+            >= 2,
+        "outline/uniform and Color status tags should both fail:\n{stdout}",
+    );
+}
+
+#[test]
+fn crud_table_single_field_and_semantic_status_components_pass() {
+    let fixture = valid_workspace("crud-table-valid-status");
+    fixture.write(
+        "apps/desktop/src/main.rs",
+        r#"//! CRUD 单字段与状态组件合规测试。
+
+enum WorkflowStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, CrudTableRow)]
+struct JobRow {
+    #[nexora(row_id, skip)]
+    id: String,
+    #[nexora(column(render = Self::render_name, text = Self::name_text))]
+    name: String,
+    #[nexora(column(status, render = Self::render_enabled, text = Self::enabled_text))]
+    enabled: bool,
+    #[nexora(column(status, render = Self::render_status, text = Self::status_text))]
+    status: WorkflowStatus,
+    #[nexora(column(render = Self::render_category, text = Self::category_text))]
+    category: String,
+}
+
+impl JobRow {
+    fn render_name(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(row.name.clone())
+    }
+
+    fn name_text(row: &Self, _cx: &App) -> String {
+        row.name.clone()
+    }
+
+    fn render_enabled(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(TableSwitchCell::new(
+            format!("job-enabled-{}", row.id),
+            row.enabled,
+        ))
+    }
+
+    fn enabled_text(row: &Self, _cx: &App) -> String {
+        row.enabled.to_string()
+    }
+
+    fn render_status(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        let tag = match row.status {
+            WorkflowStatus::Pending => Tag::info().child("等待"),
+            WorkflowStatus::Running => Tag::primary().child("运行中"),
+            WorkflowStatus::Completed => Tag::success().child("完成"),
+            WorkflowStatus::Failed => Tag::danger().child("失败"),
+        };
+        TableCell::new(tag)
+    }
+
+    fn status_text(_row: &Self, _cx: &App) -> String {
+        String::new()
+    }
+
+    fn render_category(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(Tag::color(ColorName::Blue).child(row.category.clone()))
+    }
+
+    fn category_text(row: &Self, _cx: &App) -> String {
+        row.category.clone()
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    let output = fixture.run(&["--deny-warnings"]);
+
+    assert!(
+        output.status.success(),
+        "合规 CRUD 表格不应触发 lint：\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+#[test]
 fn contract_models_cannot_leak_database_types() {
     let fixture = Fixture::new("contract-model");
     fixture.write(

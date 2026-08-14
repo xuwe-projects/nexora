@@ -35,6 +35,9 @@ pub mod panel_dialog;
 /// Sidebar Header/Footer 中由应用自行控制交互视觉的稳定区域。
 pub mod sidebar_region;
 
+/// 由真实 Action 绑定生成的完整多段快捷键提示。
+pub mod shortcut_hint;
+
 /// 桌面数据表表头辅助组件。
 pub mod table_header;
 
@@ -67,6 +70,7 @@ pub use form_field_state::{
 };
 pub use login_gate::{LoginGate, default_application_logo};
 pub use panel_dialog::PanelDialog;
+pub use shortcut_hint::ShortcutHint;
 pub use sidebar_region::SidebarRegion;
 pub use table_cell::{TableCell, TableCellVerticalAlign};
 pub use table_header::TableHeaderCell;

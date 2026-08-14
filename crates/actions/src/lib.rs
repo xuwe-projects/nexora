@@ -12,6 +12,12 @@ pub mod account;
 /// 该模块声明打开设置窗口的统一命令，并负责注册符合当前平台习惯的快捷键。
 pub mod settings;
 
+/// Shell 全局搜索相关的 action。
+///
+/// 该模块只提供命令身份；快捷键由下游应用显式注册，打开搜索的 handler 由 Nexora
+/// Shell 承担。
+pub mod search;
+
 /// 桌面应用更新相关的全局 action。
 ///
 /// 该模块只声明命令身份；更新配置、网络任务和对话框由 `nexora::desktop` 负责。

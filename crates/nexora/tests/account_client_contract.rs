@@ -14,7 +14,7 @@ use nexora::desktop::{
     contract::{
         CreateRoleRequest, ProvisionUserRequest, ReplaceRolePermissionsRequest,
         ReplaceUserRolesRequest, SYSTEM_ROLE_OWNER, UpdateRoleRequest, UpdateUserStatusRequest,
-        UserStatus,
+        UserListQuery, UserStatus, UserType,
     },
 };
 use serde::Deserialize;
@@ -220,6 +220,41 @@ fn list_permissions_gets_items_envelope() {
 
     assert_eq!(permissions[0].key, "factories:read");
     assert_request(&request, "GET", "/permissions");
+}
+
+#[test]
+fn list_users_filtered_sends_page_and_snake_case_filters() {
+    let body = r#"{"items":[],"page":{"number":2,"size":50,"total":0}}"#;
+    let (endpoint, server) = spawn_mock("200 OK", body, &[]);
+    let response = session(endpoint)
+        .list_users_filtered(UserListQuery {
+            page: contracts::pagination::PageQuery {
+                page: 2,
+                page_size: 50,
+            },
+            keyword: Some("admin".to_owned()),
+            status: Some(UserStatus::Suspended),
+            user_type: Some(UserType::ServiceAccount),
+        })
+        .expect("用户列表分页筛选响应应按契约解码");
+    let request = server.join().expect("测试服务线程应结束");
+
+    assert_eq!(response.page.number, 2);
+    assert!(request.starts_with("GET /users?"));
+    for field in [
+        "page=2",
+        "page_size=50",
+        "keyword=admin",
+        "status=suspended",
+        "user_type=service_account",
+    ] {
+        assert!(request.contains(field), "用户列表请求缺少 {field}");
+    }
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer contract-access-token\r\n")
+    );
 }
 
 #[test]

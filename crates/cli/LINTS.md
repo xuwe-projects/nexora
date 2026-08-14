@@ -44,6 +44,10 @@ nexora lint --format json
 | --- | --- | --- |
 | `nexora::action_outside_actions` | error | `actions!`、`impl_actions!` 和 Action derive 必须位于 `crates/actions`。 |
 | `nexora::copied_global_state` | warning | 业务组件不能保存完整 `Theme` 或 `ThemeRegistry` 副本。 |
+| `nexora::crud_table_boolean_status_without_switch` | error | `CrudTableRow` 的布尔、on/off 状态列必须使用 `TableSwitchCell`，不能使用文本、Tag 或裸 Switch。 |
+| `nexora::crud_table_invalid_status_tag` | error | 非布尔状态 Tag 禁止 outline、Custom、Color 和全状态统一颜色，必须使用填充语义变体。 |
+| `nexora::crud_table_merged_column` | error | CRUD 数据列只能展示所属字段，禁止读取其他字段、传递整行或构造纵向/折行正文。 |
+| `nexora::crud_table_status_without_tag` | error | 非布尔状态必须声明 `column(status)` 并使用官方 Tag；明显状态字段不能遗漏声明。 |
 | `nexora::detached_lifecycle` | warning | `.detach()` 必须确认任务或订阅确实不需要由 Entity 字段管理。 |
 | `nexora::empty_event_handler` | error | 禁止 `.on_click(|...| {})` 等空事件处理器。 |
 | `nexora::global_refresh_scope` | warning | 非主题模块不应调用 `refresh_windows()` 扩大刷新范围。 |
@@ -54,6 +58,29 @@ nexora lint --format json
 | `nexora::render_side_effect` | error | `render()` 中禁止直接创建 Entity、订阅、启动任务、修改 Global 或执行 I/O。 |
 | `nexora::unstable_element_id` | warning | ElementId 不使用列表位置、时间戳或随机值。 |
 | `nexora::untracked_task` | warning | `Task` 和 `Subscription` 返回值不能被直接丢弃。 |
+
+### CRUD 列与状态
+
+状态列必须同时提供视觉渲染和文本导出：
+
+```rust
+#[nexora(column(
+    status,
+    render = Self::render_status,
+    text = Self::status_text
+))]
+status: JobStatus,
+```
+
+- 每个数据列只能读取并展示所属字段。行 ID 仅可作为 `TableSwitchCell::new` 的稳定元素 ID；
+  需要展示头像、姓名、用户名或 ID 时分别声明列。
+- `bool`、true/false、on/off、enabled/disabled 状态使用
+  `nexora::desktop::TableSwitchCell`。二元领域枚举应先在表格行模型适配为 `bool`。
+- 其他状态使用官方 `Tag` 的默认填充样式：草稿/取消用 Secondary，等待/排队用 Info，
+  运行中用 Primary，完成/启用用 Success，暂停/重试用 Warning，失败/拒绝用 Danger。
+- 状态 Tag 不使用 `.outline()`、`Tag::custom` 或 `Tag::color`。未声明 `status` 的分类标签可以
+  使用 `Tag::color(ColorName)`。
+- 这四项规则都是确定性 error，不支持局部豁免。
 
 ## Axum、REST 与 SQLx
 

@@ -251,6 +251,7 @@ struct CityRow {
         align = "center",
         header_align = "center",
         vertical_align = "middle",
+        status,
         render = Self::render_status,
         text = Self::status_text,
         resizable = false,

@@ -7,6 +7,8 @@ use nexora::{
     SearchAction, SearchItem, SearchMode, SearchProvider, SearchSection, install_search_providers,
 };
 
+const GLOBAL_SEARCH_SOURCE: &str = include_str!("../src/global_search.rs");
+
 #[test]
 fn search_provider_declares_stable_identity_modes_and_history_resolution() {
     let provider = SearchProvider::new("imes.resources", 20)
@@ -36,6 +38,23 @@ fn search_sections_keep_provider_and_item_identity() {
     assert_eq!(section.search_items()[0].provider_id(), "nexora.features");
     assert_eq!(section.search_items()[0].item_id(), "users");
     assert_eq!(section.search_items()[0].title().as_ref(), "用户");
+}
+
+#[test]
+fn enter_confirmation_is_handled_by_the_search_dialog_action_boundary() {
+    let render = GLOBAL_SEARCH_SOURCE
+        .split_once("impl Render for SearchDialog")
+        .map(|(_, source)| source)
+        .expect("应当可以定位 SearchDialog 渲染实现");
+    assert!(render.contains(".on_action(cx.listener(Self::confirm_selection))"));
+
+    let subscription = GLOBAL_SEARCH_SOURCE
+        .split_once("let _input_subscription = cx.subscribe_in(")
+        .and_then(|(_, source)| source.split_once("let provider_states"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Input 事件订阅");
+    assert!(subscription.contains("InputEvent::PressEnter { .. } => {}"));
+    assert!(!subscription.contains("this.activate_item"));
 }
 
 #[gpui::test]

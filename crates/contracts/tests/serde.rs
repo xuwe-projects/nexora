@@ -1,8 +1,8 @@
 use contracts::{
     account::{
         CreateRoleRequest, PermissionResponse, ProvisionUserRequest, ReplaceRolePermissionsRequest,
-        ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER, UpdateRoleRequest, UserResponse,
-        UserStatus, UserType,
+        ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER, UpdateRoleRequest, UserListQuery,
+        UserResponse, UserStatus, UserType,
     },
     pagination::{PageMetadata, PageQuery, PageResponse},
     patch::PatchField,
@@ -225,4 +225,29 @@ fn shared_pagination_contract_keeps_defaults_and_response_shape() {
             "page": { "number": 2, "size": 2, "total": 7 }
         })
     );
+}
+
+#[test]
+fn user_list_query_keeps_snake_case_filters_and_page_defaults() {
+    let query: UserListQuery = serde_json::from_value(json!({
+        "page": 2,
+        "page_size": 50,
+        "keyword": "管理员",
+        "status": "suspended",
+        "user_type": "service_account"
+    }))
+    .expect("用户列表筛选查询应当可以反序列化");
+
+    assert_eq!(query.page.page, 2);
+    assert_eq!(query.page.page_size, 50);
+    assert_eq!(query.keyword.as_deref(), Some("管理员"));
+    assert_eq!(query.status, Some(UserStatus::Suspended));
+    assert_eq!(query.user_type, Some(UserType::ServiceAccount));
+
+    let encoded = serde_json::to_value(query).expect("用户列表筛选查询应当可以序列化");
+    assert_eq!(encoded["page"], 2);
+    assert_eq!(encoded["page_size"], 50);
+    assert_eq!(encoded["user_type"], "service_account");
+    assert!(encoded.get("userType").is_none());
+    assert!(serde_json::from_value::<UserListQuery>(json!({ "unknown": true })).is_err());
 }

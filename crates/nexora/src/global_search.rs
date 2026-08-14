@@ -554,13 +554,7 @@ impl SearchDialog {
                     this.query = input.read(cx).value().to_string();
                     this.request_all(ProviderRequestKind::Change, window, cx);
                 }
-                InputEvent::PressEnter { .. } => {
-                    if let Some(index) = this.active_index {
-                        this.activate_item(index, window, cx);
-                    } else {
-                        this.request_all(ProviderRequestKind::Search, window, cx);
-                    }
-                }
+                InputEvent::PressEnter { .. } => {}
                 InputEvent::Focus | InputEvent::Blur => {}
             },
         );
@@ -786,6 +780,20 @@ impl SearchDialog {
                 });
         self.active_index = Some(current);
         cx.notify();
+    }
+
+    fn confirm_selection(
+        &mut self,
+        _: &gpui_component::input::Enter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        if let Some(index) = self.active_index {
+            self.activate_item(index, window, cx);
+        } else {
+            self.request_all(ProviderRequestKind::Search, window, cx);
+        }
     }
 
     fn activate_item(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1041,6 +1049,7 @@ impl Render for SearchDialog {
 
         v_flex()
             .key_context("NexoraGlobalSearch")
+            .on_action(cx.listener(Self::confirm_selection))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 match event.keystroke.key.as_str() {
                     "up" => {

@@ -27,6 +27,7 @@ struct ColumnArguments {
     header_align: Option<Align>,
     cell_align: Option<Align>,
     vertical_align: Option<VerticalAlign>,
+    status: Option<proc_macro2::Span>,
     render: Option<ExprPath>,
     text: Option<ExprPath>,
 }
@@ -292,6 +293,26 @@ fn parse_field(field: &Field) -> Result<ParsedField> {
             "sort(asc = ..., desc = ...) 必须与 sortable、ascending 或 descending 同时声明",
         ));
     }
+    if let Some(status_span) = arguments.status {
+        if row_id {
+            return Err(Error::new(
+                status_span,
+                "状态列不能同时声明为 CrudTableRow row_id",
+            ));
+        }
+        if arguments.render.is_none() {
+            return Err(Error::new(
+                status_span,
+                "状态列必须声明 render = Self::render_status",
+            ));
+        }
+        if arguments.text.is_none() {
+            return Err(Error::new(
+                status_span,
+                "状态列必须声明 text = Self::status_text",
+            ));
+        }
+    }
 
     Ok(ParsedField {
         column: Some(ColumnField {
@@ -462,6 +483,15 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
             meta.path.span(),
             "vertical_align",
         )
+    } else if meta.path.is_ident("status") {
+        if arguments.status.is_some() {
+            return Err(meta.error("status 只能声明一次"));
+        }
+        if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
+            return Err(meta.error("status 是无值标记，应写作 status"));
+        }
+        arguments.status = Some(meta.path.span());
+        Ok(())
     } else if meta.path.is_ident("render") {
         set_once(
             &mut arguments.render,
@@ -477,7 +507,7 @@ fn parse_column_argument(meta: ParseNestedMeta<'_>, arguments: &mut ColumnArgume
             "text",
         )
     } else {
-        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、sort(...)、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、render 和 text"))
+        Err(meta.error("column 属性支持 key、name/title、width、min_width、max_width、sortable、ascending、descending、sort(...)、fixed_left、resizable、movable、selectable、header_align、align/cell_align、vertical_align、status、render 和 text"))
     }
 }
 

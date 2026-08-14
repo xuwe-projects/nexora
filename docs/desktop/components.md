@@ -16,7 +16,7 @@ CRUD 页面、表单对话框、字段容器和层级选择器。应用仍然直
 
 ```toml
 [dependencies]
-nexora = { version = "0.36.0", features = ["desktop", "derive"] }
+nexora = { version = "0.37.0", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -231,26 +231,28 @@ revision 后，旧异步结果会被丢弃，避免慢请求覆盖新输入。
 
 ## CrudPanel
 
-`CrudPanel` 是标准资源管理页面的三段式骨架：顶部摘要卡片、可选工具栏、主体内容区。主体
-使用 `flex_1` 和 `min_h_0` 填满剩余高度，因此表格、虚拟列表或编辑器可以自己管理滚动。
+`CrudPanel<Row, Query>` 是绑定 `CrudListState<Row, Query>` 的标准单主数据集资源管理页面：
+包含摘要、官方 Form/Field 筛选、操作区、DataTable 与分页。正文使用剩余高度并由官方
+DataTable 管理滚动。
 
 ```rust
 use gpui_component::{
     Sizable as _,
     button::Button,
+    form::field,
     input::Input,
 };
-use nexora::desktop::{CrudPanel, CrudPanelToolbar};
+use nexora::desktop::CrudPanel;
 
-let toolbar = CrudPanelToolbar::new()
-    .filter(Input::new(&self.keyword).placeholder("搜索城市"))
-    .action(Button::new("search").label("查询"))
-    .action(Button::new("create").primary().label("创建"));
-
-CrudPanel::new("城市", self.render_table(window, cx))
+CrudPanel::new("cities", "城市", self.cities.clone())
     .description("维护城市及所属国家或地区")
-    .refresh("refresh-cities", self.loading, false, cx.listener(Self::reload))
-    .toolbar(toolbar)
+    .field(
+        field()
+            .label("关键词")
+            .child(Input::new(&self.keyword).placeholder("搜索城市")),
+    )
+    .header_action(Button::new("create-city").primary().label("创建"))
+    .toolbar_action(Button::new("export-cities").label("导出"))
     .with_size(theme::component_size(cx))
 ```
 
@@ -258,21 +260,17 @@ CrudPanel::new("城市", self.render_table(window, cx))
 
 | 类型 | API | 说明 |
 | --- | --- | --- |
-| `CrudPanel` | `new(title, content)` | 创建资源管理 Panel |
+| `CrudPanel` | `new(id, title, state)` | 创建绑定 `CrudListState` 的资源管理 Panel |
 | `CrudPanel` | `description(text)` | 顶部摘要说明 |
-| `CrudPanel` | `refresh(id, loading, disabled, handler)` | 右上角刷新当前数据 |
-| `CrudPanel` | `toolbar(toolbar)` | 替换整块工具栏 |
-| `CrudPanel` | `filter(element)` / `filters(elements)` | 向默认工具栏追加筛选控件 |
-| `CrudPanel` | `action(element)` / `actions(elements)` | 向默认工具栏追加操作控件 |
-| `CrudPanel` | `has_toolbar()` | 查询是否有工具栏内容 |
+| `CrudPanel` | `quick_filter(element)` | 添加快速筛选控件 |
+| `CrudPanel` | `field(field)` / `filter_columns(count)` | 添加官方 Field 并设置筛选列数 |
+| `CrudPanel` | `header_action(element)` | 添加创建等页面主操作 |
+| `CrudPanel` | `toolbar_action(element)` | 添加导出、重置等辅助操作 |
+| `CrudPanel` | `has_filters()` | 查询是否渲染筛选表单 |
 | `CrudPanel` | `with_size(size)` | 跟随主题组件尺寸 |
-| `CrudPanelToolbar` | `new()` | 创建空工具栏 |
-| `CrudPanelToolbar` | `filter` / `filters` | 添加筛选区控件 |
-| `CrudPanelToolbar` | `action` / `actions` | 添加操作区控件 |
-| `CrudPanelToolbar` | `is_empty()` | 判断工具栏是否为空 |
 
-页面级“重新拉取当前数据”放在 `refresh`；查询、创建、导入、导出和批量操作放在 toolbar
-action 区，避免刷新和查询语义混在一起。
+分页默认始终显示数字页码：单页显示当前页 `1`；多页使用官方普通 `Pagination`，显示最多
+5 个页码，超出范围由官方省略号菜单处理。loading 时所有分页入口禁用。
 
 ## CrudTableRow 与 CrudTableDelegate
 
@@ -284,21 +282,36 @@ CRUD 表格优先用 `#[derive(nexora::CrudTableRow)]` 描述行数据，再用
 
 ```rust
 use gpui_component::table::{Column, DataTable, TableState};
-use nexora::desktop::{CrudTableDelegate, TableCell};
+use nexora::desktop::{CrudTableDelegate, TableCell, TableSwitchCell};
 
 #[derive(Clone, nexora::CrudTableRow)]
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., fixed_left))]
     id: u64,
-    #[nexora(column(title = "城市", width = 160., sortable))]
+    #[nexora(column(title = "城市", width = 160.))]
     name: String,
-    #[nexora(column(title = "状态", width = 76., align = "center", render = Self::status_cell))]
+    #[nexora(column(
+        title = "状态",
+        width = 76.,
+        align = "center",
+        status,
+        render = Self::status_cell,
+        text = Self::status_text
+    ))]
     enabled: bool,
 }
 
 impl CityRow {
     fn status_cell(row: &Self, _window: &mut gpui::Window, _cx: &mut gpui::App) -> TableCell {
-        TableCell::new(if row.enabled { "启用" } else { "停用" }).center()
+        TableCell::new(TableSwitchCell::new(
+            format!("city-enabled-{}", row.id),
+            row.enabled,
+        ))
+        .center()
+    }
+
+    fn status_text(row: &Self, _cx: &gpui::App) -> String {
+        (if row.enabled { "启用" } else { "停用" }).to_owned()
     }
 }
 
@@ -329,8 +342,21 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 | `column(header_align = "left")` | 表头对齐，支持 `left`、`center`、`right` |
 | `column(align = "right")` / `cell_align = "right"` | 正文水平对齐 |
 | `column(vertical_align = "top")` | 正文垂直对齐，支持 `top`、`middle`、`bottom` |
+| `column(status)` | 声明业务状态列；必须同时声明 `render` 和 `text` |
 | `column(render = Self::render_status)` | 自定义正文渲染函数 |
 | `column(text = Self::status_text)` | 自定义文本导出函数 |
+
+### 数据列与状态约束
+
+- 每个数据列只能展示所属字段。头像、姓名、用户名、用户 ID 等信息必须拆为独立列，不能用
+  `v_flex()`、折行或读取其他字段合并显示。
+- 当前锁定版本的 DataTable 表头和正文共用尺寸，没有独立正文行高；不要提高统一行高迁就
+  合并内容。
+- `bool`、true/false、on/off 状态使用 `TableSwitchCell`。其他状态使用官方 `Tag` 默认填充
+  样式，按 Secondary、Info、Primary、Success、Warning、Danger 映射实际状态语义。
+- 状态 Tag 禁止 `.outline()`、Custom、Color 和全部状态统一颜色；未声明 `status` 的分类 Tag
+  可以使用 `Tag::color(ColorName)`。
+- `nexora lint` 对合并列、错误 Switch/Tag 和无效状态颜色报告不可豁免的 error。
 
 ### Delegate API
 

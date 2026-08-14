@@ -11,6 +11,13 @@ description: 指导所有 GPUI 可见 UI 实现中正确使用 gpui-component �
 - 实现者不能因为不知道组件 API 就改为手写组件；先查源码、文档、story 或已有调用点。
 - 现有组件能力不足时，优先包装、组合或转发其 builder API，保留官方组件默认主题、尺寸、焦点、键盘、disabled 和 loading 等语义。
 - 纯布局容器可以使用 GPUI Element；语义控件必须优先使用组件库。
+- 标准 CRUD 表格每列只展示所属字段，不合并头像、姓名、用户名等多个值；锁定版本的
+  `DataTable` 表头和正文共用尺寸，不能用统一自定义行高迁就合并正文。
+- CRUD 布尔状态使用 `nexora::desktop::TableSwitchCell`，其他状态使用官方填充 `Tag` 和
+  Secondary/Info/Primary/Success/Warning/Danger 语义变体；状态 Tag 禁止 outline、Custom、
+  Color 和全状态统一颜色，分类 Tag 才能使用 `Tag::color(ColorName)`。
+- `CrudPanel` 多页继续使用普通 `Pagination` 并显示最多 5 个页码；单页由项目薄组合补充当前页
+  `1`，不创建第二套分页状态或公共分页控件。
 
 ## 文档
 

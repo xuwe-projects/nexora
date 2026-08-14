@@ -13,6 +13,8 @@ const ROLE_EDITOR_SOURCE: &str = include_str!("../src/defaults/account/roles/com
 #[cfg(feature = "desktop")]
 const USER_TABLE_SOURCE: &str = include_str!("../src/defaults/account/users/components/table.rs");
 #[cfg(feature = "desktop")]
+const USER_PAGE_SOURCE: &str = include_str!("../src/defaults/account/users/components/page.rs");
+#[cfg(feature = "desktop")]
 const USER_PROVISION_DIALOG_SOURCE: &str =
     include_str!("../src/defaults/account/users/components/provision.rs");
 #[cfg(feature = "desktop")]
@@ -253,7 +255,7 @@ fn default_role_forms_hide_role_key_from_operators() {
 #[cfg(feature = "desktop")]
 #[test]
 fn default_user_management_keeps_visual_avatar_without_image_source_or_avatar_url_input() {
-    assert!(USER_TABLE_SOURCE.contains("Avatar::new().name(user.display_name.clone()).small()"));
+    assert!(USER_TABLE_SOURCE.contains("Avatar::new().name(row.avatar_name.clone()).small()"));
     assert!(
         !USER_TABLE_SOURCE.contains(".src("),
         "默认用户列表只能显示首字母/默认 Avatar，不再读取图片 URL"
@@ -262,4 +264,22 @@ fn default_user_management_keeps_visual_avatar_without_image_source_or_avatar_ur
         !USER_PROVISION_DIALOG_SOURCE.contains("头像 URL"),
         "默认用户创建表单不应再暴露头像 URL 输入"
     );
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_user_table_keeps_official_column_handles_and_copy_control() {
+    assert!(USER_TABLE_SOURCE.contains("CrudListState::create_with_delegate"));
+    assert!(
+        USER_TABLE_SOURCE.contains("Clipboard::new(format!(\"copy-default-user-id-{}\", row.id))")
+    );
+    assert!(!USER_TABLE_SOURCE.contains("resizable = false"));
+    assert!(USER_TABLE_SOURCE.contains("status,"));
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn default_user_panel_does_not_duplicate_crud_panel_actions() {
+    assert!(USER_PAGE_SOURCE.contains("CrudPanel::new"));
+    assert!(!USER_PAGE_SOURCE.contains("refresh-default-account-users"));
 }

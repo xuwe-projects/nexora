@@ -17,7 +17,7 @@ GPUI component crates directly:
 
 ```toml
 [dependencies]
-nexora = { version = "0.36.0", features = ["desktop", "derive"] }
+nexora = { version = "0.37.0", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }
@@ -174,22 +174,23 @@ are discarded after the field has moved to a newer revision.
 
 ## CrudPanel
 
-`CrudPanel` is the standard resource-management layout: summary card, optional toolbar, and a body
-that fills the remaining height.
+`CrudPanel<Row, Query>` is the standard single-dataset resource-management view bound to
+`CrudListState<Row, Query>`. It combines the summary, official Form/Field filters, actions,
+DataTable, and pagination.
 
 ```rust
-use gpui_component::{Sizable as _, button::Button, input::Input};
-use nexora::desktop::{CrudPanel, CrudPanelToolbar};
+use gpui_component::{Sizable as _, button::Button, form::field, input::Input};
+use nexora::desktop::CrudPanel;
 
-let toolbar = CrudPanelToolbar::new()
-    .filter(Input::new(&self.keyword).placeholder("Search cities"))
-    .action(Button::new("search").label("Search"))
-    .action(Button::new("create").primary().label("Create"));
-
-CrudPanel::new("Cities", self.render_table(window, cx))
+CrudPanel::new("cities", "Cities", self.cities.clone())
     .description("Manage cities and their countries or regions")
-    .refresh("refresh-cities", self.loading, false, cx.listener(Self::reload))
-    .toolbar(toolbar)
+    .field(
+        field()
+            .label("Keyword")
+            .child(Input::new(&self.keyword).placeholder("Search cities")),
+    )
+    .header_action(Button::new("create-city").primary().label("Create"))
+    .toolbar_action(Button::new("export-cities").label("Export"))
     .with_size(theme::component_size(cx))
 ```
 
@@ -197,11 +198,11 @@ CrudPanel::new("Cities", self.render_table(window, cx))
 
 | Type | API |
 | --- | --- |
-| `CrudPanel` | `new`, `description`, `refresh`, `toolbar`, `filter`, `filters`, `action`, `actions`, `has_toolbar`, `with_size` |
-| `CrudPanelToolbar` | `new`, `filter`, `filters`, `action`, `actions`, `is_empty` |
+| `CrudPanel` | `new`, `description`, `quick_filter`, `field`, `filter_columns`, `header_action`, `toolbar_action`, `has_filters`, `with_size` |
 
-Use `refresh` for reloading current data. Put search, create, import, export, and batch operations
-in the toolbar action area.
+Pagination always includes a numbered page: a single page shows `1`; multiple pages use the
+official non-compact `Pagination` with up to five page buttons and its ellipsis menu. Loading
+disables every pagination entry.
 
 ## CrudTableRow and CrudTableDelegate
 
@@ -210,21 +211,36 @@ Prefer `#[derive(nexora::CrudTableRow)]` for CRUD row data, then connect it to
 
 ```rust
 use gpui_component::table::{Column, DataTable, TableState};
-use nexora::desktop::{CrudTableDelegate, TableCell};
+use nexora::desktop::{CrudTableDelegate, TableCell, TableSwitchCell};
 
 #[derive(Clone, nexora::CrudTableRow)]
 struct CityRow {
     #[nexora(row_id, column(name = "ID", width = 64., fixed_left))]
     id: u64,
-    #[nexora(column(title = "City", width = 160., sortable))]
+    #[nexora(column(title = "City", width = 160.))]
     name: String,
-    #[nexora(column(title = "Status", width = 76., align = "center", render = Self::status_cell))]
+    #[nexora(column(
+        title = "Status",
+        width = 76.,
+        align = "center",
+        status,
+        render = Self::status_cell,
+        text = Self::status_text
+    ))]
     enabled: bool,
 }
 
 impl CityRow {
     fn status_cell(row: &Self, _window: &mut gpui::Window, _cx: &mut gpui::App) -> TableCell {
-        TableCell::new(if row.enabled { "Enabled" } else { "Disabled" }).center()
+        TableCell::new(TableSwitchCell::new(
+            format!("city-enabled-{}", row.id),
+            row.enabled,
+        ))
+        .center()
+    }
+
+    fn status_text(row: &Self, _cx: &gpui::App) -> String {
+        (if row.enabled { "Enabled" } else { "Disabled" }).to_owned()
     }
 }
 
@@ -254,8 +270,22 @@ let table = DataTable::new(cx.new(|cx| TableState::new(delegate, window, cx))).b
 | `column(header_align = "left")` | Header alignment |
 | `column(align = "right")` / `cell_align = "right"` | Body alignment |
 | `column(vertical_align = "top")` | Body vertical alignment |
+| `column(status)` | Declare a business-state column; `render` and `text` are required |
 | `column(render = Self::render_status)` | Custom body renderer |
 | `column(text = Self::status_text)` | Custom text export |
+
+### Data-column and state rules
+
+- Each data column may display only its owning field. Split avatars, names, usernames, and IDs into
+  separate columns; do not merge them through vertical or wrapping layouts.
+- The locked DataTable version shares one size between the header and body, so do not enlarge the
+  shared row height to accommodate merged content.
+- Use `TableSwitchCell` for boolean or on/off states. Use filled official `Tag` variants for other
+  states: Secondary, Info, Primary, Success, Warning, or Danger according to business meaning.
+- State tags cannot use outline, Custom, Color, or one uniform color for every state. Classification
+  tags without `status` may use `Tag::color(ColorName)`.
+- `nexora lint` reports merged columns and invalid state components or colors as non-suppressible
+  errors.
 
 ### Delegate API
 

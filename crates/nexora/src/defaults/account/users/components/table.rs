@@ -1,36 +1,26 @@
 //! 默认用户列表数据表。
 
-use std::collections::BTreeSet;
-
-use gpui::{App, Context, Entity, IntoElement, Render, WeakEntity, Window, div, prelude::*, px};
+use gpui::{App, Context, Entity, WeakEntity, Window, div, prelude::*, px};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Sizable as _,
-    avatar::Avatar,
-    button::Button,
-    h_flex,
-    table::{Column, DataTable, TableState},
-    tag::Tag,
-    v_flex,
+    Disableable as _, Sizable as _, avatar::Avatar, button::Button, clipboard::Clipboard, h_flex,
+    table::Column, tag::Tag,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     defaults::account::has_permission,
-    desktop::contract::{UserResponse, UserStatus, UserType},
-    persistent_crud_table_state,
+    desktop::{
+        CrudListState, CrudLoadError, CrudPage, api_session,
+        contract::{UserListQuery, UserResponse, UserStatus, UserType},
+    },
 };
 use ui::{CrudTableDelegate, TableCell};
 
 use super::UsersPage;
 
-const USER_TABLE_ROW_HEIGHT: f32 = 52.0;
-
 pub(in crate::defaults::account::users) struct UsersTable {
-    state: Entity<TableState<UsersTableDelegate>>,
-    all_rows: Vec<UserResponse>,
-    server_total: usize,
+    state: Entity<CrudListState<UserTableRow, UserQuery>>,
 }
-
-type UsersTableDelegate = CrudTableDelegate<UserTableRow>;
 
 impl UsersTable {
     pub(super) fn new(
@@ -39,7 +29,6 @@ impl UsersTable {
         cx: &mut Context<Self>,
     ) -> Self {
         let action_page = page.clone();
-        let load_page = page.clone();
         let delegate = CrudTableDelegate::new(Vec::new())
             .empty_title("暂无用户")
             .empty_description("点击右上角“创建用户”添加第一个用户")
@@ -52,175 +41,111 @@ impl UsersTable {
                 move |row: &UserTableRow, window, cx| {
                     UserTableRow::render_actions(row, action_page.clone(), window, cx)
                 },
-            )
-            .on_load_more(move |_, cx| {
-                _ = load_page.update(cx, UsersPage::load_next_page);
-            });
-        let state = persistent_crud_table_state(
-            "users",
-            "users-table",
-            delegate,
-            |state| {
-                state
-                    .sortable(false)
-                    .col_movable(true)
-                    .col_resizable(true)
-                    .col_selectable(false)
-                    .row_selectable(false)
+            );
+        let state = CrudListState::create_with_delegate(
+            UserQuery::default(),
+            |query, cx| {
+                let session = api_session(cx);
+                let task = session.map(|session| {
+                    cx.background_spawn(async move { session.list_users_filtered(query.to_api()) })
+                });
+                async move {
+                    let Some(task) = task else {
+                        return Err(CrudLoadError::terminal("当前登录会话不可用，请重新登录"));
+                    };
+                    let response = task
+                        .await
+                        .map_err(|error| CrudLoadError::retryable(error.user_message()))?;
+                    let items = response
+                        .items
+                        .into_iter()
+                        .map(UserTableRow::from)
+                        .collect::<Vec<_>>();
+                    Ok(CrudPage::new(
+                        items,
+                        response.page.number,
+                        response.page.size,
+                        usize::try_from(response.page.total.max(0)).unwrap_or(usize::MAX),
+                    ))
+                }
             },
+            move |_| delegate,
+            false,
             window,
             cx,
         )
-        .expect("默认用户表格稳定列布局应当合法");
-        Self {
-            state,
-            all_rows: Vec::new(),
-            server_total: 0,
-        }
+        .expect("默认用户 CRUD 列表状态应当合法");
+        Self { state }
     }
 
-    pub(super) fn replace_rows(
-        &mut self,
-        users: Vec<UserResponse>,
-        total: i64,
-        filters: &UserFilters,
-        cx: &mut Context<Self>,
-    ) {
-        self.all_rows = users;
-        self.server_total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
-        self.apply_filters(filters, cx);
-    }
-
-    pub(super) fn append_rows(
-        &mut self,
-        users: Vec<UserResponse>,
-        total: i64,
-        filters: &UserFilters,
-        cx: &mut Context<Self>,
-    ) {
-        let existing_ids = self
-            .all_rows
-            .iter()
-            .map(|user| user.id.clone())
-            .collect::<BTreeSet<_>>();
-        self.all_rows.extend(
-            users
-                .into_iter()
-                .filter(|user| !existing_ids.contains(&user.id)),
-        );
-        self.server_total = usize::try_from(total.max(0)).unwrap_or(usize::MAX);
-        self.apply_filters(filters, cx);
-    }
-
-    pub(super) fn update_user(
-        &mut self,
-        updated: UserResponse,
-        filters: &UserFilters,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(row) = self.all_rows.iter_mut().find(|row| row.id == updated.id) {
-            *row = updated;
-        }
-        self.apply_filters(filters, cx);
-    }
-
-    pub(super) fn apply_filters(&mut self, filters: &UserFilters, cx: &mut Context<Self>) {
-        let filtered_rows = self
-            .all_rows
-            .iter()
-            .filter(|user| filters.matches(user))
-            .cloned()
-            .map(UserTableRow::from)
-            .collect::<Vec<_>>();
-        let total = if filters.is_empty() {
-            self.server_total
-        } else {
-            filtered_rows.len()
-        };
-        self.state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-            delegate.replace_rows(filtered_rows);
-            delegate.set_total(total);
-            delegate.set_loading(false);
-            delegate.set_loading_more(false);
-            cx.notify();
-        });
-        cx.notify();
-    }
-
-    pub(super) fn loaded_len(&self) -> usize {
-        self.all_rows.len()
+    pub(super) fn loaded_len(&self, cx: &App) -> usize {
+        self.state.read(cx).current_rows().len()
     }
 
     pub(super) fn visible_len(&self, cx: &App) -> usize {
-        self.state.read(cx).delegate().rows().len()
+        self.state.read(cx).current_rows().len()
     }
 
-    pub(super) fn refresh(&self, page_loading: bool, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-            delegate.set_loading(page_loading && delegate.rows().is_empty());
-            delegate.set_loading_more(page_loading);
-            cx.notify();
-        });
-        cx.notify();
+    pub(super) fn total(&self, cx: &App) -> usize {
+        self.state.read(cx).total()
+    }
+
+    pub(super) fn is_loading(&self, cx: &App) -> bool {
+        self.state.read(cx).is_loading()
+    }
+
+    pub(super) fn load_if_needed(&self, cx: &mut Context<Self>) {
+        if !self.state.read(cx).loaded_once() {
+            self.state.update(cx, CrudListState::load_current);
+        }
+    }
+
+    pub(super) fn refresh(&self, cx: &mut Context<Self>) {
+        self.state.update(cx, CrudListState::refresh_current);
+    }
+
+    pub(super) fn set_query(&self, query: UserQuery, cx: &mut Context<Self>) {
+        _ = self
+            .state
+            .update(cx, |state, cx| state.set_query(query, cx));
+        self.state.update(cx, CrudListState::load_current);
+    }
+
+    pub(super) fn query(&self, cx: &App) -> UserQuery {
+        self.state.read(cx).query().clone()
+    }
+
+    pub(super) fn state(&self) -> Entity<CrudListState<UserTableRow, UserQuery>> {
+        self.state.clone()
     }
 
     pub(super) fn refresh_actions(&self, cx: &mut Context<Self>) {
         self.state.update(cx, |_, cx| cx.notify());
-        cx.notify();
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct UserFilters {
-    keyword: String,
-    status: UserStatusFilter,
-    user_type: UserTypeFilter,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, nexora::CrudQuery)]
+#[nexora(page_size(default = 25, min = 15, max = 100, options = [15, 25, 50, 100]))]
+pub(super) struct UserQuery {
+    #[nexora(pagination)]
+    #[serde(flatten)]
+    pub(super) page: contracts::pagination::PageQuery,
+    #[nexora(filter(label = "关键词", control = "input", trigger = "manual"))]
+    pub(super) keyword: Option<String>,
+    #[nexora(filter(label = "状态", control = "select", trigger = "immediate"))]
+    pub(super) status: Option<UserStatus>,
+    #[nexora(filter(label = "类型", control = "select", trigger = "immediate"))]
+    pub(super) user_type: Option<UserType>,
 }
 
-impl UserFilters {
-    pub(super) fn new(
-        keyword: impl Into<String>,
-        status: UserStatusFilter,
-        user_type: UserTypeFilter,
-    ) -> Self {
-        Self {
-            keyword: keyword.into(),
-            status,
-            user_type,
+impl UserQuery {
+    fn to_api(&self) -> UserListQuery {
+        UserListQuery {
+            page: self.page,
+            keyword: self.keyword.clone(),
+            status: self.status,
+            user_type: self.user_type,
         }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.keyword.is_empty()
-            && self.status == UserStatusFilter::All
-            && self.user_type == UserTypeFilter::All
-    }
-
-    fn matches(&self, user: &UserResponse) -> bool {
-        if !self.status.matches(user.status) || !self.user_type.matches(user.user_type) {
-            return false;
-        }
-        if self.keyword.is_empty() {
-            return true;
-        }
-
-        let keyword = self.keyword.as_str();
-        user.id.to_ascii_lowercase().contains(keyword)
-            || user
-                .username
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .contains(keyword)
-            || user
-                .email
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .contains(keyword)
-            || user.display_name.to_ascii_lowercase().contains(keyword)
     }
 }
 
@@ -243,11 +168,11 @@ impl UserStatusFilter {
         }
     }
 
-    fn matches(self, status: UserStatus) -> bool {
+    pub(super) const fn value(self) -> Option<UserStatus> {
         match self {
-            Self::All => true,
-            Self::Active => status == UserStatus::Active,
-            Self::Suspended => status == UserStatus::Suspended,
+            Self::All => None,
+            Self::Active => Some(UserStatus::Active),
+            Self::Suspended => Some(UserStatus::Suspended),
         }
     }
 }
@@ -271,42 +196,62 @@ impl UserTypeFilter {
         }
     }
 
-    fn matches(self, user_type: UserType) -> bool {
+    pub(super) const fn value(self) -> Option<UserType> {
         match self {
-            Self::All => true,
-            Self::Human => user_type == UserType::Human,
-            Self::ServiceAccount => user_type == UserType::ServiceAccount,
+            Self::All => None,
+            Self::Human => Some(UserType::Human),
+            Self::ServiceAccount => Some(UserType::ServiceAccount),
         }
     }
 }
 
-impl Render for UsersTable {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().w_full().flex_1().min_h_0().overflow_hidden().child(
-            DataTable::new(&self.state)
-                .stripe(true)
-                .bordered(true)
-                .with_size(px(USER_TABLE_ROW_HEIGHT)),
-        )
-    }
-}
-
 #[derive(Clone, nexora::CrudTableRow)]
-struct UserTableRow {
-    #[nexora(row_id, skip)]
+pub(super) struct UserTableRow {
+    #[nexora(column(
+        key = "avatar",
+        name = "头像",
+        width = 64.,
+        min_width = 64.,
+        max_width = 64.,
+        align = "center",
+        render = Self::render_avatar
+    ))]
+    avatar_name: String,
+    #[nexora(
+        row_id,
+        column(
+            key = "id",
+            name = "用户 ID",
+            width = 220.,
+            min_width = 180.,
+            max_width = 300.,
+            render = Self::render_id
+        )
+    )]
     id: String,
     #[nexora(skip)]
     source: UserResponse,
     #[nexora(column(
-        key = "user",
-        name = "用户",
-        width = 340.,
-        min_width = 280.,
-        max_width = 520.,
-        render = Self::render_user,
+        key = "display_name",
+        name = "姓名",
+        width = 180.,
+        min_width = 140.,
+        max_width = 260.,
+        render = Self::render_display_name,
         text = Self::display_name_text
     ))]
     display_name: String,
+    #[nexora(column(
+        key = "identity",
+        name = "身份",
+        width = 112.,
+        min_width = 96.,
+        max_width = 140.,
+        align = "center",
+        render = Self::render_identity,
+        text = Self::identity_text
+    ))]
+    is_super_admin: bool,
     #[nexora(column(
         key = "type",
         name = "类型",
@@ -315,8 +260,7 @@ struct UserTableRow {
         max_width = 120.,
         align = "center",
         render = Self::render_user_type,
-        text = Self::user_type_text,
-        resizable = false
+        text = Self::user_type_text
     ))]
     user_type: UserType,
     #[nexora(column(
@@ -346,9 +290,9 @@ struct UserTableRow {
         min_width = 76.,
         max_width = 76.,
         align = "center",
+        status,
         render = Self::render_status,
-        text = Self::status_text,
-        resizable = false
+        text = Self::status_text
     ))]
     status: UserStatus,
 }
@@ -356,8 +300,10 @@ struct UserTableRow {
 impl From<UserResponse> for UserTableRow {
     fn from(user: UserResponse) -> Self {
         Self {
+            avatar_name: user.display_name.clone(),
             id: user.id.clone(),
             display_name: user.display_name.clone(),
+            is_super_admin: user.is_super_admin,
             user_type: user.user_type,
             username: user.username.clone().unwrap_or_else(|| "未绑定".to_owned()),
             email: user.email.clone().unwrap_or_else(|| "—".to_owned()),
@@ -368,6 +314,14 @@ impl From<UserResponse> for UserTableRow {
 }
 
 impl UserTableRow {
+    fn identity_text(row: &Self, _cx: &App) -> String {
+        if row.is_super_admin {
+            "超级管理员".to_owned()
+        } else {
+            "普通用户".to_owned()
+        }
+    }
+
     fn display_name_text(row: &Self, _cx: &App) -> String {
         row.display_name.clone()
     }
@@ -386,34 +340,35 @@ impl UserTableRow {
         }
     }
 
-    fn render_user(row: &Self, _window: &mut Window, cx: &mut App) -> TableCell {
-        let user = &row.source;
-        let avatar = Avatar::new().name(user.display_name.clone()).small();
+    fn render_avatar(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(Avatar::new().name(row.avatar_name.clone()).small()).center()
+    }
 
+    fn render_id(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
         TableCell::new(
-            h_flex().h_full().min_w_0().gap_2().child(avatar).child(
-                v_flex()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_1()
-                            .child(div().min_w_0().truncate().child(user.display_name.clone()))
-                            .when(user.is_super_admin, |this| {
-                                this.child(Tag::info().small().rounded_full().child("超级管理员"))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(user.id.clone()),
-                    ),
-            ),
+            h_flex()
+                .min_w_0()
+                .gap_1()
+                .child(div().min_w_0().truncate().child(row.id.clone()))
+                .child(
+                    Clipboard::new(format!("copy-default-user-id-{}", row.id))
+                        .value(row.id.clone())
+                        .tooltip("复制用户 ID"),
+                ),
         )
+    }
+
+    fn render_display_name(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        TableCell::new(div().min_w_0().truncate().child(row.display_name.clone()))
+    }
+
+    fn render_identity(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {
+        let tag = if row.is_super_admin {
+            Tag::info().small().rounded_full().child("超级管理员")
+        } else {
+            Tag::secondary().small().rounded_full().child("普通用户")
+        };
+        TableCell::new(tag).center()
     }
 
     fn render_user_type(row: &Self, _window: &mut Window, _cx: &mut App) -> TableCell {

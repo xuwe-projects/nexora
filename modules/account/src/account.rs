@@ -1036,6 +1036,34 @@ impl Account {
             .map_err(StoreError::from)?)
     }
 
+    /// 按分页和后台用户列表筛选条件返回本地用户目录。
+    ///
+    /// `keyword` 会匹配用户 ID、登录用户名、邮箱和展示名；`service_account` 为 `true`
+    /// 时只返回服务账号，为 `false` 时只返回人员用户。该方法不执行当前用户授权。
+    ///
+    /// # Errors
+    ///
+    /// 页码无效或数据库查询失败时返回错误。
+    pub async fn users_filtered(
+        &self,
+        page: u32,
+        page_size: u32,
+        keyword: Option<&str>,
+        status: Option<UserStatus>,
+        service_account: Option<bool>,
+    ) -> Result<Page<User>, AccountError> {
+        let request = handlers::accounts::page_request(page, page_size)?;
+        Ok(stores::users::query_page_filtered(
+            request,
+            keyword,
+            status,
+            service_account,
+            &self.state.pool,
+        )
+        .await
+        .map_err(StoreError::from)?)
+    }
+
     /// 返回指定用户及其直接角色、合并权限组成的授权快照。
     ///
     /// # Errors

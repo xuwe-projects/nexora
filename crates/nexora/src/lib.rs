@@ -44,7 +44,8 @@ pub mod server;
 pub use application::{
     Application, ApplicationAssets, ApplicationError, ApplicationLogo, ApplicationOptions,
     ApplicationTabStyle, ApplicationThemePreset, PersistentDataTableDelegate, ShellToolbarAction,
-    TrayUnavailablePolicy, install_shell_toolbar_actions, persistent_crud_table_state,
+    ShellToolbarOptions, TrayUnavailablePolicy, install_shell_toolbar_actions,
+    install_shell_toolbar_actions_with_options, persistent_crud_table_state,
     persistent_data_table_state, reset_data_table_layout,
 };
 #[cfg(feature = "desktop")]

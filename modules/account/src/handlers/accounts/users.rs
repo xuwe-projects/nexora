@@ -7,12 +7,9 @@ use axum::{
     http::{StatusCode, header::LOCATION},
     response::IntoResponse,
 };
-use contracts::{
-    account::{
-        AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest,
-        UpdateUserStatusRequest, UserPageResponse, UserResponse,
-    },
-    pagination::PageQuery,
+use contracts::account::{
+    AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest, UpdateUserStatusRequest,
+    UserListQuery, UserPageResponse, UserResponse, UserType,
 };
 
 use crate::{
@@ -75,9 +72,21 @@ pub(crate) async fn provision_user(
 pub(crate) async fn list_users(
     _authorization: Authorized<ReadUsers>,
     State(state): State<AccountState>,
-    ApiQuery(query): ApiQuery<PageQuery>,
+    ApiQuery(query): ApiQuery<UserListQuery>,
 ) -> Result<Json<UserPageResponse>, ApiError> {
-    let page = Account { state }.users(query.page, query.page_size).await?;
+    let service_account = query.user_type.map(|user_type| match user_type {
+        UserType::Human => false,
+        UserType::ServiceAccount => true,
+    });
+    let page = Account { state }
+        .users_filtered(
+            query.page.page,
+            query.page.page_size,
+            query.keyword.as_deref(),
+            query.status.map(super::user_status),
+            service_account,
+        )
+        .await?;
     Ok(Json(user_page_response(page)))
 }
 

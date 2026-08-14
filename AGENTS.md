@@ -52,6 +52,15 @@ src/features/users/components/table.rs
 - 字段视觉布局统一使用锁定版本的官方 `Form`/`Field`、`v_form()`、`h_form()` 与 `field()`；
   不得恢复公共 Card、FormItem 或 LabeledControl 视觉 API。分组语义使用官方 GroupBox，普通
   排版使用布局容器；业务字段转换、异步校验和服务器错误留在无视觉状态模型。
+- `CrudTableRow` 的每个数据列只能展示所属字段，禁止把头像、姓名、用户名、ID 等多个业务值
+  合并进同一单元格，也禁止纵向或自动折行正文；需要同时展示时拆成独立列。当前锁定版本的
+  `DataTable` 由表头和正文共用尺寸，不得通过统一自定义行高迁就合并内容。
+- 业务状态列必须声明 `column(status, render = ..., text = ...)`。布尔和 on/off 状态使用
+  `nexora::desktop::TableSwitchCell`；其他状态使用官方填充 `Tag`，按 Secondary、Info、
+  Primary、Success、Warning、Danger 映射实际语义，禁止 outline、Custom、Color 或所有状态
+  统一颜色。`Tag::color(ColorName)` 只用于非状态分类标签。
+- `CrudPanel` 默认分页必须保留数字页码：单页显示当前页 `1`，多页使用官方 `Pagination` 的
+  普通模式和最多 5 个可见页码，不得退化为只有上一页、下一页的 compact 模式。
 - `div()`、`h_flex()`、`v_flex()` 可以用于普通布局和内容组合，但不得用来模拟已有语义控件
   及其 hover、focus、selected、disabled、loading、键盘导航等行为。
 - 纯 GPUI 自定义前必须明确记录：检查过的候选组件；无法满足的具体行为；为什么不能通过

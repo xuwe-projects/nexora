@@ -9,7 +9,7 @@ use contracts::{
     account::{
         AccessProfileResponse, CreateRoleRequest, PermissionResponse, ProvisionUserRequest,
         ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse, UpdateRoleRequest,
-        UpdateUserStatusRequest, UserPageResponse, UserResponse,
+        UpdateUserStatusRequest, UserListQuery, UserPageResponse, UserResponse,
     },
     collection::ItemsResponse,
     error::ErrorEnvelope,
@@ -457,9 +457,22 @@ impl AccountSession {
         page: u32,
         page_size: u32,
     ) -> Result<UserPageResponse, AccountClientError> {
-        let request = self
-            .request(Method::GET, "users")
-            .query(&[("page", page), ("page_size", page_size)]);
+        self.list_users_filtered(UserListQuery {
+            page: contracts::pagination::PageQuery { page, page_size },
+            ..UserListQuery::default()
+        })
+    }
+
+    /// 按分页和用户管理筛选条件读取本地用户目录。
+    ///
+    /// # Errors
+    ///
+    /// 网络、响应解析失败，或当前用户没有 `users:read` 权限时返回错误。
+    pub fn list_users_filtered(
+        &self,
+        query: UserListQuery,
+    ) -> Result<UserPageResponse, AccountClientError> {
+        let request = self.request(Method::GET, "users").query(&query);
         self.send_json(request)
     }
 

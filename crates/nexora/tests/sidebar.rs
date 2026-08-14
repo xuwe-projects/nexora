@@ -117,7 +117,9 @@ fn shell_uses_gpui_component_sidebar_for_navigation() {
     );
     assert!(
         APPLICATION_SOURCE.contains("Input::new(input)")
-            && APPLICATION_SOURCE.contains(".prefix(Icon::new(IconName::Search).xsmall())")
+            && APPLICATION_SOURCE.contains(
+                ".prefix(Icon::new(IconName::Search).with_size(WORKSPACE_SHELL_ICON_SIZE))"
+            )
             && APPLICATION_SOURCE.contains(".with_size(theme::component_size(cx))"),
         "Sidebar 搜索输入必须复用 gpui-component Input、搜索图标前缀并跟随组件尺寸"
     );
@@ -132,6 +134,85 @@ fn shell_uses_gpui_component_sidebar_for_navigation() {
             "Sidebar Shell 不得手写官方组件已有的导航能力：{forbidden}"
         );
     }
+}
+
+#[test]
+fn collapsed_navigation_groups_open_recursive_official_popup_menus() {
+    let collapsed = APPLICATION_SOURCE
+        .split_once("fn render_collapsed_navigation_entry")
+        .and_then(|(_, source)| source.split_once("#[derive(Clone)]\nstruct NavigationSearchIndex"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位收起导航目录实现");
+
+    for required in [
+        "dropdown_menu_with_anchor(Anchor::RightCenter",
+        "populate_navigation_popup_menu(",
+        "menu.submenu_with_icon(",
+        "PopupMenuItem::new(metadata.title())",
+        "cx.navigate(path.clone())",
+    ] {
+        assert!(collapsed.contains(required), "收起导航目录缺少 {required}");
+    }
+}
+
+#[test]
+fn sidebar_shell_controls_share_the_navigation_icon_size() {
+    let sidebar = APPLICATION_SOURCE
+        .split_once("fn render_sidebar")
+        .and_then(|(_, source)| source.split_once("fn render_tab"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Shell 实现");
+
+    for control in [
+        "\"expand-sidebar\"",
+        "\"collapse-sidebar\"",
+        "\"expand-sidebar-search\"",
+    ] {
+        assert!(sidebar.contains(control), "Sidebar 缺少 {control}");
+    }
+    assert!(sidebar.contains("workspace_icon_button("));
+    assert!(!sidebar.contains("SidebarToggleButton::new()"));
+}
+
+#[test]
+fn sidebar_footer_fills_expanded_width_and_centers_only_when_collapsed() {
+    let footer_host = APPLICATION_SOURCE
+        .split_once("fn workspace_sidebar_footer_host")
+        .and_then(|(_, source)| source.split_once("/// Shell 顶部工具区"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Footer 宿主");
+
+    assert!(footer_host.contains("host.justify_center().child(content)"));
+    assert!(footer_host.contains("div().flex_1().min_w_0().child(content)"));
+}
+
+#[test]
+fn sidebar_feature_icons_keep_an_explicit_twenty_pixel_size() {
+    let sidebar_feature_icon = APPLICATION_SOURCE
+        .split_once("fn sidebar_feature_icon")
+        .and_then(|(_, source)| source.split_once("impl Render for ApplicationShell"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Sidebar Feature 图标构造函数");
+
+    assert!(
+        sidebar_feature_icon.contains("WORKSPACE_SHELL_ICON_SIZE"),
+        "Sidebar 图标必须显式使用共享 20px 尺寸"
+    );
+    assert!(
+        APPLICATION_SOURCE.contains(".icon(sidebar_feature_icon(metadata.icon()))"),
+        "Sidebar Feature 与目录必须使用专用图标尺寸"
+    );
+
+    let feature_icon = APPLICATION_SOURCE
+        .split_once("fn feature_icon")
+        .and_then(|(_, source)| source.split_once("impl Render for ApplicationShell"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Feature 图标构造函数");
+
+    assert!(
+        feature_icon.contains(".size_4()"),
+        "非 Sidebar Feature 图标继续保持 16px"
+    );
 }
 
 #[test]
@@ -164,6 +245,10 @@ fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
         "默认 Footer 必须在自身实现中显式声明 hover"
     );
     assert!(default_footer.contains("Avatar::new().name(display_name.clone()).small()"));
+    assert!(
+        default_footer.contains(".when(collapsed") && default_footer.contains(".size_8()"),
+        "默认 Footer 收起态必须用 32px 正方形 hover 区居中 Avatar"
+    );
     assert!(
         !default_footer.contains(".src("),
         "默认登录用户区域只能显示首字母/默认 Avatar，不再读取图片 URL"
@@ -201,8 +286,11 @@ fn shell_keeps_sidebar_structure_without_injecting_custom_slot_interactions() {
         "Sidebar Shell 不得把自定义 Header 追加在默认品牌之后"
     );
     assert!(sidebar.contains(".border_b_1()"));
-    assert!(sidebar.contains(".border_t_1()"));
+    assert!(APPLICATION_SOURCE.contains("fn workspace_sidebar_footer_host"));
+    assert!(APPLICATION_SOURCE.contains(".border_t_1()"));
     assert!(sidebar.contains(".gap_2()"));
+    assert!(sidebar.contains("SidebarCollapsible::None"));
+    assert!(sidebar.contains("WORKSPACE_SIDEBAR_COLLAPSED_WIDTH"));
     assert!(
         sidebar.contains(".child(self.render_sidebar_header_content(cx))")
             && sidebar.contains(".children(self.render_sidebar_search(cx))"),

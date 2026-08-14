@@ -14,6 +14,7 @@ use syn::{
 use super::{
     CliError, CliResult,
     cargo::{Member, Workspace},
+    crud_table,
     diagnostic::{Diagnostic, Report},
     relative_path,
 };
@@ -94,6 +95,8 @@ fn check_file(
         CliError::new(format!("无法解析 Rust 源码 {}：{error}", path.display()))
     })?;
     let relative = relative_path(workspace.root(), path);
+
+    crud_table::check_file(&syntax, relative.clone(), report);
 
     let mut docs = PublicDocsVisitor {
         path: relative.clone(),

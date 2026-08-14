@@ -42,6 +42,12 @@ src/features/users/components/table.rs
 
 - 先检查 `gpui-component` 是否已经提供对应组件；应用直接依赖并导入 `gpui` 与
   `gpui-component`，不要通过 `nexora::gpui` 等路径使用。
+- `CrudTableRow` 每个数据列只展示所属字段；头像、姓名、用户名和 ID 等信息拆成独立列，禁止
+  纵向或折行合并。锁定版本的 `DataTable` 表头与正文共用尺寸，不用统一行高迁就合并内容。
+- 状态列声明 `column(status, render = ..., text = ...)`。布尔与 on/off 状态使用
+  `TableSwitchCell`；其他状态使用官方填充语义 `Tag`，禁止 outline、Custom、Color 和统一
+  颜色。分类 Tag 未声明 `status` 时可以使用 `Tag::color(ColorName)`。
+- `CrudPanel` 单页分页显示当前页 `1`，多页使用官方普通 `Pagination` 和最多 5 个数字页码。
 - 状态放在最近的真实使用者：局部状态留在组件，共享状态提升到最近共同父 Entity，只有
   跨窗口且与应用同生命周期的唯一状态才使用 `Global`。
 - `render` 只能读取状态、计算轻量派生值和构建 Element；不得创建长期 Entity、发起

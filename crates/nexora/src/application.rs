@@ -17,30 +17,28 @@ use ::desktop::{
 };
 #[cfg(feature = "desktop")]
 use actions::account::{self as account_actions, AccountActionKind, SignInAccount, SignOutAccount};
-use actions::{settings::OpenSettings, window as window_actions};
+use actions::{search::OpenGlobalSearch, settings::OpenSettings, window as window_actions};
 use configuration::{ConfigurationError, UserConfigStore, VersionedConfiguration};
 #[cfg(feature = "desktop")]
 use gpui::{Anchor, WindowHandle};
 use gpui::{
-    AnyElement, AnyView, App, AssetSource, Bounds, ClickEvent, Context, Entity, Focusable as _,
-    Global, Image, ImageFormat, IntoElement as _, Keystroke, MouseButton, Pixels, Render,
+    AnyElement, AnyView, App, AssetSource, Bounds, ClickEvent, Context, ElementId, Entity,
+    Focusable as _, Global, Image, ImageFormat, IntoElement as _, MouseButton, Pixels, Render,
     ScrollHandle, Size, Subscription, Task, WeakEntity, Window, WindowBounds, WindowOptions, div,
     img, point, prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size as ComponentSize,
-    StyledExt as _, TitleBar, WindowExt as _,
+    ActiveTheme as _, Collapsible, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    Size as ComponentSize, StyledExt as _, TitleBar, WindowExt as _,
     alert::Alert,
     badge::Badge,
     button::{Button, ButtonVariants as _, Toggle},
     dialog::{DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState},
-    kbd::Kbd,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     sidebar::{
-        Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
-        SidebarToggleButton,
+        Sidebar, SidebarCollapsible, SidebarGroup, SidebarItem, SidebarMenu, SidebarMenuItem,
     },
     tab::{Tab, TabBar},
     table::{Column, TableDelegate, TableEvent, TableState},
@@ -53,8 +51,12 @@ use pinyin::ToPinyin as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ui::{
-    CrudTableDelegate, CrudTableRow, DataTableLayoutError, DataTableLayoutKey, SidebarRegion,
-    apply_data_table_layout, data_table_layout_from_event, layout::WorkspaceLayout,
+    CrudTableDelegate, CrudTableRow, DataTableLayoutError, DataTableLayoutKey, ShortcutHint,
+    SidebarRegion, apply_data_table_layout, data_table_layout_from_event,
+    layout::{
+        WORKSPACE_SHELL_ICON_SIZE, WORKSPACE_SIDEBAR_COLLAPSED_WIDTH,
+        WORKSPACE_SIDEBAR_EXPANDED_WIDTH, WorkspaceLayout,
+    },
 };
 
 use crate::global_search::{
@@ -241,6 +243,18 @@ enum ShellToolbarRenderer {
 }
 
 impl ShellToolbarAction {
+    /// 创建与 Shell 搜索框同一视觉尺度的官方图标按钮。
+    ///
+    /// 自定义工具动作应使用该工厂作为交互根元素，再组合 `Badge`、`Popover` 等官方
+    /// 组件，避免每个下游应用分别决定按钮与图标尺寸。
+    pub fn icon_button(
+        id: impl Into<ElementId>,
+        icon: impl Into<Icon>,
+        tooltip: impl Into<gpui::SharedString>,
+    ) -> Button {
+        workspace_icon_button(id, icon, tooltip)
+    }
+
     /// 创建一个使用官方图标按钮的全局工具动作。
     ///
     /// `id` 必须在当前应用安装的动作中唯一，`order` 越小越靠左。回调只应执行窗口级或
@@ -339,14 +353,11 @@ impl ShellToolbarAction {
                 on_click,
             } => {
                 let on_click = on_click.clone();
-                let button = Button::new(self.id.clone())
-                    .ghost()
-                    .xsmall()
-                    .icon(icon.as_ref().clone())
-                    .tooltip(tooltip.clone())
-                    .loading(*loading)
-                    .disabled(*disabled || *loading)
-                    .on_click(move |event, window, cx| on_click(event, window, cx));
+                let button =
+                    Self::icon_button(self.id.clone(), icon.as_ref().clone(), tooltip.clone())
+                        .loading(*loading)
+                        .disabled(*disabled || *loading)
+                        .on_click(move |event, window, cx| on_click(event, window, cx));
                 if *badge == 0 {
                     button.into_any_element()
                 } else {
@@ -362,9 +373,79 @@ impl ShellToolbarAction {
     }
 }
 
+fn workspace_icon_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    tooltip: impl Into<gpui::SharedString>,
+) -> Button {
+    // gpui-component 的自定义 Button 尺寸会把图标缩放到 75%；该基准值使最终图标为 20px，
+    // 再用实例样式把可点击区域固定为 32px，继续保留官方 loading/disabled 图标语义。
+    const COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON: Pixels = px(20.0 / 0.75);
+    Button::new(id)
+        .ghost()
+        .with_size(COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON)
+        .size_8()
+        .icon(icon)
+        .tooltip(tooltip)
+}
+
+fn workspace_sidebar_footer_host(
+    content: AnyElement,
+    collapsed: bool,
+    border_color: gpui::Hsla,
+) -> AnyElement {
+    let host = h_flex()
+        .w_full()
+        .pt_3()
+        .border_t_1()
+        .border_color(border_color);
+    if collapsed {
+        host.justify_center().child(content).into_any_element()
+    } else {
+        host.child(div().flex_1().min_w_0().child(content))
+            .into_any_element()
+    }
+}
+
+/// Shell 顶部工具区的容器级布局选项。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShellToolbarOptions {
+    right_padding: Pixels,
+}
+
+impl ShellToolbarOptions {
+    /// 创建默认工具区布局。
+    ///
+    /// 默认右边距为 12px，使工具动作不会贴住窗口边框。
+    pub const fn new() -> Self {
+        Self {
+            right_padding: px(12.0),
+        }
+    }
+
+    /// 设置工具动作容器与窗口右边框之间的距离。
+    #[must_use]
+    pub fn right_padding(mut self, padding: Pixels) -> Self {
+        self.right_padding = padding;
+        self
+    }
+
+    /// 返回当前配置的工具区右边距。
+    pub const fn right_padding_value(&self) -> Pixels {
+        self.right_padding
+    }
+}
+
+impl Default for ShellToolbarOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Default)]
 struct ShellToolbarActionRegistry {
     actions: Vec<ShellToolbarAction>,
+    options: ShellToolbarOptions,
 }
 
 impl Global for ShellToolbarActionRegistry {}
@@ -376,7 +457,23 @@ impl Global for ShellToolbarActionRegistry {}
 /// # Panics
 ///
 /// 动作列表包含重复稳定 ID 时 panic。
-pub fn install_shell_toolbar_actions(mut actions: Vec<ShellToolbarAction>, cx: &mut App) {
+pub fn install_shell_toolbar_actions(actions: Vec<ShellToolbarAction>, cx: &mut App) {
+    install_shell_toolbar_actions_with_options(actions, ShellToolbarOptions::default(), cx);
+}
+
+/// 使用显式容器布局安装应用级主窗口全局工具动作。
+///
+/// `options` 只控制 Shell 拥有的工具区容器；每个自定义动作仍负责自身的官方组件组合。
+/// 后一次安装会完整替换动作与布局配置。
+///
+/// # Panics
+///
+/// 动作列表包含重复稳定 ID 时 panic。
+pub fn install_shell_toolbar_actions_with_options(
+    mut actions: Vec<ShellToolbarAction>,
+    options: ShellToolbarOptions,
+    cx: &mut App,
+) {
     actions.sort_by(|left, right| {
         left.order()
             .cmp(&right.order())
@@ -386,7 +483,7 @@ pub fn install_shell_toolbar_actions(mut actions: Vec<ShellToolbarAction>, cx: &
     for action in &actions {
         assert!(ids.insert(action.id()), "ShellToolbarAction ID 不能重复");
     }
-    let registry = ShellToolbarActionRegistry { actions };
+    let registry = ShellToolbarActionRegistry { actions, options };
     if cx.has_global::<ShellToolbarActionRegistry>() {
         *cx.global_mut::<ShellToolbarActionRegistry>() = registry;
     } else {
@@ -394,13 +491,25 @@ pub fn install_shell_toolbar_actions(mut actions: Vec<ShellToolbarAction>, cx: &
     }
 }
 
-fn shell_toolbar_actions(cx: &mut App) -> Vec<AnyElement> {
-    cx.try_global::<ShellToolbarActionRegistry>()
-        .map(|registry| registry.actions.clone())
-        .unwrap_or_default()
+struct RenderedShellToolbar {
+    actions: Vec<AnyElement>,
+    right_padding: Pixels,
+}
+
+fn shell_toolbar_actions(cx: &mut App) -> RenderedShellToolbar {
+    let registry = cx
+        .try_global::<ShellToolbarActionRegistry>()
+        .cloned()
+        .unwrap_or_default();
+    let actions = registry
+        .actions
         .into_iter()
         .map(|action| action.render(cx))
-        .collect()
+        .collect();
+    RenderedShellToolbar {
+        actions,
+        right_padding: registry.options.right_padding,
+    }
 }
 
 #[derive(Clone)]
@@ -2387,6 +2496,7 @@ struct ApplicationShellConfig {
 }
 
 struct ApplicationShell {
+    focus_handle: gpui::FocusHandle,
     registry: AppRegistry,
     application_name: String,
     application_logo: Option<ApplicationLogo>,
@@ -2472,6 +2582,168 @@ impl NavigationTreeEntry {
 struct NavigationSearchResult {
     sections: Vec<(&'static str, Vec<NavigationTreeEntry>)>,
     expanded_groups: HashSet<&'static str>,
+}
+
+/// 在官方 Sidebar 使用应用自定义目标宽度时协调展开与收起导航渲染。
+///
+/// `SidebarCollapsible::None` 让 Sidebar 本体保持 80px/236px 真实宽度，因此容器会向子项
+/// 传入 `false`。展开态继续渲染官方 Group/Menu；收起态的叶子继续使用官方
+/// SidebarMenuItem，有子项的目录则组合官方 Button、Popover 与 PopupMenu，在图标右侧
+/// 提供递归子菜单。
+#[derive(Clone)]
+struct WorkspaceSidebarGroup {
+    group: SidebarGroup<SidebarMenu>,
+    entries: Vec<NavigationTreeEntry>,
+    active_target_id: &'static str,
+    collapsed: bool,
+}
+
+impl WorkspaceSidebarGroup {
+    fn new(
+        group: SidebarGroup<SidebarMenu>,
+        entries: Vec<NavigationTreeEntry>,
+        active_target_id: &'static str,
+        collapsed: bool,
+    ) -> Self {
+        Self {
+            group,
+            entries,
+            active_target_id,
+            collapsed,
+        }
+    }
+}
+
+impl Collapsible for WorkspaceSidebarGroup {
+    fn collapsed(self, _collapsed: bool) -> Self {
+        self
+    }
+
+    fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+}
+
+impl SidebarItem for WorkspaceSidebarGroup {
+    fn render(
+        self,
+        id: impl Into<ElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> impl gpui::IntoElement {
+        if !self.collapsed {
+            return self
+                .group
+                .collapsed(false)
+                .render(id, window, cx)
+                .into_any_element();
+        }
+
+        let id = id.into();
+        v_flex()
+            .gap_2()
+            .children(self.entries.into_iter().enumerate().map(|(index, entry)| {
+                render_collapsed_navigation_entry(
+                    entry,
+                    format!("{id}-{index}"),
+                    self.active_target_id,
+                    window,
+                    cx,
+                )
+            }))
+            .into_any_element()
+    }
+}
+
+fn navigation_entry_contains_target(entry: &NavigationTreeEntry, target_id: &str) -> bool {
+    match entry {
+        NavigationTreeEntry::Feature(metadata) => metadata.id() == target_id,
+        NavigationTreeEntry::Group { children, .. } => children
+            .iter()
+            .any(|child| navigation_entry_contains_target(child, target_id)),
+    }
+}
+
+fn render_collapsed_navigation_entry(
+    entry: NavigationTreeEntry,
+    id: impl Into<ElementId>,
+    active_target_id: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    match entry {
+        NavigationTreeEntry::Feature(metadata) => {
+            let path = metadata.path().to_owned();
+            SidebarMenuItem::new(metadata.title())
+                .icon(sidebar_feature_icon(metadata.icon()))
+                .active(metadata.id() == active_target_id)
+                .on_click(move |_, _, cx| {
+                    _ = cx.navigate(path.clone());
+                })
+                .collapsed(true)
+                .render(id, window, cx)
+                .into_any_element()
+        }
+        NavigationTreeEntry::Group { metadata, children } => {
+            let active = children
+                .iter()
+                .any(|child| navigation_entry_contains_target(child, active_target_id));
+            workspace_icon_button(id, sidebar_feature_icon(metadata.icon()), metadata.title())
+                .w_full()
+                .h_9()
+                .selected(active)
+                .dropdown_menu_with_anchor(Anchor::RightCenter, move |menu, window, cx| {
+                    populate_navigation_popup_menu(
+                        menu,
+                        children.clone(),
+                        active_target_id,
+                        window,
+                        cx,
+                    )
+                })
+                .into_any_element()
+        }
+    }
+}
+
+fn populate_navigation_popup_menu(
+    mut menu: PopupMenu,
+    entries: Vec<NavigationTreeEntry>,
+    active_target_id: &'static str,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    for entry in entries {
+        menu = match entry {
+            NavigationTreeEntry::Feature(metadata) => {
+                let path = metadata.path().to_owned();
+                menu.item(
+                    PopupMenuItem::new(metadata.title())
+                        .icon(feature_icon(metadata.icon()))
+                        .checked(metadata.id() == active_target_id)
+                        .on_click(move |_, _, cx| {
+                            _ = cx.navigate(path.clone());
+                        }),
+                )
+            }
+            NavigationTreeEntry::Group { metadata, children } => menu.submenu_with_icon(
+                Some(feature_icon(metadata.icon())),
+                metadata.title(),
+                window,
+                cx,
+                move |submenu, window, cx| {
+                    populate_navigation_popup_menu(
+                        submenu,
+                        children.clone(),
+                        active_target_id,
+                        window,
+                        cx,
+                    )
+                },
+            ),
+        };
+    }
+    menu
 }
 
 #[derive(Clone)]
@@ -2570,7 +2842,6 @@ fn feature_search_section(
     registry: &AppRegistry,
     account_enabled: bool,
     request: &crate::SearchRequest,
-    shell: WeakEntity<ApplicationShell>,
     cx: &App,
 ) -> SearchSection {
     let query = normalize_search_text(request.query.as_str());
@@ -2582,14 +2853,11 @@ fn feature_search_section(
         })
         .filter(|metadata| query.is_empty() || index.feature_matches(*metadata, query.as_str()))
         .filter(|metadata| !metadata.path().contains('{'))
-        .map(|metadata| feature_search_item(metadata, shell.clone()));
+        .map(feature_search_item);
     SearchSection::new("nexora.pages", "页面").items(items)
 }
 
-fn feature_search_item(
-    metadata: FeatureMetadata,
-    shell: WeakEntity<ApplicationShell>,
-) -> SearchItem {
+fn feature_search_item(metadata: FeatureMetadata) -> SearchItem {
     let path = metadata.path().to_owned();
     let action_path = path.clone();
     SearchItem::new(
@@ -2598,20 +2866,10 @@ fn feature_search_item(
         metadata.title(),
         move |_, _, cx| {
             let path = action_path.clone();
-            let shell = shell.clone();
             Task::ready(
-                match shell.update_in(cx, |this, window, cx| {
-                    let route = this
-                        .registry
-                        .resolve(path.as_str())
-                        .map_err(|error| crate::SearchActionError::new(error.to_string(), true))?;
-                    this.navigate_to_route_in(ShellRoute::new(route), true, window, cx)
-                        .map_err(|error| crate::SearchActionError::new(error.to_string(), true))
-                }) {
-                    Ok(Ok(())) => Ok(SearchAction::Close),
-                    Ok(Err(error)) => Err(error),
-                    Err(_) => Err(crate::SearchActionError::new("页面窗口已经关闭", false)),
-                },
+                cx.navigate(path)
+                    .map(|()| SearchAction::Close)
+                    .map_err(|error| crate::SearchActionError::new(error.to_string(), true)),
             )
         },
     )
@@ -2921,7 +3179,13 @@ impl ApplicationShell {
             .map(NavigationGroupMetadata::id)
             .collect();
 
+        let focus_handle = cx.focus_handle();
+        if window.focused(cx).is_none() {
+            window.focus(&focus_handle, cx);
+        }
+
         Self {
+            focus_handle,
             registry,
             application_name,
             application_logo,
@@ -3615,7 +3879,7 @@ impl ApplicationShell {
     ) -> SidebarMenuItem {
         let path = metadata.path();
         SidebarMenuItem::new(metadata.title())
-            .icon(feature_icon(metadata.icon()))
+            .icon(sidebar_feature_icon(metadata.icon()))
             .active(self.active_target_id() == metadata.id())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Err(error) = this.open_path(path, window, cx) {
@@ -3663,7 +3927,7 @@ impl ApplicationShell {
             .collect::<Vec<_>>();
 
         let item = SidebarMenuItem::new(metadata.title())
-            .icon(feature_icon(metadata.icon()))
+            .icon(sidebar_feature_icon(metadata.icon()))
             .default_open(expanded)
             .click_to_toggle(true)
             .children(children);
@@ -3974,14 +4238,14 @@ impl ApplicationShell {
     fn render_sidebar_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.sidebar_search_input.as_ref().map(|input| {
             Input::new(input)
-                .prefix(Icon::new(IconName::Search).xsmall())
+                .prefix(Icon::new(IconName::Search).with_size(WORKSPACE_SHELL_ICON_SIZE))
                 .with_size(theme::component_size(cx))
                 .into_any_element()
         })
     }
 
     #[cfg(feature = "desktop")]
-    fn render_default_account_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_default_account_footer(&self, collapsed: bool, cx: &mut Context<Self>) -> AnyElement {
         let profile = crate::account::client::login_profile(cx);
         let display_name = profile
             .map(|profile| profile.user.display_name.clone())
@@ -3990,17 +4254,20 @@ impl ApplicationShell {
         let menu_items =
             account_actions::menu_actions_with_updates(crate::desktop::updater_available(cx));
         let action_context = cx.focus_handle();
-
-        SidebarRegion::new("nexora-default-account-footer")
-            .w_full()
-            .py_2()
-            .rounded(cx.theme().radius)
-            .hover(|this| {
-                this.bg(cx.theme().tokens.sidebar_accent)
-                    .text_color(cx.theme().sidebar_accent_foreground)
-            })
-            .child(
-                h_flex().flex_1().min_w_0().gap_2().child(avatar).child(
+        let content = if collapsed {
+            h_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(avatar)
+                .into_any_element()
+        } else {
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .child(avatar)
+                .child(
                     div()
                         .flex_1()
                         .min_w_0()
@@ -4008,8 +4275,19 @@ impl ApplicationShell {
                         .whitespace_nowrap()
                         .truncate()
                         .child(display_name),
-                ),
-            )
+                )
+                .into_any_element()
+        };
+
+        SidebarRegion::new("nexora-default-account-footer")
+            .when(collapsed, |this| this.size_8())
+            .when(!collapsed, |this| this.w_full().py_2())
+            .rounded(cx.theme().radius)
+            .hover(|this| {
+                this.bg(cx.theme().tokens.sidebar_accent)
+                    .text_color(cx.theme().sidebar_accent_foreground)
+            })
+            .child(content)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
                 menu_items.iter().cloned().fold(
                     menu.action_context(action_context.clone()).min_w(220.0),
@@ -4069,101 +4347,109 @@ impl ApplicationShell {
         } = self.filtered_navigation_sections(cx);
         let search_expanded_groups = search_active.then_some(&expanded_groups);
         let has_navigation_results = !sections.is_empty();
-        let navigation_groups =
-            sections
-                .into_iter()
-                .map(|(section, items)| {
-                    SidebarGroup::new(section).child(SidebarMenu::new().children(items.iter().map(
-                        |entry| self.render_navigation_entry(entry, search_expanded_groups, cx),
-                    )))
-                })
-                .collect::<Vec<_>>();
-        let header =
-            if self.sidebar_collapsed {
-                v_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_2()
-                    .when(reserves_macos_traffic_lights, |this| this.pt_5())
-                    .pb_3()
-                    .border_b_1()
-                    .border_color(sidebar_border)
-                    .child(
-                        SidebarToggleButton::new()
-                            .collapsed(true)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_sidebar_collapsed(false, cx);
-                            })),
-                    )
-                    .when(self.sidebar_search_input.is_some(), |this| {
-                        this.child(
-                            Button::new("expand-sidebar-search")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Search)
-                                .tooltip("展开并搜索导航")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.expand_sidebar_and_focus_search(window, cx);
-                                })),
+        let navigation_groups = sections
+            .into_iter()
+            .map(|(section, items)| {
+                let group = SidebarGroup::new(section).child(SidebarMenu::new().children(
+                    items.iter().map(|entry| {
+                        self.render_navigation_entry(entry, search_expanded_groups, cx)
+                    }),
+                ));
+                WorkspaceSidebarGroup::new(
+                    group,
+                    items,
+                    self.active_target_id(),
+                    self.sidebar_collapsed,
+                )
+            })
+            .collect::<Vec<_>>();
+        let header = if self.sidebar_collapsed {
+            v_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .when(reserves_macos_traffic_lights, |this| this.pt_5())
+                .pb_3()
+                .border_b_1()
+                .border_color(sidebar_border)
+                .child(
+                    workspace_icon_button("expand-sidebar", IconName::PanelLeftOpen, "展开侧边栏")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_sidebar_collapsed(false, cx);
+                        })),
+                )
+                .when(self.sidebar_search_input.is_some(), |this| {
+                    this.child(
+                        workspace_icon_button(
+                            "expand-sidebar-search",
+                            IconName::Search,
+                            "展开并搜索导航",
                         )
-                    })
-                    .into_any_element()
-            } else {
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .when(reserves_macos_traffic_lights, |this| this.pt_5())
-                    .px_2()
-                    .pb_3()
-                    .border_b_1()
-                    .border_color(sidebar_border)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(self.render_sidebar_header_content(cx)),
-                            )
-                            .child(SidebarToggleButton::new().collapsed(false).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.set_sidebar_collapsed(true, cx);
-                                }),
-                            )),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.expand_sidebar_and_focus_search(window, cx);
+                        })),
                     )
-                    .children(self.render_sidebar_search(cx))
-                    .into_any_element()
-            };
+                })
+                .into_any_element()
+        } else {
+            v_flex()
+                .w_full()
+                .gap_2()
+                .when(reserves_macos_traffic_lights, |this| this.pt_5())
+                .px_2()
+                .pb_3()
+                .border_b_1()
+                .border_color(sidebar_border)
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.render_sidebar_header_content(cx)),
+                        )
+                        .child(
+                            workspace_icon_button(
+                                "collapse-sidebar",
+                                IconName::PanelLeftClose,
+                                "收起侧边栏",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_sidebar_collapsed(true, cx);
+                            })),
+                        ),
+                )
+                .children(self.render_sidebar_search(cx))
+                .into_any_element()
+        };
         let empty_navigation = (search_active && !has_navigation_results).then(|| {
-            SidebarGroup::new("").child(
-                SidebarMenu::new().child(SidebarMenuItem::new("未找到匹配的导航").disable(true)),
+            WorkspaceSidebarGroup::new(
+                SidebarGroup::new("").child(
+                    SidebarMenu::new()
+                        .child(SidebarMenuItem::new("未找到匹配的导航").disable(true)),
+                ),
+                Vec::new(),
+                self.active_target_id(),
+                self.sidebar_collapsed,
             )
         });
 
         let footer = if let Some(footer) = self.sidebar_footer.as_ref() {
-            Some(
-                div()
-                    .w_full()
-                    .pt_3()
-                    .border_t_1()
-                    .border_color(sidebar_border)
-                    .child(footer.clone())
-                    .into_any_element(),
-            )
+            Some(workspace_sidebar_footer_host(
+                footer.clone().into_any_element(),
+                self.sidebar_collapsed,
+                sidebar_border,
+            ))
         } else {
             #[cfg(feature = "desktop")]
             if self.account_enabled {
-                Some(
-                    div()
-                        .w_full()
-                        .pt_3()
-                        .border_t_1()
-                        .border_color(sidebar_border)
-                        .child(self.render_default_account_footer(cx))
-                        .into_any_element(),
-                )
+                Some(workspace_sidebar_footer_host(
+                    self.render_default_account_footer(self.sidebar_collapsed, cx),
+                    self.sidebar_collapsed,
+                    sidebar_border,
+                ))
             } else {
                 None
             }
@@ -4171,11 +4457,17 @@ impl ApplicationShell {
             None
         };
 
+        let sidebar_width = if self.sidebar_collapsed {
+            WORKSPACE_SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            WORKSPACE_SIDEBAR_EXPANDED_WIDTH
+        };
         Sidebar::new("nexora-sidebar")
             .h_full()
-            .w(px(236.0))
-            .collapsible(SidebarCollapsible::Icon)
-            .collapsed(self.sidebar_collapsed)
+            .w(sidebar_width)
+            // 工作区导航框架统一绘制外侧边框，并与官方 Sidebar 使用同一真实宽度。
+            .border_r_0()
+            .collapsible(SidebarCollapsible::None)
             .header(header)
             .children(navigation_groups)
             .children(empty_navigation)
@@ -4423,12 +4715,8 @@ impl ApplicationShell {
             .flex_shrink_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                Button::new("tabs-back")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::ArrowLeft)
+                workspace_icon_button("tabs-back", IconName::ArrowLeft, "后退")
                     .disabled(!can_navigate_back)
-                    .tooltip("后退")
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
                         match this.navigate_back_in(window, cx) {
@@ -4439,12 +4727,8 @@ impl ApplicationShell {
                     })),
             )
             .child(
-                Button::new("tabs-forward")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::ArrowRight)
+                workspace_icon_button("tabs-forward", IconName::ArrowRight, "前进")
                     .disabled(!can_navigate_forward)
-                    .tooltip("前进")
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
                         match this.navigate_forward_in(window, cx) {
@@ -4455,30 +4739,26 @@ impl ApplicationShell {
                     })),
             )
             .child(
-                Button::new("tabs-reload")
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::default().path("icons/rotate-ccw.svg"))
-                    .loading(reload_loading)
-                    .disabled(
-                        reload_loading
-                            || reload_availability != crate::FeatureReloadAvailability::Available,
-                    )
-                    .tooltip("刷新当前页面")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.reload_active_feature(window, cx);
-                    })),
+                workspace_icon_button(
+                    "tabs-reload",
+                    Icon::default().path("icons/rotate-ccw.svg"),
+                    "刷新当前页面",
+                )
+                .loading(reload_loading)
+                .disabled(
+                    reload_loading
+                        || reload_availability != crate::FeatureReloadAvailability::Available,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.reload_active_feature(window, cx);
+                })),
             )
             .into_any_element()
     }
 
     fn render_tab_bar_suffix(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("open-feature-search")
-            .ghost()
-            .xsmall()
-            .icon(IconName::Plus)
-            .tooltip("打开页面")
+        workspace_icon_button("open-feature-search", IconName::Plus, "打开页面")
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_search(SearchMode::OpenPage, window, cx);
             }))
@@ -4495,23 +4775,19 @@ impl ApplicationShell {
         "anonymous".to_owned()
     }
 
-    fn feature_search_provider(&self, cx: &Context<Self>) -> SearchProvider {
+    fn feature_search_provider(&self) -> SearchProvider {
         let registry = self.registry.clone();
         let resolver_registry = self.registry.clone();
         let account_enabled = self.account_enabled;
         let resolver_account_enabled = self.account_enabled;
-        let shell = cx.entity().downgrade();
-        let resolver_shell = shell.clone();
         SearchProvider::new("nexora.features", i32::MIN)
             .modes([SearchMode::Global, SearchMode::OpenPage])
             .on_change(move |request, _, cx| {
                 let registry = registry.clone();
-                let shell = shell.clone();
                 Task::ready(Ok(vec![feature_search_section(
                     &registry,
                     account_enabled,
                     &request,
-                    shell,
                     cx,
                 )]))
             })
@@ -4523,13 +4799,18 @@ impl ApplicationShell {
                     .filter(|metadata| {
                         Self::feature_visible_for_account(resolver_account_enabled, *metadata, cx)
                     })
-                    .map(|metadata| feature_search_item(metadata, resolver_shell.clone()));
+                    .map(feature_search_item);
                 Task::ready(Ok(item))
             })
     }
 
     fn open_search(&mut self, mode: SearchMode, window: &mut Window, cx: &mut Context<Self>) {
-        let mut providers = vec![self.feature_search_provider(cx)];
+        // 搜索使用官方 Dialog 栈；在同一窗口已有弹层时直接复用当前弹层，避免连续双击
+        // Shift 叠加多个全局搜索实例。
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let mut providers = vec![self.feature_search_provider()];
         if mode != SearchMode::OpenPage {
             providers.extend(installed_search_providers(cx));
         }
@@ -4548,14 +4829,13 @@ impl ApplicationShell {
         search.update(cx, |search, cx| search.start(window, cx));
     }
 
-    fn render_global_title_bar_content(&self, cx: &mut Context<Self>) -> AnyElement {
-        let toolbar_actions = shell_toolbar_actions(cx);
-        let search_shortcut = Keystroke::parse(if cfg!(target_os = "macos") {
-            "cmd-k"
-        } else {
-            "ctrl-k"
-        })
-        .expect("全局搜索快捷键必须是有效的 GPUI Keystroke");
+    fn render_global_title_bar_content(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let toolbar = shell_toolbar_actions(cx);
+        let search_shortcut = ShortcutHint::binding_for_action(&OpenGlobalSearch, None, window);
         let search_colors = cx.theme().semantic_tokens().colors;
         h_flex()
             .relative()
@@ -4581,7 +4861,7 @@ impl ApplicationShell {
                             .min_w_0()
                             .gap_2()
                             .justify_start()
-                            .child(Icon::new(IconName::Search).xsmall())
+                            .child(Icon::new(IconName::Search).with_size(WORKSPACE_SHELL_ICON_SIZE))
                             .child(
                                 div()
                                     .flex_1()
@@ -4590,23 +4870,24 @@ impl ApplicationShell {
                                     .text_left()
                                     .child("搜索或跳转到…"),
                             )
-                            .child(Kbd::new(search_shortcut)),
+                            .when_some(search_shortcut, |this, shortcut| this.child(shortcut)),
                     )
                     .tooltip("全局搜索")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_search(SearchMode::Global, window, cx);
                     })),
             )
-            .when(!toolbar_actions.is_empty(), |this| {
+            .when(!toolbar.actions.is_empty(), |this| {
                 this.child(
                     h_flex()
                         .absolute()
                         .right_0()
+                        .pr(toolbar.right_padding)
                         .h_full()
                         .items_center()
                         .gap_1()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .children(toolbar_actions),
+                        .children(toolbar.actions),
                 )
             })
             .into_any_element()
@@ -4763,10 +5044,11 @@ impl ApplicationShell {
 
         let layout = WorkspaceLayout::new(
             self.render_sidebar(window, cx),
-            self.render_global_title_bar_content(cx),
+            self.render_global_title_bar_content(window, cx),
             self.render_tab_bar_content(cx),
             active_feature,
         )
+        .with_sidebar_collapsed(self.sidebar_collapsed)
         .with_content_scrollable(self.active_content_scrollable());
         let layout = match self.render_active_panel_overlay(cx) {
             Some(overlay) => layout.with_panel_overlay(overlay),
@@ -4787,7 +5069,15 @@ fn account_icon(kind: AccountActionKind) -> IconName {
 }
 
 fn feature_icon(icon: Option<&str>) -> Icon {
-    Icon::default().path(format!("icons/{}.svg", icon.unwrap_or("frame")))
+    Icon::default()
+        .path(format!("icons/{}.svg", icon.unwrap_or("frame")))
+        .size_4()
+}
+
+fn sidebar_feature_icon(icon: Option<&str>) -> Icon {
+    Icon::default()
+        .path(format!("icons/{}.svg", icon.unwrap_or("frame")))
+        .with_size(WORKSPACE_SHELL_ICON_SIZE)
 }
 
 impl Render for ApplicationShell {
@@ -4832,11 +5122,23 @@ impl Render for ApplicationShell {
         let root = div()
             .relative()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &OpenGlobalSearch, window, cx| {
+                if !this.account_enabled || this.authenticated {
+                    this.open_search(SearchMode::Global, window, cx);
+                }
+            }))
             .child(content)
             .children(ui::window_layers(window, cx));
         #[cfg(feature = "desktop")]
         let root = root.key_context(account_actions::CONTEXT);
         root.into_any_element()
+    }
+}
+
+impl gpui::Focusable for ApplicationShell {
+    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+        self.focus_handle.clone()
     }
 }
 

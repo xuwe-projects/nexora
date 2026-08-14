@@ -4,6 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::pagination::PageQuery;
 use crate::{pagination::PageResponse, patch::PatchField};
 
 /// Account 后台系统角色使用的默认 owner。
@@ -147,6 +148,24 @@ pub enum UserType {
     Human,
     /// 用于系统集成、任务或服务间调用的非人类账号。
     ServiceAccount,
+}
+
+/// 后台用户列表支持的分页与筛选查询参数。
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct UserListQuery {
+    /// 从一开始的页码和单页数量。
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 按用户 ID、登录用户名、邮箱或姓名进行不区分大小写的包含匹配。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<String>,
+    /// 按用户访问状态筛选。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<UserStatus>,
+    /// 按人员或服务账号筛选。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_type: Option<UserType>,
 }
 
 /// 修改用户访问状态的请求正文。

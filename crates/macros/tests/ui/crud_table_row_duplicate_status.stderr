@@ -1,0 +1,5 @@
+error: status 只能声明一次
+ --> tests/ui/crud_table_row_duplicate_status.rs:9:9
+  |
+9 |         status,
+  |         ^^^^^^

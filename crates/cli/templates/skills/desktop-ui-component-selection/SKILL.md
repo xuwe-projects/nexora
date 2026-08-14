@@ -9,6 +9,8 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 
 在 GPUI 桌面程序里实现交互时，先查 `nexora::desktop` 已有封装和 `gpui-component` 已有组件，再考虑自定义元素。不要手写已经存在的应用导航、折叠面板、表单控件、弹层、表格、树、列表、设置页、标题栏、状态栏、分页、通知或加载状态。
 
+禁止创建或依赖上游项目的私有 fork 来承载 Nexora 定制。上游公开 API 不足时，先核对官方文档与锁定源码，并依次使用官方 `Styled`、builder、props、组合方式和本地薄包装；仍有通用能力缺口时，可以按上游贡献流程提交改进，但 Nexora 与脚手架只能在改动进入官方仓库的可固定 revision 后消费。不得以临时过渡、交付期限、固定 commit 或等待上游合并为由依赖私有 fork。
+
 官方组件文档入口：
 `https://longbridge.github.io/gpui-component/zh-CN/docs/components/`
 
@@ -97,10 +99,10 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 | 普通表格 | `Table` | `table` | 简单二维数据展示使用。 |
 | 高性能数据表、排序、复杂行列 | `DataTable` | `data-table` | 数据量大、表格交互多时优先用它。 |
 | 标准 CRUD 资源管理 Panel | `nexora::desktop::CrudPanel<Row, Query>` | 项目封装 | 仅用于 `Row: CrudTableRow`、`Query: CrudQuery` 的单主数据集；筛选使用官方 Form/Field，刷新走 Feature 生命周期。 |
-| 标准 CRUD DataTable | `#[derive(nexora::CrudTableRow)]` + `CrudTableDelegate<T>` | 项目封装 | 行结构字段声明列；delegate 继续接入原生 `DataTable`，操作列用 `action_column`，复杂场景保留手写 `TableDelegate`。 |
+| 标准 CRUD DataTable | `#[derive(nexora::CrudTableRow)]` + `CrudTableDelegate<T>` | 项目封装 | 行结构字段声明列；每列只展示所属字段，禁止合并头像、姓名、用户名等多项内容；操作列用 `action_column`。 |
 | CRUD 表格表头 | `nexora::desktop::TableHeaderCell` | 项目封装 | `DataTable` 的 `render_th` 默认用它让表头水平、垂直居中；需要按列语义覆盖时使用 `.left()`、`.center()`、`.right()` 或完全自定义表头元素。 |
 | CRUD 表格正文单元格 | `nexora::desktop::TableCell` | 项目封装 | `DataTable` 的 `render_td` 优先用它；默认垂直居中、水平靠左，可用 `.left()`、`.center()`、`.right()` 和 `.top()`、`.middle()`、`.bottom()` 覆盖；网格线优先使用 `DataTable::bordered(true)` 等原生表格样式。 |
-| 分页 | `Pagination` | `pagination` | 远程分页或大数据分页使用。 |
+| 分页 | `Pagination` | `pagination` | 远程分页或大数据分页使用；`CrudPanel` 默认单页显示 `1`，多页显示最多 5 个数字页码。 |
 | 图表 | `Chart` | `chart` | 常规业务图表使用。 |
 | 绘图或更偏数值绘制的图形 | `Plot` | `plot` | 需要 plot 风格数据展示时使用。 |
 | 键值描述、详情摘要 | `DescriptionList` | `description-list` | 展示配置、元数据、构建产物详情使用。 |
@@ -116,6 +118,8 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 | 小型加载状态 | `Spinner` | `spinner` | 按钮内、局部区域等待状态使用。 |
 | 数量、状态、标签徽标 | `Badge` | `badge` | 未读数、状态点、版本号使用。 |
 | 标签、可移除标记 | `Tag` | `tag` | feature 标记、筛选条件、分类标签使用。 |
+| CRUD 布尔状态 | `nexora::desktop::TableSwitchCell` | 项目封装 / `switch` | true/false、on/off、启用/停用字段使用受控官方 Switch 包装。 |
+| CRUD 枚举状态 | `Tag` | `tag` | 使用默认填充样式，并按 Secondary、Info、Primary、Success、Warning、Danger 映射状态语义。 |
 
 ## 内容、媒体与辅助
 
@@ -145,6 +149,7 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 ## 禁止事项
 
 - 禁止仅凭记忆判断组件库不存在某个组件；必须核对仓库封装、锁定版本源码或官方文档。
+- 禁止创建、维护或依赖上游项目的私有 fork 实现框架定制；临时 fork、补丁分支和等待上游合并都不是例外。
 - 禁止用原始 `div()` 和 `on_click` 重写标准 `Button`、`Toggle`、`Tabs`、`Menu` 等交互。
 - 禁止复制官方组件源码后局部修改。
 - 禁止为了视觉微调重写完整控件；先使用主题 token、尺寸 API、props、builder 或组合。
@@ -169,6 +174,11 @@ description: 用于所有 Nexora GPUI 可见界面的新增、修改和审查，
 - CRUD 资源表格优先用 `CrudTableRow` 派生宏加 `CrudTableDelegate<T>`；它只增强
   gpui-component `DataTable` 的常规样板，不改变 `Column`、`TableState` 和 `TableDelegate`
   的原生用法。
+- `CrudTableRow` 数据列必须保持单列单字段，禁止纵向、折行或合并展示多个行字段；锁定版本的
+  `DataTable` 没有独立正文行高，不能通过统一行高同时放大表头来迁就合并内容。
+- 状态列声明 `column(status, render = ..., text = ...)`。布尔状态使用 `TableSwitchCell`；
+  其他状态使用填充语义 `Tag`，禁止 `.outline()`、Custom/Color 和全部状态统一颜色。分类 Tag
+  未声明 `status` 时仍可使用 `Tag::color(ColorName)`。
 - 修改或新增复杂交互前，打开对应组件文档或锁定版本源码确认当前 API。
 - 如果需要组件库没有覆盖的新交互，先做 feature 私有薄包装；只有多个 feature 已经真实复用时，才提升到共享 UI 边界。
 - `div()`、`h_flex()`、`v_flex()` 可以用于普通布局和内容组合，但不得模拟已有语义控件及其

@@ -231,6 +231,7 @@ struct DerivedCityRow {
         title = "状态",
         width = 76.,
         align = "center",
+        status,
         render = Self::render_status,
         text = Self::status_text,
         resizable = false

@@ -49,19 +49,58 @@ pub(crate) async fn query_page(
     request: PageRequest,
     pool: &PgPool,
 ) -> Result<Page<User>, sqlx::Error> {
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM account.users")
-        .fetch_one(pool)
-        .await?;
+    query_page_filtered(request, None, None, None, pool).await
+}
+
+/// 按分页、关键词、状态和账号类型返回本地用户实体。
+pub(crate) async fn query_page_filtered(
+    request: PageRequest,
+    keyword: Option<&str>,
+    status: Option<UserStatus>,
+    service_account: Option<bool>,
+    pool: &PgPool,
+) -> Result<Page<User>, sqlx::Error> {
+    let keyword = keyword.map(str::trim).filter(|value| !value.is_empty());
+    let total = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM account.users
+        WHERE ($1::text IS NULL OR
+               id ILIKE '%' || $1 || '%' OR
+               COALESCE(username, '') ILIKE '%' || $1 || '%' OR
+               COALESCE(email, '') ILIKE '%' || $1 || '%' OR
+               display_name ILIKE '%' || $1 || '%')
+          AND ($2::account.user_status IS NULL OR status = $2)
+          AND ($3::boolean IS NULL OR
+               (NOT is_super_admin AND username IS NULL AND email IS NULL) = $3)
+        "#,
+    )
+    .bind(keyword)
+    .bind(status)
+    .bind(service_account)
+    .fetch_one(pool)
+    .await?;
     let offset = i64::from(request.number().saturating_sub(1)) * i64::from(request.size());
     let items = sqlx::query_as::<_, User>(
         r#"
         SELECT id, identity_id, username, email, display_name, status,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
+        WHERE ($1::text IS NULL OR
+               id ILIKE '%' || $1 || '%' OR
+               COALESCE(username, '') ILIKE '%' || $1 || '%' OR
+               COALESCE(email, '') ILIKE '%' || $1 || '%' OR
+               display_name ILIKE '%' || $1 || '%')
+          AND ($2::account.user_status IS NULL OR status = $2)
+          AND ($3::boolean IS NULL OR
+               (NOT is_super_admin AND username IS NULL AND email IS NULL) = $3)
         ORDER BY created_at DESC, id DESC
-        LIMIT $1 OFFSET $2
+        LIMIT $4 OFFSET $5
         "#,
     )
+    .bind(keyword)
+    .bind(status)
+    .bind(service_account)
     .bind(i64::from(request.size()))
     .bind(offset)
     .fetch_all(pool)

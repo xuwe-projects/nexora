@@ -10,6 +10,7 @@ use gpui_component::{
     checkbox::Checkbox,
     form::field,
     input::{Input, InputState, NumberInput},
+    tag::Tag,
     v_flex,
 };
 use nexora::{
@@ -280,8 +281,34 @@ struct ShowcaseRow {
     component: &'static str,
     #[nexora(column(title = "用途", width = 340.))]
     usage: &'static str,
-    #[nexora(column(title = "状态", width = 120., align = "right"))]
-    status: &'static str,
+    #[nexora(column(
+        title = "状态",
+        width = 120.,
+        align = "right",
+        status,
+        render = Self::render_status,
+        text = Self::status_text
+    ))]
+    status: ShowcaseStatus,
+}
+
+#[derive(Clone, Copy)]
+enum ShowcaseStatus {
+    Ready,
+}
+
+impl ShowcaseRow {
+    fn render_status(row: &Self, _window: &mut Window, _cx: &mut App) -> Tag {
+        match row.status {
+            ShowcaseStatus::Ready => Tag::success().child("Ready"),
+        }
+    }
+
+    fn status_text(row: &Self, _cx: &App) -> String {
+        match row.status {
+            ShowcaseStatus::Ready => "Ready".to_owned(),
+        }
+    }
 }
 
 fn showcase_rows() -> Vec<ShowcaseRow> {
@@ -290,19 +317,19 @@ fn showcase_rows() -> Vec<ShowcaseRow> {
             id: "crud-panel",
             component: "CrudPanel",
             usage: "强类型分页、缓存与表格骨架",
-            status: "Ready",
+            status: ShowcaseStatus::Ready,
         },
         ShowcaseRow {
             id: "form-field",
             component: "Form / Field",
             usage: "官方字段布局与无视觉校验状态",
-            status: "Ready",
+            status: ShowcaseStatus::Ready,
         },
         ShowcaseRow {
             id: "sidebar-region",
             component: "SidebarRegion",
             usage: "Sidebar 插槽稳定交互区域",
-            status: "Ready",
+            status: ShowcaseStatus::Ready,
         },
     ]
 }

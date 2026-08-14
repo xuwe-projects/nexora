@@ -10,6 +10,7 @@ use account::{
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
     ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
     PORTAL_ADMIN_ROLE_KEY, PermissionDefinition, PermissionKey, SYSTEM_ROLE_OWNER, User,
+    UserStatus as AccountUserStatus,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_generated_role_for_owner, create_permissions, create_role, create_role_for_owner,
@@ -118,6 +119,60 @@ async fn host_pool_facade_manages_users_roles_and_permissions(pool: PgPool) {
         .expect("宿主应能替换用户角色关联");
     assert_eq!(profile.user, user);
     assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
+}
+
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
+async fn user_directory_filters_keyword_status_and_account_type(pool: PgPool) {
+    let account = test_account(pool.clone()).await;
+    let active_user = create_user(&pool, identity("alpha-user"))
+        .await
+        .expect("应当可以准备启用人员用户");
+    let suspended_user = create_user(&pool, identity("suspended-user"))
+        .await
+        .expect("应当可以准备待停用人员用户");
+    account
+        .update_user_status(suspended_user.id.as_str(), AccountUserStatus::Suspended)
+        .await
+        .expect("应当可以停用普通人员用户");
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name)
+        VALUES ('service-automation', 'service-automation', 'Automation Service')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备服务账号");
+
+    let keyword_page = account
+        .users_filtered(1, 100, Some("ALPHA@EXAMPLE.COM"), None, None)
+        .await
+        .expect("关键词筛选应当成功");
+    assert_eq!(keyword_page.items(), &[active_user]);
+
+    let suspended_page = account
+        .users_filtered(1, 100, None, Some(AccountUserStatus::Suspended), None)
+        .await
+        .expect("状态筛选应当成功");
+    assert_eq!(suspended_page.items(), &[suspended_user]);
+
+    let human_page = account
+        .users_filtered(1, 100, None, None, Some(false))
+        .await
+        .expect("人员账号筛选应当成功");
+    assert!(
+        human_page
+            .items()
+            .iter()
+            .all(|user| user.id != "service-automation")
+    );
+
+    let service_page = account
+        .users_filtered(1, 100, None, None, Some(true))
+        .await
+        .expect("服务账号筛选应当成功");
+    assert_eq!(service_page.items().len(), 1);
+    assert_eq!(service_page.items()[0].id, "service-automation");
 }
 
 #[sqlx::test(migrator = "NEXORA_MIGRATOR")]

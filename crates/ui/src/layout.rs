@@ -2,14 +2,66 @@
 //!
 //! 该模块提供跨桌面应用复用的工作区结构，业务应用只需要传入导航、全局顶栏、标签栏和主面板。
 
-use gpui::{AnyElement, Context, IntoElement, Pixels, Window, div, prelude::*, px};
-use gpui_component::{ActiveTheme as _, TitleBar, scroll::ScrollableElement as _};
+use std::time::Duration;
+
+use gpui::{AnyElement, Context, ElementId, IntoElement, Pixels, Window, div, prelude::*, px};
+use gpui_component::{
+    ActiveTheme as _, TitleBar,
+    animation::{EffectTransition, ease_in_out_cubic},
+    scroll::ScrollableElement as _,
+};
 
 /// 工作区右侧全局栏的固定高度，与视觉原型保持一致。
 pub const WORKSPACE_GLOBAL_BAR_HEIGHT: Pixels = px(44.0);
 
 /// 工作区右侧 Feature 标签栏的固定高度，与视觉原型保持一致。
 pub const WORKSPACE_TAB_BAR_HEIGHT: Pixels = px(42.0);
+
+/// 工作区 Sidebar 展开时的统一宽度。
+pub const WORKSPACE_SIDEBAR_EXPANDED_WIDTH: Pixels = px(236.0);
+
+/// 工作区 Sidebar 收起时的统一导航框架宽度。
+///
+/// Shell 让官方 Sidebar 本体直接使用该宽度，使导航滚动条、Header/Footer 与图标中心
+/// 都按同一条 80px 布局轴计算，而不是在 48px Sidebar 外补背景。
+pub const WORKSPACE_SIDEBAR_COLLAPSED_WIDTH: Pixels = px(80.0);
+
+/// 工作区 Shell 图标的固定尺寸。
+///
+/// Sidebar 导航、展开/收起、搜索与顶部工具动作共用该尺寸，避免相邻入口出现视觉重量差异。
+pub const WORKSPACE_SHELL_ICON_SIZE: Pixels = px(20.0);
+
+const WORKSPACE_SIDEBAR_TRANSITION_DURATION: Duration = Duration::from_millis(200);
+
+#[derive(Clone, Copy)]
+struct WorkspaceSidebarAnimationState {
+    from_width: Pixels,
+    target_width: Pixels,
+}
+
+impl WorkspaceSidebarAnimationState {
+    fn new(target_width: Pixels) -> Self {
+        Self {
+            from_width: target_width,
+            target_width,
+        }
+    }
+
+    fn update_target(&mut self, target_width: Pixels) {
+        if self.target_width == target_width {
+            return;
+        }
+        self.from_width = self.target_width;
+        self.target_width = target_width;
+    }
+}
+
+fn sidebar_animation_id(from: Pixels, to: Pixels) -> ElementId {
+    ElementId::NamedInteger(
+        "nexora-workspace-sidebar-frame-width".into(),
+        (from.as_f32().to_bits() as u64) << 32 | to.as_f32().to_bits() as u64,
+    )
+}
 
 /// 带窗口顶部栏和侧边导航的桌面工作区布局。
 ///
@@ -22,6 +74,7 @@ pub struct WorkspaceLayout {
     tab_bar_content: AnyElement,
     panel_overlay: Option<AnyElement>,
     content: AnyElement,
+    sidebar_collapsed: bool,
     content_padding: Pixels,
     content_scrollable: bool,
 }
@@ -45,9 +98,19 @@ impl WorkspaceLayout {
             tab_bar_content: tab_bar_content.into_any_element(),
             panel_overlay: None,
             content: content.into_any_element(),
+            sidebar_collapsed: false,
             content_padding: px(24.0),
             content_scrollable: true,
         }
+    }
+
+    /// 设置工作区 Sidebar 是否处于收起状态。
+    ///
+    /// 该状态控制壳层导航框架从 236px 过渡到 80px。传入的官方 Sidebar 应同步使用
+    /// 相同目标宽度，避免滚动条和 Header/Footer 继续按另一套内部宽度布局。
+    pub fn with_sidebar_collapsed(mut self, collapsed: bool) -> Self {
+        self.sidebar_collapsed = collapsed;
+        self
     }
 
     /// 设置只覆盖右侧主面板的浮层。
@@ -101,9 +164,10 @@ impl WorkspaceLayout {
     ///
     /// 返回元素包含固定的桌面工作区结构：Sidebar 从窗口顶边延伸到底边，右侧工作区依次放置
     /// 44px 官方窗口顶部栏、42px Feature 标签栏和剩余主内容区域。主内容可以按 feature 需要
-    /// 开启或关闭外层滚动；Sidebar 自己负责展开、折叠与动画。颜色和背景读取当前
-    /// `gpui-component` 主题，避免业务应用重复处理平台差异或写死视觉样式。
-    pub fn render<T>(self, _window: &mut Window, cx: &mut Context<T>) -> AnyElement
+    /// 开启或关闭外层滚动；官方 Sidebar 负责内容折叠与交互，工作区导航框架负责统一的
+    /// 展开/收起占位和动画。颜色和背景读取当前 `gpui-component` 主题，避免业务应用重复
+    /// 处理平台差异或写死视觉样式。
+    pub fn render<T>(self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
     {
@@ -115,6 +179,7 @@ impl WorkspaceLayout {
             tab_bar_content,
             panel_overlay,
             content,
+            sidebar_collapsed,
             content_padding,
             content_scrollable,
         } = self;
@@ -137,6 +202,47 @@ impl WorkspaceLayout {
         } else {
             content_panel.overflow_hidden().into_any_element()
         };
+        let sidebar_target_width = if sidebar_collapsed {
+            WORKSPACE_SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            WORKSPACE_SIDEBAR_EXPANDED_WIDTH
+        };
+        let sidebar_animation =
+            window.use_keyed_state("nexora-workspace-sidebar-frame-animation", cx, |_, _| {
+                WorkspaceSidebarAnimationState::new(sidebar_target_width)
+            });
+        if sidebar_animation.read(cx).target_width != sidebar_target_width {
+            sidebar_animation.update(cx, |state, _| {
+                state.update_target(sidebar_target_width);
+            });
+        }
+        let sidebar_animation = *sidebar_animation.read(cx);
+        let sidebar_frame = div()
+            .id("nexora-workspace-sidebar-frame")
+            .debug_selector(|| "nexora-workspace-sidebar-frame".into())
+            .flex()
+            .h_full()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .relative()
+            .bg(cx.theme().tokens.sidebar)
+            .child(sidebar)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .h_full()
+                    .w(px(1.0))
+                    .bg(cx.theme().sidebar_border),
+            );
+        let sidebar_frame = EffectTransition::new(WORKSPACE_SIDEBAR_TRANSITION_DURATION)
+            .ease(ease_in_out_cubic)
+            .width(sidebar_animation.from_width, sidebar_animation.target_width)
+            .apply(
+                sidebar_frame,
+                sidebar_animation_id(sidebar_animation.from_width, sidebar_animation.target_width),
+            );
         div()
             .flex()
             .size_full()
@@ -144,7 +250,7 @@ impl WorkspaceLayout {
             .min_h_0()
             .bg(background)
             .text_color(foreground)
-            .child(sidebar)
+            .child(sidebar_frame)
             .child(
                 div()
                     .relative()

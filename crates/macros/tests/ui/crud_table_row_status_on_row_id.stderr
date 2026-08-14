@@ -1,0 +1,5 @@
+error: 状态列不能同时声明为 CrudTableRow row_id
+ --> tests/ui/crud_table_row_status_on_row_id.rs:8:13
+  |
+8 |             status,
+  |             ^^^^^^
