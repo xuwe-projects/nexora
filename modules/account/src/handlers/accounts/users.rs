@@ -13,7 +13,7 @@ use contracts::account::{
 };
 
 use crate::{
-    Account, AccountError, AccountState, ApiError, CreateHumanIdentity,
+    Account, AccountError, AccountState, ApiError, CreateHumanIdentity, UserType as DomainUserType,
     authorization::{
         Authorized, RequiredPermission,
         accounts::{ProvisionUsers, ReadUsers, WriteUserRoles, WriteUserStatus},
@@ -74,9 +74,9 @@ pub(crate) async fn list_users(
     State(state): State<AccountState>,
     ApiQuery(query): ApiQuery<UserListQuery>,
 ) -> Result<Json<UserPageResponse>, ApiError> {
-    let service_account = query.user_type.map(|user_type| match user_type {
-        UserType::Human => false,
-        UserType::ServiceAccount => true,
+    let user_type = query.user_type.map(|user_type| match user_type {
+        UserType::Human => DomainUserType::Human,
+        UserType::ServiceAccount => DomainUserType::ServiceAccount,
     });
     let page = Account { state }
         .users_filtered(
@@ -84,7 +84,7 @@ pub(crate) async fn list_users(
             query.page.page_size,
             query.keyword.as_deref(),
             query.status.map(super::user_status),
-            service_account,
+            user_type,
         )
         .await?;
     Ok(Json(user_page_response(page)))

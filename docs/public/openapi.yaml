@@ -21,6 +21,8 @@ tags:
     description: 当前认证用户的本地授权快照
   - name: Users
     description: 本地用户、访问状态与直接角色
+  - name: Service accounts
+    description: ZITADEL machine user 资料与一次性设备凭据
   - name: Roles
     description: 按 owner 隔离的系统角色与自定义角色
   - name: Permissions
@@ -132,8 +134,8 @@ paths:
       summary: 校验本地账号并返回当前用户、角色与合并权限
       description: >-
         仅认证服务中存在身份还不代表可以登录本系统。identity_id 必须已经存在于
-        account.users 且用户处于启用状态。接口会通过 ZITADEL UserService v2 gRPC 读取并同步
-        最新 username、邮箱与展示名，但不会为陌生身份自动创建本地用户。
+        account.users 且用户处于启用状态。人员用户会通过 ZITADEL UserService v2 gRPC 同步
+        最新资料；服务账号直接返回本地授权快照，不进入人员目录刷新，也不会自动开通陌生身份。
       security:
         - bearerAuth: []
       responses:
@@ -162,6 +164,16 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
+        - name: keyword
+          in: query
+          schema: { type: string }
+          description: 按用户 ID、username、邮箱或名称模糊查询
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/UserStatus" }
+        - name: user_type
+          in: query
+          schema: { $ref: "#/components/schemas/UserType" }
       responses:
         "200":
           description: 用户分页
@@ -229,6 +241,146 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /service-accounts:
+    post:
+      tags: [Service accounts]
+      operationId: createServiceAccount
+      summary: 创建不带默认 member 角色的服务账号
+      description: >-
+        要求 service_accounts:provision；role_ids 非空时额外要求 users:roles.write。
+        本操作只创建 JWT machine user 与本地账号，不自动创建凭据。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceAccount"
+      responses:
+        "201":
+          description: 服务账号已创建；Location 指向统一用户资源
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /service-accounts/{service_account_id}:
+    patch:
+      tags: [Service accounts]
+      operationId: updateServiceAccount
+      summary: 修改服务账号展示名称或说明
+      description: 要求 service_accounts:profile.write；稳定 username、类型、状态和角色不在本接口修改。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceAccountId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceAccount"
+      responses:
+        "200":
+          description: 修改后的统一用户表示
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /service-accounts/{service_account_id}/credentials:
+    get:
+      tags: [Service accounts]
+      operationId: listServiceAccountCredentials
+      summary: 从 Provider 协调并列出凭据元数据
+      description: 要求 service_accounts:credentials.read；响应永不包含 Client Secret 或 PAT 明文。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceAccountId"
+      responses:
+        "200":
+          description: 协调后的凭据元数据
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ServiceAccountCredential" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    post:
+      tags: [Service accounts]
+      operationId: createServiceAccountCredential
+      summary: 生成/轮换 Client Secret 或创建 PAT
+      description: >-
+        要求 service_accounts:credentials.write。Idempotency-Key 在服务账号范围内永久防止重复
+        创建；一次性 Secret/PAT 仅本响应返回，服务端不持久化明文。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceAccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateServiceAccountCredential" }
+      responses:
+        "201":
+          description: 凭据元数据已持久化；敏感内容仅显示一次
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateServiceAccountCredentialResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /service-accounts/{service_account_id}/credentials/{credential_id}:
+    delete:
+      tags: [Service accounts]
+      operationId: revokeServiceAccountCredential
+      summary: 撤销一个凭据
+      description: 要求 service_accounts:credentials.write；不会影响同账号的其他 PAT 或另一类型凭据。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ServiceAccountId"
+        - $ref: "#/components/parameters/CredentialId"
+      responses:
+        "204": { description: 凭据已撤销 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /users/{user_id}:
     parameters:
       - $ref: "#/components/parameters/UserId"
@@ -594,7 +746,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: JWT or PAT
+      description: JWT 使用 discovery/JWKS 本地校验；PAT/opaque token 每次请求实时调用 ZITADEL introspection
   parameters:
     UserId:
       name: user_id
@@ -606,6 +759,34 @@ components:
         pattern: "^[A-Za-z0-9]{8}$"
         minLength: 8
         maxLength: 8
+    ServiceAccountId:
+      name: service_account_id
+      in: path
+      required: true
+      description: Nexora 本地服务账号 ID
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9]{8}$"
+        minLength: 8
+        maxLength: 8
+    CredentialId:
+      name: credential_id
+      in: path
+      required: true
+      description: PostgreSQL BIGSERIAL 凭据元数据 ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 同一服务账号范围内永久去重的一次性创建操作键；重复键不会再次生成敏感内容
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
     RoleId:
       name: role_id
       in: path
@@ -841,6 +1022,10 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        description:
+          type: [string, "null"]
+          maxLength: 500
+          description: 服务账号的可选管理员用途说明；人员用户通常为空
         status:
           $ref: "#/components/schemas/UserStatus"
         user_type:
@@ -1012,6 +1197,128 @@ components:
             type: integer
             format: int64
             minimum: 1
+    CreateServiceAccount:
+      type: object
+      additionalProperties: false
+      required: [username, display_name]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 创建后不可修改的稳定 username，同时作为 OAuth Client ID
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: [string, "null"]
+          maxLength: 500
+        role_ids:
+          type: array
+          default: []
+          maxItems: 64
+          uniqueItems: true
+          description: 可选初始业务角色；不会自动附加 member
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+    UpdateServiceAccount:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        username:
+          type: string
+          deprecated: true
+          description: 稳定标识不可修改；提供该字段时返回 409 service_account_identifier_immutable
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: [string, "null"]
+          maxLength: 500
+    ServiceAccountCredentialType:
+      type: string
+      enum: [client_credentials, personal_access_token]
+    ServiceAccountCredentialStatus:
+      type: string
+      enum: [active, revoked]
+    ServiceAccountCredentialSource:
+      type: string
+      enum: [nexora, provider_external]
+    CreateServiceAccountCredential:
+      type: object
+      additionalProperties: false
+      required: [credential_type, name]
+      properties:
+        credential_type:
+          $ref: "#/components/schemas/ServiceAccountCredentialType"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        expires_at:
+          type: [integer, "null"]
+          format: int64
+          description: PAT 的可选 Unix 秒到期时间；null/缺省表示永不过期，Client Credentials 禁止提供
+    ServiceAccountCredential:
+      type: object
+      required:
+        - id
+        - service_account_id
+        - credential_type
+        - name
+        - created_at
+        - status
+        - source
+        - last_synchronized_at
+      properties:
+        id: { type: integer, format: int64, minimum: 1 }
+        service_account_id: { type: string, pattern: "^[A-Za-z0-9]{8}$" }
+        credential_type: { $ref: "#/components/schemas/ServiceAccountCredentialType" }
+        name: { type: string }
+        provider_credential_id: { type: [string, "null"] }
+        created_by: { type: [string, "null"] }
+        created_at:
+          type: integer
+          format: int64
+          description: Unix 秒
+        expires_at:
+          type: [integer, "null"]
+          format: int64
+          description: Unix 秒；null 表示无固定到期时间
+        status: { $ref: "#/components/schemas/ServiceAccountCredentialStatus" }
+        source: { $ref: "#/components/schemas/ServiceAccountCredentialSource" }
+        revoked_by: { type: [string, "null"] }
+        revoked_at: { type: [integer, "null"], format: int64 }
+        last_synchronized_at: { type: integer, format: int64 }
+    CreateServiceAccountCredentialResponse:
+      type: object
+      required: [credential, secret]
+      properties:
+        credential: { $ref: "#/components/schemas/ServiceAccountCredential" }
+        secret:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [client_id, client_secret]
+              properties:
+                client_id: { type: string }
+                client_secret:
+                  type: string
+                  format: password
+                  readOnly: true
+            - type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  format: password
+                  readOnly: true
     ReplaceUserRoles:
       type: object
       additionalProperties: false

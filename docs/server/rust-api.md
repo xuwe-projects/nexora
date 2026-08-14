@@ -133,6 +133,8 @@ application_migrate::migrate(&pool).await?;
 | `organization_id` | `POST /users` 创建人类用户的 ZITADEL Organization ID |
 | `project_id` | ZITADEL 中承载系统角色的 Project ID，不是 API Application Client ID |
 | `personal_access_token` | 调用 ZITADEL UserService/ProjectService 的服务账号 PAT；Debug 会脱敏 |
+| `introspection_client_id` | ZITADEL API resource server 的 introspection Client ID |
+| `introspection_client_secret` | introspection HTTP Basic Secret；Debug 会脱敏且应由环境变量注入 |
 
 ### `dependencies`
 
@@ -146,6 +148,15 @@ pub async fn dependencies<S>(
 用于不采用 `Server` 组合器的高级宿主。它发现 OIDC Provider、创建 verifier，并绑定部署
 issuer；不执行迁移、创建 Router 或启动服务。`PgPool` 是廉价克隆句柄，不应再包
 `Arc<PgPool>`。
+
+装配后的统一 verifier 对 JWT 使用 discovery/JWKS，对 PAT/opaque token 每次实时调用
+introspection。`AccountDependencies` 同时包含人员目录和 `service_account_directory`；后者由
+同一个 `ZitadelUserDirectory` 实现 machine user、Client Secret 和 PAT 管理，不建立平行身份系统。
+
+`Account` 公开的服务账号用例包括 `create_service_account`、
+`update_service_account_profile`、`service_account_credentials`、
+`create_service_account_credential` 与 `revoke_service_account_credential`。创建/轮换返回类型的
+`Debug` 会隐藏敏感内容，调用者只能在成功响应中交付一次 Secret/PAT。
 
 ### `user_directory`
 

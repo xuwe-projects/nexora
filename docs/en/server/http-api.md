@@ -14,7 +14,7 @@ This page documents the Setup and Account routes returned by
 | Owner | Routes | Returned by `Server::routers()` |
 | --- | --- | --- |
 | Nexora Setup | `GET /setup`, `POST /setup`, `POST /setup/complete` | Yes |
-| Nexora Account | `/me`, `/users`, `/roles`, `/permissions`, and child resources | Yes |
+| Nexora Account | `/me`, `/users`, `/service-accounts`, `/roles`, `/permissions`, and child resources | Yes |
 | Generated host | `GET /health` | No; the host's `routes::routers()` owns it |
 | Host business modules | Application-defined | No |
 
@@ -30,7 +30,9 @@ decides route merge order and middleware boundaries.
 - Stable identity lookup uses the issuer-scoped `identity_id`. Optional `username` is mutable login
   metadata and is never an authentication key.
 
-Authentication validates the Bearer syntax, token signature/issuer/audience/expiry, local account
+JWTs use local discovery/JWKS verification. PATs and opaque tokens call ZITADEL
+`/oauth/v2/introspect` on every request without caching successful results. Authentication validates
+the Bearer syntax, Provider result, issuer/audience/expiry, local account
 registration, account status, and finally the required permission. The super administrator bypasses
 permission membership; other users receive permissions through roles.
 
@@ -43,6 +45,10 @@ permission membership; other users receive permissions through roles.
 | `POST /users` | `users:provision`; also `users:roles.write` when `role_ids` is non-empty |
 | `PATCH /users/{user_id}` | `users:status.write` |
 | `PUT /users/{user_id}/roles` | `users:roles.write` |
+| `POST /service-accounts` | `service_accounts:provision`; also `users:roles.write` for non-empty `role_ids` |
+| `PATCH /service-accounts/{service_account_id}` | `service_accounts:profile.write` |
+| `GET /service-accounts/{service_account_id}/credentials` | `service_accounts:credentials.read` |
+| Credential create, rotation, and revocation | `service_accounts:credentials.write` |
 | `GET /roles`, `GET /roles/{role_id}` | `roles:read` |
 | Role create/update/delete and permission replacement | `roles:write` |
 | `GET /permissions` | `permissions:read` |
@@ -58,7 +64,9 @@ permission membership; other users receive permissions through roles.
 | `username` | string | Yes | Identity Provider login name; not a binding key |
 | `email` | string | Yes | Display email |
 | `display_name` | string | No | Display name, at most 200 characters |
+| `description` | string | Yes | Optional service-account purpose, at most 500 characters |
 | `status` | enum | No | `active` or `suspended` |
+| `user_type` | enum | No | `human` or `service_account` |
 | `is_super_admin` | boolean | No | Whether this is the unique immutable super administrator |
 | `created_at` | int64 | No | Creation time in Unix seconds |
 | `updated_at` | int64 | No | Profile update time in Unix seconds |
@@ -129,12 +137,12 @@ Roles and permissions use the unpaged `{"items": [...]}` envelope.
 | 400 | `invalid_json_body`, `invalid_path_parameter`, `invalid_query_parameter` |
 | 401 | `missing_access_token`, `invalid_access_token`, `invalid_identity`, `invalid_identity_issuer` |
 | 403 | `account_not_registered`, `account_suspended`, `permission_denied` |
-| 404 | `resource_not_found`, `route_not_found` |
+| 404 | `resource_not_found`, `credential_not_found`, `route_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `user_already_provisioned`, `role_key_exists`, `role_in_use`, `system_role_immutable`, `role_not_modified`, `last_administrator`, `super_administrator_immutable` |
-| 422 | `validation_failed`; `details.field` identifies the field |
+| 409 | `user_already_provisioned`, `service_account_already_exists`, `service_account_identifier_immutable`, `service_account_required`, `client_secret_rotation_conflict`, role and administrator conflict codes |
+| 422 | `validation_failed`, `credential_type_invalid`, `credential_expiration_invalid`; `details.field` identifies the field |
 | 500 | `internal_error`; SQL, paths, and stack traces are never exposed |
-| 503 | `identity_issuer_not_bound`, `identity_provider_unavailable` |
+| 503 | `identity_issuer_not_bound`, `identity_provider_unavailable`, `token_introspection_unavailable`, `credential_provider_unavailable` |
 
 `401` includes `WWW-Authenticate: Bearer`. When the host installs Nexora's common HTTP middleware,
 responses also include `x-request-id`, matching the error body's `request_id`.
@@ -143,9 +151,9 @@ responses also include `x-request-id`, matching the error body's `request_id`.
 
 ### `GET /me`
 
-Requires authentication but no extra permission. It reads the latest human profile from ZITADEL
-UserService v2 by identity ID, synchronizes username, email, display name, and last-login
-time, then returns `200 AccessProfile`. It never provisions an unknown identity. Common failures are
+Requires authentication but no extra permission. Human users refresh their profile through ZITADEL
+UserService v2. Service accounts return the local authorization snapshot without entering the human
+directory refresh path. Both update last-login time and never provision an unknown identity. Common failures are
 invalid token `401`, unregistered or suspended account `403`, missing directory identity `404`, and
 Provider `503`.
 
@@ -217,10 +225,32 @@ Requires `users:roles.write`:
 ```
 
 This replaces the complete direct role set for the supplied owner rather than appending. `owner`
-defaults to `IMES`; in that backend scope the server retains the built-in `member` role and prevents
+defaults to `IMES`; in that backend scope the server retains `member` for human users, while service
+accounts never receive that default role, and prevents
 removing the final administrator. With a customer owner, only roles in that owner are replaced; `IMES`
 and other customer owners are unaffected. The server deduplicates up to 64 IDs. Returns
 `200 AccessProfile`. The super administrator cannot receive roles.
+
+## Service accounts
+
+`POST /service-accounts` creates a ZITADEL JWT machine user and a local `service_account`. Its stable
+`username` is also the Client ID. `role_ids` may be empty and never adds `member`; the response is
+`201` with `Location: /users/{id}` and does not create credentials automatically.
+`PATCH /service-accounts/{id}` changes only `display_name` and nullable `description`. Status and
+roles continue to use the unified user endpoints. Service accounts cannot be deleted; suspend them
+to make both JWT and PAT requests fail the local status gate immediately.
+
+`GET /service-accounts/{id}/credentials` reconciles live Provider state into non-sensitive local
+metadata, including name, type, creator, Unix-second timestamps, status, revocation data, and
+`nexora`/`provider_external` source. It never returns a Secret or PAT. Calling service-account
+operations for a human returns `409 service_account_required`.
+
+`POST /service-accounts/{id}/credentials` requires a unique `Idempotency-Key`. A
+`client_credentials` request cannot carry `expires_at`; repeating it serially rotates the sole
+Client Secret. A `personal_access_token` request may create multiple PATs and accepts a future Unix
+second or null/omitted expiry. `201` returns metadata plus a one-time `client_id`/`client_secret` or
+`token`; plaintext is not persisted or logged. `DELETE
+/service-accounts/{id}/credentials/{credential_id}` returns `204` and revokes only that credential.
 
 ## Roles
 

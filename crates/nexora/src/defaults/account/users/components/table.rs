@@ -31,12 +31,12 @@ impl UsersTable {
         let action_page = page.clone();
         let delegate = CrudTableDelegate::new(Vec::new())
             .empty_title("暂无用户")
-            .empty_description("点击右上角“创建用户”添加第一个用户")
+            .empty_description("点击右上角按钮添加第一个人员或服务账号")
             .action_column(
                 Column::new("actions", "操作")
-                    .width(px(184.))
+                    .width(px(284.))
                     .min_width(px(180.))
-                    .max_width(px(220.))
+                    .max_width(px(320.))
                     .selectable(false),
                 move |row: &UserTableRow, window, cx| {
                     UserTableRow::render_actions(row, action_page.clone(), window, cx)
@@ -233,7 +233,7 @@ pub(super) struct UserTableRow {
     source: UserResponse,
     #[nexora(column(
         key = "display_name",
-        name = "姓名",
+            name = "名称",
         width = 180.,
         min_width = 140.,
         max_width = 260.,
@@ -408,8 +408,10 @@ impl UserTableRow {
         let user = &row.source;
         let role_user_id = user.id.clone();
         let status_user_id = user.id.clone();
+        let credentials_user = user.clone();
         let role_page = page.clone();
         let status_page = page.clone();
+        let credentials_page = page.clone();
         let mutation_busy = page
             .upgrade()
             .is_some_and(|page| page.read(cx).has_active_mutation(cx));
@@ -419,6 +421,8 @@ impl UserTableRow {
         let can_manage_roles =
             has_permission(cx, "users:roles.write") && has_permission(cx, "roles:read");
         let can_change_status = has_permission(cx, "users:status.write");
+        let can_manage_credentials = has_permission(cx, "service_accounts:credentials.read")
+            || has_permission(cx, "service_accounts:profile.write");
         let is_service_account = Self::user_is_service_account(user);
         let is_active = user.status == UserStatus::Active;
         let status_action = if is_active { "停用" } else { "启用" };
@@ -428,18 +432,14 @@ impl UserTableRow {
             UserStatus::Active
         };
 
-        let role_tooltip = if is_service_account {
-            "服务账号不能在这里操作"
-        } else if user.is_super_admin {
+        let role_tooltip = if user.is_super_admin {
             "超级管理员不能修改角色"
         } else if can_manage_roles {
-            "管理用户角色"
+            "管理账号角色"
         } else {
             "当前账号不能管理角色"
         };
-        let status_tooltip = if is_service_account {
-            "服务账号不能在这里操作"
-        } else if user.is_super_admin {
+        let status_tooltip = if user.is_super_admin {
             "超级管理员不能修改状态"
         } else if can_change_status {
             status_action
@@ -455,12 +455,7 @@ impl UserTableRow {
                     Button::new(format!("default-user-roles-{role_user_id}"))
                         .with_size(component_size)
                         .label("管理角色")
-                        .disabled(
-                            is_service_account
-                                || user.is_super_admin
-                                || mutation_busy
-                                || !can_manage_roles,
-                        )
+                        .disabled(user.is_super_admin || mutation_busy || !can_manage_roles)
                         .tooltip(role_tooltip)
                         .on_click(move |_, window, cx| {
                             _ = role_page.update(cx, |page, cx| {
@@ -474,19 +469,37 @@ impl UserTableRow {
                         .outline()
                         .label(status_action)
                         .loading(current_user_busy)
-                        .disabled(
-                            is_service_account
-                                || user.is_super_admin
-                                || mutation_busy
-                                || !can_change_status,
-                        )
+                        .disabled(user.is_super_admin || mutation_busy || !can_change_status)
                         .tooltip(status_tooltip)
                         .on_click(move |_, _, cx| {
                             _ = status_page.update(cx, |page, cx| {
                                 page.set_user_status(status_user_id.clone(), target_status, cx);
                             });
                         }),
-                ),
+                )
+                .when(is_service_account, |this| {
+                    this.child(
+                        Button::new(format!("default-service-account-manage-{}", user.id))
+                            .with_size(component_size)
+                            .outline()
+                            .label("账号与凭据")
+                            .disabled(mutation_busy || !can_manage_credentials)
+                            .tooltip(if can_manage_credentials {
+                                "管理服务账号资料与凭据"
+                            } else {
+                                "当前账号不能查看服务账号凭据"
+                            })
+                            .on_click(move |_, window, cx| {
+                                _ = credentials_page.update(cx, |page, cx| {
+                                    page.manage_service_account(
+                                        credentials_user.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }),
+                    )
+                }),
         )
         .center()
     }

@@ -97,6 +97,8 @@ the two sources.
 | `organization_id` | ZITADEL Organization where `POST /users` creates human users |
 | `project_id` | ZITADEL Project that carries system roles |
 | `personal_access_token` | Server credential for ZITADEL UserService/ProjectService; redacted in Debug |
+| `introspection_client_id` | ZITADEL API resource-server introspection Client ID |
+| `introspection_client_secret` | HTTP Basic introspection secret; redacted in Debug and injected securely |
 
 Advanced hosts may compose without `Server`:
 
@@ -113,6 +115,16 @@ pub fn user_directory<S>(
 
 `dependencies` performs OIDC discovery and issuer binding. `user_directory` constructs the ZITADEL
 gRPC clients. Neither runs migrations or starts HTTP.
+
+The composed verifier uses discovery/JWKS for JWTs and uncached real-time introspection for
+PAT/opaque tokens. `AccountDependencies` carries both the human identity directory and a
+`service_account_directory`; the same `ZitadelUserDirectory` implements machine-user, Client Secret,
+and PAT operations without a parallel local identity system.
+
+The `Account` facade exposes `create_service_account`, `update_service_account_profile`,
+`service_account_credentials`, `create_service_account_credential`, and
+`revoke_service_account_credential`. One-time credential result types redact plaintext from Debug;
+callers may deliver the Secret/PAT only in the successful creation response.
 
 `ZitadelUserDirectory` is also public for custom setup flows. `new` accepts issuer, PAT,
 Organization ID, and Project ID and creates the gRPC clients;

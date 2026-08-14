@@ -7,7 +7,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{
     SYSTEM_ROLE_OWNER, StoreError,
-    entities::account::{AccessProfile, PermissionKey, User, UserStatus},
+    entities::account::{AccessProfile, PermissionKey, User, UserStatus, UserType},
     stores::roles,
 };
 
@@ -15,7 +15,7 @@ use crate::{
 pub(crate) async fn query_by_id(user_id: &str, pool: &PgPool) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, username, email, display_name, status,
+        SELECT id, identity_id, username, email, display_name, status, user_type, description,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE id = $1
@@ -33,7 +33,7 @@ pub(crate) async fn query_by_identity_id(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, username, email, display_name, status,
+        SELECT id, identity_id, username, email, display_name, status, user_type, description,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE identity_id = $1
@@ -57,7 +57,7 @@ pub(crate) async fn query_page_filtered(
     request: PageRequest,
     keyword: Option<&str>,
     status: Option<UserStatus>,
-    service_account: Option<bool>,
+    user_type: Option<UserType>,
     pool: &PgPool,
 ) -> Result<Page<User>, sqlx::Error> {
     let keyword = keyword.map(str::trim).filter(|value| !value.is_empty());
@@ -71,19 +71,18 @@ pub(crate) async fn query_page_filtered(
                COALESCE(email, '') ILIKE '%' || $1 || '%' OR
                display_name ILIKE '%' || $1 || '%')
           AND ($2::account.user_status IS NULL OR status = $2)
-          AND ($3::boolean IS NULL OR
-               (NOT is_super_admin AND username IS NULL AND email IS NULL) = $3)
+          AND ($3::account.user_type IS NULL OR user_type = $3)
         "#,
     )
     .bind(keyword)
     .bind(status)
-    .bind(service_account)
+    .bind(user_type)
     .fetch_one(pool)
     .await?;
     let offset = i64::from(request.number().saturating_sub(1)) * i64::from(request.size());
     let items = sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, username, email, display_name, status,
+        SELECT id, identity_id, username, email, display_name, status, user_type, description,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE ($1::text IS NULL OR
@@ -92,15 +91,14 @@ pub(crate) async fn query_page_filtered(
                COALESCE(email, '') ILIKE '%' || $1 || '%' OR
                display_name ILIKE '%' || $1 || '%')
           AND ($2::account.user_status IS NULL OR status = $2)
-          AND ($3::boolean IS NULL OR
-               (NOT is_super_admin AND username IS NULL AND email IS NULL) = $3)
+          AND ($3::account.user_type IS NULL OR user_type = $3)
         ORDER BY created_at DESC, id DESC
         LIMIT $4 OFFSET $5
         "#,
     )
     .bind(keyword)
     .bind(status)
-    .bind(service_account)
+    .bind(user_type)
     .bind(i64::from(request.size()))
     .bind(offset)
     .fetch_all(pool)
@@ -151,22 +149,18 @@ pub(crate) async fn update_status(
     let mut transaction = pool.begin().await?;
     let administrator_role_id =
         roles::query_system_role_id("admin", true, &mut transaction).await?;
-    let (current_status, is_super_admin, username, email) =
-        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
-            r#"
-        SELECT status, is_super_admin, username, email
+    let (current_status, is_super_admin) = sqlx::query_as::<_, (UserStatus, bool)>(
+        r#"
+        SELECT status, is_super_admin
         FROM account.users
         WHERE id = $1
         FOR UPDATE
         "#,
-        )
-        .bind(user_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(StoreError::NotFound("用户"))?;
-    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
-        return Err(StoreError::ServiceAccountImmutable);
-    }
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(StoreError::NotFound("用户"))?;
     if is_super_admin && current_status != status {
         return Err(StoreError::SuperAdministratorImmutable);
     }
@@ -178,7 +172,7 @@ pub(crate) async fn update_status(
         UPDATE account.users
         SET status = $2, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, identity_id, username, email, display_name, status,
+        RETURNING id, identity_id, username, email, display_name, status, user_type, description,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -203,10 +197,10 @@ pub(crate) async fn replace_roles_for_owner(
     } else {
         None
     };
-    let (target_status, is_super_admin, username, email) =
-        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
+    let (target_status, is_super_admin, target_user_type) =
+        sqlx::query_as::<_, (UserStatus, bool, UserType)>(
             r#"
-        SELECT status, is_super_admin, username, email
+        SELECT status, is_super_admin, user_type
         FROM account.users
         WHERE id = $1
         FOR UPDATE
@@ -219,11 +213,14 @@ pub(crate) async fn replace_roles_for_owner(
     if is_super_admin {
         return Err(StoreError::SuperAdministratorImmutable);
     }
-    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
-        return Err(StoreError::ServiceAccountImmutable);
-    }
     ensure_user_exists(granted_by, &mut transaction).await?;
-    let desired_role_ids = desired_role_ids_for_owner(owner, role_ids, &mut transaction).await?;
+    let desired_role_ids = desired_role_ids_for_owner(
+        owner,
+        role_ids,
+        target_user_type == UserType::Human,
+        &mut transaction,
+    )
+    .await?;
     let currently_administrator = if let Some(administrator_role_id) = administrator_role_id {
         sqlx::query_scalar::<_, bool>(
             r#"
@@ -286,24 +283,20 @@ pub(crate) async fn grant_user_role(
     pool: &PgPool,
 ) -> Result<AccessProfile, StoreError> {
     let mut transaction = pool.begin().await?;
-    let (_, is_super_admin, username, email) =
-        sqlx::query_as::<_, (UserStatus, bool, Option<String>, Option<String>)>(
-            r#"
-        SELECT status, is_super_admin, username, email
+    let (_, is_super_admin) = sqlx::query_as::<_, (UserStatus, bool)>(
+        r#"
+        SELECT status, is_super_admin
         FROM account.users
         WHERE id = $1
         FOR UPDATE
         "#,
-        )
-        .bind(user_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(StoreError::NotFound("用户"))?;
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(StoreError::NotFound("用户"))?;
     if is_super_admin {
         return Err(StoreError::SuperAdministratorImmutable);
-    }
-    if is_service_account(is_super_admin, username.as_deref(), email.as_deref()) {
-        return Err(StoreError::ServiceAccountImmutable);
     }
     ensure_user_exists(granted_by, &mut transaction).await?;
     let result = sqlx::query(
@@ -336,7 +329,23 @@ pub(super) async fn grant_initial_roles(
     granted_by: &str,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), StoreError> {
-    let desired_role_ids = desired_role_ids(role_ids, transaction).await?;
+    let desired_role_ids = desired_role_ids(role_ids, true, transaction).await?;
+    insert_role_grants(
+        user_id,
+        desired_role_ids.as_slice(),
+        granted_by,
+        transaction,
+    )
+    .await
+}
+
+pub(super) async fn grant_initial_service_account_roles(
+    user_id: &str,
+    role_ids: &[i64],
+    granted_by: &str,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), StoreError> {
+    let desired_role_ids = desired_role_ids(role_ids, false, transaction).await?;
     insert_role_grants(
         user_id,
         desired_role_ids.as_slice(),
@@ -348,17 +357,19 @@ pub(super) async fn grant_initial_roles(
 
 async fn desired_role_ids(
     role_ids: &[i64],
+    include_member: bool,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<i64>, StoreError> {
-    desired_role_ids_for_owner(SYSTEM_ROLE_OWNER, role_ids, transaction).await
+    desired_role_ids_for_owner(SYSTEM_ROLE_OWNER, role_ids, include_member, transaction).await
 }
 
 async fn desired_role_ids_for_owner(
     owner: &str,
     role_ids: &[i64],
+    include_member: bool,
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<i64>, StoreError> {
-    let member_role_id = if owner == SYSTEM_ROLE_OWNER {
+    let member_role_id = if owner == SYSTEM_ROLE_OWNER && include_member {
         Some(roles::query_system_role_id("member", false, transaction).await?)
     } else {
         None
@@ -401,10 +412,6 @@ async fn insert_role_grants(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-fn is_service_account(is_super_admin: bool, username: Option<&str>, email: Option<&str>) -> bool {
-    !is_super_admin && username.is_none() && email.is_none()
 }
 
 async fn ensure_user_exists(

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use account::{AccessProfile, PermissionKey, User, UserStatus};
+use account::{AccessProfile, PermissionKey, User, UserStatus, UserType};
 use chrono::Utc;
 use sqlx::{Postgres, Type, TypeInfo};
 
@@ -14,6 +14,22 @@ fn permission_keys_support_built_in_and_application_defined_values() {
         (PermissionKey::RolesRead, "roles:read"),
         (PermissionKey::RolesWrite, "roles:write"),
         (PermissionKey::PermissionsRead, "permissions:read"),
+        (
+            PermissionKey::ServiceAccountsProvision,
+            "service_accounts:provision",
+        ),
+        (
+            PermissionKey::ServiceAccountsProfileWrite,
+            "service_accounts:profile.write",
+        ),
+        (
+            PermissionKey::ServiceAccountsCredentialsRead,
+            "service_accounts:credentials.read",
+        ),
+        (
+            PermissionKey::ServiceAccountsCredentialsWrite,
+            "service_accounts:credentials.write",
+        ),
     ];
 
     for (permission, key) in cases {
@@ -54,6 +70,8 @@ fn profile(permissions: impl IntoIterator<Item = PermissionKey>) -> AccessProfil
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),
             status: UserStatus::Active,
+            user_type: UserType::Human,
+            description: None,
             is_super_admin: false,
             created_at: now,
             updated_at: now,

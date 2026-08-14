@@ -18,6 +18,15 @@ const USER_PAGE_SOURCE: &str = include_str!("../src/defaults/account/users/compo
 const USER_PROVISION_DIALOG_SOURCE: &str =
     include_str!("../src/defaults/account/users/components/provision.rs");
 #[cfg(feature = "desktop")]
+const SERVICE_ACCOUNT_DIALOG_SOURCE: &str =
+    include_str!("../src/defaults/account/users/components/service_account.rs");
+#[cfg(feature = "desktop")]
+const SERVICE_ACCOUNT_CREDENTIALS_SOURCE: &str =
+    include_str!("../src/defaults/account/users/components/credentials.rs");
+#[cfg(feature = "desktop")]
+const CREDENTIAL_SECRET_SOURCE: &str =
+    include_str!("../src/defaults/account/users/components/credential_secret.rs");
+#[cfg(feature = "desktop")]
 const DEFAULT_SETTINGS_SOURCE: &str = include_str!("../src/defaults/settings.rs");
 #[cfg(feature = "desktop")]
 const DEFAULT_LOGIN_SOURCE: &str = include_str!("../src/defaults/login.rs");
@@ -194,6 +203,18 @@ fn default_users_feature_keeps_panel_form_dialog_stable_and_blocks_unprivileged_
         cx.debug_bounds("panel-dialog-overlay").is_none(),
         "未登录或没有 users:provision 权限时不能打开创建用户 FormDialog"
     );
+
+    let service_account_button = cx
+        .debug_bounds("open-default-service-account-dialog")
+        .expect("默认用户页面应当渲染独立的服务账号创建按钮");
+    cx.simulate_click(service_account_button.center(), Modifiers::none());
+    cx.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    assert!(
+        cx.debug_bounds("panel-dialog-overlay").is_none(),
+        "未登录或没有 service_accounts:provision 权限时不能打开服务账号 FormDialog"
+    );
 }
 
 #[cfg(feature = "desktop")]
@@ -282,4 +303,28 @@ fn default_user_table_keeps_official_column_handles_and_copy_control() {
 fn default_user_panel_does_not_duplicate_crud_panel_actions() {
     assert!(USER_PAGE_SOURCE.contains("CrudPanel::new"));
     assert!(!USER_PAGE_SOURCE.contains("refresh-default-account-users"));
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn service_account_ui_keeps_required_component_and_lifecycle_boundaries() {
+    for choice in [
+        "Client Credentials（推荐）",
+        "Personal Access Token",
+        "暂不生成凭据",
+    ] {
+        assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains(choice));
+    }
+    assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains("open_alert_dialog"));
+    assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains("service_accounts:credentials.write"));
+    assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains("!can_create_credential"));
+    assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains("超长期 PAT"));
+    assert!(SERVICE_ACCOUNT_DIALOG_SOURCE.contains("凭据生成失败"));
+    assert!(SERVICE_ACCOUNT_CREDENTIALS_SOURCE.contains("DataTable::new"));
+    assert!(SERVICE_ACCOUNT_CREDENTIALS_SOURCE.contains("confirm_revoke"));
+    assert!(SERVICE_ACCOUNT_CREDENTIALS_SOURCE.contains("open_alert_dialog"));
+    assert!(CREDENTIAL_SECRET_SOURCE.contains("Clipboard::new"));
+    assert!(CREDENTIAL_SECRET_SOURCE.contains("self.secret = None"));
+    assert!(USER_TABLE_SOURCE.contains(".when(is_service_account"));
+    assert!(USER_TABLE_SOURCE.contains("page.manage_service_account"));
 }

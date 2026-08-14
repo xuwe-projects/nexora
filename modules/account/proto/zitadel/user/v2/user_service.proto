@@ -2,11 +2,22 @@ syntax = "proto3";
 
 package zitadel.user.v2;
 
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
 // ZITADEL UserService v2 中 setup 用户目录所需的最小线上契约。
 // 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的字段由 Protobuf 兼容机制忽略。
 service UserService {
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc AddSecret(AddSecretRequest) returns (AddSecretResponse);
+  rpc RemoveSecret(RemoveSecretRequest) returns (RemoveSecretResponse);
+  rpc AddPersonalAccessToken(AddPersonalAccessTokenRequest) returns (AddPersonalAccessTokenResponse);
+  rpc RemovePersonalAccessToken(RemovePersonalAccessTokenRequest) returns (RemovePersonalAccessTokenResponse);
+  rpc ListPersonalAccessTokens(ListPersonalAccessTokensRequest) returns (ListPersonalAccessTokensResponse);
   rpc SetUserMetadata(SetUserMetadataRequest) returns (SetUserMetadataResponse);
   rpc ListUserMetadata(ListUserMetadataRequest) returns (ListUserMetadataResponse);
   rpc DeactivateUser(DeactivateUserRequest) returns (DeactivateUserResponse);
@@ -54,6 +65,11 @@ message Password {
   bool change_required = 2;
 }
 
+enum AccessTokenType {
+  ACCESS_TOKEN_TYPE_BEARER = 0;
+  ACCESS_TOKEN_TYPE_JWT = 1;
+}
+
 message CreateUserRequest {
   message Human {
     SetHumanProfile profile = 1;
@@ -64,7 +80,11 @@ message CreateUserRequest {
     }
   }
 
-  message Machine {}
+  message Machine {
+    string name = 1;
+    optional string description = 2;
+    AccessTokenType access_token_type = 3;
+  }
 
   string organization_id = 1;
   optional string user_id = 2;
@@ -77,6 +97,28 @@ message CreateUserRequest {
 
 message CreateUserResponse {
   string id = 1;
+  Timestamp creation_date = 2;
+}
+
+message UpdateUserRequest {
+  message Human {}
+
+  message Machine {
+    optional string name = 1;
+    optional string description = 2;
+    optional AccessTokenType access_token_type = 3;
+  }
+
+  string user_id = 1;
+  optional string username = 2;
+  oneof user_type {
+    Human human = 3;
+    Machine machine = 4;
+  }
+}
+
+message UpdateUserResponse {
+  Timestamp change_date = 1;
 }
 
 message DeleteUserRequest {
@@ -170,7 +212,12 @@ message HumanUser {
   HumanPhone phone = 8;
 }
 
-message MachineUser {}
+message MachineUser {
+  string name = 1;
+  string description = 2;
+  bool has_secret = 3;
+  AccessTokenType access_token_type = 4;
+}
 
 message User {
   string user_id = 1;
@@ -194,6 +241,95 @@ message ListUsersResponse {
   ListDetails details = 1;
   UserFieldName sorting_column = 2;
   repeated User result = 3;
+}
+
+message AddSecretRequest {
+  string user_id = 1;
+}
+
+message AddSecretResponse {
+  Timestamp creation_date = 1;
+  string client_secret = 2;
+}
+
+message RemoveSecretRequest {
+  string user_id = 1;
+}
+
+message RemoveSecretResponse {
+  Timestamp deletion_date = 1;
+}
+
+message AddPersonalAccessTokenRequest {
+  string user_id = 1;
+  Timestamp expiration_date = 2;
+}
+
+message AddPersonalAccessTokenResponse {
+  Timestamp creation_date = 1;
+  string token_id = 2;
+  string token = 3;
+}
+
+message RemovePersonalAccessTokenRequest {
+  string user_id = 1;
+  string token_id = 2;
+}
+
+message RemovePersonalAccessTokenResponse {
+  Timestamp deletion_date = 1;
+}
+
+message PaginationRequest {
+  uint64 offset = 1;
+  uint32 limit = 2;
+  bool asc = 3;
+}
+
+message PaginationResponse {
+  uint64 total_result = 1;
+  uint64 applied_limit = 2;
+}
+
+message IDFilter {
+  string id = 1;
+}
+
+message PersonalAccessTokensSearchFilter {
+  oneof filter {
+    IDFilter token_id_filter = 1;
+    IDFilter user_id_filter = 2;
+    IDFilter organization_id_filter = 3;
+  }
+}
+
+enum PersonalAccessTokenFieldName {
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_UNSPECIFIED = 0;
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_CREATED_DATE = 1;
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_ID = 2;
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_USER_ID = 3;
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_ORGANIZATION_ID = 4;
+  PERSONAL_ACCESS_TOKEN_FIELD_NAME_EXPIRATION_DATE = 5;
+}
+
+message PersonalAccessToken {
+  Timestamp creation_date = 1;
+  Timestamp change_date = 2;
+  string id = 3;
+  string user_id = 4;
+  string organization_id = 5;
+  Timestamp expiration_date = 6;
+}
+
+message ListPersonalAccessTokensRequest {
+  optional PaginationRequest pagination = 1;
+  optional PersonalAccessTokenFieldName sorting_column = 2;
+  repeated PersonalAccessTokensSearchFilter filters = 3;
+}
+
+message ListPersonalAccessTokensResponse {
+  PaginationResponse pagination = 1;
+  repeated PersonalAccessToken result = 2;
 }
 
 message Metadata {

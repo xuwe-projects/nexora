@@ -40,6 +40,8 @@ OIDC__ISSUER_URL=https://id.example.com
 OIDC__AUDIENCE=api-application-client-id
 OIDC__PROJECT_ID=zitadel-project-id
 OIDC__PERSONAL_ACCESS_TOKEN=zitadel-service-account-pat
+OIDC__INTROSPECTION_CLIENT_ID=api-resource-server-client-id
+OIDC__INTROSPECTION_CLIENT_SECRET=api-resource-server-client-secret
 ```
 
 只验证配置文件和环境变量而不连接外部服务时，使用：
@@ -52,9 +54,20 @@ cargo run -p server -- --check-config config/server.toml
 
 服务端把认证与业务授权拆成两个边界：OIDC Provider 负责登录和签发 access token；本地
 PostgreSQL 保存用户、角色、权限及关联关系。API 只接受 `Authorization: Bearer <token>`，
-并校验 JWT 签名、`iss`、`aud`、`exp`、可选的 `nbf` 和 `sub`。生产 OIDC issuer 必须使用
-HTTPS，仅 `localhost`、loopback IPv4/IPv6 开发地址允许 HTTP。Provider 必须签发可通过 JWKS
-验证的 JWT access token；当前实现不接受 opaque token。
+JWT 会通过 JWKS 校验签名、`iss`、`aud`、`exp`、可选的 `nbf` 和 `sub`；PAT/opaque token
+则在每个请求中实时调用 ZITADEL `/oauth/v2/introspect`，不使用成功缓存。introspection 的
+`active` 必须为真，且 issuer、audience 与有效期仍要匹配；inactive 返回 401，Provider
+不可用返回 503。生产 OIDC issuer 必须使用 HTTPS，仅 `localhost`、loopback IPv4/IPv6
+开发地址允许 HTTP。
+
+introspection 使用独立的 resource-server Client ID/Secret 通过 HTTP Basic 认证，不能复用
+上面的管理 PAT。Secret 只能通过环境变量或密钥系统注入，模板中只能保留占位值：
+
+```toml
+[oidc]
+introspection_client_id = "api-resource-server-client-id"
+introspection_client_secret = "replace-with-secret"
+```
 
 数据库迁移与服务启动相互独立。Nexora 自动创建 `nexora` schema，把框架历史固定记录在
 `nexora._sqlx_migrations`；应用业务迁移使用自己的 SQLx Migrator 和独立历史。服务端必须按

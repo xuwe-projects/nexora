@@ -27,3 +27,7 @@ project_id = "replace-with-zitadel-project-id"
 # ZITADEL 服务账号 PAT，用于 UserService 与 ProjectService v2；不要提交真实令牌。
 # 生产环境建议删除本行并使用 ACCOUNT__OIDC__PERSONAL_ACCESS_TOKEN 从密钥系统注入。
 personal_access_token = "replace-with-zitadel-service-account-pat"
+# PAT/opaque Bearer token 实时 introspection 使用的 resource-server Client ID。
+introspection_client_id = "replace-with-introspection-client-id"
+# 生产环境通过 ACCOUNT__OIDC__INTROSPECTION_CLIENT_SECRET 或密钥系统注入，禁止提交真实 Secret。
+introspection_client_secret = "replace-with-introspection-client-secret"

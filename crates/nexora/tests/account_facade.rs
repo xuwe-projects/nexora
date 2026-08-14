@@ -297,6 +297,10 @@ mod server {
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_id: "introspection-client".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_secret: "introspection-secret".to_owned(),
                 },
             },
         };
@@ -317,6 +321,10 @@ mod server {
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_id: "introspection-client".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_secret: "introspection-secret".to_owned(),
                 },
             },
         };
@@ -337,6 +345,10 @@ mod server {
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_id: "introspection-client".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_secret: "introspection-secret".to_owned(),
                 },
             },
         };
@@ -351,6 +363,10 @@ mod server {
                     project_id: "project-1".to_owned(),
                     #[cfg(feature = "server")]
                     personal_access_token: "test-personal-access-token".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_id: "introspection-client".to_owned(),
+                    #[cfg(feature = "server")]
+                    introspection_client_secret: "introspection-secret".to_owned(),
                 },
             },
         };
@@ -459,6 +475,8 @@ mod server {
                     organization_id: "organization-1".to_owned(),
                     project_id: "project-1".to_owned(),
                     personal_access_token: "test-personal-access-token".to_owned(),
+                    introspection_client_id: "introspection-client".to_owned(),
+                    introspection_client_secret: "introspection-secret".to_owned(),
                 },
             },
         };
@@ -522,6 +540,8 @@ mod server {
                     organization_id: "organization-1".to_owned(),
                     project_id: String::new(),
                     personal_access_token: "secret-personal-access-token".to_owned(),
+                    introspection_client_id: "introspection-client".to_owned(),
+                    introspection_client_secret: "secret-introspection-client-secret".to_owned(),
                 },
             },
         };

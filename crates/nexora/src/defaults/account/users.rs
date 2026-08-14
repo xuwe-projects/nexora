@@ -11,7 +11,10 @@ use crate::{
     FeatureRuntimeError, NoPath, NoQuery, RouteMatch,
 };
 
-use self::components::{ProvisionUserDialog, UserRoleEditor, UsersPage};
+use self::components::{
+    CreateServiceAccountDialog, CredentialSecretDialog, ProvisionUserDialog,
+    ServiceAccountCredentials, UserRoleEditor, UsersPage,
+};
 
 pub(super) const USERS_METADATA: FeatureMetadata = FeatureMetadata::new(
     "users",
@@ -34,6 +37,9 @@ struct DefaultUsersFeature {
 
 struct UsersDialogLayer {
     provision_dialog: Entity<ProvisionUserDialog>,
+    service_account_dialog: Entity<CreateServiceAccountDialog>,
+    credential_secret: Entity<CredentialSecretDialog>,
+    credentials: Entity<ServiceAccountCredentials>,
     role_editor: Entity<UserRoleEditor>,
 }
 
@@ -43,6 +49,9 @@ impl Render for UsersDialogLayer {
             .absolute()
             .inset_0()
             .children([self.provision_dialog.clone().into_any_element()])
+            .child(self.service_account_dialog.clone())
+            .child(self.credentials.clone())
+            .child(self.credential_secret.clone())
             .child(self.role_editor.clone())
     }
 }
@@ -64,12 +73,34 @@ impl FeatureElement for DefaultUsersFeature {
     fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let page = cx.new(|cx| UsersPage::new(window, cx));
         let dialog = cx.new(|cx| ProvisionUserDialog::new(page.downgrade(), window, cx));
+        let credential_secret = cx.new(CredentialSecretDialog::new);
+        let service_account_dialog = cx.new(|cx| {
+            CreateServiceAccountDialog::new(
+                page.downgrade(),
+                credential_secret.downgrade(),
+                window,
+                cx,
+            )
+        });
+        let credentials = cx.new(|cx| {
+            ServiceAccountCredentials::new(
+                page.downgrade(),
+                credential_secret.downgrade(),
+                window,
+                cx,
+            )
+        });
         page.update(cx, |page, cx| {
             page.set_provision_dialog(dialog.downgrade(), cx);
+            page.set_service_account_dialog(service_account_dialog.downgrade(), cx);
+            page.set_credentials(credentials.downgrade(), cx);
         });
         let role_editor = page.read(cx).role_editor();
         let dialog_layer = cx.new(|_| UsersDialogLayer {
             provision_dialog: dialog,
+            service_account_dialog,
+            credential_secret,
+            credentials,
             role_editor,
         });
         self.page = Some(page);

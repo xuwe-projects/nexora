@@ -30,8 +30,11 @@ pub use crate::account::{
     CreateHumanIdentity, CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory,
     IdentityDirectoryError, OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
     Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey,
-    RequiredPermission, Role, SYSTEM_ROLE_OWNER, User, VerifiedBearerIdentity, VerifiedIdentity,
-    VerifiedOrganizationContext, create_generated_role_for_owner, create_permission_catalog,
+    RequiredPermission, Role, SYSTEM_ROLE_OWNER, ServiceAccountCredential,
+    ServiceAccountCredentialSource, ServiceAccountCredentialStatus, ServiceAccountCredentialType,
+    ServiceAccountDirectory, ServiceAccountDirectoryError, User, UserType, VerifiedBearerIdentity,
+    VerifiedIdentity, VerifiedOrganizationContext, ZitadelAccessTokenVerifier,
+    ZitadelIntrospectionVerifier, create_generated_role_for_owner, create_permission_catalog,
     create_permissions, create_role, create_role_for_owner, create_user, create_user_with_roles,
     ensure_system_role_with_permissions, grant_user_role, replace_role_permissions,
     replace_role_permissions_for_owner, replace_user_roles, replace_user_roles_for_owner,
@@ -106,6 +109,7 @@ impl Server {
         let provisioning_client = crate::account::server::provisioning_client(settings)?;
         let mut dependencies = crate::account::server::dependencies(pool.clone(), settings).await?;
         dependencies.identity_directory = Some(Arc::new(directory.clone()));
+        dependencies.service_account_directory = Some(Arc::new(directory.clone()));
         let account = crate::account::Account::new(dependencies);
         self.setup_required = !account.is_system_initialized().await?;
         if !self.setup_required {

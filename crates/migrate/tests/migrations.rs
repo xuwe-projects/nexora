@@ -9,6 +9,10 @@ const PROTECTION_UP: &str =
     include_str!("../migrations/20260807034446_account_protection_baseline.up.sql");
 const CATALOG_UP: &str =
     include_str!("../migrations/20260807034500_account_catalog_baseline.up.sql");
+const SERVICE_ACCOUNTS_UP: &str =
+    include_str!("../migrations/20260814075639_account_service_accounts.up.sql");
+const SERVICE_ACCOUNTS_DOWN: &str =
+    include_str!("../migrations/20260814075639_account_service_accounts.down.sql");
 
 #[test]
 fn baseline_contains_four_reversible_timestamp_migrations() {
@@ -23,7 +27,7 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
         })
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(migration_names.len(), 8);
+    assert_eq!(migration_names.len(), 10);
     for version in [
         "20260807034412_account_identity_baseline",
         "20260807034430_account_authorization_baseline",
@@ -33,6 +37,30 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
         assert!(migration_names.contains(&format!("{version}.up.sql")));
         assert!(migration_names.contains(&format!("{version}.down.sql")));
     }
+    assert!(migration_names.contains("20260814075639_account_service_accounts.up.sql"));
+    assert!(migration_names.contains("20260814075639_account_service_accounts.down.sql"));
+}
+
+#[test]
+fn service_account_migration_is_reversible_and_never_stores_secrets() {
+    assert!(SERVICE_ACCOUNTS_UP.contains("CREATE TYPE account.user_type"));
+    assert!(SERVICE_ACCOUNTS_UP.contains("CREATE TABLE account.service_account_credentials"));
+    assert!(SERVICE_ACCOUNTS_UP.contains("service_accounts:credentials.write"));
+    assert!(SERVICE_ACCOUNTS_UP.contains("users_service_account_delete_forbidden"));
+    for forbidden in [
+        "client_secret TEXT",
+        "personal_access_token TEXT",
+        "token TEXT",
+    ] {
+        assert!(
+            !SERVICE_ACCOUNTS_UP
+                .to_lowercase()
+                .contains(&forbidden.to_lowercase()),
+            "凭据元数据迁移不得保存敏感字段: {forbidden}"
+        );
+    }
+    assert!(SERVICE_ACCOUNTS_DOWN.contains("DROP TABLE account.service_account_credentials"));
+    assert!(SERVICE_ACCOUNTS_DOWN.contains("DROP TYPE account.user_type"));
 }
 
 #[test]

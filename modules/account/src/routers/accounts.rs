@@ -26,6 +26,23 @@ pub(super) fn initialize() -> Router<AccountState> {
             put(handlers::accounts::users::replace_user_roles),
         )
         .route(
+            "/service-accounts",
+            axum::routing::post(handlers::accounts::service_accounts::create_service_account),
+        )
+        .route(
+            "/service-accounts/{service_account_id}",
+            axum::routing::patch(handlers::accounts::service_accounts::update_service_account),
+        )
+        .route(
+            "/service-accounts/{service_account_id}/credentials",
+            get(handlers::accounts::service_accounts::list_credentials)
+                .post(handlers::accounts::service_accounts::create_credential),
+        )
+        .route(
+            "/service-accounts/{service_account_id}/credentials/{credential_id}",
+            axum::routing::delete(handlers::accounts::service_accounts::revoke_credential),
+        )
+        .route(
             "/roles",
             get(handlers::accounts::roles::list_roles).post(handlers::accounts::roles::create_role),
         )

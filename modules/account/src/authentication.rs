@@ -1,5 +1,6 @@
 //! Bearer access token 验证端口与 OIDC 实现。
 
+mod introspection;
 mod oidc;
 
 use async_trait::async_trait;
@@ -13,6 +14,7 @@ use std::sync::Arc;
 
 use crate::ApiError;
 
+pub use introspection::{ZitadelAccessTokenVerifier, ZitadelIntrospectionVerifier};
 pub use oidc::OidcAccessTokenVerifier;
 
 /// ZITADEL token 中携带的组织上下文。
@@ -62,6 +64,12 @@ pub enum VerificationError {
         /// 网络请求返回的底层错误，仅用于日志诊断。
         #[source]
         reqwest::Error,
+    ),
+    /// PAT/opaque token introspection 端点暂时不可用或返回无效响应。
+    #[error("Token introspection 服务暂时不可用: {0}")]
+    IntrospectionUnavailable(
+        /// 不包含 token、Client Secret 或 Authorization 的脱敏诊断信息。
+        String,
     ),
     /// Provider discovery 文档不完整或与配置不一致。
     #[error("OIDC Provider 元数据无效: {0}")]

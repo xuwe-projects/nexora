@@ -20,6 +20,7 @@ default = ["desktop", "derive"]
 derive = ["dep:contracts", "dep:macros"]
 desktop = [
     "dep:actions",
+    "dep:chrono",
     "dep:desktop",
     "dep:gpui",
     "dep:gpui-component",
@@ -56,6 +57,7 @@ server = [
 account = { workspace = true, optional = true, default-features = false }
 actions = { workspace = true, optional = true }
 axum = { workspace = true, optional = true, features = ["form"] }
+chrono = { workspace = true, optional = true }
 configuration = { workspace = true }
 contracts = { workspace = true, optional = true }
 desktop = { workspace = true, optional = true }

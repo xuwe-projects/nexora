@@ -10,10 +10,13 @@ pub use crate::account_module::{
     CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
     IdentityIssuerBindingOutcome, PORTAL_ADMIN_ROLE_KEY, Page, Permission,
     PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role, SYSTEM_ROLE_OWNER,
-    SystemRole, User, UserStatus,
+    ServiceAccountCredential, ServiceAccountCredentialSource, ServiceAccountCredentialStatus,
+    ServiceAccountCredentialType, ServiceAccountDirectory, ServiceAccountDirectoryError,
+    SystemRole, User, UserStatus, UserType,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
+        ZitadelAccessTokenVerifier, ZitadelIntrospectionVerifier,
     },
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_generated_role_for_owner, create_permission_catalog, create_permissions, create_role,
@@ -45,7 +48,7 @@ pub(crate) mod server {
     use crate::{
         account_module::{
             Account, AccountDependencies, AccountError,
-            authentication::{OidcAccessTokenVerifier, VerificationError},
+            authentication::{VerificationError, ZitadelAccessTokenVerifier},
         },
         config::{__private::ProvidesAccountServerSettings, AccountServerSection, ConfigError},
     };
@@ -96,6 +99,14 @@ pub(crate) mod server {
         /// 不应把真实令牌提交到配置模板或版本库。
         #[cfg(feature = "server")]
         pub personal_access_token: String,
+        /// 验证 PAT/opaque Bearer token 使用的 resource-server Client ID。
+        #[cfg(feature = "server")]
+        pub introspection_client_id: String,
+        /// 验证 PAT/opaque Bearer token 使用的 resource-server Client Secret。
+        ///
+        /// 生产部署必须通过 `OIDC__INTROSPECTION_CLIENT_SECRET` 或密钥系统注入。
+        #[cfg(feature = "server")]
+        pub introspection_client_secret: String,
     }
 
     impl fmt::Debug for OidcSettings {
@@ -108,7 +119,9 @@ pub(crate) mod server {
             debug
                 .field("organization_id", &self.organization_id)
                 .field("project_id", &self.project_id)
-                .field("personal_access_token", &"[REDACTED]");
+                .field("personal_access_token", &"[REDACTED]")
+                .field("introspection_client_id", &self.introspection_client_id)
+                .field("introspection_client_secret", &"[REDACTED]");
             debug.finish()
         }
     }
@@ -137,9 +150,11 @@ pub(crate) mod server {
         S: ProvidesAccountServerSettings<AccountServerSettings = Settings>,
     {
         let settings = settings.account_server_settings();
-        let verifier = OidcAccessTokenVerifier::discover(
+        let verifier = ZitadelAccessTokenVerifier::discover(
             settings.oidc.issuer_url.trim(),
             settings.oidc.audience.trim().to_owned(),
+            settings.oidc.introspection_client_id.trim().to_owned(),
+            settings.oidc.introspection_client_secret.trim().to_owned(),
         )
         .await?;
         Account::bind_identity_issuer(&pool, settings.oidc.issuer_url.trim()).await?;
@@ -148,6 +163,7 @@ pub(crate) mod server {
             pool,
             token_verifier: Arc::new(verifier),
             identity_directory: None,
+            service_account_directory: None,
         })
     }
 
@@ -263,6 +279,20 @@ pub(crate) mod server {
             return Err(ConfigError::invalid_section(
                 "account.server",
                 "oidc.personal_access_token 不能为空",
+            ));
+        }
+        #[cfg(feature = "server")]
+        if settings.introspection_client_id.trim().is_empty() {
+            return Err(ConfigError::invalid_section(
+                "account.server",
+                "oidc.introspection_client_id 不能为空",
+            ));
+        }
+        #[cfg(feature = "server")]
+        if settings.introspection_client_secret.trim().is_empty() {
+            return Err(ConfigError::invalid_section(
+                "account.server",
+                "oidc.introspection_client_secret 不能为空",
             ));
         }
         Ok(())

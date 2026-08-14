@@ -13,7 +13,7 @@ order: 2
 | 来源 | 路由 | 是否属于 `Server::routers()` |
 | --- | --- | --- |
 | Nexora Setup | `GET /setup`、`POST /setup`、`POST /setup/complete` | 是 |
-| Nexora Account | `/me`、`/users`、`/roles`、`/permissions` 及其子资源 | 是 |
+| Nexora Account | `/me`、`/users`、`/service-accounts`、`/roles`、`/permissions` 及其子资源 | 是 |
 | 生成的宿主应用 | `GET /health` | 否；由应用的 `routes::routers()` 提供 |
 | 宿主业务 | 应用自行声明 | 否 |
 
@@ -39,9 +39,11 @@ order: 2
 Authorization: Bearer <access_token>
 ```
 
-验证顺序固定为：Bearer 头格式、token 签名/issuer/audience/有效期、本地用户是否已开通、
+JWT 使用 discovery/JWKS 本地验签；PAT 或其他 opaque token 每次请求实时调用 ZITADEL
+`/oauth/v2/introspect`，成功结果不缓存。验证顺序固定为：Bearer 头格式、Provider
+签名或 introspection、issuer/audience/有效期、本地用户是否已开通、
 用户是否停用、目标权限。身份绑定只使用当前部署 OIDC issuer 范围内稳定的
-`identity_id`；`username` 仅作为可更新的登录名元数据，不参与认证查找。
+`identity_id`。人员 username 是目录元数据；服务账号 username 创建后不可修改并作为 Client ID。
 
 超级管理员直接通过权限判断；普通用户必须通过角色拥有下表所列权限。
 
@@ -54,6 +56,10 @@ Authorization: Bearer <access_token>
 | `POST /users` | `users:provision`；`role_ids` 非空时还要 `users:roles.write` |
 | `PATCH /users/{user_id}` | `users:status.write` |
 | `PUT /users/{user_id}/roles` | `users:roles.write` |
+| `POST /service-accounts` | `service_accounts:provision`；`role_ids` 非空时还要 `users:roles.write` |
+| `PATCH /service-accounts/{service_account_id}` | `service_accounts:profile.write` |
+| `GET /service-accounts/{service_account_id}/credentials` | `service_accounts:credentials.read` |
+| 凭据创建、轮换和撤销 | `service_accounts:credentials.write` |
 | `GET /roles`、`GET /roles/{role_id}` | `roles:read` |
 | `POST /roles`、`PATCH /roles/{role_id}`、`DELETE /roles/{role_id}` | `roles:write` |
 | `PUT /roles/{role_id}/permissions` | `roles:write` |
@@ -70,7 +76,9 @@ Authorization: Bearer <access_token>
 | `username` | string | 是 | 身份提供方登录用户名；不会替代 `identity_id` |
 | `email` | string | 是 | 展示邮箱 |
 | `display_name` | string | 否 | 展示名称，最多 200 个字符 |
+| `description` | string | 是 | 服务账号用途说明，最多 500 个字符 |
 | `status` | enum | 否 | `active` 或 `suspended` |
+| `user_type` | enum | 否 | `human` 或 `service_account` |
 | `is_super_admin` | boolean | 否 | 是否为系统唯一、不可变的内置超级管理员 |
 | `created_at` | int64 | 否 | 创建时间，Unix 秒 |
 | `updated_at` | int64 | 否 | 资料更新时间，Unix 秒 |
@@ -183,6 +191,15 @@ Authorization: Bearer <access_token>
 | 500 | `internal_error` | 数据库或内部操作失败；不会返回 SQL 或堆栈 |
 | 503 | `identity_issuer_not_bound` | 部署尚未完成 issuer 绑定 |
 | 503 | `identity_provider_unavailable` | OIDC Provider/JWKS 暂时不可用 |
+| 503 | `token_introspection_unavailable` | PAT introspection 暂时不可用；请求失败关闭 |
+| 503 | `credential_provider_unavailable` | ZITADEL 服务账号/凭据管理接口不可用 |
+| 409 | `service_account_required` | 对人员账号调用服务账号资料或凭据接口 |
+| 409 | `client_secret_rotation_conflict` | 另一轮 Client Secret 轮换仍在进行 |
+| 404 | `credential_not_found` | 指定凭据不存在 |
+| 409 | `service_account_already_exists` | 稳定 username 已被服务账号使用 |
+| 409 | `service_account_identifier_immutable` | 尝试修改创建后不可变的 username |
+| 422 | `credential_type_invalid` | 请求了不支持的凭据类型 |
+| 422 | `credential_expiration_invalid` | Client Credentials 提供到期时间，或 PAT 已过期 |
 
 `401` 响应包含 `WWW-Authenticate: Bearer`。如果宿主安装 Nexora 的统一 HTTP 中间件，响应还
 会包含 `x-request-id`，并优先沿用格式有效的请求头值；错误正文的 `request_id` 与该值一致。
@@ -191,9 +208,9 @@ Authorization: Bearer <access_token>
 
 ### `GET /me`
 
-验证 Bearer token、本地账号和状态，然后通过配置的 ZITADEL UserService v2 gRPC 按
-`identity_id` 读取最新人类用户，原子同步 `username`、邮箱、展示名与最近登录时间，
-最后返回 `AccessProfile`。该接口不要求额外权限，也不会为陌生身份自动创建用户；目录中
+验证 Bearer token、本地账号和状态。人员用户再通过 ZITADEL UserService v2 gRPC 按
+`identity_id` 同步资料；服务账号直接返回本地授权快照并更新最近认证时间，不进入人员目录。
+该接口不要求额外权限，也不会为陌生身份自动创建用户；人员目录中
 不存在该身份时返回 `404 identity_not_found`，目录暂时不可用时返回
 `503 identity_provider_unavailable`。
 
@@ -281,8 +298,8 @@ Provider 删除补偿；补偿本身失败只记录脱敏服务端日志，不�
 ```
 
 `status` 只能为 `active` 或 `suspended`，未知字段被拒绝。成功返回 `200 User`。不能修改
-超级管理员或服务账号；也不能停用会导致系统失去最后一个启用管理员的用户，对应返回
-`409 super_administrator_immutable`、`409 service_account_immutable` 或 `409 last_administrator`。
+超级管理员；服务账号与人员账号都可以停用，停用后其 JWT 和 PAT 在本地状态门禁立即失效。
+操作也不能导致系统失去最后一个启用管理员。
 
 ### `PUT /users/{user_id}/roles`
 
@@ -294,8 +311,28 @@ Provider 删除补偿；补偿本身失败只记录脱敏服务端日志，不�
 
 最多 64 项，服务端去重；`owner` 缺省为 `IMES`，此时空数组会移除后台业务角色但保留内置
 `member`。传入客户 owner 时只替换该 owner 下的角色，不影响 `IMES` 或其他客户 owner。
-成功返回更新后的 `200 AccessProfile`。目标用户、角色或授权人不存在返回 `404`；超级管理员和服务账号不可挂载
-角色，且不能通过后台 owner 操作移除最后一个管理员。
+成功返回更新后的 `200 AccessProfile`。目标用户、角色或授权人不存在返回 `404`；服务账号与
+人员账号共用角色系统，但服务账号不会自动保留 `member`。超级管理员仍不可挂载角色，也不能
+通过后台 owner 操作移除最后一个管理员。
+
+## 服务账号接口
+
+`POST /service-accounts` 创建 ZITADEL JWT machine user 和本地 `service_account`，稳定
+`username` 同时作为 Client ID。`role_ids` 可为空且不自动附加 `member`；接口返回
+`201`、`Location: /users/{id}`，但不自动创建凭据。`PATCH /service-accounts/{id}` 只修改
+`display_name` 与可清空的 `description`；状态和角色继续使用统一用户接口。服务账号不提供
+删除接口，只能停用。
+
+`GET /service-accounts/{id}/credentials` 会实时读取 Provider 状态并协调本地元数据。响应包含
+名称、类型、创建人、Unix 秒时间、状态、撤销信息及 `nexora`/`provider_external` 来源，不含
+Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`。
+
+`POST /service-accounts/{id}/credentials` 要求唯一 `Idempotency-Key` 请求头。请求类型为
+`client_credentials` 时禁止 `expires_at`，再次创建会串行轮换唯一 Client Secret；类型为
+`personal_access_token` 时允许多个 PAT，`expires_at` 可为未来 Unix 秒或 `null`（永不过期）。
+成功返回 `201`、凭据元数据和仅本次可见的 `client_id`/`client_secret` 或 `token`。数据库与
+日志只保存非敏感元数据。`DELETE /service-accounts/{id}/credentials/{credential_id}` 返回
+`204`，只撤销目标凭据。
 
 ## 角色接口
 

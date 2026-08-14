@@ -41,6 +41,168 @@ pub struct ProvisionUserRequest {
     pub role_ids: Vec<i64>,
 }
 
+/// 创建服务账号的请求正文。
+///
+/// 服务账号不会获得默认 `member` 角色，也不会自动创建凭据；`username` 创建后不可修改。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CreateServiceAccountRequest {
+    /// 身份 Provider 中稳定且唯一的服务账号 username，同时作为 Client ID。
+    pub username: String,
+    /// 面向管理员展示的服务账号名称。
+    pub display_name: String,
+    /// 可选用途说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// 创建时直接授予的角色 ID；允许为空且不会自动补充 `member`。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_ids: Vec<i64>,
+}
+
+/// 局部修改服务账号资料的请求正文。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateServiceAccountRequest {
+    /// 服务账号稳定标识不可修改；若客户端提供该字段，服务端返回稳定冲突错误码。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// 可选的新展示名称；字段缺失时保持原值。
+    pub display_name: Option<String>,
+    /// 说明的三态更新值，区分保持、清空和设置。
+    #[serde(default, skip_serializing_if = "PatchField::is_missing")]
+    pub description: PatchField<String>,
+}
+
+/// 服务账号可管理的凭据类型。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAccountCredentialType {
+    /// 使用 Client ID 和一次性 Client Secret 换取短期 access token。
+    ClientCredentials,
+    /// 可直接作为 Bearer Token 使用的 Personal Access Token。
+    PersonalAccessToken,
+    /// 请求中不受支持的凭据类型；仅用于让服务端返回稳定业务错误码。
+    #[serde(other)]
+    Invalid,
+}
+
+/// 服务账号凭据协调后的状态。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAccountCredentialStatus {
+    /// Provider 中仍然有效。
+    Active,
+    /// 已由 Nexora 或 Provider 撤销。
+    Revoked,
+}
+
+/// 服务账号凭据元数据来源。
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAccountCredentialSource {
+    /// 由 Nexora 管理接口创建。
+    Nexora,
+    /// 在 Provider 外部创建后由协调流程发现。
+    ProviderExternal,
+}
+
+/// 创建服务账号凭据的请求正文。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CreateServiceAccountCredentialRequest {
+    /// 要创建或轮换的凭据类型。
+    pub credential_type: ServiceAccountCredentialType,
+    /// 面向管理员的凭据名称。
+    pub name: String,
+    /// PAT 的可选 Unix 秒到期时间；为空表示永不过期，Client Credentials 禁止提供。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
+
+/// 服务账号凭据的非敏感公开元数据。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ServiceAccountCredentialResponse {
+    /// 数据库生成的凭据本地 ID。
+    pub id: i64,
+    /// 凭据所属服务账号本地用户 ID。
+    pub service_account_id: String,
+    /// 凭据类型。
+    pub credential_type: ServiceAccountCredentialType,
+    /// 本地管理名称。
+    pub name: String,
+    /// Provider 凭据或 Token ID；Provider 不提供时为空。
+    pub provider_credential_id: Option<String>,
+    /// Nexora 创建操作者；Provider 外部创建时为空。
+    pub created_by: Option<String>,
+    /// 凭据创建时间的 Unix 秒时间戳。
+    pub created_at: i64,
+    /// 可选到期时间的 Unix 秒时间戳；为空表示无固定到期时间。
+    pub expires_at: Option<i64>,
+    /// 最近协调得到的凭据状态。
+    pub status: ServiceAccountCredentialStatus,
+    /// 凭据元数据来源。
+    pub source: ServiceAccountCredentialSource,
+    /// Nexora 撤销操作者；外部撤销或尚未撤销时为空。
+    pub revoked_by: Option<String>,
+    /// 可选撤销时间的 Unix 秒时间戳。
+    pub revoked_at: Option<i64>,
+    /// 最近一次成功协调 Provider 状态的 Unix 秒时间戳。
+    pub last_synchronized_at: i64,
+}
+
+/// 凭据创建成功后仅返回一次的敏感内容。
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ServiceAccountCredentialSecret {
+    /// Client Credentials 创建或轮换后返回的 Client ID 与 Client Secret。
+    ClientCredentials {
+        /// 服务账号稳定 username，同时作为 OAuth Client ID。
+        client_id: String,
+        /// 仅本次响应可见的 Client Secret。
+        client_secret: String,
+    },
+    /// PAT 创建后仅本次响应可见的 token。
+    PersonalAccessToken {
+        /// 仅本次响应可见的 PAT 明文。
+        token: String,
+    },
+}
+
+impl fmt::Debug for ServiceAccountCredentialSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClientCredentials { client_id, .. } => formatter
+                .debug_struct("ClientCredentials")
+                .field("client_id", client_id)
+                .field("client_secret", &"<redacted>")
+                .finish(),
+            Self::PersonalAccessToken { .. } => formatter
+                .debug_struct("PersonalAccessToken")
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+/// 创建凭据后返回的元数据和一次性敏感内容。
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CreateServiceAccountCredentialResponse {
+    /// 已持久化并可继续查询的非敏感凭据元数据。
+    pub credential: ServiceAccountCredentialResponse,
+    /// 关闭响应后无法再次读取的一次性 Secret 或 PAT。
+    pub secret: ServiceAccountCredentialSecret,
+}
+
+impl fmt::Debug for CreateServiceAccountCredentialResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateServiceAccountCredentialResponse")
+            .field("credential", &self.credential)
+            .field("secret", &self.secret)
+            .finish()
+    }
+}
+
 impl fmt::Debug for ProvisionUserRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -201,6 +363,9 @@ pub struct UserResponse {
     pub email: Option<String>,
     /// 用户展示名称。
     pub display_name: String,
+    /// 面向管理员的可选账号说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// 用户当前访问状态。
     pub status: UserStatus,
     /// 用户类型，用于区分人员用户和服务账号。

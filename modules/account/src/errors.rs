@@ -6,7 +6,10 @@ use thiserror::Error;
 
 use kernel::ValidationError;
 
-use crate::{IdentityDirectoryError, PermissionKey, authentication::VerificationError};
+use crate::{
+    IdentityDirectoryError, PermissionKey, ServiceAccountDirectoryError,
+    authentication::VerificationError,
+};
 
 /// Store 在执行持久化操作时返回的结构化错误。
 #[derive(Debug, Error)]
@@ -90,6 +93,13 @@ pub enum AccountError {
         /// 不包含 Provider 内部响应或密钥的稳定错误分类。
         #[from]
         IdentityDirectoryError,
+    ),
+    /// 服务账号 Provider 创建、更新或凭据操作失败。
+    #[error(transparent)]
+    ServiceAccountDirectory(
+        /// 不包含 Provider 内部响应或任何凭据明文的稳定错误分类。
+        #[from]
+        ServiceAccountDirectoryError,
     ),
     /// 外部身份缺少稳定 identity ID 或必要展示字段。
     #[error("认证身份不完整")]
@@ -199,6 +209,26 @@ impl From<AccountError> for ApiError {
                     "身份服务暂时无法完成请求",
                 )
             }
+            AccountError::ServiceAccountDirectory(ServiceAccountDirectoryError::Conflict) => {
+                Self::new(
+                    StatusCode::CONFLICT,
+                    "service_account_provider_conflict",
+                    "身份服务中已存在冲突的服务账号或凭据",
+                )
+            }
+            AccountError::ServiceAccountDirectory(ServiceAccountDirectoryError::NotFound) => {
+                Self::new(
+                    StatusCode::NOT_FOUND,
+                    "service_account_provider_not_found",
+                    "身份服务中的服务账号或凭据不存在",
+                )
+            }
+            AccountError::ServiceAccountDirectory(ServiceAccountDirectoryError::Unavailable) => {
+                Self::service_unavailable(
+                    "credential_provider_unavailable",
+                    "身份服务暂时无法完成服务账号请求",
+                )
+            }
             AccountError::InvalidIdentity => {
                 Self::unauthorized("invalid_identity", "认证身份不完整")
             }
@@ -230,15 +260,23 @@ impl From<AccountError> for ApiError {
                 "permission_denied",
                 "没有执行该操作的权限",
             ),
-            AccountError::InvalidInput(validation) => Self::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "validation_failed",
-                validation.message(),
-            )
-            .with_details(serde_json::json!({ "field": validation.field() })),
-            AccountError::NotFound(_) => {
-                Self::new(StatusCode::NOT_FOUND, "resource_not_found", "资源不存在")
+            AccountError::InvalidInput(validation) => {
+                let code = match validation.field() {
+                    "expires_at" => "credential_expiration_invalid",
+                    "credential_type" => "credential_type_invalid",
+                    _ => "validation_failed",
+                };
+                Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, validation.message())
+                    .with_details(serde_json::json!({ "field": validation.field() }))
             }
+            AccountError::NotFound(resource) => match resource {
+                "服务账号凭据" => Self::new(
+                    StatusCode::NOT_FOUND,
+                    "credential_not_found",
+                    "服务账号凭据不存在",
+                ),
+                _ => Self::new(StatusCode::NOT_FOUND, "resource_not_found", "资源不存在"),
+            },
             AccountError::Conflict { code, message } => {
                 Self::new(StatusCode::CONFLICT, code, message)
             }
@@ -269,6 +307,13 @@ impl From<VerificationError> for ApiError {
             VerificationError::ProviderUnavailable(source) => {
                 tracing::warn!(error = ?source, "OIDC Provider 或 JWKS 暂时不可用");
                 Self::service_unavailable("identity_provider_unavailable", "认证服务暂时不可用")
+            }
+            VerificationError::IntrospectionUnavailable(reason) => {
+                tracing::warn!(reason, "Token introspection 服务暂时不可用");
+                Self::service_unavailable(
+                    "token_introspection_unavailable",
+                    "Token introspection 服务暂时不可用",
+                )
             }
             error => {
                 tracing::error!(error = ?error, "OIDC verifier 配置或元数据错误");

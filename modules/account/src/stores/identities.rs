@@ -15,6 +15,9 @@ const USER_ID_ALPHABET: &[u8; 62] =
 const UNBIASED_BYTE_LIMIT: u8 = 248;
 
 /// 更新认证授权身份对应的已有本地用户；不存在时不创建任何记录。
+///
+/// 人员账号同步 Provider 登录名、邮箱和展示名；服务账号只记录最近认证时间，避免 token
+/// claims 修改稳定 username，或由旧 JWT 覆盖通过资料接口更新后的展示名称。
 pub(crate) async fn sync_existing(
     identity: &ExternalIdentity,
     pool: &PgPool,
@@ -22,13 +25,25 @@ pub(crate) async fn sync_existing(
     Ok(sqlx::query_as::<_, User>(
         r#"
         UPDATE account.users
-        SET username = COALESCE($2, username),
-            email = COALESCE($3, email),
-            display_name = CASE WHEN $4 = $1 THEN display_name ELSE $4 END,
-            updated_at = NOW(),
+        SET username = CASE
+                WHEN user_type = 'service_account' THEN username
+                ELSE COALESCE($2, username)
+            END,
+            email = CASE
+                WHEN user_type = 'service_account' THEN email
+                ELSE COALESCE($3, email)
+            END,
+            display_name = CASE
+                WHEN user_type = 'service_account' OR $4 = $1 THEN display_name
+                ELSE $4
+            END,
+            updated_at = CASE
+                WHEN user_type = 'service_account' THEN updated_at
+                ELSE NOW()
+            END,
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, username, email, display_name, status,
+        RETURNING id, identity_id, username, email, display_name, status, user_type, description,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -87,7 +102,7 @@ async fn insert_new(
             )
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, username, email, display_name, status,
+            RETURNING id, identity_id, username, email, display_name, status, user_type, description,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
@@ -132,7 +147,7 @@ pub(super) async fn upsert(
             )
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
-            RETURNING id, identity_id, username, email, display_name, status,
+            RETURNING id, identity_id, username, email, display_name, status, user_type, description,
                       is_super_admin, created_at, updated_at, last_login_at
             "#,
         )
@@ -169,7 +184,7 @@ async fn update_existing(
             updated_at = NOW(),
             last_login_at = NOW()
         WHERE identity_id = $1
-        RETURNING id, identity_id, username, email, display_name, status,
+        RETURNING id, identity_id, username, email, display_name, status, user_type, description,
                   is_super_admin, created_at, updated_at, last_login_at
         "#,
     )
@@ -187,7 +202,7 @@ async fn query_existing(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT id, identity_id, username, email, display_name, status,
+        SELECT id, identity_id, username, email, display_name, status, user_type, description,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
         WHERE identity_id = $1
@@ -198,7 +213,7 @@ async fn query_existing(
     .await
 }
 
-fn generate_user_id() -> Result<String, sqlx::Error> {
+pub(super) fn generate_user_id() -> Result<String, sqlx::Error> {
     let mut identifier = String::with_capacity(USER_ID_LENGTH);
     let mut random_bytes = [0_u8; USER_ID_LENGTH * 2];
     while identifier.len() < USER_ID_LENGTH {

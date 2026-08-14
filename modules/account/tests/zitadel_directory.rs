@@ -1,10 +1,17 @@
 #![cfg(feature = "zitadel")]
 
 use account::{
-    __private::inspect_create_human_user_request,
-    CreateHumanIdentity,
+    __private::{
+        inspect_add_client_secret_request, inspect_add_personal_access_token_request,
+        inspect_create_human_user_request, inspect_create_service_account_request,
+        inspect_remove_client_secret_request, inspect_remove_personal_access_token_request,
+        inspect_service_account_status_mapping,
+    },
+    CreateHumanIdentity, CreateServiceAccountIdentity, ServiceAccountClientSecret,
+    ServiceAccountDirectoryError, ServiceAccountPersonalAccessTokenSecret,
     directory::{DirectoryError, ZitadelUserDirectory},
 };
+use chrono::{TimeZone as _, Utc};
 use grpc::{StatusCodeError, StatusError};
 
 const TEST_TOKEN: &str = "test-bootstrap-pat";
@@ -174,6 +181,88 @@ fn create_human_user_request_omits_phone_when_not_provided() {
     assert_eq!(inspection.contact_phone, None);
     assert_eq!(inspection.phone_is_verified, None);
     assert!(!inspection.phone_send_code);
+}
+
+#[test]
+fn create_service_account_request_uses_machine_user_with_jwt_access_tokens() {
+    let inspection = inspect_create_service_account_request(
+        TEST_ORGANIZATION_ID,
+        &CreateServiceAccountIdentity {
+            username: "dispenser-line-a".to_owned(),
+            display_name: "A 线点料机".to_owned(),
+            description: Some("一号车间".to_owned()),
+        },
+    );
+
+    assert_eq!(inspection.organization_id, TEST_ORGANIZATION_ID);
+    assert_eq!(inspection.username, "dispenser-line-a");
+    assert_eq!(inspection.display_name, "A 线点料机");
+    assert_eq!(inspection.description.as_deref(), Some("一号车间"));
+    assert!(inspection.access_token_is_jwt);
+}
+
+#[test]
+fn service_account_credential_requests_keep_subject_expiration_and_token_identity() {
+    for inspection in [
+        inspect_add_client_secret_request("machine-1"),
+        inspect_remove_client_secret_request("machine-1"),
+    ] {
+        assert_eq!(inspection.user_id, "machine-1");
+        assert_eq!(inspection.token_id, None);
+        assert_eq!(inspection.expires_at, None);
+    }
+
+    let expires_at = Utc
+        .with_ymd_and_hms(2030, 6, 1, 12, 30, 45)
+        .single()
+        .expect("测试到期时间必须有效");
+    let expiring = inspect_add_personal_access_token_request("machine-1", Some(expires_at));
+    assert_eq!(expiring.user_id, "machine-1");
+    assert_eq!(expiring.expires_at, Some((expires_at.timestamp(), 0)));
+
+    let permanent = inspect_add_personal_access_token_request("machine-1", None);
+    assert_eq!(permanent.expires_at, None);
+
+    let removal = inspect_remove_personal_access_token_request("machine-1", "pat-7");
+    assert_eq!(removal.user_id, "machine-1");
+    assert_eq!(removal.token_id.as_deref(), Some("pat-7"));
+}
+
+#[test]
+fn service_account_provider_statuses_map_to_stable_categories() {
+    assert!(matches!(
+        inspect_service_account_status_mapping(StatusCodeError::AlreadyExists),
+        ServiceAccountDirectoryError::Conflict
+    ));
+    assert!(matches!(
+        inspect_service_account_status_mapping(StatusCodeError::NotFound),
+        ServiceAccountDirectoryError::NotFound
+    ));
+    assert!(matches!(
+        inspect_service_account_status_mapping(StatusCodeError::Unavailable),
+        ServiceAccountDirectoryError::Unavailable
+    ));
+}
+
+#[test]
+fn service_account_secret_values_are_redacted_from_debug_output() {
+    let now = Utc
+        .timestamp_opt(1_800_000_000, 0)
+        .single()
+        .expect("测试时间戳必须有效");
+    let client = ServiceAccountClientSecret {
+        created_at: now,
+        client_secret: "client-secret-must-not-leak".to_owned(),
+    };
+    let pat = ServiceAccountPersonalAccessTokenSecret {
+        token_id: "pat-1".to_owned(),
+        created_at: now,
+        expires_at: None,
+        token: "pat-must-not-leak".to_owned(),
+    };
+
+    assert!(!format!("{client:?}").contains("client-secret-must-not-leak"));
+    assert!(!format!("{pat:?}").contains("pat-must-not-leak"));
 }
 
 fn human_identity(username: &str) -> CreateHumanIdentity {

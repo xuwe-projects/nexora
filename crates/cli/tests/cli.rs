@@ -1776,6 +1776,14 @@ fn workspace_account_feature_generates_a_composable_server() {
         server_config
             .contains("personal_access_token = \"replace-with-zitadel-service-account-pat\"")
     );
+    assert!(
+        server_config
+            .contains("introspection_client_id = \"replace-with-introspection-client-id\"")
+    );
+    assert!(
+        server_config
+            .contains("introspection_client_secret = \"replace-with-introspection-client-secret\"")
+    );
     assert!(!server_config.contains("initialize_empty_database"));
     let readme = fs::read_to_string(project.join("README.md")).unwrap();
     assert!(!readme.contains('\r'));

@@ -52,3 +52,31 @@ pub struct ReadPermissions;
 impl RequiredPermission for ReadPermissions {
     const KEY: PermissionKey = PermissionKey::PermissionsRead;
 }
+
+/// 创建服务账号所需的权限标记。
+pub struct ProvisionServiceAccounts;
+
+impl RequiredPermission for ProvisionServiceAccounts {
+    const KEY: PermissionKey = PermissionKey::ServiceAccountsProvision;
+}
+
+/// 修改服务账号资料所需的权限标记。
+pub struct WriteServiceAccountProfiles;
+
+impl RequiredPermission for WriteServiceAccountProfiles {
+    const KEY: PermissionKey = PermissionKey::ServiceAccountsProfileWrite;
+}
+
+/// 查看服务账号凭据元数据所需的权限标记。
+pub struct ReadServiceAccountCredentials;
+
+impl RequiredPermission for ReadServiceAccountCredentials {
+    const KEY: PermissionKey = PermissionKey::ServiceAccountsCredentialsRead;
+}
+
+/// 创建、轮换和撤销服务账号凭据所需的权限标记。
+pub struct WriteServiceAccountCredentials;
+
+impl RequiredPermission for WriteServiceAccountCredentials {
+    const KEY: PermissionKey = PermissionKey::ServiceAccountsCredentialsWrite;
+}

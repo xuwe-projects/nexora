@@ -23,7 +23,10 @@ use crate::{
 };
 
 use super::table::{UserStatusFilter, UserTypeFilter};
-use super::{ProvisionUserDialog, UserRoleEditor, UsersTable};
+use super::{
+    CreateServiceAccountDialog, ProvisionUserDialog, ServiceAccountCredentials, UserRoleEditor,
+    UsersTable,
+};
 
 pub(in crate::defaults::account::users) struct UsersPage {
     roles: Vec<RoleResponse>,
@@ -38,6 +41,8 @@ pub(in crate::defaults::account::users) struct UsersPage {
     users_table: Entity<UsersTable>,
     role_editor: Entity<UserRoleEditor>,
     provision_dialog: Option<WeakEntity<ProvisionUserDialog>>,
+    service_account_dialog: Option<WeakEntity<CreateServiceAccountDialog>>,
+    credentials: Option<WeakEntity<ServiceAccountCredentials>>,
     _role_editor_subscription: Subscription,
     _roles_task: Option<Task<()>>,
     _mutation_task: Option<Task<()>>,
@@ -71,6 +76,8 @@ impl UsersPage {
             users_table,
             role_editor,
             provision_dialog: None,
+            service_account_dialog: None,
+            credentials: None,
             _role_editor_subscription: role_editor_subscription,
             _roles_task: None,
             _mutation_task: None,
@@ -90,6 +97,24 @@ impl UsersPage {
         self.role_editor.clone()
     }
 
+    pub(in crate::defaults::account::users) fn set_service_account_dialog(
+        &mut self,
+        dialog: WeakEntity<CreateServiceAccountDialog>,
+        cx: &mut Context<Self>,
+    ) {
+        self.service_account_dialog = Some(dialog);
+        cx.notify();
+    }
+
+    pub(in crate::defaults::account::users) fn set_credentials(
+        &mut self,
+        credentials: WeakEntity<ServiceAccountCredentials>,
+        cx: &mut Context<Self>,
+    ) {
+        self.credentials = Some(credentials);
+        cx.notify();
+    }
+
     pub(in crate::defaults::account::users) fn load_if_needed(&mut self, cx: &mut Context<Self>) {
         self.users_table
             .update(cx, |table, cx| table.load_if_needed(cx));
@@ -100,6 +125,29 @@ impl UsersPage {
 
     pub(super) fn user_provisioned(&mut self, display_name: String, cx: &mut Context<Self>) {
         self.notice = Some(format!("用户“{display_name}”已创建"));
+        self.users_table.update(cx, |table, cx| table.refresh(cx));
+    }
+
+    pub(super) fn service_account_created(&mut self, display_name: String, cx: &mut Context<Self>) {
+        self.notice = Some(format!("服务账号“{display_name}”已创建"));
+        self.users_table.update(cx, |table, cx| table.refresh(cx));
+    }
+
+    pub(super) fn service_account_created_with_credential_error(
+        &mut self,
+        display_name: String,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = Some(format!(
+            "服务账号“{display_name}”已创建，但初始凭据生成失败；账号已保留，可从凭据管理重试"
+        ));
+        self.error = Some(error);
+        self.users_table.update(cx, |table, cx| table.refresh(cx));
+    }
+
+    pub(super) fn service_account_updated(&mut self, display_name: String, cx: &mut Context<Self>) {
+        self.notice = Some(format!("服务账号“{display_name}”资料已更新"));
         self.users_table.update(cx, |table, cx| table.refresh(cx));
     }
 
@@ -146,6 +194,24 @@ impl UsersPage {
         if let Some(dialog) = &self.provision_dialog {
             let roles = self.roles.clone();
             _ = dialog.update(cx, |dialog, cx| dialog.open(roles, window, cx));
+        }
+    }
+
+    fn open_service_account_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dialog) = &self.service_account_dialog {
+            let roles = self.roles.clone();
+            _ = dialog.update(cx, |dialog, cx| dialog.open(roles, window, cx));
+        }
+    }
+
+    pub(super) fn manage_service_account(
+        &mut self,
+        user: crate::desktop::contract::UserResponse,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(credentials) = &self.credentials {
+            _ = credentials.update(cx, |credentials, cx| credentials.open(user, window, cx));
         }
     }
 
@@ -213,7 +279,14 @@ impl UsersPage {
     }
 
     pub(super) fn has_active_mutation(&self, cx: &App) -> bool {
-        self.is_loading(cx) || self.busy_user_id.is_some() || self.role_editor.read(cx).is_busy()
+        self.is_loading(cx)
+            || self.busy_user_id.is_some()
+            || self.role_editor.read(cx).is_busy()
+            || self
+                .credentials
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .is_some_and(|credentials| credentials.read(cx).is_busy())
     }
 
     fn is_loading(&self, cx: &App) -> bool {
@@ -253,6 +326,7 @@ impl Render for UsersPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let component_size = theme::component_size(cx);
         let can_provision = has_permission(cx, "users:provision");
+        let can_provision_service_account = has_permission(cx, "service_accounts:provision");
         let users_table = self.users_table.read(cx);
         let loaded_count = users_table.loaded_len(cx);
         let visible_count = users_table.visible_len(cx);
@@ -279,6 +353,21 @@ impl Render for UsersPage {
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_provision_dialog(window, cx);
+            }));
+        let create_service_account_action = Button::new("open-default-service-account-dialog")
+            .debug_selector(|| "open-default-service-account-dialog".into())
+            .with_size(component_size)
+            .outline()
+            .icon(IconName::Plus)
+            .label("创建服务账号")
+            .disabled(loading || !can_provision_service_account)
+            .tooltip(if can_provision_service_account {
+                "创建服务账号"
+            } else {
+                "当前账号不能创建服务账号"
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_service_account_dialog(window, cx);
             }));
         let page = cx.entity().downgrade();
         let status_filter = filter_dropdown(
@@ -315,7 +404,12 @@ impl Render for UsersPage {
             .filter(field().label("类型").child(type_filter))
             .filter_columns(3)
             .toolbar_action(h_flex().w_full().justify_end().child(query_action))
-            .header_action(create_user_action)
+            .header_action(
+                h_flex()
+                    .gap_2()
+                    .child(create_service_account_action)
+                    .child(create_user_action),
+            )
             .with_size(component_size);
 
         v_flex()

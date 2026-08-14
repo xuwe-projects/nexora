@@ -2,18 +2,26 @@
 
 use contracts::{
     account::{
-        AccessProfileResponse, PermissionResponse, RoleResponse, UserPageResponse, UserResponse,
+        AccessProfileResponse, PermissionResponse, RoleResponse, ServiceAccountCredentialResponse,
+        ServiceAccountCredentialSource as ApiCredentialSource,
+        ServiceAccountCredentialStatus as ApiCredentialStatus,
+        ServiceAccountCredentialType as ApiCredentialType, UserPageResponse, UserResponse,
         UserStatus as ApiUserStatus, UserType,
     },
     pagination::PageMetadata,
 };
 use kernel::{Page, PageRequest, ValidationError};
 
-use crate::{AccessProfile, AccountError, Permission, PermissionKey, Role, User, UserStatus};
+use crate::{
+    AccessProfile, AccountError, Permission, PermissionKey, Role, ServiceAccountCredential,
+    ServiceAccountCredentialSource, ServiceAccountCredentialStatus, ServiceAccountCredentialType,
+    User, UserStatus, UserType as DomainUserType,
+};
 
 pub(crate) mod me;
 pub(crate) mod permissions;
 pub(crate) mod roles;
+pub(crate) mod service_accounts;
 pub(crate) mod users;
 
 const MAX_PAGE_SIZE: u32 = 100;
@@ -122,30 +130,25 @@ pub(super) fn access_profile_response(profile: AccessProfile) -> AccessProfileRe
 }
 
 pub(super) fn user_response(user: User) -> UserResponse {
-    let api_user_type = response_user_type(&user);
     UserResponse {
         id: user.id,
         identity_id: user.identity_id,
         username: user.username,
         email: user.email,
         display_name: user.display_name,
+        description: user.description,
         status: match user.status {
             UserStatus::Active => ApiUserStatus::Active,
             UserStatus::Suspended => ApiUserStatus::Suspended,
         },
-        user_type: api_user_type,
+        user_type: match user.user_type {
+            DomainUserType::Human => UserType::Human,
+            DomainUserType::ServiceAccount => UserType::ServiceAccount,
+        },
         is_super_admin: user.is_super_admin,
         created_at: user.created_at.timestamp(),
         updated_at: user.updated_at.timestamp(),
         last_login_at: user.last_login_at.timestamp(),
-    }
-}
-
-fn response_user_type(user: &User) -> UserType {
-    if !user.is_super_admin && user.username.is_none() && user.email.is_none() {
-        UserType::ServiceAccount
-    } else {
-        UserType::Human
     }
 }
 
@@ -164,6 +167,39 @@ pub(super) fn role_response(role: Role) -> RoleResponse {
             .collect(),
         created_at: role.created_at.timestamp(),
         updated_at: role.updated_at.timestamp(),
+    }
+}
+
+pub(super) fn service_account_credential_response(
+    credential: ServiceAccountCredential,
+) -> ServiceAccountCredentialResponse {
+    ServiceAccountCredentialResponse {
+        id: credential.id,
+        service_account_id: credential.service_account_id,
+        credential_type: match credential.credential_type {
+            ServiceAccountCredentialType::ClientCredentials => ApiCredentialType::ClientCredentials,
+            ServiceAccountCredentialType::PersonalAccessToken => {
+                ApiCredentialType::PersonalAccessToken
+            }
+        },
+        name: credential.name,
+        provider_credential_id: credential.provider_credential_id,
+        created_by: credential.created_by,
+        created_at: credential.created_at.timestamp(),
+        expires_at: credential.expires_at.map(|value| value.timestamp()),
+        status: match credential.status {
+            ServiceAccountCredentialStatus::Active => ApiCredentialStatus::Active,
+            ServiceAccountCredentialStatus::Revoked => ApiCredentialStatus::Revoked,
+        },
+        source: match credential.source {
+            ServiceAccountCredentialSource::Nexora => ApiCredentialSource::Nexora,
+            ServiceAccountCredentialSource::ProviderExternal => {
+                ApiCredentialSource::ProviderExternal
+            }
+        },
+        revoked_by: credential.revoked_by,
+        revoked_at: credential.revoked_at.map(|value| value.timestamp()),
+        last_synchronized_at: credential.last_synchronized_at.timestamp(),
     }
 }
 

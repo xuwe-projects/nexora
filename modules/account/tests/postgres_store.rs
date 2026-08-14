@@ -8,9 +8,13 @@ use std::{
 use account::{
     Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
-    ExternalIdentity, IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome,
-    PORTAL_ADMIN_ROLE_KEY, PermissionDefinition, PermissionKey, SYSTEM_ROLE_OWNER, User,
-    UserStatus as AccountUserStatus,
+    CreateServiceAccountIdentity, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
+    IdentityIssuerBindingOutcome, PORTAL_ADMIN_ROLE_KEY, PermissionDefinition, PermissionKey,
+    ProviderPersonalAccessToken, ProviderServiceAccountCredentials, SYSTEM_ROLE_OWNER,
+    ServiceAccountClientSecret, ServiceAccountCredentialSource, ServiceAccountCredentialType,
+    ServiceAccountDirectory, ServiceAccountDirectoryError, ServiceAccountIdentity,
+    ServiceAccountPersonalAccessTokenSecret, User, UserStatus as AccountUserStatus,
+    UserType as AccountUserType,
     authentication::{AccessTokenVerifier, VerificationError, VerifiedIdentity},
     authorization::{AuthenticatedUser, Authorized, RequiredPermission},
     create_generated_role_for_owner, create_permissions, create_role, create_role_for_owner,
@@ -27,11 +31,16 @@ use axum::{
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
     routing::get,
 };
+use chrono::{Duration as ChronoDuration, Utc};
 use contracts::account::{
-    AccessProfileResponse, ProvisionUserRequest, ReplaceUserRolesRequest, UpdateUserStatusRequest,
-    UserStatus,
+    AccessProfileResponse, CreateServiceAccountCredentialRequest,
+    CreateServiceAccountCredentialResponse, CreateServiceAccountRequest, ProvisionUserRequest,
+    ReplaceUserRolesRequest, ServiceAccountCredentialType as ApiCredentialType,
+    UpdateServiceAccountRequest, UpdateUserStatusRequest, UserResponse, UserStatus,
 };
 use contracts::error::ErrorEnvelope;
+use contracts::patch::PatchField;
+use serde_json::json;
 use sqlx::{PgPool, migrate::Migrator};
 use tower::ServiceExt as _;
 
@@ -136,8 +145,8 @@ async fn user_directory_filters_keyword_status_and_account_type(pool: PgPool) {
         .expect("应当可以停用普通人员用户");
     sqlx::query(
         r#"
-        INSERT INTO account.users (id, identity_id, display_name)
-        VALUES ('service-automation', 'service-automation', 'Automation Service')
+        INSERT INTO account.users (id, identity_id, username, display_name, user_type)
+        VALUES ('SvcAuto1', 'service-automation', 'service-automation', 'Automation Service', 'service_account')
         "#,
     )
     .execute(&pool)
@@ -157,22 +166,409 @@ async fn user_directory_filters_keyword_status_and_account_type(pool: PgPool) {
     assert_eq!(suspended_page.items(), &[suspended_user]);
 
     let human_page = account
-        .users_filtered(1, 100, None, None, Some(false))
+        .users_filtered(1, 100, None, None, Some(AccountUserType::Human))
         .await
         .expect("人员账号筛选应当成功");
-    assert!(
-        human_page
-            .items()
-            .iter()
-            .all(|user| user.id != "service-automation")
-    );
+    assert!(human_page.items().iter().all(|user| user.id != "SvcAuto1"));
 
     let service_page = account
-        .users_filtered(1, 100, None, None, Some(true))
+        .users_filtered(1, 100, None, None, Some(AccountUserType::ServiceAccount))
         .await
         .expect("服务账号筛选应当成功");
     assert_eq!(service_page.items().len(), 1);
-    assert_eq!(service_page.items()[0].id, "service-automation");
+    assert_eq!(service_page.items()[0].id, "SvcAuto1");
+}
+
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
+async fn service_account_lifecycle_keeps_roles_credentials_and_deletion_rules(pool: PgPool) {
+    let directory = Arc::new(TestServiceAccountDirectory::default());
+    let account = test_account_with_service_directory(pool.clone(), directory.clone()).await;
+    let operator = create_user(&pool, identity("service-account-operator"))
+        .await
+        .expect("应当可以创建服务账号操作者");
+    let role = create_role(&pool, "machine-reader", "设备读取者", None, &[])
+        .await
+        .expect("应当可以创建服务账号业务角色");
+    let service_account = account
+        .create_service_account(
+            CreateServiceAccountIdentity {
+                username: "dispenser-line-a".to_owned(),
+                display_name: "A 线点料机".to_owned(),
+                description: Some("一号车间".to_owned()),
+            },
+            &[],
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建无角色无凭据的服务账号");
+
+    let member_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM account.user_roles user_roles
+        JOIN account.roles roles ON roles.id = user_roles.role_id
+        WHERE user_roles.user_id = $1 AND roles.key = 'member'
+        "#,
+    )
+    .bind(service_account.id.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对服务账号默认角色");
+    assert_eq!(member_count, 0, "服务账号不得自动获得 member");
+    let me = current_profile(&account, service_account.identity_id.as_str()).await;
+    assert_eq!(me.user.id, service_account.id);
+    assert_eq!(me.user.email, None, "服务账号 /me 不得进入人员资料刷新");
+    assert_eq!(
+        me.user.username.as_deref(),
+        Some("dispenser-line-a"),
+        "服务账号认证不得用 token claims 覆盖稳定 username"
+    );
+    assert_eq!(
+        me.user.display_name, "A 线点料机",
+        "服务账号认证不得用旧 JWT claims 覆盖受管资料"
+    );
+
+    let profile = account
+        .replace_user_roles(
+            service_account.id.as_str(),
+            &[role.id],
+            operator.id.as_str(),
+        )
+        .await
+        .expect("服务账号应当允许使用统一角色接口");
+    assert!(profile.roles.iter().any(|assigned| assigned.id == role.id));
+    account
+        .update_user_status(service_account.id.as_str(), AccountUserStatus::Suspended)
+        .await
+        .expect("服务账号应当允许使用统一状态接口");
+    account
+        .update_user_status(service_account.id.as_str(), AccountUserStatus::Active)
+        .await
+        .expect("服务账号应当可以重新启用");
+
+    let first_pat = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::PersonalAccessToken,
+            "A 线控制器",
+            None,
+            Some("pat-request-1"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建永不过期 PAT");
+    assert_eq!(first_pat.client_id, None);
+    let second_pat = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::PersonalAccessToken,
+            "维护终端",
+            Some(Utc::now() + ChronoDuration::days(30)),
+            Some("pat-request-2"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建有期限的第二个 PAT");
+    assert_ne!(first_pat.credential.id, second_pat.credential.id);
+    let replay = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::PersonalAccessToken,
+            "重复请求",
+            None,
+            Some("pat-request-1"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect_err("幂等键重放不得生成第三个 PAT");
+    assert!(matches!(
+        replay,
+        AccountError::Conflict {
+            code: "idempotency_key_replayed",
+            ..
+        }
+    ));
+
+    account
+        .revoke_service_account_credential(
+            service_account.id.as_str(),
+            first_pat.credential.id,
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以只撤销第一个 PAT");
+    let credentials = account
+        .service_account_credentials(service_account.id.as_str())
+        .await
+        .expect("应当可以协调 Provider 凭据状态");
+    assert_eq!(credentials.len(), 2);
+    assert!(credentials.iter().any(|credential| {
+        credential.id == first_pat.credential.id
+            && credential.status == account::ServiceAccountCredentialStatus::Revoked
+    }));
+    assert!(credentials.iter().any(|credential| {
+        credential.id == second_pat.credential.id
+            && credential.status == account::ServiceAccountCredentialStatus::Active
+    }));
+
+    let first_client = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::ClientCredentials,
+            "设备 OAuth",
+            None,
+            Some("client-request-1"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建 Client Secret");
+    assert_eq!(first_client.client_id.as_deref(), Some("dispenser-line-a"));
+    let second_client = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::ClientCredentials,
+            "设备 OAuth 轮换",
+            None,
+            Some("client-request-2"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以串行轮换 Client Secret");
+    let active_clients = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*) FROM account.service_account_credentials
+        WHERE service_account_id = $1 AND credential_type = 'client_credentials'
+          AND status = 'active'
+        "#,
+    )
+    .bind(service_account.id.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对唯一有效 Client Secret");
+    assert_eq!(active_clients, 1);
+    assert_ne!(first_client.credential.id, second_client.credential.id);
+
+    directory.add_external_pat("console-pat", None);
+    let reconciled = account
+        .service_account_credentials(service_account.id.as_str())
+        .await
+        .expect("Provider 外部创建 PAT 应当被协调进本地元数据");
+    assert!(reconciled.iter().any(|credential| {
+        credential.provider_credential_id.as_deref() == Some("console-pat")
+            && credential.source == ServiceAccountCredentialSource::ProviderExternal
+            && credential.status == account::ServiceAccountCredentialStatus::Active
+    }));
+
+    let deletion = sqlx::query("DELETE FROM account.users WHERE id = $1")
+        .bind(service_account.id.as_str())
+        .execute(&pool)
+        .await;
+    assert!(deletion.is_err(), "服务账号只能停用，数据库也必须拒绝删除");
+
+    let human_error = account
+        .service_account_credentials(operator.id.as_str())
+        .await
+        .expect_err("人员账号不得进入服务账号凭据接口");
+    assert!(matches!(
+        human_error,
+        AccountError::Conflict {
+            code: "service_account_required",
+            ..
+        }
+    ));
+}
+
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
+async fn service_account_http_enforces_permissions_validation_and_resource_semantics(pool: PgPool) {
+    let directory = Arc::new(TestServiceAccountDirectory::default());
+    let account = test_account_with_service_directory(pool.clone(), directory).await;
+    let operator = create_user(&pool, identity("service-http-admin"))
+        .await
+        .expect("应当可以创建服务账号 HTTP 管理员");
+    let unprivileged = create_user(&pool, identity("service-http-member"))
+        .await
+        .expect("应当可以创建无管理权限用户");
+    let mut permission_ids = Vec::new();
+    for key in [
+        "service_accounts:provision",
+        "service_accounts:profile.write",
+        "service_accounts:credentials.read",
+        "service_accounts:credentials.write",
+    ] {
+        permission_ids.push(permission_id(key, &pool).await);
+    }
+    let manager_role = account
+        .create_role(
+            "service-http-manager",
+            "服务账号 HTTP 管理员",
+            None,
+            permission_ids.as_slice(),
+        )
+        .await
+        .expect("应当可以创建服务账号 HTTP 管理角色");
+    account
+        .replace_user_roles(
+            operator.id.as_str(),
+            &[manager_role.id],
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以授予服务账号 HTTP 管理权限");
+
+    let denied = request_json_response(
+        &account,
+        Method::POST,
+        "/service-accounts".to_owned(),
+        unprivileged.identity_id.as_str(),
+        &CreateServiceAccountRequest {
+            username: "denied-machine".to_owned(),
+            display_name: "无权限设备".to_owned(),
+            description: None,
+            role_ids: Vec::new(),
+        },
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response_error_code(denied).await, "permission_denied");
+
+    let created = request_json_response(
+        &account,
+        Method::POST,
+        "/service-accounts".to_owned(),
+        operator.identity_id.as_str(),
+        &CreateServiceAccountRequest {
+            username: "http-machine-a".to_owned(),
+            display_name: "HTTP 设备 A".to_owned(),
+            description: Some("初始说明".to_owned()),
+            role_ids: Vec::new(),
+        },
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert!(created.headers().get("location").is_some_and(|value| {
+        value
+            .to_str()
+            .is_ok_and(|value| value.starts_with("/users/"))
+    }));
+    let service_account: UserResponse = response_json(created).await;
+    assert_eq!(
+        service_account.user_type,
+        contracts::account::UserType::ServiceAccount
+    );
+
+    let immutable = request_json_response(
+        &account,
+        Method::PATCH,
+        format!("/service-accounts/{}", service_account.id),
+        operator.identity_id.as_str(),
+        &json!({ "username": "http-machine-b" }),
+    )
+    .await;
+    assert_eq!(immutable.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_error_code(immutable).await,
+        "service_account_identifier_immutable"
+    );
+
+    let updated = request_json_response(
+        &account,
+        Method::PATCH,
+        format!("/service-accounts/{}", service_account.id),
+        operator.identity_id.as_str(),
+        &UpdateServiceAccountRequest {
+            username: None,
+            display_name: Some("HTTP 设备 A（更新）".to_owned()),
+            description: PatchField::Null,
+        },
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated: UserResponse = response_json(updated).await;
+    assert_eq!(updated.username.as_deref(), Some("http-machine-a"));
+    assert_eq!(updated.description, None);
+
+    let invalid_type = request_json_response(
+        &account,
+        Method::POST,
+        format!("/service-accounts/{}/credentials", service_account.id),
+        operator.identity_id.as_str(),
+        &json!({ "credential_type": "ssh_key", "name": "不支持的凭据" }),
+    )
+    .await;
+    assert_eq!(invalid_type.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_error_code(invalid_type).await,
+        "credential_type_invalid"
+    );
+
+    let invalid_expiration = request_json_response(
+        &account,
+        Method::POST,
+        format!("/service-accounts/{}/credentials", service_account.id),
+        operator.identity_id.as_str(),
+        &CreateServiceAccountCredentialRequest {
+            credential_type: ApiCredentialType::ClientCredentials,
+            name: "错误到期时间".to_owned(),
+            expires_at: Some(Utc::now().timestamp() + 3_600),
+        },
+    )
+    .await;
+    assert_eq!(
+        invalid_expiration.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        response_error_code(invalid_expiration).await,
+        "credential_expiration_invalid"
+    );
+
+    let created_credential = request_json_with_idempotency_response(
+        &account,
+        format!("/service-accounts/{}/credentials", service_account.id),
+        operator.identity_id.as_str(),
+        "http-pat-request-1",
+        &CreateServiceAccountCredentialRequest {
+            credential_type: ApiCredentialType::PersonalAccessToken,
+            name: "HTTP PAT".to_owned(),
+            expires_at: None,
+        },
+    )
+    .await;
+    assert_eq!(created_credential.status(), StatusCode::CREATED);
+    let created_credential: CreateServiceAccountCredentialResponse =
+        response_json(created_credential).await;
+
+    let human_credentials = get_response_with_token(
+        router(&account),
+        format!("/service-accounts/{}/credentials", operator.id).as_str(),
+        operator.identity_id.as_str(),
+    )
+    .await;
+    assert_eq!(human_credentials.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_error_code(human_credentials).await,
+        "service_account_required"
+    );
+
+    let missing = get_response_with_token(
+        router(&account),
+        "/service-accounts/Missing1/credentials",
+        operator.identity_id.as_str(),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let revoked = delete_with_token(
+        router(&account),
+        format!(
+            "/service-accounts/{}/credentials/{}",
+            service_account.id, created_credential.credential.id
+        )
+        .as_str(),
+        operator.identity_id.as_str(),
+    )
+    .await;
+    assert_eq!(revoked, StatusCode::NO_CONTENT);
 }
 
 #[sqlx::test(migrator = "NEXORA_MIGRATOR")]
@@ -1435,7 +1831,153 @@ async fn test_account_with_directory(
         pool,
         token_verifier: Arc::new(TokenIdentityVerifier),
         identity_directory: Some(identity_directory),
+        service_account_directory: None,
     })
+}
+
+async fn test_account_with_service_directory(
+    pool: PgPool,
+    service_account_directory: Arc<dyn ServiceAccountDirectory>,
+) -> Account {
+    Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
+        .await
+        .expect("测试部署 issuer 应当可以绑定或核对");
+    Account::new(AccountDependencies {
+        pool,
+        token_verifier: Arc::new(TokenIdentityVerifier),
+        identity_directory: Some(Arc::new(TestIdentityDirectory)),
+        service_account_directory: Some(service_account_directory),
+    })
+}
+
+#[derive(Default)]
+struct TestServiceAccountDirectory {
+    state: Mutex<TestServiceAccountDirectoryState>,
+}
+
+#[derive(Default)]
+struct TestServiceAccountDirectoryState {
+    has_client_secret: bool,
+    next_token_id: usize,
+    personal_access_tokens: Vec<ProviderPersonalAccessToken>,
+}
+
+impl TestServiceAccountDirectory {
+    fn add_external_pat(&self, token_id: &str, expires_at: Option<chrono::DateTime<Utc>>) {
+        self.state
+            .lock()
+            .expect("测试服务账号目录锁不应中毒")
+            .personal_access_tokens
+            .push(ProviderPersonalAccessToken {
+                token_id: token_id.to_owned(),
+                created_at: Utc::now(),
+                expires_at,
+            });
+    }
+}
+
+#[async_trait]
+impl ServiceAccountDirectory for TestServiceAccountDirectory {
+    async fn create_service_account(
+        &self,
+        request: &CreateServiceAccountIdentity,
+    ) -> Result<ServiceAccountIdentity, ServiceAccountDirectoryError> {
+        Ok(ServiceAccountIdentity {
+            identity_id: format!("machine-{}", request.username),
+            username: request.username.clone(),
+            display_name: request.display_name.clone(),
+            description: request.description.clone(),
+        })
+    }
+
+    async fn update_service_account(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), ServiceAccountDirectoryError> {
+        Ok(())
+    }
+
+    async fn delete_uncommitted_service_account(
+        &self,
+        _: &str,
+    ) -> Result<(), ServiceAccountDirectoryError> {
+        Ok(())
+    }
+
+    async fn create_client_secret(
+        &self,
+        _: &str,
+    ) -> Result<ServiceAccountClientSecret, ServiceAccountDirectoryError> {
+        self.state
+            .lock()
+            .expect("测试服务账号目录锁不应中毒")
+            .has_client_secret = true;
+        Ok(ServiceAccountClientSecret {
+            created_at: Utc::now(),
+            client_secret: "only-visible-client-secret".to_owned(),
+        })
+    }
+
+    async fn remove_client_secret(&self, _: &str) -> Result<(), ServiceAccountDirectoryError> {
+        self.state
+            .lock()
+            .expect("测试服务账号目录锁不应中毒")
+            .has_client_secret = false;
+        Ok(())
+    }
+
+    async fn create_personal_access_token(
+        &self,
+        _: &str,
+        expires_at: Option<chrono::DateTime<Utc>>,
+    ) -> Result<ServiceAccountPersonalAccessTokenSecret, ServiceAccountDirectoryError> {
+        let created_at = Utc::now();
+        let mut state = self.state.lock().expect("测试服务账号目录锁不应中毒");
+        state.next_token_id += 1;
+        let token_id = format!("pat-{}", state.next_token_id);
+        state
+            .personal_access_tokens
+            .push(ProviderPersonalAccessToken {
+                token_id: token_id.clone(),
+                created_at,
+                expires_at,
+            });
+        Ok(ServiceAccountPersonalAccessTokenSecret {
+            token_id,
+            created_at,
+            expires_at,
+            token: "only-visible-pat".to_owned(),
+        })
+    }
+
+    async fn remove_personal_access_token(
+        &self,
+        _: &str,
+        token_id: &str,
+    ) -> Result<(), ServiceAccountDirectoryError> {
+        let mut state = self.state.lock().expect("测试服务账号目录锁不应中毒");
+        let before = state.personal_access_tokens.len();
+        state
+            .personal_access_tokens
+            .retain(|token| token.token_id != token_id);
+        if state.personal_access_tokens.len() == before {
+            return Err(ServiceAccountDirectoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn credentials(
+        &self,
+        _: &str,
+    ) -> Result<ProviderServiceAccountCredentials, ServiceAccountDirectoryError> {
+        let state = self.state.lock().expect("测试服务账号目录锁不应中毒");
+        Ok(ProviderServiceAccountCredentials {
+            has_client_secret: state.has_client_secret,
+            personal_access_tokens: state.personal_access_tokens.clone(),
+        })
+    }
 }
 
 fn router(account: &Account) -> Router {
@@ -1570,6 +2112,74 @@ async fn request_json_response<T: serde::Serialize>(
         )
         .await
         .expect("路由应当返回响应")
+}
+
+async fn request_json_with_idempotency_response<T: serde::Serialize>(
+    account: &Account,
+    uri: String,
+    token: &str,
+    idempotency_key: &str,
+    body: &T,
+) -> axum::response::Response {
+    router(account)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .header("idempotency-key", idempotency_key)
+                .body(Body::from(
+                    serde_json::to_vec(body).expect("请求契约应当可以序列化"),
+                ))
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应")
+}
+
+async fn get_response_with_token(
+    router: Router,
+    uri: &str,
+    token: &str,
+) -> axum::response::Response {
+    router
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应")
+}
+
+async fn delete_with_token(router: Router, uri: &str, token: &str) -> StatusCode {
+    router
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应")
+        .status()
+}
+
+async fn response_json<T: serde::de::DeserializeOwned>(response: axum::response::Response) -> T {
+    let body = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("响应正文应当可以读取");
+    serde_json::from_slice(&body).expect("响应应当符合预期 JSON 契约")
+}
+
+async fn response_error_code(response: axum::response::Response) -> String {
+    let envelope: ErrorEnvelope = response_json(response).await;
+    envelope.error.code
 }
 
 async fn system_role_id(key: &str, pool: &PgPool) -> i64 {
