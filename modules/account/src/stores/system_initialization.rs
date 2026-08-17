@@ -159,7 +159,8 @@ pub(crate) async fn initialize(
         let super_admin = completed_super_admin(record, &mut *transaction)
             .await?
             .ok_or(StoreError::InvalidData("系统初始化状态"))?;
-        let same_identity = super_admin.identity_id == identity.identity_id;
+        let same_identity =
+            super_admin.identity_id.as_deref() == Some(identity.identity_id.as_str());
         transaction.commit().await.map_err(|source| {
             StoreError::database_operation("system_initialization.commit_existing", source)
         })?;

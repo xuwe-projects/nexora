@@ -65,7 +65,8 @@ pub(crate) async fn query_page_filtered(
         r#"
         SELECT COUNT(*)
         FROM account.users
-        WHERE ($1::text IS NULL OR
+        WHERE identity_id IS NOT NULL
+          AND ($1::text IS NULL OR
                id ILIKE '%' || $1 || '%' OR
                COALESCE(username, '') ILIKE '%' || $1 || '%' OR
                COALESCE(email, '') ILIKE '%' || $1 || '%' OR
@@ -85,7 +86,8 @@ pub(crate) async fn query_page_filtered(
         SELECT id, identity_id, username, email, display_name, status, user_type, description,
                is_super_admin, created_at, updated_at, last_login_at
         FROM account.users
-        WHERE ($1::text IS NULL OR
+        WHERE identity_id IS NOT NULL
+          AND ($1::text IS NULL OR
                id ILIKE '%' || $1 || '%' OR
                COALESCE(username, '') ILIKE '%' || $1 || '%' OR
                COALESCE(email, '') ILIKE '%' || $1 || '%' OR

@@ -152,6 +152,28 @@ async fn user_directory_filters_keyword_status_and_account_type(pool: PgPool) {
     .execute(&pool)
     .await
     .expect("应当可以准备服务账号");
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, user_type)
+        VALUES ('SysAudit', NULL, '内部审计主体', 'service_account')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("内部服务主体应当允许不绑定 Provider identity");
+
+    let invalid_human = sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, user_type)
+        VALUES ('HumanNil', NULL, '缺少身份的人员', 'human')
+        "#,
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_human.is_err(),
+        "人员账号仍必须绑定 Provider identity"
+    );
 
     let keyword_page = account
         .users_filtered(1, 100, Some("ALPHA@EXAMPLE.COM"), None, None)
@@ -177,6 +199,18 @@ async fn user_directory_filters_keyword_status_and_account_type(pool: PgPool) {
         .expect("服务账号筛选应当成功");
     assert_eq!(service_page.items().len(), 1);
     assert_eq!(service_page.items()[0].id, "SvcAuto1");
+
+    let internal_error = account
+        .service_account_credentials("SysAudit")
+        .await
+        .expect_err("内部服务主体不得进入 Provider 凭据协调");
+    assert!(matches!(
+        internal_error,
+        AccountError::Conflict {
+            code: "internal_service_account",
+            ..
+        }
+    ));
 }
 
 #[sqlx::test(migrator = "NEXORA_MIGRATOR")]
@@ -215,7 +249,7 @@ async fn service_account_lifecycle_keeps_roles_credentials_and_deletion_rules(po
     .await
     .expect("应当可以核对服务账号默认角色");
     assert_eq!(member_count, 0, "服务账号不得自动获得 member");
-    let me = current_profile(&account, service_account.identity_id.as_str()).await;
+    let me = current_profile(&account, provider_identity_id(&service_account)).await;
     assert_eq!(me.user.id, service_account.id);
     assert_eq!(me.user.email, None, "服务账号 /me 不得进入人员资料刷新");
     assert_eq!(
@@ -529,12 +563,21 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         )
         .await
         .expect("应当可以授予服务账号 HTTP 管理权限");
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, user_type)
+        VALUES ('IntAudit', NULL, '内部审计主体', 'service_account')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("应当可以准备内部服务主体");
 
     let denied = request_json_response(
         &account,
         Method::POST,
         "/service-accounts".to_owned(),
-        unprivileged.identity_id.as_str(),
+        provider_identity_id(&unprivileged),
         &CreateServiceAccountRequest {
             username: "denied-machine".to_owned(),
             display_name: "无权限设备".to_owned(),
@@ -550,7 +593,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         &account,
         Method::POST,
         "/service-accounts".to_owned(),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         &CreateServiceAccountRequest {
             username: "http-machine-a".to_owned(),
             display_name: "HTTP 设备 A".to_owned(),
@@ -575,7 +618,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         &account,
         Method::PATCH,
         format!("/service-accounts/{}", service_account.id),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         &json!({ "username": "http-machine-b" }),
     )
     .await;
@@ -589,7 +632,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         &account,
         Method::PATCH,
         format!("/service-accounts/{}", service_account.id),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         &UpdateServiceAccountRequest {
             username: None,
             display_name: Some("HTTP 设备 A（更新）".to_owned()),
@@ -606,7 +649,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         &account,
         Method::POST,
         format!("/service-accounts/{}/credentials", service_account.id),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         &json!({ "credential_type": "ssh_key", "name": "不支持的凭据" }),
     )
     .await;
@@ -620,7 +663,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         &account,
         Method::POST,
         format!("/service-accounts/{}/credentials", service_account.id),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         &CreateServiceAccountCredentialRequest {
             credential_type: ApiCredentialType::ClientCredentials,
             name: "错误到期时间".to_owned(),
@@ -640,7 +683,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
     let created_credential = request_json_with_idempotency_response(
         &account,
         format!("/service-accounts/{}/credentials", service_account.id),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
         "http-pat-request-1",
         &CreateServiceAccountCredentialRequest {
             credential_type: ApiCredentialType::PersonalAccessToken,
@@ -656,7 +699,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
     let human_credentials = get_response_with_token(
         router(&account),
         format!("/service-accounts/{}/credentials", operator.id).as_str(),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
     )
     .await;
     assert_eq!(human_credentials.status(), StatusCode::CONFLICT);
@@ -665,10 +708,22 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
         "service_account_required"
     );
 
+    let internal_credentials = get_response_with_token(
+        router(&account),
+        "/service-accounts/IntAudit/credentials",
+        provider_identity_id(&operator),
+    )
+    .await;
+    assert_eq!(internal_credentials.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_error_code(internal_credentials).await,
+        "internal_service_account"
+    );
+
     let missing = get_response_with_token(
         router(&account),
         "/service-accounts/Missing1/credentials",
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
     )
     .await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
@@ -680,7 +735,7 @@ async fn service_account_http_enforces_permissions_validation_and_resource_seman
             service_account.id, created_credential.credential.id
         )
         .as_str(),
-        operator.identity_id.as_str(),
+        provider_identity_id(&operator),
     )
     .await;
     assert_eq!(revoked, StatusCode::NO_CONTENT);
@@ -1157,7 +1212,7 @@ async fn managed_user_with_initial_password_sets_directory_password(pool: PgPool
         .await
         .expect("带初始密码的人类用户应当可以创建并绑定本地账号");
 
-    assert_eq!(user.identity_id, "13800000000");
+    assert_eq!(user.identity_id.as_deref(), Some("13800000000"));
     let created = directory.created.lock().expect("测试目录记录应可读取");
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].username, "13800000000");
@@ -1184,7 +1239,7 @@ async fn managed_user_with_contact_phone_passes_phone_to_directory(pool: PgPool)
         .await
         .expect("带联系手机号的人类用户应当可以创建并绑定本地账号");
 
-    assert_eq!(user.identity_id, "13800000000");
+    assert_eq!(user.identity_id.as_deref(), Some("13800000000"));
     let created = directory.created.lock().expect("测试目录记录应可读取");
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].username, "13800000000");
@@ -1340,7 +1395,7 @@ async fn existing_identity_authenticates_without_automatic_role_grant(pool: PgPo
     let profile = current_profile(&account, "ordinary-user").await;
 
     assert_eq!(profile.user.id, "User0001");
-    assert_eq!(profile.user.identity_id, "ordinary-user");
+    assert_eq!(profile.user.identity_id.as_deref(), Some("ordinary-user"));
     assert!(profile.roles.is_empty());
     assert!(profile.permissions.is_empty());
 }
@@ -1758,7 +1813,10 @@ async fn authorized_administrator_can_provision_user_then_me_syncs_existing(pool
     assert!(location.starts_with("/users/"));
 
     let profile = current_profile(&account, "provisioned-user").await;
-    assert_eq!(profile.user.identity_id, "provisioned-user");
+    assert_eq!(
+        profile.user.identity_id.as_deref(),
+        Some("provisioned-user")
+    );
     assert!(profile.roles.iter().any(|role| role.id == initial_role.id));
     let granted_by = sqlx::query_scalar::<_, Option<String>>(
         "SELECT granted_by FROM account.user_roles WHERE user_id = $1 AND role_id = $2",
@@ -2142,7 +2200,7 @@ fn host_router(account: &Account, pool: PgPool) -> Router {
 }
 
 async fn host_profile(authenticated: AuthenticatedUser) -> StatusCode {
-    if authenticated.profile().user.identity_id == "host-user" {
+    if authenticated.profile().user.identity_id.as_deref() == Some("host-user") {
         StatusCode::OK
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -2346,6 +2404,12 @@ fn permission_keys(permissions: &[account::Permission]) -> Vec<&str> {
         .iter()
         .map(|permission| permission.key.as_str())
         .collect()
+}
+
+fn provider_identity_id(user: &User) -> &str {
+    user.identity_id
+        .as_deref()
+        .expect("测试 Provider 用户应当具有 identity ID")
 }
 
 async fn stored_role_permission_keys(role_id: i64, pool: &PgPool) -> Vec<String> {

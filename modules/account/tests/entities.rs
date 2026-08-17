@@ -65,7 +65,7 @@ fn profile(permissions: impl IntoIterator<Item = PermissionKey>) -> AccessProfil
     AccessProfile {
         user: User {
             id: "Ab3xY9qP".to_owned(),
-            identity_id: "test-user".to_owned(),
+            identity_id: Some("test-user".to_owned()),
             username: Some("test-user".to_owned()),
             email: Some("user@example.com".to_owned()),
             display_name: "测试用户".to_owned(),

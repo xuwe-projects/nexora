@@ -4,7 +4,7 @@ use semver::Version;
 #[test]
 fn current_release_is_newer_than_previous_release() {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let previous = Version::parse("0.38.1").unwrap();
+    let previous = Version::parse("0.38.2").unwrap();
 
     assert!(current > previous);
 }
@@ -19,8 +19,8 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
-    assert!(entry.markdown().contains("UserListQuery"));
-    assert!(entry.markdown().contains("invalid_query_parameter"));
+    assert!(entry.markdown().contains("identity_id = null"));
+    assert!(entry.markdown().contains("internal_service_account"));
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn embedded_repository_supports_sparse_release_components() {
     let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
 
     assert!(repository.find("api", &version, "zh-CN").is_some());
-    assert!(repository.find("console", &version, "zh-CN").is_none());
+    assert!(repository.find("console", &version, "zh-CN").is_some());
     assert!(
         repository
             .find("console", &Version::parse("0.38.0").unwrap(), "zh-CN")
@@ -59,6 +59,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.38.2",
             "0.38.1",
             "0.38.0",
             "0.37.0",

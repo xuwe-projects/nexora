@@ -10,7 +10,7 @@ order: 2
 Install the released standalone `cli` package from its GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.38.2 cli --locked --force --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.39.0 cli --locked --force --bin nexora
 ```
 
 Install the current local checkout from the Nexora repository root:

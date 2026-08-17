@@ -1528,7 +1528,8 @@ impl Account {
     ///
     /// # Errors
     ///
-    /// 目标不存在或不是服务账号、资料无效、Provider 拒绝更新，或数据库写入失败时返回错误。
+    /// 目标不存在、不是 Provider 管理的服务账号、资料无效、Provider 拒绝更新，或数据库写入
+    /// 失败时返回错误。
     pub async fn update_service_account_profile(
         &self,
         service_account_id: &str,
@@ -1537,6 +1538,7 @@ impl Account {
     ) -> Result<User, AccountError> {
         validate_service_account_profile(display_name, description)?;
         let current = self.require_service_account(service_account_id).await?;
+        let identity_id = service_account_provider_identity(&current)?.to_owned();
         let directory = self
             .state
             .service_account_directory
@@ -1544,7 +1546,7 @@ impl Account {
             .ok_or(ServiceAccountDirectoryError::Unavailable)?;
         directory
             .update_service_account(
-                current.identity_id.as_str(),
+                identity_id.as_str(),
                 display_name.trim(),
                 description.map(str::trim),
             )
@@ -1561,7 +1563,7 @@ impl Account {
             Err(error) => {
                 if let Err(cleanup_error) = directory
                     .update_service_account(
-                        current.identity_id.as_str(),
+                        identity_id.as_str(),
                         current.display_name.as_str(),
                         current.description.as_deref(),
                     )
@@ -1585,18 +1587,19 @@ impl Account {
     ///
     /// # Errors
     ///
-    /// 服务账号不存在、Provider 不可用或本地协调事务失败时返回错误。
+    /// 服务账号不存在、没有 Provider 身份、Provider 不可用或本地协调事务失败时返回错误。
     pub async fn service_account_credentials(
         &self,
         service_account_id: &str,
     ) -> Result<Vec<ServiceAccountCredential>, AccountError> {
         let user = self.require_service_account(service_account_id).await?;
+        let identity_id = service_account_provider_identity(&user)?;
         let directory = self
             .state
             .service_account_directory
             .as_ref()
             .ok_or(ServiceAccountDirectoryError::Unavailable)?;
-        let snapshot = directory.credentials(user.identity_id.as_str()).await?;
+        let snapshot = directory.credentials(identity_id).await?;
         Ok(
             stores::service_accounts::reconcile(service_account_id, &snapshot, &self.state.pool)
                 .await?,
@@ -1626,7 +1629,7 @@ impl Account {
     /// # Errors
     ///
     /// 输入或到期时间无效、未启用 PAT introspection、幂等键重复、轮换并发冲突、服务账号
-    /// 或操作者不存在、Provider 不可用，或数据库事务失败时返回错误。
+    /// 没有 Provider 身份、操作者不存在、Provider 不可用，或数据库事务失败时返回错误。
     pub async fn create_service_account_credential(
         &self,
         service_account_id: &str,
@@ -1650,7 +1653,8 @@ impl Account {
         if expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
             return Err(ValidationError::new("expires_at", "PAT 到期时间必须晚于当前时间").into());
         }
-        _ = self.require_service_account(service_account_id).await?;
+        let service_account = self.require_service_account(service_account_id).await?;
+        _ = service_account_provider_identity(&service_account)?;
         let directory = self
             .state
             .service_account_directory
@@ -1688,6 +1692,7 @@ impl Account {
             });
         }
         let user = stores::service_accounts::lock(service_account_id, &mut transaction).await?;
+        let identity_id = service_account_provider_identity(&user)?.to_owned();
         if let Some(idempotency_key) = idempotency_key
             && stores::service_accounts::idempotency_key_exists(
                 service_account_id,
@@ -1709,9 +1714,7 @@ impl Account {
                     code: "service_account_username_missing",
                     message: "服务账号缺少稳定 username，不能创建 Client Secret",
                 })?;
-                let generated = directory
-                    .create_client_secret(user.identity_id.as_str())
-                    .await?;
+                let generated = directory.create_client_secret(identity_id.as_str()).await?;
                 let inserted = stores::service_accounts::insert_client_secret(
                     service_account_id,
                     name.as_str(),
@@ -1725,13 +1728,12 @@ impl Account {
                     Ok(credential) => credential,
                     Err(error) => {
                         _ = transaction.rollback().await;
-                        compensate_client_secret(directory.as_ref(), user.identity_id.as_str())
-                            .await;
+                        compensate_client_secret(directory.as_ref(), identity_id.as_str()).await;
                         return Err(error.into());
                     }
                 };
                 if let Err(error) = transaction.commit().await {
-                    compensate_client_secret(directory.as_ref(), user.identity_id.as_str()).await;
+                    compensate_client_secret(directory.as_ref(), identity_id.as_str()).await;
                     return Err(StoreError::from(error).into());
                 }
                 Ok(CreatedServiceAccountCredential {
@@ -1742,7 +1744,7 @@ impl Account {
             }
             ServiceAccountCredentialType::PersonalAccessToken => {
                 let generated = directory
-                    .create_personal_access_token(user.identity_id.as_str(), expires_at)
+                    .create_personal_access_token(identity_id.as_str(), expires_at)
                     .await?;
                 let verified = self
                     .state
@@ -1750,7 +1752,7 @@ impl Account {
                     .verify_opaque_token(generated.token.as_str())
                     .await
                     .and_then(|identity| {
-                        if identity.subject == user.identity_id {
+                        if identity.subject == identity_id {
                             Ok(identity)
                         } else {
                             Err(VerificationError::InvalidToken)
@@ -1760,7 +1762,7 @@ impl Account {
                     _ = transaction.rollback().await;
                     compensate_personal_access_token(
                         directory.as_ref(),
-                        user.identity_id.as_str(),
+                        identity_id.as_str(),
                         generated.token_id.as_str(),
                     )
                     .await;
@@ -1783,7 +1785,7 @@ impl Account {
                         _ = transaction.rollback().await;
                         compensate_personal_access_token(
                             directory.as_ref(),
-                            user.identity_id.as_str(),
+                            identity_id.as_str(),
                             generated.token_id.as_str(),
                         )
                         .await;
@@ -1793,7 +1795,7 @@ impl Account {
                 if let Err(error) = transaction.commit().await {
                     compensate_personal_access_token(
                         directory.as_ref(),
-                        user.identity_id.as_str(),
+                        identity_id.as_str(),
                         generated.token_id.as_str(),
                     )
                     .await;
@@ -1812,14 +1814,16 @@ impl Account {
     ///
     /// # Errors
     ///
-    /// 服务账号或凭据不存在、凭据已经撤销、Provider 拒绝移除，或本地事务失败时返回错误。
+    /// 服务账号或凭据不存在、没有 Provider 身份、凭据已经撤销、Provider 拒绝移除，或本地事务
+    /// 失败时返回错误。
     pub async fn revoke_service_account_credential(
         &self,
         service_account_id: &str,
         credential_id: i64,
         revoked_by: &str,
     ) -> Result<(), AccountError> {
-        _ = self.require_service_account(service_account_id).await?;
+        let service_account = self.require_service_account(service_account_id).await?;
+        _ = service_account_provider_identity(&service_account)?;
         let directory = self
             .state
             .service_account_directory
@@ -1827,6 +1831,7 @@ impl Account {
             .ok_or(ServiceAccountDirectoryError::Unavailable)?;
         let mut transaction = self.state.pool.begin().await.map_err(StoreError::from)?;
         let user = stores::service_accounts::lock(service_account_id, &mut transaction).await?;
+        let identity_id = service_account_provider_identity(&user)?.to_owned();
         let credential = stores::service_accounts::lock_credential(
             service_account_id,
             credential_id,
@@ -1841,9 +1846,7 @@ impl Account {
         }
         match credential.credential_type {
             ServiceAccountCredentialType::ClientCredentials => {
-                directory
-                    .remove_client_secret(user.identity_id.as_str())
-                    .await?;
+                directory.remove_client_secret(identity_id.as_str()).await?;
             }
             ServiceAccountCredentialType::PersonalAccessToken => {
                 let token_id =
@@ -1855,7 +1858,7 @@ impl Account {
                             message: "凭据缺少 Provider Token ID，无法撤销",
                         })?;
                 directory
-                    .remove_personal_access_token(user.identity_id.as_str(), token_id)
+                    .remove_personal_access_token(identity_id.as_str(), token_id)
                     .await?;
             }
         }
@@ -2015,6 +2018,13 @@ async fn compensate_client_secret(directory: &dyn ServiceAccountDirectory, ident
             "本地凭据元数据写入失败后无法移除 Provider Client Secret"
         );
     }
+}
+
+fn service_account_provider_identity(user: &User) -> Result<&str, AccountError> {
+    user.identity_id.as_deref().ok_or(AccountError::Conflict {
+        code: "internal_service_account",
+        message: "内部服务主体不支持身份 Provider 资料或凭据管理",
+    })
 }
 
 async fn compensate_personal_access_token(

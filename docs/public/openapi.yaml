@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Nexora API
-  version: 0.38.2
+  version: 0.39.0
   license:
     name: MIT OR Apache-2.0
     identifier: MIT OR Apache-2.0
@@ -1007,10 +1007,10 @@ components:
           minLength: 8
           maxLength: 8
         identity_id:
-          type: string
+          type: [string, "null"]
           minLength: 1
           maxLength: 255
-          description: 认证授权服务中与用户对应的稳定唯一 ID
+          description: 认证授权服务中与用户对应的稳定唯一 ID；不参与认证的内部服务主体为 null
         username:
           type: [string, "null"]
           minLength: 1

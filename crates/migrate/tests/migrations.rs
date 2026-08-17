@@ -13,6 +13,10 @@ const SERVICE_ACCOUNTS_UP: &str =
     include_str!("../migrations/20260814075639_account_service_accounts.up.sql");
 const SERVICE_ACCOUNTS_DOWN: &str =
     include_str!("../migrations/20260814075639_account_service_accounts.down.sql");
+const INTERNAL_SERVICE_ACCOUNTS_UP: &str =
+    include_str!("../migrations/20260817060744_account_internal_service_accounts.up.sql");
+const INTERNAL_SERVICE_ACCOUNTS_DOWN: &str =
+    include_str!("../migrations/20260817060744_account_internal_service_accounts.down.sql");
 
 #[test]
 fn baseline_contains_four_reversible_timestamp_migrations() {
@@ -27,7 +31,7 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
         })
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(migration_names.len(), 10);
+    assert_eq!(migration_names.len(), 12);
     for version in [
         "20260807034412_account_identity_baseline",
         "20260807034430_account_authorization_baseline",
@@ -39,6 +43,8 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
     }
     assert!(migration_names.contains("20260814075639_account_service_accounts.up.sql"));
     assert!(migration_names.contains("20260814075639_account_service_accounts.down.sql"));
+    assert!(migration_names.contains("20260817060744_account_internal_service_accounts.up.sql"));
+    assert!(migration_names.contains("20260817060744_account_internal_service_accounts.down.sql"));
 }
 
 #[test]
@@ -61,6 +67,15 @@ fn service_account_migration_is_reversible_and_never_stores_secrets() {
     }
     assert!(SERVICE_ACCOUNTS_DOWN.contains("DROP TABLE account.service_account_credentials"));
     assert!(SERVICE_ACCOUNTS_DOWN.contains("DROP TYPE account.user_type"));
+}
+
+#[test]
+fn internal_service_account_migration_is_nullable_but_keeps_human_identity_required() {
+    assert!(INTERNAL_SERVICE_ACCOUNTS_UP.contains("identity_id DROP NOT NULL"));
+    assert!(INTERNAL_SERVICE_ACCOUNTS_UP.contains("users_human_identity_required"));
+    assert!(INTERNAL_SERVICE_ACCOUNTS_UP.contains("user_type <> 'human'"));
+    assert!(INTERNAL_SERVICE_ACCOUNTS_DOWN.contains("identity_id IS NULL"));
+    assert!(INTERNAL_SERVICE_ACCOUNTS_DOWN.contains("identity_id SET NOT NULL"));
 }
 
 #[test]

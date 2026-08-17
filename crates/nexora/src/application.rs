@@ -3103,7 +3103,7 @@ impl ApplicationShell {
         let auth_identity = account_enabled
             .then(|| crate::account::client::login_profile(cx))
             .flatten()
-            .map(|profile| profile.user.identity_id.clone());
+            .and_then(|profile| profile.user.identity_id.clone());
         #[cfg(feature = "desktop")]
         let (sidebar_header, sidebar_footer) = if authenticated {
             (
@@ -3234,7 +3234,7 @@ impl ApplicationShell {
         }
         let authenticated = crate::account::client::is_authenticated(cx);
         let auth_identity = crate::account::client::login_profile(cx)
-            .map(|profile| profile.user.identity_id.clone());
+            .and_then(|profile| profile.user.identity_id.clone());
         if authenticated == self.authenticated && auth_identity == self.auth_identity {
             cx.notify();
             return;

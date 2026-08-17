@@ -73,7 +73,7 @@ introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固�
 | 字段 | 类型 | 可空 | 说明 |
 | --- | --- | --- | --- |
 | `id` | string | 否 | Nexora 本地生成的 8 位大小写字母与数字用户 ID |
-| `identity_id` | string | 否 | 当前 OIDC issuer 中稳定唯一的 subject |
+| `identity_id` | string | 是 | 当前 OIDC issuer 中稳定唯一的 subject；不参与认证的内部服务主体为 `null` |
 | `username` | string | 是 | 身份提供方登录用户名；不会替代 `identity_id` |
 | `email` | string | 是 | 展示邮箱 |
 | `display_name` | string | 否 | 展示名称，最多 200 个字符 |
@@ -188,6 +188,7 @@ introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固�
 | 409 | `system_role_immutable` | 尝试修改或删除系统角色 |
 | 409 | `last_administrator` | 操作会移除最后一个启用管理员 |
 | 409 | `super_administrator_immutable` | 尝试修改超级管理员状态或角色 |
+| 409 | `internal_service_account` | 内部服务主体没有 Provider 身份，不支持资料或凭据管理 |
 | 422 | `validation_failed` | 业务字段校验失败，`details.field` 指向字段 |
 | 500 | `internal_error` | 数据库或内部操作失败；不会返回 SQL 或堆栈 |
 | 503 | `identity_issuer_not_bound` | 部署尚未完成 issuer 绑定 |
@@ -242,8 +243,10 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 成功：`200`，正文为用户分页。未知 query 字段由 `deny_unknown_fields` 拒绝，并返回
 `400 invalid_query_parameter`。
 
-`User` 响应包含 `user_type`：`human` 表示人员用户，`service_account` 表示服务账号。服务账号
-用于系统集成、任务或服务间调用，默认管理界面会把它们标记为不可操作。
+`User` 响应包含 `user_type`：`human` 表示人员用户，`service_account` 同时覆盖 Provider machine
+user 与本地内部服务主体，不新增第三种用户类型。`GET /users` 只返回绑定了 `identity_id` 的可管理
+账号；`identity_id = null` 的内部服务主体不参与登录、凭据管理或默认用户界面，但仍可用本地
+`id` 作为审计外键。
 
 ### `POST /users`
 
@@ -327,7 +330,8 @@ Provider 删除补偿；补偿本身失败只记录脱敏服务端日志，不�
 
 `GET /service-accounts/{id}/credentials` 会实时读取 Provider 状态并协调本地元数据。响应包含
 名称、类型、创建人、Unix 秒时间、状态、撤销信息及 `nexora`/`provider_external` 来源，不含
-Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`。
+Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`；对没有 `identity_id` 的
+内部服务主体返回 `409 internal_service_account`，且不会调用 Provider。
 
 `POST /service-accounts/{id}/credentials` 要求唯一 `Idempotency-Key` 请求头。请求类型为
 `client_credentials` 时禁止 `expires_at`，再次创建会串行轮换唯一 Client Secret；类型为
@@ -339,6 +343,10 @@ Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`�
 非敏感元数据。Client Credentials 不依赖 introspection。`DELETE
 /service-accounts/{id}/credentials/{credential_id}` 返回
 `204`，只撤销目标凭据。
+
+内部服务主体只能由可信宿主通过应用迁移或本地 Account 存储维护。其 `user_type` 仍为
+`service_account`，但 `identity_id` 必须为 `null`，并且不能调用上述 Provider 资料、Client
+Secret 或 PAT 接口。人员账号始终必须有非空 `identity_id`，数据库约束会拒绝违反该规则的数据。
 
 ## 角色接口
 

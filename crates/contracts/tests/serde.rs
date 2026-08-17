@@ -81,7 +81,7 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let now = 1_784_044_800;
     let response = UserResponse {
         id: "Ab3xY9qP".to_owned(),
-        identity_id: "user-1".to_owned(),
+        identity_id: Some("user-1".to_owned()),
         username: Some("tester".to_owned()),
         email: Some("user@example.com".to_owned()),
         display_name: "测试用户".to_owned(),
@@ -108,6 +108,13 @@ fn account_responses_use_snake_case_and_unix_second_timestamps() {
     let decoded: UserResponse =
         serde_json::from_value(json).expect("SDK 应当可以反序列化服务端用户响应");
     assert_eq!(decoded, response);
+
+    let internal = UserResponse {
+        identity_id: None,
+        ..response
+    };
+    let json = serde_json::to_value(internal).expect("内部服务主体响应应当可以序列化");
+    assert!(json["identity_id"].is_null());
 
     let role = RoleResponse {
         id: 42,

@@ -292,7 +292,9 @@ pub struct User {
     /// 本地生成的 8 位大小写字母与数字用户 ID。
     pub id: String,
     /// 当前部署绑定的 OIDC issuer 中与用户对应的稳定唯一 ID（subject）。
-    pub identity_id: String,
+    ///
+    /// 不参与认证的内部服务主体没有 Provider 身份，因此该字段为空。
+    pub identity_id: Option<String>,
     /// 身份提供方中的可选登录用户名。
     pub username: Option<String>,
     /// 可选展示邮箱。

@@ -158,7 +158,9 @@ issuer；不执行迁移、创建 Router 或启动服务。`PgPool` 是廉价克
 `Account` 公开的服务账号用例包括 `create_service_account`、
 `update_service_account_profile`、`service_account_credentials`、
 `create_service_account_credential` 与 `revoke_service_account_credential`。创建/轮换返回类型的
-`Debug` 会隐藏敏感内容，调用者只能在成功响应中交付一次 Secret/PAT。
+`Debug` 会隐藏敏感内容，调用者只能在成功响应中交付一次 Secret/PAT。这些用例只管理有
+Provider 身份的 machine user；传入 `identity_id = None` 的内部服务主体会返回
+`AccountError::Conflict { code: "internal_service_account", .. }`，不会访问 Provider。
 
 ### `user_directory`
 
@@ -426,12 +428,24 @@ async fn list_factories(auth: Authorized<ReadFactories>) {
 
 ### `ExternalIdentity`
 
+`ExternalIdentity` 只描述已由 Provider 认证的外部身份，因此它的 `identity_id` 保持必填。
+
 | 字段 | 类型 | 约束 |
 | --- | --- | --- |
 | `identity_id` | `String` | trim 后非空，最多 255 字节；稳定绑定键 |
 | `username` | `Option<String>` | trim 后非空，最多 200 个字符；可变元数据 |
 | `email` | `Option<String>` | 最多 320 字节 |
 | `display_name` | `String` | trim 后非空，最多 200 个字符 |
+
+### `User`
+
+持久化 Account 用户的 `identity_id` 类型为 `Option<String>`。人员账号以及由 Nexora 创建的
+Provider machine user 均为 `Some(identity_id)`；不参与认证的内部服务主体使用 `None`，同时保持
+`user_type = UserType::ServiceAccount`。内部服务主体不会出现在 `list_users` 的普通管理集合中，
+宿主应通过稳定本地 `User.id` 建立审计外键。数据库保证人员账号不能使用 `None`。
+
+HTTP `UserResponse.identity_id` 对应 `string | null`，字段本身始终存在。该类型变化要求使用公开
+Rust `User` 或 `UserResponse` 的下游在升级时处理 `None`。
 
 ### `CreateHumanIdentity` 与 `IdentityDirectory`
 

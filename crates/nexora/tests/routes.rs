@@ -222,7 +222,7 @@ fn profile(is_super_admin: bool, permissions: &[&str]) -> AccessProfileResponse 
     AccessProfileResponse {
         user: UserResponse {
             id: "user0001".to_owned(),
-            identity_id: "identity-user0001".to_owned(),
+            identity_id: Some("identity-user0001".to_owned()),
             username: Some("user0001".to_owned()),
             email: Some("user0001@example.com".to_owned()),
             display_name: "测试用户".to_owned(),

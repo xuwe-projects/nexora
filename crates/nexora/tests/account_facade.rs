@@ -195,7 +195,7 @@ mod client {
             .expect("应能解析 /me 契约");
         let request = server.join().expect("测试服务线程应结束");
 
-        assert_eq!(profile.user.identity_id, "subject-1");
+        assert_eq!(profile.user.identity_id.as_deref(), Some("subject-1"));
         assert!(request.starts_with("GET /me HTTP/1.1\r\n"));
         assert!(
             request

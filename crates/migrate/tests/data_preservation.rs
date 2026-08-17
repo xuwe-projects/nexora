@@ -3,6 +3,34 @@
 use sqlx::PgPool;
 
 #[sqlx::test(migrations = false)]
+async fn internal_service_principal_can_omit_provider_identity(pool: PgPool) {
+    migrate::migrate(&pool).await.expect("Account 迁移应当成功");
+
+    sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, user_type)
+        VALUES ('SysAudit', NULL, '内部审计主体', 'service_account')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("内部服务主体应当允许不绑定 Provider identity");
+
+    let invalid_human = sqlx::query(
+        r#"
+        INSERT INTO account.users (id, identity_id, display_name, user_type)
+        VALUES ('HumanNil', NULL, '缺少身份的人员', 'human')
+        "#,
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_human.is_err(),
+        "人员账号仍必须绑定 Provider identity"
+    );
+}
+
+#[sqlx::test(migrations = false)]
 async fn account_baseline_allows_optional_username_binding(pool: PgPool) {
     migrate::migrate(&pool)
         .await

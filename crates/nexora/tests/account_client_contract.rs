@@ -228,7 +228,7 @@ fn update_user_status_patches_snake_case_status() {
         .expect("200 响应应按 User 契约解码");
     let request = server.join().expect("测试服务线程应结束");
 
-    assert_eq!(user.identity_id, "subject-1");
+    assert_eq!(user.identity_id.as_deref(), Some("subject-1"));
     assert_request(&request, "PATCH", "/users/User0001");
     assert_eq!(request_body(&request), r#"{"status":"suspended"}"#);
 }
