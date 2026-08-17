@@ -23,10 +23,7 @@ use crate::{
 };
 
 use super::table::{UserStatusFilter, UserTypeFilter};
-use super::{
-    CreateServiceAccountDialog, ProvisionUserDialog, ServiceAccountCredentials, UserRoleEditor,
-    UsersTable,
-};
+use super::{CreateServiceAccountDialog, ProvisionUserDialog, UserRoleEditor, UsersTable};
 
 pub(in crate::defaults::account::users) struct UsersPage {
     roles: Vec<RoleResponse>,
@@ -42,7 +39,6 @@ pub(in crate::defaults::account::users) struct UsersPage {
     role_editor: Entity<UserRoleEditor>,
     provision_dialog: Option<WeakEntity<ProvisionUserDialog>>,
     service_account_dialog: Option<WeakEntity<CreateServiceAccountDialog>>,
-    credentials: Option<WeakEntity<ServiceAccountCredentials>>,
     _role_editor_subscription: Subscription,
     _roles_task: Option<Task<()>>,
     _mutation_task: Option<Task<()>>,
@@ -77,7 +73,6 @@ impl UsersPage {
             role_editor,
             provision_dialog: None,
             service_account_dialog: None,
-            credentials: None,
             _role_editor_subscription: role_editor_subscription,
             _roles_task: None,
             _mutation_task: None,
@@ -106,15 +101,6 @@ impl UsersPage {
         cx.notify();
     }
 
-    pub(in crate::defaults::account::users) fn set_credentials(
-        &mut self,
-        credentials: WeakEntity<ServiceAccountCredentials>,
-        cx: &mut Context<Self>,
-    ) {
-        self.credentials = Some(credentials);
-        cx.notify();
-    }
-
     pub(in crate::defaults::account::users) fn load_if_needed(&mut self, cx: &mut Context<Self>) {
         self.users_table
             .update(cx, |table, cx| table.load_if_needed(cx));
@@ -130,24 +116,6 @@ impl UsersPage {
 
     pub(super) fn service_account_created(&mut self, display_name: String, cx: &mut Context<Self>) {
         self.notice = Some(format!("服务账号“{display_name}”已创建"));
-        self.users_table.update(cx, |table, cx| table.refresh(cx));
-    }
-
-    pub(super) fn service_account_created_with_credential_error(
-        &mut self,
-        display_name: String,
-        error: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.notice = Some(format!(
-            "服务账号“{display_name}”已创建，但初始凭据生成失败；账号已保留，可从凭据管理重试"
-        ));
-        self.error = Some(error);
-        self.users_table.update(cx, |table, cx| table.refresh(cx));
-    }
-
-    pub(super) fn service_account_updated(&mut self, display_name: String, cx: &mut Context<Self>) {
-        self.notice = Some(format!("服务账号“{display_name}”资料已更新"));
         self.users_table.update(cx, |table, cx| table.refresh(cx));
     }
 
@@ -201,17 +169,6 @@ impl UsersPage {
         if let Some(dialog) = &self.service_account_dialog {
             let roles = self.roles.clone();
             _ = dialog.update(cx, |dialog, cx| dialog.open(roles, window, cx));
-        }
-    }
-
-    pub(super) fn manage_service_account(
-        &mut self,
-        user: crate::desktop::contract::UserResponse,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(credentials) = &self.credentials {
-            _ = credentials.update(cx, |credentials, cx| credentials.open(user, window, cx));
         }
     }
 
@@ -279,14 +236,7 @@ impl UsersPage {
     }
 
     pub(super) fn has_active_mutation(&self, cx: &App) -> bool {
-        self.is_loading(cx)
-            || self.busy_user_id.is_some()
-            || self.role_editor.read(cx).is_busy()
-            || self
-                .credentials
-                .as_ref()
-                .and_then(WeakEntity::upgrade)
-                .is_some_and(|credentials| credentials.read(cx).is_busy())
+        self.is_loading(cx) || self.busy_user_id.is_some() || self.role_editor.read(cx).is_busy()
     }
 
     fn is_loading(&self, cx: &App) -> bool {

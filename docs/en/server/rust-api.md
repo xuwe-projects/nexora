@@ -120,13 +120,14 @@ The composed verifier uses discovery/JWKS for JWTs. It performs uncached real-ti
 PAT/opaque tokens only when the Client ID/Secret pair is complete and valid. Missing, partial, or
 rejected credentials select JWT-only mode; temporary outages retain the configuration and retry on
 later opaque/PAT operations. `AccountDependencies` carries both the human identity directory and a
-`service_account_directory`; the same `ZitadelUserDirectory` implements machine-user, Client Secret,
-and PAT operations without a parallel local identity system.
+`service_account_directory`; the same `ZitadelUserDirectory` creates, finds, and updates machine
+users without a parallel local identity system. Product code does not create, list, or revoke
+Provider credentials.
 
-The `Account` facade exposes `create_service_account`, `update_service_account_profile`,
-`service_account_credentials`, `create_service_account_credential`, and
-`revoke_service_account_credential`. One-time credential result types redact plaintext from Debug;
-callers may deliver the Secret/PAT only in the successful creation response.
+The `Account` facade exposes `create_or_reuse_service_account` and
+`update_service_account_profile`. Username collisions with a machine user require explicit reuse;
+collisions with a human user are rejected. Developers create PATs directly in ZITADEL, while the
+configured introspection client verifies opaque PATs sent to application APIs.
 
 `ZitadelUserDirectory` is also public for custom setup flows. `new` accepts issuer, PAT,
 Organization ID, and Project ID and creates the gRPC clients;
@@ -136,6 +137,8 @@ Organization ID, and Project ID and creates the gRPC clients;
 It also implements `IdentityDirectory`: `identity` refreshes a profile, `create_human_identity`
 creates a UserService v2 human user, sets the initial password, requests email verification, and
 `delete_identity` supports compensation after a failed local transaction.
+Project-role definitions and each user's complete Project authorization are synchronized through the
+ZITADEL v2 ProjectService and AuthorizationService; existing local roles are ensured before assignment.
 `DirectoryUser` carries identity ID, username, display name, and optional email;
 `into_external_identity()` preserves those trusted fields. `DirectoryError` distinguishes invalid
 configuration, TLS, UserService/ProjectService requests, invalid UTF-8, and the safety limit, without
@@ -164,7 +167,7 @@ exposing PAT metadata.
 | `permissions` | none | Complete permission catalog |
 | `roles` / `roles_for_owner` | optional owner | Defaults to `IMES`; owner variants query a specific role scope |
 | `role` / `role_for_owner` | role ID and optional owner | A role outside the requested owner is treated as missing |
-| `create_role` / `create_role_for_owner` | owner, key, name, description, permission IDs | Transactional custom role creation; role keys remain globally unique |
+| `create_role` / `create_role_for_owner` | owner, key, name, description, permission IDs | Transactional custom role creation; system-owner definitions are mirrored to the ZITADEL Project |
 | `create_generated_role_for_owner` | owner, name, description, permission IDs | Uses the database sequence to generate a globally unique `role_<id>` key |
 | `update_role` / `update_role_for_owner` | owner, ID, optional name, three-state description | System roles are immutable |
 | `delete_role` / `delete_role_for_owner` | owner, ID | Rejects system or referenced roles |
@@ -173,12 +176,14 @@ exposing PAT metadata.
 | `user_access` | user ID | `AccessProfile` |
 | `refresh_user_from_directory` | identity ID | Synchronizes username, email, display name, and last-login time without creating unknown users |
 | `update_user_status` | user ID and status | Protects the super admin and final enabled admin |
-| `replace_user_roles` / `replace_user_roles_for_owner` | owner, user ID, complete roles, actor ID | Defaults to replacing `IMES` roles and retaining `member`; owner variant only replaces that owner |
+| `replace_user_roles` / `replace_user_roles_for_owner` | owner, user ID, complete roles, actor ID | Defaults to replacing `IMES` roles and retaining `member`; the default scope also replaces the ZITADEL Project authorization |
 | `ensure_system_role_with_permissions` | role key, name, description, permission keys | Creates or updates an `IMES` system role and rebuilds its direct permission set |
 | `grant_user_role` | user ID, role ID, actor ID | Idempotently appends one direct role without clearing existing roles |
 | `provision_user` | trusted `ExternalIdentity` | Creates a user without a local password |
 | `provision_user_with_roles` | identity, roles, actor ID | Transactional user and initial role creation |
 | `create_managed_user_with_roles` | `CreateHumanIdentity`, roles, actor ID | Creates the Provider user with `initial_password`, binds it locally, and attempts Provider deletion if the local transaction fails |
+| `create_or_reuse_service_account` | service-account profile, roles, actor ID, reuse confirmation | Creates a machine user or imports a matching Provider machine user, then synchronizes local and Provider roles |
+| `update_service_account_profile` | local service-account ID, display name, description | Updates Provider and local machine-user profile fields with compensation |
 | `routers::<S>` | none | Router with private Account State injected |
 
 Facade writes do not authorize the current caller. Built-in HTTP handlers apply `Authorized<P>`;

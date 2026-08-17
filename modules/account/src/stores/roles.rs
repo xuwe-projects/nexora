@@ -197,11 +197,6 @@ pub(crate) async fn update_for_owner(
         .ok_or(StoreError::NotFound("角色"))
 }
 
-/// 删除后台系统范围内未被用户引用的自定义角色。
-pub(crate) async fn delete(role_id: i64, pool: &PgPool) -> Result<(), StoreError> {
-    delete_for_owner(SYSTEM_ROLE_OWNER, role_id, pool).await
-}
-
 /// 按 owner 删除未被用户引用的自定义角色。
 pub(crate) async fn delete_for_owner(
     owner: &str,
@@ -220,6 +215,29 @@ pub(crate) async fn delete_for_owner(
         Err(error) if is_foreign_key_violation(&error) => Err(StoreError::Conflict("role_in_use")),
         Err(error) => Err(error.into()),
     }
+}
+
+pub(crate) async fn ensure_deletable_for_owner(
+    owner: &str,
+    role_id: i64,
+    pool: &PgPool,
+) -> Result<Role, StoreError> {
+    let role = query_by_id_for_owner(owner, role_id, pool)
+        .await?
+        .ok_or(StoreError::NotFound("角色"))?;
+    if role.is_system {
+        return Err(StoreError::SystemRole);
+    }
+    let in_use = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM account.user_roles WHERE role_id = $1)",
+    )
+    .bind(role_id)
+    .fetch_one(pool)
+    .await?;
+    if in_use {
+        return Err(StoreError::Conflict("role_in_use"));
+    }
+    Ok(role)
 }
 
 /// 按 owner 原子替换自定义角色包含的权限集合。

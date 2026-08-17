@@ -17,7 +17,7 @@ GPUI component crates directly:
 
 ```toml
 [dependencies]
-nexora = { version = "0.39.0", features = ["desktop", "derive"] }
+nexora = { version = "0.40.0", features = ["desktop", "derive"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 theme = { workspace = true }

@@ -171,6 +171,22 @@ enum Type {
   TYPE_MACHINE = 2;
 }
 
+enum TextQueryMethod {
+  TEXT_QUERY_METHOD_EQUALS = 0;
+  TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE = 1;
+  TEXT_QUERY_METHOD_STARTS_WITH = 2;
+  TEXT_QUERY_METHOD_STARTS_WITH_IGNORE_CASE = 3;
+  TEXT_QUERY_METHOD_CONTAINS = 4;
+  TEXT_QUERY_METHOD_CONTAINS_IGNORE_CASE = 5;
+  TEXT_QUERY_METHOD_ENDS_WITH = 6;
+  TEXT_QUERY_METHOD_ENDS_WITH_IGNORE_CASE = 7;
+}
+
+message UserNameQuery {
+  string user_name = 1;
+  TextQueryMethod method = 2;
+}
+
 message StateQuery {
   UserState state = 1;
 }
@@ -185,6 +201,7 @@ message InUserIDQuery {
 
 message SearchQuery {
   oneof query {
+    UserNameQuery user_name_query = 1;
     StateQuery state_query = 7;
     TypeQuery type_query = 8;
     InUserIDQuery in_user_ids_query = 10;

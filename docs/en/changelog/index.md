@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.40.0: unified service-account and ZITADEL role synchronization](./0.40.0)
 - [0.39.0: internal service principals without Provider identities](./0.39.0)
 - [0.38.2: fix user-list query parsing](./0.38.2)
 - [0.38.1: optional introspection and safe PAT creation](./0.38.1)

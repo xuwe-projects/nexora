@@ -99,13 +99,6 @@ impl PermissionKey {
     /// 修改服务账号展示名称和说明。
     pub const ServiceAccountsProfileWrite: Self =
         Self(Cow::Borrowed("service_accounts:profile.write"));
-    /// 查看服务账号凭据的非敏感元数据。
-    pub const ServiceAccountsCredentialsRead: Self =
-        Self(Cow::Borrowed("service_accounts:credentials.read"));
-    /// 生成、轮换或撤销服务账号凭据。
-    pub const ServiceAccountsCredentialsWrite: Self =
-        Self(Cow::Borrowed("service_accounts:credentials.write"));
-
     /// 返回数据库和授权日志使用的稳定权限键。
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
@@ -214,76 +207,6 @@ pub enum UserType {
     Human,
     /// 设备、系统集成、任务或服务间调用使用的非人类账号。
     ServiceAccount,
-}
-
-/// PostgreSQL `account.service_account_credential_type` 对应的凭据类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Type)]
-#[sqlx(
-    type_name = "account.service_account_credential_type",
-    rename_all = "snake_case"
-)]
-pub enum ServiceAccountCredentialType {
-    /// OAuth 2.0 Client Credentials 使用的唯一 Client Secret。
-    ClientCredentials,
-    /// 直接作为 Bearer token 使用的 Personal Access Token。
-    PersonalAccessToken,
-}
-
-/// PostgreSQL `account.service_account_credential_status` 对应的协调状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Type)]
-#[sqlx(
-    type_name = "account.service_account_credential_status",
-    rename_all = "snake_case"
-)]
-pub enum ServiceAccountCredentialStatus {
-    /// Provider 中仍然存在且可用。
-    Active,
-    /// 已经由 Nexora 撤销或在 Provider 协调时确认不存在。
-    Revoked,
-}
-
-/// PostgreSQL `account.service_account_credential_source` 对应的元数据来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Type)]
-#[sqlx(
-    type_name = "account.service_account_credential_source",
-    rename_all = "snake_case"
-)]
-pub enum ServiceAccountCredentialSource {
-    /// 由 Nexora 管理入口创建。
-    Nexora,
-    /// 在 Provider 外部创建后由协调过程发现。
-    ProviderExternal,
-}
-
-/// 服务账号凭据的非敏感本地元数据。
-#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
-pub struct ServiceAccountCredential {
-    /// 数据库生成的稳定主键。
-    pub id: i64,
-    /// 所属服务账号的本地用户 ID。
-    pub service_account_id: String,
-    /// 凭据类型。
-    pub credential_type: ServiceAccountCredentialType,
-    /// 管理员可读名称。
-    pub name: String,
-    /// Provider 返回的可选稳定凭据 ID；Client Secret 通常为空。
-    pub provider_credential_id: Option<String>,
-    /// 可选本地创建操作者 ID。
-    pub created_by: Option<String>,
-    /// Provider 创建时间或首次协调发现时间。
-    pub created_at: DateTime<Utc>,
-    /// PAT 可选到期时间。
-    pub expires_at: Option<DateTime<Utc>>,
-    /// 最近协调得到的状态。
-    pub status: ServiceAccountCredentialStatus,
-    /// 元数据来源。
-    pub source: ServiceAccountCredentialSource,
-    /// 可选本地撤销操作者 ID。
-    pub revoked_by: Option<String>,
-    /// 可选撤销时间。
-    pub revoked_at: Option<DateTime<Utc>>,
-    /// 最近一次成功协调 Provider 的时间。
-    pub last_synchronized_at: DateTime<Utc>,
 }
 
 /// `account.users` 查询返回的本地用户实体。

@@ -4,7 +4,7 @@ use semver::Version;
 #[test]
 fn current_release_is_newer_than_previous_release() {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let previous = Version::parse("0.38.2").unwrap();
+    let previous = Version::parse("0.39.0").unwrap();
 
     assert!(current > previous);
 }
@@ -19,8 +19,9 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.component(), "api");
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
-    assert!(entry.markdown().contains("identity_id = null"));
-    assert!(entry.markdown().contains("internal_service_account"));
+    assert!(entry.markdown().contains("username"));
+    assert!(entry.markdown().contains("ZITADEL Project"));
+    assert!(entry.markdown().contains("PAT introspection"));
 }
 
 #[test]
@@ -59,6 +60,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.39.0",
             "0.38.2",
             "0.38.1",
             "0.38.0",

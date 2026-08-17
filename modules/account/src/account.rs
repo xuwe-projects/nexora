@@ -7,7 +7,6 @@ use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{Router, extract::FromRef};
-use chrono::{DateTime, Utc};
 pub use kernel::Page;
 use kernel::ValidationError;
 use sqlx::PgPool;
@@ -41,10 +40,7 @@ mod zitadel_user;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::directory::{
-        ZitadelCreateServiceAccountRequestInspection,
-        ZitadelServiceAccountCredentialRequestInspection, inspect_add_client_secret_request,
-        inspect_add_personal_access_token_request, inspect_create_service_account_request,
-        inspect_remove_client_secret_request, inspect_remove_personal_access_token_request,
+        ZitadelCreateServiceAccountRequestInspection, inspect_create_service_account_request,
         inspect_service_account_status_mapping,
     };
     pub use crate::zitadel_user::{
@@ -53,14 +49,12 @@ pub mod __private {
 }
 
 pub(crate) use api::ApiError;
-use authentication::{AccessTokenVerifier, VerificationError};
+use authentication::AccessTokenVerifier;
 
 pub use contracts::account::SYSTEM_ROLE_OWNER;
 pub use entities::account::{
     AccessProfile, ExternalIdentity, Permission, PermissionCatalogDefinition, PermissionDefinition,
-    PermissionKey, Role, ServiceAccountCredential, ServiceAccountCredentialSource,
-    ServiceAccountCredentialStatus, ServiceAccountCredentialType, SystemRole, User, UserStatus,
-    UserType,
+    PermissionKey, Role, SystemRole, User, UserStatus, UserType,
 };
 pub use errors::{AccountError, StoreError};
 
@@ -85,8 +79,7 @@ pub struct AccountDependencies {
     /// 可选的外部身份目录；配置后 `/me` 会刷新 Provider 资料，管理员创建用户也会先在
     /// Provider 创建身份，再原子绑定本地账号。
     pub identity_directory: Option<Arc<dyn IdentityDirectory>>,
-    /// 可选服务账号与凭据 Provider；配置后才能创建 machine user、Client Secret 与 PAT，
-    /// 并以 Provider 当前状态协调本地非敏感元数据。
+    /// 可选服务账号 Provider；配置后可以创建、查找和同步 machine user。
     pub service_account_directory: Option<Arc<dyn ServiceAccountDirectory>>,
 }
 
@@ -238,12 +231,73 @@ pub trait IdentityDirectory: Send + Sync {
     ///
     /// identity ID 不存在、Provider 拒绝删除或暂时不可用时返回稳定目录错误。
     async fn delete_identity(&self, identity_id: &str) -> Result<(), IdentityDirectoryError>;
+
+    /// 确保默认 Account Project 中存在指定角色定义。
+    ///
+    /// 不支持 Project 角色管理的自定义目录保持本地角色行为，不阻止 Account 操作。
+    ///
+    /// # Errors
+    ///
+    /// Provider 拒绝角色管理请求、项目不存在或暂时不可用时返回稳定目录错误。
+    async fn ensure_project_role(
+        &self,
+        _key: &str,
+        _display_name: &str,
+    ) -> Result<ProjectRoleEnsureOutcome, IdentityDirectoryError> {
+        Ok(ProjectRoleEnsureOutcome::Existing)
+    }
+
+    /// 更新默认 Account Project 中的角色展示名称。
+    ///
+    /// # Errors
+    ///
+    /// 角色不存在、Provider 拒绝修改或暂时不可用时返回稳定目录错误。
+    async fn update_project_role(
+        &self,
+        _key: &str,
+        _display_name: &str,
+    ) -> Result<(), IdentityDirectoryError> {
+        Ok(())
+    }
+
+    /// 删除默认 Account Project 中的角色定义。
+    ///
+    /// # Errors
+    ///
+    /// 角色不存在、Provider 拒绝删除或暂时不可用时返回稳定目录错误。
+    async fn remove_project_role(&self, _key: &str) -> Result<(), IdentityDirectoryError> {
+        Ok(())
+    }
+
+    /// 把用户在默认 Account Project 中的角色关联替换为完整目标集合。
+    ///
+    /// 返回替换前的角色键，供本地事务失败时执行 Provider 补偿。
+    ///
+    /// # Errors
+    ///
+    /// 用户、项目或角色不存在，Provider 拒绝授权变更或暂时不可用时返回稳定目录错误。
+    async fn replace_project_roles(
+        &self,
+        _identity_id: &str,
+        _role_keys: &[String],
+    ) -> Result<Vec<String>, IdentityDirectoryError> {
+        Ok(Vec::new())
+    }
+}
+
+/// 确保 ZITADEL Project 角色定义后的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectRoleEnsureOutcome {
+    /// 本次调用创建了新的 Provider 角色定义。
+    Created,
+    /// Provider 中已经存在同 key 角色定义。
+    Existing,
 }
 
 /// 在身份 Provider 创建服务账号所需的领域输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateServiceAccountIdentity {
-    /// 创建后不可修改的稳定 username，同时作为 Client Credentials 的 Client ID。
+    /// 创建后不可修改的稳定 username。
     pub username: String,
     /// 面向管理员展示的服务账号名称。
     pub display_name: String,
@@ -264,90 +318,16 @@ pub struct ServiceAccountIdentity {
     pub description: Option<String>,
 }
 
-/// Provider 创建或轮换 Client Secret 后仅返回一次的结果。
-#[derive(Clone, PartialEq, Eq)]
-pub struct ServiceAccountClientSecret {
-    /// Provider 凭据创建时间。
-    pub created_at: DateTime<Utc>,
-    /// 仅本次调用可读取的 Client Secret 明文。
-    pub client_secret: String,
-}
-
-impl fmt::Debug for ServiceAccountClientSecret {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ServiceAccountClientSecret")
-            .field("created_at", &self.created_at)
-            .field("client_secret", &"<redacted>")
-            .finish()
-    }
-}
-
-/// Provider 创建 PAT 后仅返回一次的结果。
-#[derive(Clone, PartialEq, Eq)]
-pub struct ServiceAccountPersonalAccessTokenSecret {
-    /// Provider 分配的稳定 Token ID。
-    pub token_id: String,
-    /// Provider 凭据创建时间。
-    pub created_at: DateTime<Utc>,
-    /// 可选到期时间；为空表示 Provider 接受永不过期 PAT。
-    pub expires_at: Option<DateTime<Utc>>,
-    /// 仅本次调用可读取的 PAT 明文。
-    pub token: String,
-}
-
-impl fmt::Debug for ServiceAccountPersonalAccessTokenSecret {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ServiceAccountPersonalAccessTokenSecret")
-            .field("token_id", &self.token_id)
-            .field("created_at", &self.created_at)
-            .field("expires_at", &self.expires_at)
-            .field("token", &"<redacted>")
-            .finish()
-    }
-}
-
-/// Provider 查询返回的 PAT 非敏感元数据。
+/// Provider 中按 username 查到的账号类型。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderPersonalAccessToken {
-    /// Provider 分配的稳定 Token ID。
-    pub token_id: String,
-    /// Provider 记录的创建时间。
-    pub created_at: DateTime<Utc>,
-    /// Provider 记录的可选到期时间。
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-/// Provider 当前服务账号凭据状态快照。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderServiceAccountCredentials {
-    /// 当前是否存在可用 Client Secret。
-    pub has_client_secret: bool,
-    /// 当前仍存在的全部 PAT 元数据。
-    pub personal_access_tokens: Vec<ProviderPersonalAccessToken>,
-}
-
-/// 服务账号凭据创建成功后交付给调用方的一次性结果。
-#[derive(Clone, PartialEq, Eq)]
-pub struct CreatedServiceAccountCredential {
-    /// 已持久化且可再次查询的非敏感凭据元数据。
-    pub credential: ServiceAccountCredential,
-    /// Client Credentials 返回稳定 Client ID；PAT 为 `None`。
-    pub client_id: Option<String>,
-    /// 仅本次调用可见的 Client Secret 或 PAT 明文。
-    pub secret: String,
-}
-
-impl fmt::Debug for CreatedServiceAccountCredential {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CreatedServiceAccountCredential")
-            .field("credential", &self.credential)
-            .field("client_id", &self.client_id)
-            .field("secret", &"<redacted>")
-            .finish()
-    }
+pub enum ProviderUsernameMatch {
+    /// 命中了可以导入或复用的 machine/service account。
+    ServiceAccount(
+        /// Provider 返回的稳定服务账号资料。
+        ServiceAccountIdentity,
+    ),
+    /// 命中了人类用户；该 username 不能用于创建服务账号。
+    Human,
 }
 
 /// 服务账号 Provider 操作的稳定失败分类。
@@ -356,17 +336,27 @@ pub enum ServiceAccountDirectoryError {
     /// Provider 中已存在相同 username 或 identity。
     #[error("身份 Provider 中的服务账号已经存在")]
     Conflict,
-    /// Provider 中不存在目标服务账号或凭据。
-    #[error("身份 Provider 中的服务账号或凭据不存在")]
+    /// Provider 中不存在目标服务账号。
+    #[error("身份 Provider 中的服务账号不存在")]
     NotFound,
     /// Provider 暂时不可用或拒绝了管理请求。
     #[error("身份 Provider 暂时无法完成服务账号请求")]
     Unavailable,
 }
 
-/// Account 创建服务账号、管理凭据和协调 Provider 状态使用的适配端口。
+/// Account 创建、查找和更新服务账号使用的适配端口。
 #[async_trait]
 pub trait ServiceAccountDirectory: Send + Sync {
+    /// 按稳定 username 查找 Provider 账号，并保留人类/服务账号类型信息。
+    ///
+    /// # Errors
+    ///
+    /// username 不合法、Provider 拒绝查询或暂时不可用时返回稳定目录错误。
+    async fn account_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<ProviderUsernameMatch>, ServiceAccountDirectoryError>;
+
     /// 创建 access token 类型固定为 JWT 的 machine/service account。
     ///
     /// # Errors
@@ -398,58 +388,6 @@ pub trait ServiceAccountDirectory: Send + Sync {
         &self,
         identity_id: &str,
     ) -> Result<(), ServiceAccountDirectoryError>;
-
-    /// 创建或轮换唯一 Client Secret，并返回仅可读取一次的明文。
-    ///
-    /// # Errors
-    ///
-    /// Provider 中不存在目标服务账号、凭据冲突或管理接口不可用时返回稳定错误分类。
-    async fn create_client_secret(
-        &self,
-        identity_id: &str,
-    ) -> Result<ServiceAccountClientSecret, ServiceAccountDirectoryError>;
-
-    /// 移除当前 Client Secret，不影响 PAT。
-    ///
-    /// # Errors
-    ///
-    /// Provider 中不存在服务账号或 Secret，或管理接口不可用时返回稳定错误分类。
-    async fn remove_client_secret(
-        &self,
-        identity_id: &str,
-    ) -> Result<(), ServiceAccountDirectoryError>;
-
-    /// 创建一个可选到期时间的 PAT，并返回仅可读取一次的明文。
-    ///
-    /// # Errors
-    ///
-    /// Provider 拒绝到期时间、目标服务账号不存在、凭据冲突或接口不可用时返回稳定错误分类。
-    async fn create_personal_access_token(
-        &self,
-        identity_id: &str,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<ServiceAccountPersonalAccessTokenSecret, ServiceAccountDirectoryError>;
-
-    /// 撤销指定 PAT，不影响同账号其他凭据。
-    ///
-    /// # Errors
-    ///
-    /// Provider 中不存在服务账号或 PAT，或管理接口不可用时返回稳定错误分类。
-    async fn remove_personal_access_token(
-        &self,
-        identity_id: &str,
-        token_id: &str,
-    ) -> Result<(), ServiceAccountDirectoryError>;
-
-    /// 查询当前 Client Secret 是否存在和全部 PAT 元数据，用于本地协调。
-    ///
-    /// # Errors
-    ///
-    /// Provider 中不存在目标服务账号、响应无效或查询接口不可用时返回稳定错误分类。
-    async fn credentials(
-        &self,
-        identity_id: &str,
-    ) -> Result<ProviderServiceAccountCredentials, ServiceAccountDirectoryError>;
 }
 
 /// 账号模块首次初始化需要的可信输入。
@@ -1079,7 +1017,8 @@ impl Account {
         description: Option<&str>,
         permission_ids: &[i64],
     ) -> Result<Role, AccountError> {
-        create_role(&self.state.pool, key, name, description, permission_ids).await
+        self.create_role_for_owner(SYSTEM_ROLE_OWNER, key, name, description, permission_ids)
+            .await
     }
 
     /// 在指定 owner 下创建一个可由应用管理的自定义角色。
@@ -1095,7 +1034,7 @@ impl Account {
         description: Option<&str>,
         permission_ids: &[i64],
     ) -> Result<Role, AccountError> {
-        create_role_for_owner(
+        let role = create_role_for_owner(
             &self.state.pool,
             owner,
             key,
@@ -1103,7 +1042,26 @@ impl Account {
             description,
             permission_ids,
         )
-        .await
+        .await?;
+        if role.owner == SYSTEM_ROLE_OWNER
+            && let Some(directory) = self.state.identity_directory.as_ref()
+            && let Err(error) = directory
+                .ensure_project_role(role.key.as_str(), role.name.as_str())
+                .await
+        {
+            if let Err(cleanup_error) =
+                stores::roles::delete_for_owner(role.owner.as_str(), role.id, &self.state.pool)
+                    .await
+            {
+                tracing::error!(
+                    error = ?cleanup_error,
+                    role_id = role.id,
+                    "ZITADEL 角色创建失败后无法回滚本地角色"
+                );
+            }
+            return Err(error.into());
+        }
+        Ok(role)
     }
 
     /// 在指定 owner 下创建自动生成 key 的自定义角色。
@@ -1166,14 +1124,49 @@ impl Account {
         let final_name = name.unwrap_or(current.name.as_str());
         let final_description = description.unwrap_or(current.description.as_deref());
         handlers::accounts::validate_role_fields(final_name, final_description)?;
-        Ok(stores::roles::update_for_owner(
+        let updated = stores::roles::update_for_owner(
             owner.as_str(),
             role_id,
             name,
             description,
             &self.state.pool,
         )
-        .await?)
+        .await?;
+        if owner == SYSTEM_ROLE_OWNER
+            && updated.name != current.name
+            && let Some(directory) = self.state.identity_directory.as_ref()
+            && let Err(error) = async {
+                if directory
+                    .ensure_project_role(updated.key.as_str(), updated.name.as_str())
+                    .await?
+                    == ProjectRoleEnsureOutcome::Existing
+                {
+                    directory
+                        .update_project_role(updated.key.as_str(), updated.name.as_str())
+                        .await?;
+                }
+                Ok::<(), IdentityDirectoryError>(())
+            }
+            .await
+        {
+            if let Err(cleanup_error) = stores::roles::update_for_owner(
+                owner.as_str(),
+                role_id,
+                Some(current.name.as_str()),
+                Some(current.description.as_deref()),
+                &self.state.pool,
+            )
+            .await
+            {
+                tracing::error!(
+                    error = ?cleanup_error,
+                    role_id,
+                    "ZITADEL 角色更新失败后无法恢复本地角色资料"
+                );
+            }
+            return Err(error.into());
+        }
+        Ok(updated)
     }
 
     /// 删除一个尚未被用户引用的自定义角色。
@@ -1182,7 +1175,7 @@ impl Account {
     ///
     /// 角色不存在、角色是系统角色、仍被用户引用或数据库失败时返回错误。
     pub async fn delete_role(&self, role_id: i64) -> Result<(), AccountError> {
-        Ok(stores::roles::delete(role_id, &self.state.pool).await?)
+        self.delete_role_for_owner(SYSTEM_ROLE_OWNER, role_id).await
     }
 
     /// 按 owner 删除一个尚未被用户引用的自定义角色。
@@ -1196,7 +1189,32 @@ impl Account {
         role_id: i64,
     ) -> Result<(), AccountError> {
         let owner = handlers::accounts::role_owner(owner)?;
-        Ok(stores::roles::delete_for_owner(owner.as_str(), role_id, &self.state.pool).await?)
+        let role =
+            stores::roles::ensure_deletable_for_owner(owner.as_str(), role_id, &self.state.pool)
+                .await?;
+        if owner == SYSTEM_ROLE_OWNER
+            && let Some(directory) = self.state.identity_directory.as_ref()
+        {
+            directory.remove_project_role(role.key.as_str()).await?;
+        }
+        if let Err(error) =
+            stores::roles::delete_for_owner(owner.as_str(), role_id, &self.state.pool).await
+        {
+            if owner == SYSTEM_ROLE_OWNER
+                && let Some(directory) = self.state.identity_directory.as_ref()
+                && let Err(cleanup_error) = directory
+                    .ensure_project_role(role.key.as_str(), role.name.as_str())
+                    .await
+            {
+                tracing::error!(
+                    error = ?cleanup_error,
+                    role_id,
+                    "本地角色删除失败后无法恢复 ZITADEL 角色定义"
+                );
+            }
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// 原子替换一个自定义角色包含的权限集合。
@@ -1361,7 +1379,8 @@ impl Account {
         role_ids: &[i64],
         granted_by: &str,
     ) -> Result<AccessProfile, AccountError> {
-        replace_user_roles(&self.state.pool, user_id, role_ids, granted_by).await
+        self.replace_user_roles_for_owner(SYSTEM_ROLE_OWNER, user_id, role_ids, granted_by)
+            .await
     }
 
     /// 只替换指定 owner 下的用户直接角色集合。
@@ -1377,7 +1396,73 @@ impl Account {
         role_ids: &[i64],
         granted_by: &str,
     ) -> Result<AccessProfile, AccountError> {
-        replace_user_roles_for_owner(&self.state.pool, owner, user_id, role_ids, granted_by).await
+        let owner = handlers::accounts::role_owner(owner)?;
+        let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+        if owner != SYSTEM_ROLE_OWNER {
+            return replace_user_roles_for_owner(
+                &self.state.pool,
+                owner.as_str(),
+                user_id,
+                role_ids.as_slice(),
+                granted_by,
+            )
+            .await;
+        }
+
+        let profile = self.user_access(user_id).await?;
+        let desired_role_definitions = stores::users::desired_role_definitions_for_user(
+            owner.as_str(),
+            user_id,
+            role_ids.as_slice(),
+            &self.state.pool,
+        )
+        .await?;
+        self.ensure_project_role_definitions(desired_role_definitions.as_slice())
+            .await?;
+        let desired_role_keys = desired_role_definitions
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let provider_previous = if let (Some(identity_id), Some(directory)) = (
+            profile.user.identity_id.as_deref(),
+            self.state.identity_directory.as_ref(),
+        ) {
+            Some(
+                directory
+                    .replace_project_roles(identity_id, desired_role_keys.as_slice())
+                    .await?,
+            )
+        } else {
+            None
+        };
+        match replace_user_roles_for_owner(
+            &self.state.pool,
+            owner.as_str(),
+            user_id,
+            role_ids.as_slice(),
+            granted_by,
+        )
+        .await
+        {
+            Ok(profile) => Ok(profile),
+            Err(error) => {
+                if let (Some(identity_id), Some(previous), Some(directory)) = (
+                    profile.user.identity_id.as_deref(),
+                    provider_previous,
+                    self.state.identity_directory.as_ref(),
+                ) && let Err(cleanup_error) = directory
+                    .replace_project_roles(identity_id, previous.as_slice())
+                    .await
+                {
+                    tracing::error!(
+                        error = ?cleanup_error,
+                        user_id,
+                        "本地角色替换失败后无法恢复 ZITADEL 用户角色关联"
+                    );
+                }
+                Err(error)
+            }
+        }
     }
 
     /// 幂等追加一个用户角色，不清空用户已有角色。
@@ -1391,7 +1476,19 @@ impl Account {
         role_id: i64,
         granted_by: &str,
     ) -> Result<AccessProfile, AccountError> {
-        grant_user_role(&self.state.pool, user_id, role_id, granted_by).await
+        _ = self.role_for_owner(SYSTEM_ROLE_OWNER, role_id).await?;
+        let profile = self.user_access(user_id).await?;
+        let mut role_ids = profile
+            .roles
+            .iter()
+            .filter(|role| role.owner == SYSTEM_ROLE_OWNER)
+            .map(|role| role.id)
+            .collect::<Vec<_>>();
+        role_ids.push(role_id);
+        role_ids.sort_unstable();
+        role_ids.dedup();
+        self.replace_user_roles(user_id, role_ids.as_slice(), granted_by)
+            .await
     }
 
     /// 把经过宿主服务确认的外部身份显式开通为普通本地用户。
@@ -1447,17 +1544,46 @@ impl Account {
         R: Into<CreateHumanIdentityProvision>,
     {
         let request = normalized_create_human_identity_provision(request.into())?;
+        let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+        let desired_role_definitions = stores::users::desired_role_definitions(
+            SYSTEM_ROLE_OWNER,
+            role_ids.as_slice(),
+            true,
+            &self.state.pool,
+        )
+        .await?;
         let directory = self
             .state
             .identity_directory
             .as_ref()
             .ok_or(IdentityDirectoryError::Unavailable)?;
+        self.ensure_project_role_definitions(desired_role_definitions.as_slice())
+            .await?;
+        let desired_role_keys = desired_role_definitions
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
         let identity = directory
             .create_human_identity_with_contact(&request.identity, request.contact_phone.as_deref())
             .await?
             .normalized()?;
         let identity_id = identity.identity_id.clone();
-        match create_user_with_roles(&self.state.pool, identity, role_ids, granted_by).await {
+        if let Err(error) = directory
+            .replace_project_roles(identity_id.as_str(), desired_role_keys.as_slice())
+            .await
+        {
+            if let Err(cleanup_error) = directory.delete_identity(identity_id.as_str()).await {
+                tracing::error!(
+                    error = ?cleanup_error,
+                    business_operation = "managed_user_role_compensation",
+                    "ZITADEL 用户角色关联失败后无法删除新用户"
+                );
+            }
+            return Err(error.into());
+        }
+        match create_user_with_roles(&self.state.pool, identity, role_ids.as_slice(), granted_by)
+            .await
+        {
             Ok(user) => Ok(user),
             Err(error) => {
                 if let Err(cleanup_error) = directory.delete_identity(identity_id.as_str()).await {
@@ -1474,8 +1600,8 @@ impl Account {
 
     /// 在配置的身份 Provider 创建 JWT machine user，并原子写入本地服务账号与初始角色。
     ///
-    /// 服务账号不会自动获得 `member` 角色，也不会自动生成凭据。Provider 创建成功而本地
-    /// 事务失败时会尽力删除尚未交付的 machine user；补偿日志不包含任何凭据。
+    /// 服务账号不会自动获得 `member` 角色。Provider 创建成功而本地事务失败时会尽力删除
+    /// 尚未交付的 machine user。
     ///
     /// # Errors
     ///
@@ -1487,15 +1613,138 @@ impl Account {
         role_ids: &[i64],
         granted_by: &str,
     ) -> Result<User, AccountError> {
+        self.create_or_reuse_service_account(request, role_ids, granted_by, false)
+            .await
+    }
+
+    /// 创建服务账号，或在管理员确认后导入/复用同 username 的既有 machine user。
+    ///
+    /// `reuse_existing` 为 `false` 时，本地或 Provider 已存在同名服务账号会返回
+    /// `service_account_reuse_confirmation_required`；调用方确认后使用相同请求并传 `true` 重试。
+    /// 同名人类账号始终返回类型冲突。复用成功后会把所选角色完整同步到本地 Account 与
+    /// ZITADEL Project role assignment。
+    ///
+    /// # Errors
+    ///
+    /// 输入无效、同名账号类型冲突、尚未确认复用、角色或操作者不存在、Provider 不可用，
+    /// 或本地事务失败时返回错误。
+    pub async fn create_or_reuse_service_account(
+        &self,
+        request: CreateServiceAccountIdentity,
+        role_ids: &[i64],
+        granted_by: &str,
+        reuse_existing: bool,
+    ) -> Result<User, AccountError> {
         let request = normalized_service_account_identity(request)?;
         let role_ids = handlers::accounts::user_role_ids(role_ids.to_vec())?;
+        if let Some(local) =
+            stores::users::query_by_username(request.username.as_str(), &self.state.pool).await?
+        {
+            if local.user_type != UserType::ServiceAccount {
+                return Err(AccountError::Conflict {
+                    code: "service_account_username_type_conflict",
+                    message: "该登录用户名已属于人员账号，不能作为服务账号使用",
+                });
+            }
+            if !reuse_existing {
+                return Err(AccountError::Conflict {
+                    code: "service_account_reuse_confirmation_required",
+                    message: "该服务账号已存在，确认后可以直接使用",
+                });
+            }
+            return self
+                .replace_user_roles(local.id.as_str(), role_ids.as_slice(), granted_by)
+                .await
+                .map(|profile| profile.user);
+        }
+
+        let desired_role_definitions = stores::users::desired_role_definitions(
+            SYSTEM_ROLE_OWNER,
+            role_ids.as_slice(),
+            false,
+            &self.state.pool,
+        )
+        .await?;
+        self.ensure_project_role_definitions(desired_role_definitions.as_slice())
+            .await?;
+        let desired_role_keys = desired_role_definitions
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
         let directory = self
             .state
             .service_account_directory
             .as_ref()
             .ok_or(ServiceAccountDirectoryError::Unavailable)?;
-        let identity = directory.create_service_account(&request).await?;
+        let provider_match = directory
+            .account_by_username(request.username.as_str())
+            .await?;
+        let (identity, created) = match provider_match {
+            Some(ProviderUsernameMatch::Human) => {
+                return Err(AccountError::Conflict {
+                    code: "service_account_username_type_conflict",
+                    message: "该登录用户名已属于人员账号，不能作为服务账号使用",
+                });
+            }
+            Some(ProviderUsernameMatch::ServiceAccount(_)) if !reuse_existing => {
+                return Err(AccountError::Conflict {
+                    code: "service_account_reuse_confirmation_required",
+                    message: "该服务账号已存在，确认后可以直接使用",
+                });
+            }
+            Some(ProviderUsernameMatch::ServiceAccount(identity)) => (identity, false),
+            None => match directory.create_service_account(&request).await {
+                Ok(identity) => (identity, true),
+                Err(ServiceAccountDirectoryError::Conflict) => {
+                    match directory
+                        .account_by_username(request.username.as_str())
+                        .await?
+                    {
+                        Some(ProviderUsernameMatch::Human) => {
+                            return Err(AccountError::Conflict {
+                                code: "service_account_username_type_conflict",
+                                message: "该登录用户名已属于人员账号，不能作为服务账号使用",
+                            });
+                        }
+                        Some(ProviderUsernameMatch::ServiceAccount(_)) if !reuse_existing => {
+                            return Err(AccountError::Conflict {
+                                code: "service_account_reuse_confirmation_required",
+                                message: "该服务账号已存在，确认后可以直接使用",
+                            });
+                        }
+                        Some(ProviderUsernameMatch::ServiceAccount(identity)) => (identity, false),
+                        None => return Err(ServiceAccountDirectoryError::Conflict.into()),
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            },
+        };
         let identity_id = identity.identity_id.clone();
+        let provider_previous = if let Some(role_directory) = self.state.identity_directory.as_ref()
+        {
+            match role_directory
+                .replace_project_roles(identity_id.as_str(), desired_role_keys.as_slice())
+                .await
+            {
+                Ok(previous) => Some(previous),
+                Err(error) => {
+                    if created
+                        && let Err(cleanup_error) = directory
+                            .delete_uncommitted_service_account(identity_id.as_str())
+                            .await
+                    {
+                        tracing::error!(
+                            error = ?cleanup_error,
+                            business_operation = "service_account_role_compensation",
+                            "ZITADEL 服务账号角色关联失败后无法删除新账号"
+                        );
+                    }
+                    return Err(error.into());
+                }
+            }
+        } else {
+            None
+        };
         match stores::service_accounts::provision(
             &identity,
             role_ids.as_slice(),
@@ -1506,14 +1755,27 @@ impl Account {
         {
             Ok(user) => Ok(user),
             Err(error) => {
-                if let Err(cleanup_error) = directory
-                    .delete_uncommitted_service_account(identity_id.as_str())
-                    .await
+                if created {
+                    if let Err(cleanup_error) = directory
+                        .delete_uncommitted_service_account(identity_id.as_str())
+                        .await
+                    {
+                        tracing::error!(
+                            error = ?cleanup_error,
+                            business_operation = "service_account_creation_compensation",
+                            "本地服务账号创建失败后无法删除身份 Provider 中的新账号"
+                        );
+                    }
+                } else if let (Some(previous), Some(role_directory)) =
+                    (provider_previous, self.state.identity_directory.as_ref())
+                    && let Err(cleanup_error) = role_directory
+                        .replace_project_roles(identity_id.as_str(), previous.as_slice())
+                        .await
                 {
                     tracing::error!(
                         error = ?cleanup_error,
-                        business_operation = "service_account_creation_compensation",
-                        "本地服务账号创建失败后无法删除身份 Provider 中的新账号"
+                        business_operation = "service_account_import_compensation",
+                        "既有服务账号导入失败后无法恢复 ZITADEL 角色关联"
                     );
                 }
                 Err(error.into())
@@ -1580,32 +1842,6 @@ impl Account {
         }
     }
 
-    /// 从 Provider 实时读取并协调指定服务账号的凭据非敏感元数据。
-    ///
-    /// 该方法不会返回或恢复 Client Secret/PAT 明文；Provider 外部创建或撤销的凭据会更新
-    /// 本地来源与状态。
-    ///
-    /// # Errors
-    ///
-    /// 服务账号不存在、没有 Provider 身份、Provider 不可用或本地协调事务失败时返回错误。
-    pub async fn service_account_credentials(
-        &self,
-        service_account_id: &str,
-    ) -> Result<Vec<ServiceAccountCredential>, AccountError> {
-        let user = self.require_service_account(service_account_id).await?;
-        let identity_id = service_account_provider_identity(&user)?;
-        let directory = self
-            .state
-            .service_account_directory
-            .as_ref()
-            .ok_or(ServiceAccountDirectoryError::Unavailable)?;
-        let snapshot = directory.credentials(identity_id).await?;
-        Ok(
-            stores::service_accounts::reconcile(service_account_id, &snapshot, &self.state.pool)
-                .await?,
-        )
-    }
-
     async fn require_service_account(&self, user_id: &str) -> Result<User, AccountError> {
         let user = stores::users::query_by_id(user_id, &self.state.pool)
             .await
@@ -1620,250 +1856,16 @@ impl Account {
         Ok(user)
     }
 
-    /// 创建 PAT 或串行轮换唯一 Client Secret，并返回一次性敏感内容。
-    ///
-    /// `idempotency_key` 在同一服务账号内永久关联一次创建尝试；重复键返回稳定冲突且不会再次
-    /// 调用 Provider。Client Secret 轮换使用事务级非阻塞互斥，重叠请求返回
-    /// `client_secret_rotation_conflict`。Provider 成功而本地元数据失败时会尽力撤销新凭据。
-    ///
-    /// # Errors
-    ///
-    /// 输入或到期时间无效、未启用 PAT introspection、幂等键重复、轮换并发冲突、服务账号
-    /// 没有 Provider 身份、操作者不存在、Provider 不可用，或数据库事务失败时返回错误。
-    pub async fn create_service_account_credential(
+    async fn ensure_project_role_definitions(
         &self,
-        service_account_id: &str,
-        credential_type: ServiceAccountCredentialType,
-        name: &str,
-        expires_at: Option<DateTime<Utc>>,
-        idempotency_key: Option<&str>,
-        created_by: &str,
-    ) -> Result<CreatedServiceAccountCredential, AccountError> {
-        let name = normalized_credential_name(name)?;
-        let idempotency_key = normalized_idempotency_key(idempotency_key)?;
-        if credential_type == ServiceAccountCredentialType::ClientCredentials
-            && expires_at.is_some()
-        {
-            return Err(ValidationError::new(
-                "expires_at",
-                "Client Credentials 不允许设置到期时间",
-            )
-            .into());
-        }
-        if expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
-            return Err(ValidationError::new("expires_at", "PAT 到期时间必须晚于当前时间").into());
-        }
-        let service_account = self.require_service_account(service_account_id).await?;
-        _ = service_account_provider_identity(&service_account)?;
-        let directory = self
-            .state
-            .service_account_directory
-            .as_ref()
-            .ok_or(ServiceAccountDirectoryError::Unavailable)?;
-        if credential_type == ServiceAccountCredentialType::PersonalAccessToken {
-            match self
-                .state
-                .token_verifier
-                .opaque_token_validation_available()
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(AccountError::Conflict {
-                        code: "personal_access_token_unavailable",
-                        message: "当前部署未启用 PAT，请使用 Client Credentials",
-                    });
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        let mut transaction = self.state.pool.begin().await.map_err(StoreError::from)?;
-        if credential_type == ServiceAccountCredentialType::ClientCredentials
-            && !stores::service_accounts::try_lock_client_secret_rotation(
-                service_account_id,
-                &mut transaction,
-            )
-            .await
-            .map_err(StoreError::from)?
-        {
-            return Err(AccountError::Conflict {
-                code: "client_secret_rotation_conflict",
-                message: "另一个 Client Secret 轮换仍在进行，请稍后重试",
-            });
-        }
-        let user = stores::service_accounts::lock(service_account_id, &mut transaction).await?;
-        let identity_id = service_account_provider_identity(&user)?.to_owned();
-        if let Some(idempotency_key) = idempotency_key
-            && stores::service_accounts::idempotency_key_exists(
-                service_account_id,
-                idempotency_key,
-                &mut transaction,
-            )
-            .await
-            .map_err(StoreError::from)?
-        {
-            return Err(AccountError::Conflict {
-                code: "idempotency_key_replayed",
-                message: "该幂等键已经完成过凭据创建，敏感内容无法再次读取",
-            });
-        }
-
-        match credential_type {
-            ServiceAccountCredentialType::ClientCredentials => {
-                let client_id = user.username.clone().ok_or(AccountError::Conflict {
-                    code: "service_account_username_missing",
-                    message: "服务账号缺少稳定 username，不能创建 Client Secret",
-                })?;
-                let generated = directory.create_client_secret(identity_id.as_str()).await?;
-                let inserted = stores::service_accounts::insert_client_secret(
-                    service_account_id,
-                    name.as_str(),
-                    created_by,
-                    generated.created_at,
-                    idempotency_key,
-                    &mut transaction,
-                )
-                .await;
-                let credential = match inserted {
-                    Ok(credential) => credential,
-                    Err(error) => {
-                        _ = transaction.rollback().await;
-                        compensate_client_secret(directory.as_ref(), identity_id.as_str()).await;
-                        return Err(error.into());
-                    }
-                };
-                if let Err(error) = transaction.commit().await {
-                    compensate_client_secret(directory.as_ref(), identity_id.as_str()).await;
-                    return Err(StoreError::from(error).into());
-                }
-                Ok(CreatedServiceAccountCredential {
-                    credential,
-                    client_id: Some(client_id),
-                    secret: generated.client_secret,
-                })
-            }
-            ServiceAccountCredentialType::PersonalAccessToken => {
-                let generated = directory
-                    .create_personal_access_token(identity_id.as_str(), expires_at)
-                    .await?;
-                let verified = self
-                    .state
-                    .token_verifier
-                    .verify_opaque_token(generated.token.as_str())
-                    .await
-                    .and_then(|identity| {
-                        if identity.subject == identity_id {
-                            Ok(identity)
-                        } else {
-                            Err(VerificationError::InvalidToken)
-                        }
-                    });
-                if let Err(error) = verified {
-                    _ = transaction.rollback().await;
-                    compensate_personal_access_token(
-                        directory.as_ref(),
-                        identity_id.as_str(),
-                        generated.token_id.as_str(),
-                    )
-                    .await;
-                    return Err(error.into());
-                }
-                let inserted = stores::service_accounts::insert_personal_access_token(
-                    service_account_id,
-                    name.as_str(),
-                    generated.token_id.as_str(),
-                    created_by,
-                    generated.created_at,
-                    generated.expires_at,
-                    idempotency_key,
-                    &mut transaction,
-                )
-                .await;
-                let credential = match inserted {
-                    Ok(credential) => credential,
-                    Err(error) => {
-                        _ = transaction.rollback().await;
-                        compensate_personal_access_token(
-                            directory.as_ref(),
-                            identity_id.as_str(),
-                            generated.token_id.as_str(),
-                        )
-                        .await;
-                        return Err(error.into());
-                    }
-                };
-                if let Err(error) = transaction.commit().await {
-                    compensate_personal_access_token(
-                        directory.as_ref(),
-                        identity_id.as_str(),
-                        generated.token_id.as_str(),
-                    )
-                    .await;
-                    return Err(StoreError::from(error).into());
-                }
-                Ok(CreatedServiceAccountCredential {
-                    credential,
-                    client_id: None,
-                    secret: generated.token,
-                })
-            }
-        }
-    }
-
-    /// 撤销一个 Client Secret 或 PAT，并在同一服务账号内保持其他凭据不变。
-    ///
-    /// # Errors
-    ///
-    /// 服务账号或凭据不存在、没有 Provider 身份、凭据已经撤销、Provider 拒绝移除，或本地事务
-    /// 失败时返回错误。
-    pub async fn revoke_service_account_credential(
-        &self,
-        service_account_id: &str,
-        credential_id: i64,
-        revoked_by: &str,
+        definitions: &[(String, String)],
     ) -> Result<(), AccountError> {
-        let service_account = self.require_service_account(service_account_id).await?;
-        _ = service_account_provider_identity(&service_account)?;
-        let directory = self
-            .state
-            .service_account_directory
-            .as_ref()
-            .ok_or(ServiceAccountDirectoryError::Unavailable)?;
-        let mut transaction = self.state.pool.begin().await.map_err(StoreError::from)?;
-        let user = stores::service_accounts::lock(service_account_id, &mut transaction).await?;
-        let identity_id = service_account_provider_identity(&user)?.to_owned();
-        let credential = stores::service_accounts::lock_credential(
-            service_account_id,
-            credential_id,
-            &mut transaction,
-        )
-        .await?;
-        if credential.status == ServiceAccountCredentialStatus::Revoked {
-            return Err(AccountError::Conflict {
-                code: "credential_already_revoked",
-                message: "服务账号凭据已经撤销",
-            });
+        let Some(directory) = self.state.identity_directory.as_ref() else {
+            return Ok(());
+        };
+        for (key, name) in definitions {
+            directory.ensure_project_role(key, name).await?;
         }
-        match credential.credential_type {
-            ServiceAccountCredentialType::ClientCredentials => {
-                directory.remove_client_secret(identity_id.as_str()).await?;
-            }
-            ServiceAccountCredentialType::PersonalAccessToken => {
-                let token_id =
-                    credential
-                        .provider_credential_id
-                        .as_deref()
-                        .ok_or(AccountError::Conflict {
-                            code: "credential_provider_id_missing",
-                            message: "凭据缺少 Provider Token ID，无法撤销",
-                        })?;
-                directory
-                    .remove_personal_access_token(identity_id.as_str(), token_id)
-                    .await?;
-            }
-        }
-        stores::service_accounts::revoke(credential_id, revoked_by, &mut transaction).await?;
-        transaction.commit().await.map_err(StoreError::from)?;
         Ok(())
     }
 
@@ -1994,54 +1996,11 @@ fn validate_service_account_profile(
     Ok(())
 }
 
-fn normalized_credential_name(value: &str) -> Result<String, AccountError> {
-    let value = value.trim();
-    if value.is_empty() || value.chars().count() > 200 {
-        return Err(ValidationError::new("name", "凭据名称长度必须为 1 至 200 个字符").into());
-    }
-    Ok(value.to_owned())
-}
-
-fn normalized_idempotency_key(value: Option<&str>) -> Result<Option<&str>, AccountError> {
-    let value = value.map(str::trim).filter(|value| !value.is_empty());
-    if value.is_some_and(|value| value.chars().count() > 255) {
-        return Err(ValidationError::new("idempotency_key", "幂等键不能超过 255 个字符").into());
-    }
-    Ok(value)
-}
-
-async fn compensate_client_secret(directory: &dyn ServiceAccountDirectory, identity_id: &str) {
-    if let Err(error) = directory.remove_client_secret(identity_id).await {
-        tracing::error!(
-            error = ?error,
-            business_operation = "client_secret_creation_compensation",
-            "本地凭据元数据写入失败后无法移除 Provider Client Secret"
-        );
-    }
-}
-
 fn service_account_provider_identity(user: &User) -> Result<&str, AccountError> {
     user.identity_id.as_deref().ok_or(AccountError::Conflict {
         code: "internal_service_account",
-        message: "内部服务主体不支持身份 Provider 资料或凭据管理",
+        message: "内部服务主体不支持身份 Provider 资料管理",
     })
-}
-
-async fn compensate_personal_access_token(
-    directory: &dyn ServiceAccountDirectory,
-    identity_id: &str,
-    token_id: &str,
-) {
-    if let Err(error) = directory
-        .remove_personal_access_token(identity_id, token_id)
-        .await
-    {
-        tracing::error!(
-            error = ?error,
-            business_operation = "personal_access_token_creation_compensation",
-            "本地凭据元数据写入失败后无法移除 Provider PAT"
-        );
-    }
 }
 
 fn normalized_create_human_identity_provision(

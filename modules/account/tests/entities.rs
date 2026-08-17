@@ -22,14 +22,6 @@ fn permission_keys_support_built_in_and_application_defined_values() {
             PermissionKey::ServiceAccountsProfileWrite,
             "service_accounts:profile.write",
         ),
-        (
-            PermissionKey::ServiceAccountsCredentialsRead,
-            "service_accounts:credentials.read",
-        ),
-        (
-            PermissionKey::ServiceAccountsCredentialsWrite,
-            "service_accounts:credentials.write",
-        ),
     ];
 
     for (permission, key) in cases {

@@ -7,7 +7,6 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use grpc::{StatusCodeError, StatusError, client::Channel};
 use grpc_protobuf::CallBuilder as _;
 use protobuf::{ProtoString, View};
@@ -15,19 +14,25 @@ use thiserror::Error;
 
 use crate::{
     CreateHumanIdentity, CreateServiceAccountIdentity, ExternalIdentity, IdentityDirectory,
-    IdentityDirectoryError, ProviderPersonalAccessToken, ProviderServiceAccountCredentials,
-    ServiceAccountClientSecret, ServiceAccountDirectory, ServiceAccountDirectoryError,
-    ServiceAccountIdentity, ServiceAccountPersonalAccessTokenSecret, SystemRole,
+    IdentityDirectoryError, ProjectRoleEnsureOutcome, ProviderUsernameMatch,
+    ServiceAccountDirectory, ServiceAccountDirectoryError, ServiceAccountIdentity, SystemRole,
     generated::zitadel::{
-        project::v2::{AddProjectRoleRequest, project_service_client::ProjectServiceClient},
+        authorization::v2::{
+            AuthorizationView, AuthorizationsSearchFilter, CreateAuthorizationRequest,
+            DeleteAuthorizationRequest, IDFilter as AuthorizationIDFilter,
+            InIDsFilter as AuthorizationInIDsFilter, ListAuthorizationsRequest,
+            PaginationRequest as AuthorizationPaginationRequest, UpdateAuthorizationRequest,
+            authorization_service_client::AuthorizationServiceClient,
+        },
+        project::v2::{
+            AddProjectRoleRequest, RemoveProjectRoleRequest, UpdateProjectRoleRequest,
+            project_service_client::ProjectServiceClient,
+        },
         user::v2::{
-            AccessTokenType, AddPersonalAccessTokenRequest, AddSecretRequest, CreateUserRequest,
-            DeleteUserRequest, HumanUserView, IDFilter, InUserIDQuery,
-            ListPersonalAccessTokensRequest, ListQuery, ListUsersRequest, PaginationRequest,
-            PersonalAccessTokenFieldName, PersonalAccessTokensSearchFilter,
-            RemovePersonalAccessTokenRequest, RemoveSecretRequest, SearchQuery, StateQuery,
-            Timestamp, TimestampView, Type, TypeQuery, UpdateUserRequest, UserFieldName, UserState,
-            UserView, create_user_request::Machine as CreateMachine,
+            AccessTokenType, CreateUserRequest, DeleteUserRequest, HumanUserView, InUserIDQuery,
+            ListQuery, ListUsersRequest, SearchQuery, StateQuery, TextQueryMethod, Type, TypeQuery,
+            UpdateUserRequest, UserFieldName, UserNameQuery, UserState, UserView,
+            create_user_request::Machine as CreateMachine,
             update_user_request::Machine as UpdateMachine, user_service_client::UserServiceClient,
         },
     },
@@ -37,7 +42,6 @@ use crate::{
 
 const PAGE_SIZE: u32 = 100;
 const MAX_DIRECTORY_USERS: u64 = 10_000;
-const MAX_DIRECTORY_CREDENTIALS: u64 = 10_000;
 /// 可用于首次初始化选择的人类用户。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryUser {
@@ -68,6 +72,7 @@ impl DirectoryUser {
 pub struct ZitadelUserDirectory {
     user_client: UserServiceClient<Channel>,
     project_client: ProjectServiceClient<Channel>,
+    authorization_client: AuthorizationServiceClient<Channel>,
     organization_id: String,
     project_id: String,
 }
@@ -111,7 +116,8 @@ impl ZitadelUserDirectory {
         let channel = zitadel::authenticated_channel(issuer, personal_access_token)?;
         Ok(Self {
             user_client: UserServiceClient::new(channel.clone()),
-            project_client: ProjectServiceClient::new(channel),
+            project_client: ProjectServiceClient::new(channel.clone()),
+            authorization_client: AuthorizationServiceClient::new(channel),
             organization_id: organization_id.to_owned(),
             project_id: project_id.to_owned(),
         })
@@ -319,6 +325,139 @@ impl ZitadelUserDirectory {
         });
         Ok(users)
     }
+
+    async fn replace_authorization_roles(
+        &self,
+        identity_id: &str,
+        role_keys: &[String],
+    ) -> Result<Vec<String>, DirectoryError> {
+        let mut desired = role_keys
+            .iter()
+            .map(|key| key.trim().to_owned())
+            .filter(|key| !key.is_empty())
+            .collect::<Vec<_>>();
+        desired.sort();
+        desired.dedup();
+
+        let existing = self.authorization_for_user(identity_id).await?;
+        let previous = existing
+            .as_ref()
+            .map(|(_, roles)| roles.clone())
+            .unwrap_or_default();
+        match existing {
+            Some((authorization_id, current)) => {
+                if desired.is_empty() {
+                    let mut request = DeleteAuthorizationRequest::new();
+                    request.set_id(authorization_id.as_str());
+                    self.authorization_client
+                        .delete_authorization(request.as_view())
+                        .with_timeout(REQUEST_TIMEOUT)
+                        .await?;
+                } else if current != desired {
+                    let mut request = UpdateAuthorizationRequest::new();
+                    request.set_id(authorization_id.as_str());
+                    request.role_keys_mut().extend(desired);
+                    self.authorization_client
+                        .update_authorization(request.as_view())
+                        .with_timeout(REQUEST_TIMEOUT)
+                        .await?;
+                }
+            }
+            None if desired.is_empty() => {}
+            None => {
+                let mut request = CreateAuthorizationRequest::new();
+                request.set_user_id(identity_id);
+                request.set_project_id(self.project_id.as_str());
+                request.set_organization_id(self.organization_id.as_str());
+                request.role_keys_mut().extend(desired.clone());
+                match self
+                    .authorization_client
+                    .create_authorization(request.as_view())
+                    .with_timeout(REQUEST_TIMEOUT)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(error) if error.code() == StatusCodeError::AlreadyExists => {
+                        let Some((authorization_id, _)) =
+                            self.authorization_for_user(identity_id).await?
+                        else {
+                            return Err(DirectoryError::Request {
+                                code: StatusCodeError::Unknown,
+                                message: "角色关联已存在但无法重新读取".to_owned(),
+                            });
+                        };
+                        let mut update = UpdateAuthorizationRequest::new();
+                        update.set_id(authorization_id.as_str());
+                        update.role_keys_mut().extend(desired);
+                        self.authorization_client
+                            .update_authorization(update.as_view())
+                            .with_timeout(REQUEST_TIMEOUT)
+                            .await?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        Ok(previous)
+    }
+
+    async fn authorization_for_user(
+        &self,
+        identity_id: &str,
+    ) -> Result<Option<(String, Vec<String>)>, DirectoryError> {
+        let mut pagination = AuthorizationPaginationRequest::new();
+        pagination.set_limit(2);
+        pagination.set_asc(true);
+        let mut request = ListAuthorizationsRequest::new();
+        request.set_pagination(pagination);
+
+        let mut users = AuthorizationInIDsFilter::new();
+        users.ids_mut().push(identity_id);
+        let mut user_filter = AuthorizationsSearchFilter::new();
+        user_filter.set_in_user_ids(users);
+        request.filters_mut().push(user_filter);
+
+        let mut project = AuthorizationIDFilter::new();
+        project.set_id(self.project_id.as_str());
+        let mut project_filter = AuthorizationsSearchFilter::new();
+        project_filter.set_project_id(project);
+        request.filters_mut().push(project_filter);
+
+        let mut organization = AuthorizationIDFilter::new();
+        organization.set_id(self.organization_id.as_str());
+        let mut organization_filter = AuthorizationsSearchFilter::new();
+        organization_filter.set_organization_id(organization);
+        request.filters_mut().push(organization_filter);
+
+        let response = self
+            .authorization_client
+            .list_authorizations(request.as_view())
+            .with_timeout(REQUEST_TIMEOUT)
+            .await?;
+        let mut matches = response.authorizations().iter();
+        let first = matches.next().map(authorization_snapshot).transpose()?;
+        if matches.next().is_some() {
+            return Err(DirectoryError::Request {
+                code: StatusCodeError::Unknown,
+                message: "同一用户和 Project 存在多个角色关联".to_owned(),
+            });
+        }
+        Ok(first)
+    }
+}
+
+fn authorization_snapshot(
+    authorization: AuthorizationView<'_>,
+) -> Result<(String, Vec<String>), DirectoryError> {
+    let id = required_string(authorization.id(), "authorization.id")?;
+    let mut role_keys = authorization
+        .roles()
+        .iter()
+        .map(|role| required_string(role.key(), "authorization.role.key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    role_keys.sort();
+    role_keys.dedup();
+    Ok((id, role_keys))
 }
 
 #[async_trait]
@@ -363,10 +502,124 @@ impl IdentityDirectory for ZitadelUserDirectory {
             .await
             .map_err(identity_directory_error)
     }
+
+    async fn ensure_project_role(
+        &self,
+        key: &str,
+        display_name: &str,
+    ) -> Result<ProjectRoleEnsureOutcome, IdentityDirectoryError> {
+        let mut request = AddProjectRoleRequest::new();
+        request.set_project_id(self.project_id.as_str());
+        request.set_role_key(key);
+        request.set_display_name(display_name);
+        match self
+            .project_client
+            .add_project_role(request.as_view())
+            .with_timeout(REQUEST_TIMEOUT)
+            .await
+        {
+            Ok(_) => Ok(ProjectRoleEnsureOutcome::Created),
+            Err(error) if error.code() == StatusCodeError::AlreadyExists => {
+                Ok(ProjectRoleEnsureOutcome::Existing)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    code = ?error.code(),
+                    project_id = %self.project_id,
+                    role_key = key,
+                    "ZITADEL Project 角色创建失败"
+                );
+                Err(IdentityDirectoryError::Unavailable)
+            }
+        }
+    }
+
+    async fn update_project_role(
+        &self,
+        key: &str,
+        display_name: &str,
+    ) -> Result<(), IdentityDirectoryError> {
+        let mut request = UpdateProjectRoleRequest::new();
+        request.set_project_id(self.project_id.as_str());
+        request.set_role_key(key);
+        request.set_display_name(display_name);
+        self.project_client
+            .update_project_role(request.as_view())
+            .with_timeout(REQUEST_TIMEOUT)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    code = ?error.code(),
+                    project_id = %self.project_id,
+                    role_key = key,
+                    "ZITADEL Project 角色更新失败"
+                );
+                IdentityDirectoryError::Unavailable
+            })?;
+        Ok(())
+    }
+
+    async fn remove_project_role(&self, key: &str) -> Result<(), IdentityDirectoryError> {
+        let mut request = RemoveProjectRoleRequest::new();
+        request.set_project_id(self.project_id.as_str());
+        request.set_role_key(key);
+        let result = self
+            .project_client
+            .remove_project_role(request.as_view())
+            .with_timeout(REQUEST_TIMEOUT)
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if error.code() == StatusCodeError::NotFound => Ok(()),
+            Err(error) => {
+                tracing::warn!(
+                    code = ?error.code(),
+                    project_id = %self.project_id,
+                    role_key = key,
+                    "ZITADEL Project 角色删除失败"
+                );
+                Err(IdentityDirectoryError::Unavailable)
+            }
+        }
+    }
+
+    async fn replace_project_roles(
+        &self,
+        identity_id: &str,
+        role_keys: &[String],
+    ) -> Result<Vec<String>, IdentityDirectoryError> {
+        self.replace_authorization_roles(identity_id, role_keys)
+            .await
+            .map_err(identity_directory_error)
+    }
 }
 
 #[async_trait]
 impl ServiceAccountDirectory for ZitadelUserDirectory {
+    async fn account_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<ProviderUsernameMatch>, ServiceAccountDirectoryError> {
+        let request = user_by_username_request(username);
+        let response = self
+            .user_client
+            .list_users(request.as_view())
+            .with_timeout(REQUEST_TIMEOUT)
+            .await
+            .map_err(service_account_directory_status)?;
+        let mut matches = response.result().iter().filter(|user| {
+            user.username()
+                .to_str()
+                .is_ok_and(|value| value.eq_ignore_ascii_case(username))
+        });
+        let result = matches.next().map(provider_username_match).transpose()?;
+        if matches.next().is_some() {
+            tracing::warn!("ZITADEL username 查询返回多个精确匹配账号");
+            return Err(ServiceAccountDirectoryError::Unavailable);
+        }
+        Ok(result)
+    }
+
     async fn create_service_account(
         &self,
         request: &CreateServiceAccountIdentity,
@@ -420,152 +673,6 @@ impl ServiceAccountDirectory for ZitadelUserDirectory {
             .await
             .map_err(service_account_directory_error)
     }
-
-    async fn create_client_secret(
-        &self,
-        identity_id: &str,
-    ) -> Result<ServiceAccountClientSecret, ServiceAccountDirectoryError> {
-        let request = add_client_secret_request(identity_id);
-        let response = self
-            .user_client
-            .add_secret(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(service_account_directory_status)?;
-        Ok(ServiceAccountClientSecret {
-            created_at: required_timestamp(
-                response.creation_date_opt().into_option(),
-                "add_secret.creation_date",
-            )?,
-            client_secret: required_string(response.client_secret(), "add_secret.client_secret")
-                .map_err(service_account_directory_error)?,
-        })
-    }
-
-    async fn remove_client_secret(
-        &self,
-        identity_id: &str,
-    ) -> Result<(), ServiceAccountDirectoryError> {
-        let request = remove_client_secret_request(identity_id);
-        self.user_client
-            .remove_secret(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(service_account_directory_status)?;
-        Ok(())
-    }
-
-    async fn create_personal_access_token(
-        &self,
-        identity_id: &str,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<ServiceAccountPersonalAccessTokenSecret, ServiceAccountDirectoryError> {
-        let request = add_personal_access_token_request(identity_id, expires_at);
-        let response = self
-            .user_client
-            .add_personal_access_token(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(service_account_directory_status)?;
-        Ok(ServiceAccountPersonalAccessTokenSecret {
-            token_id: required_string(response.token_id(), "add_personal_access_token.token_id")
-                .map_err(service_account_directory_error)?,
-            created_at: required_timestamp(
-                response.creation_date_opt().into_option(),
-                "add_personal_access_token.creation_date",
-            )?,
-            expires_at,
-            token: required_string(response.token(), "add_personal_access_token.token")
-                .map_err(service_account_directory_error)?,
-        })
-    }
-
-    async fn remove_personal_access_token(
-        &self,
-        identity_id: &str,
-        token_id: &str,
-    ) -> Result<(), ServiceAccountDirectoryError> {
-        let request = remove_personal_access_token_request(identity_id, token_id);
-        self.user_client
-            .remove_personal_access_token(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(service_account_directory_status)?;
-        Ok(())
-    }
-
-    async fn credentials(
-        &self,
-        identity_id: &str,
-    ) -> Result<ProviderServiceAccountCredentials, ServiceAccountDirectoryError> {
-        Ok(ProviderServiceAccountCredentials {
-            has_client_secret: self.machine_has_secret(identity_id).await?,
-            personal_access_tokens: self.personal_access_tokens(identity_id).await?,
-        })
-    }
-}
-
-impl ZitadelUserDirectory {
-    async fn machine_has_secret(
-        &self,
-        identity_id: &str,
-    ) -> Result<bool, ServiceAccountDirectoryError> {
-        let request = list_machine_user_request(identity_id);
-        let response = self
-            .user_client
-            .list_users(request.as_view())
-            .with_timeout(REQUEST_TIMEOUT)
-            .await
-            .map_err(service_account_directory_status)?;
-        let Some(user) = response
-            .result()
-            .into_iter()
-            .find(|user| user.user_id().to_str().is_ok_and(|id| id == identity_id))
-        else {
-            return Err(ServiceAccountDirectoryError::NotFound);
-        };
-        let Some(machine) = user.machine_opt().into_option() else {
-            return Err(ServiceAccountDirectoryError::NotFound);
-        };
-        Ok(machine.has_secret())
-    }
-
-    async fn personal_access_tokens(
-        &self,
-        identity_id: &str,
-    ) -> Result<Vec<ProviderPersonalAccessToken>, ServiceAccountDirectoryError> {
-        let mut offset = 0_u64;
-        let mut tokens = Vec::new();
-        loop {
-            if offset >= MAX_DIRECTORY_CREDENTIALS {
-                return Err(ServiceAccountDirectoryError::Unavailable);
-            }
-            let request = list_personal_access_tokens_request(offset, identity_id);
-            let response = self
-                .user_client
-                .list_personal_access_tokens(request.as_view())
-                .with_timeout(REQUEST_TIMEOUT)
-                .await
-                .map_err(service_account_directory_status)?;
-            let result_count = response.result().len() as u64;
-            for token in response.result() {
-                tokens.push(ProviderPersonalAccessToken {
-                    token_id: required_string(token.id(), "personal_access_token.id")
-                        .map_err(service_account_directory_error)?,
-                    created_at: required_timestamp(
-                        token.creation_date_opt().into_option(),
-                        "personal_access_token.creation_date",
-                    )?,
-                    expires_at: optional_timestamp(token.expiration_date_opt().into_option())?,
-                });
-            }
-            offset = offset.saturating_add(result_count);
-            if result_count == 0 || offset >= response.pagination().total_result() {
-                break;
-            }
-        }
-        Ok(tokens)
-    }
 }
 
 fn identity_directory_error(error: DirectoryError) -> IdentityDirectoryError {
@@ -597,18 +704,6 @@ pub struct ZitadelCreateServiceAccountRequestInspection {
     pub description: Option<String>,
     /// 是否明确要求 ZITADEL 签发 JWT access token。
     pub access_token_is_jwt: bool,
-}
-
-/// 测试可见的 ZITADEL 凭据请求摘要，不包含 Secret 或 PAT 明文。
-#[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZitadelServiceAccountCredentialRequestInspection {
-    /// 目标 ZITADEL machine user ID。
-    pub user_id: String,
-    /// 撤销 PAT 时使用的稳定 Provider token ID。
-    pub token_id: Option<String>,
-    /// 创建 PAT 时传入的可选到期时间 `(Unix 秒, 纳秒)`。
-    pub expires_at: Option<(i64, i32)>,
 }
 
 /// 构造并检查实际使用的 ZITADEL machine user 创建请求。
@@ -644,76 +739,12 @@ pub fn inspect_create_service_account_request(
     }
 }
 
-/// 构造并检查实际使用的 ZITADEL Client Secret 创建请求。
-#[doc(hidden)]
-pub fn inspect_add_client_secret_request(
-    identity_id: &str,
-) -> ZitadelServiceAccountCredentialRequestInspection {
-    let request = add_client_secret_request(identity_id);
-    credential_request_inspection(request.as_view().user_id(), None, None)
-}
-
-/// 构造并检查实际使用的 ZITADEL Client Secret 移除请求。
-#[doc(hidden)]
-pub fn inspect_remove_client_secret_request(
-    identity_id: &str,
-) -> ZitadelServiceAccountCredentialRequestInspection {
-    let request = remove_client_secret_request(identity_id);
-    credential_request_inspection(request.as_view().user_id(), None, None)
-}
-
-/// 构造并检查实际使用的 ZITADEL PAT 创建请求。
-#[doc(hidden)]
-pub fn inspect_add_personal_access_token_request(
-    identity_id: &str,
-    expires_at: Option<DateTime<Utc>>,
-) -> ZitadelServiceAccountCredentialRequestInspection {
-    let request = add_personal_access_token_request(identity_id, expires_at);
-    let view = request.as_view();
-    let expires_at = view
-        .expiration_date_opt()
-        .into_option()
-        .map(|value| (value.seconds(), value.nanos()));
-    credential_request_inspection(view.user_id(), None, expires_at)
-}
-
-/// 构造并检查实际使用的 ZITADEL PAT 移除请求。
-#[doc(hidden)]
-pub fn inspect_remove_personal_access_token_request(
-    identity_id: &str,
-    token_id: &str,
-) -> ZitadelServiceAccountCredentialRequestInspection {
-    let request = remove_personal_access_token_request(identity_id, token_id);
-    let view = request.as_view();
-    credential_request_inspection(view.user_id(), Some(view.token_id()), None)
-}
-
 /// 检查 ZITADEL gRPC 状态到稳定服务账号 Provider 错误的映射。
 #[doc(hidden)]
 pub fn inspect_service_account_status_mapping(
     code: StatusCodeError,
 ) -> ServiceAccountDirectoryError {
     service_account_directory_status(StatusError::new(code, "test status"))
-}
-
-fn credential_request_inspection(
-    user_id: View<'_, ProtoString>,
-    token_id: Option<View<'_, ProtoString>>,
-    expires_at: Option<(i64, i32)>,
-) -> ZitadelServiceAccountCredentialRequestInspection {
-    ZitadelServiceAccountCredentialRequestInspection {
-        user_id: user_id
-            .to_str()
-            .expect("测试 identity ID 必须是 UTF-8")
-            .to_owned(),
-        token_id: token_id.map(|value| {
-            value
-                .to_str()
-                .expect("测试 token ID 必须是 UTF-8")
-                .to_owned()
-        }),
-        expires_at,
-    }
 }
 
 fn service_account_directory_status(error: StatusError) -> ServiceAccountDirectoryError {
@@ -833,40 +864,6 @@ fn create_service_account_request(
     create
 }
 
-fn add_client_secret_request(identity_id: &str) -> AddSecretRequest {
-    let mut request = AddSecretRequest::new();
-    request.set_user_id(identity_id);
-    request
-}
-
-fn remove_client_secret_request(identity_id: &str) -> RemoveSecretRequest {
-    let mut request = RemoveSecretRequest::new();
-    request.set_user_id(identity_id);
-    request
-}
-
-fn add_personal_access_token_request(
-    identity_id: &str,
-    expires_at: Option<DateTime<Utc>>,
-) -> AddPersonalAccessTokenRequest {
-    let mut request = AddPersonalAccessTokenRequest::new();
-    request.set_user_id(identity_id);
-    if let Some(expires_at) = expires_at {
-        request.set_expiration_date(timestamp(expires_at));
-    }
-    request
-}
-
-fn remove_personal_access_token_request(
-    identity_id: &str,
-    token_id: &str,
-) -> RemovePersonalAccessTokenRequest {
-    let mut request = RemovePersonalAccessTokenRequest::new();
-    request.set_user_id(identity_id);
-    request.set_token_id(token_id);
-    request
-}
-
 fn list_users_request(offset: u64, identity_id: Option<&str>) -> ListUsersRequest {
     let mut request = ListUsersRequest::new();
     let mut list_query = ListQuery::new();
@@ -898,83 +895,49 @@ fn list_users_request(offset: u64, identity_id: Option<&str>) -> ListUsersReques
     request
 }
 
-fn list_machine_user_request(identity_id: &str) -> ListUsersRequest {
+fn user_by_username_request(username: &str) -> ListUsersRequest {
     let mut request = ListUsersRequest::new();
     let mut query = ListQuery::new();
-    query.set_limit(1);
+    query.set_limit(2);
+    query.set_asc(true);
     request.set_query(query);
+    request.set_sorting_column(UserFieldName::UserName);
 
-    let mut user_type = TypeQuery::new();
-    user_type.set_type(Type::Machine);
-    let mut type_query = SearchQuery::new();
-    type_query.set_type_query(user_type);
-    request.queries_mut().push(type_query);
-
-    let mut ids = InUserIDQuery::new();
-    ids.user_ids_mut().push(identity_id);
-    let mut id_query = SearchQuery::new();
-    id_query.set_in_user_ids_query(ids);
-    request.queries_mut().push(id_query);
+    let mut username_query = UserNameQuery::new();
+    username_query.set_user_name(username);
+    username_query.set_method(TextQueryMethod::EqualsIgnoreCase);
+    let mut search = SearchQuery::new();
+    search.set_user_name_query(username_query);
+    request.queries_mut().push(search);
     request
 }
 
-fn list_personal_access_tokens_request(
-    offset: u64,
-    identity_id: &str,
-) -> ListPersonalAccessTokensRequest {
-    let mut pagination = PaginationRequest::new();
-    pagination.set_offset(offset);
-    pagination.set_limit(PAGE_SIZE);
-    pagination.set_asc(true);
-    let mut id = IDFilter::new();
-    id.set_id(identity_id);
-    let mut filter = PersonalAccessTokensSearchFilter::new();
-    filter.set_user_id_filter(id);
-    let mut request = ListPersonalAccessTokensRequest::new();
-    request.set_pagination(pagination);
-    request.set_sorting_column(PersonalAccessTokenFieldName::CreatedDate);
-    request.filters_mut().push(filter);
-    request
-}
-
-fn timestamp(value: DateTime<Utc>) -> Timestamp {
-    let mut timestamp = Timestamp::new();
-    timestamp.set_seconds(value.timestamp());
-    timestamp.set_nanos(value.timestamp_subsec_nanos() as i32);
-    timestamp
-}
-
-fn required_timestamp(
-    value: Option<TimestampView<'_>>,
-    field: &'static str,
-) -> Result<DateTime<Utc>, ServiceAccountDirectoryError> {
-    let Some(value) = value else {
-        tracing::warn!(field, "ZITADEL 服务账号目录响应缺少时间字段");
+fn provider_username_match(
+    user: UserView<'_>,
+) -> Result<ProviderUsernameMatch, ServiceAccountDirectoryError> {
+    if user.human_opt().into_option().is_some() {
+        return Ok(ProviderUsernameMatch::Human);
+    }
+    let Some(machine) = user.machine_opt().into_option() else {
         return Err(ServiceAccountDirectoryError::Unavailable);
     };
-    timestamp_value(value).ok_or_else(|| {
-        tracing::warn!(field, "ZITADEL 服务账号目录响应包含无效时间字段");
-        ServiceAccountDirectoryError::Unavailable
-    })
-}
-
-fn optional_timestamp(
-    value: Option<TimestampView<'_>>,
-) -> Result<Option<DateTime<Utc>>, ServiceAccountDirectoryError> {
-    value
-        .map(|value| {
-            timestamp_value(value).ok_or_else(|| {
-                tracing::warn!("ZITADEL 服务账号目录响应包含无效到期时间");
-                ServiceAccountDirectoryError::Unavailable
-            })
-        })
-        .transpose()
-}
-
-fn timestamp_value(value: TimestampView<'_>) -> Option<DateTime<Utc>> {
-    u32::try_from(value.nanos())
-        .ok()
-        .and_then(|nanos| DateTime::from_timestamp(value.seconds(), nanos))
+    let identity_id = required_string(user.user_id(), "service_account.user_id")
+        .map_err(service_account_directory_error)?;
+    let username = required_string(user.username(), "service_account.username")
+        .map_err(service_account_directory_error)?;
+    let display_name = required_string(machine.name(), "service_account.name")
+        .map_err(service_account_directory_error)?;
+    let description = required_string(machine.description(), "service_account.description")
+        .map_err(service_account_directory_error)
+        .map(non_empty_owned)?;
+    Ok(ProviderUsernameMatch::ServiceAccount(
+        ServiceAccountIdentity {
+            identity_id,
+            username,
+            display_name,
+            description,
+        },
+    ))
 }
 
 fn directory_user(user: UserView<'_>) -> Result<Option<DirectoryUser>, DirectoryError> {

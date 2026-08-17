@@ -17,6 +17,11 @@ const INTERNAL_SERVICE_ACCOUNTS_UP: &str =
     include_str!("../migrations/20260817060744_account_internal_service_accounts.up.sql");
 const INTERNAL_SERVICE_ACCOUNTS_DOWN: &str =
     include_str!("../migrations/20260817060744_account_internal_service_accounts.down.sql");
+const REMOVE_SERVICE_ACCOUNT_CREDENTIALS_UP: &str =
+    include_str!("../migrations/20260817102306_account_remove_service_account_credentials.up.sql");
+const REMOVE_SERVICE_ACCOUNT_CREDENTIALS_DOWN: &str = include_str!(
+    "../migrations/20260817102306_account_remove_service_account_credentials.down.sql"
+);
 
 #[test]
 fn baseline_contains_four_reversible_timestamp_migrations() {
@@ -31,7 +36,7 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
         })
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(migration_names.len(), 12);
+    assert_eq!(migration_names.len(), 14);
     for version in [
         "20260807034412_account_identity_baseline",
         "20260807034430_account_authorization_baseline",
@@ -45,6 +50,14 @@ fn baseline_contains_four_reversible_timestamp_migrations() {
     assert!(migration_names.contains("20260814075639_account_service_accounts.down.sql"));
     assert!(migration_names.contains("20260817060744_account_internal_service_accounts.up.sql"));
     assert!(migration_names.contains("20260817060744_account_internal_service_accounts.down.sql"));
+    assert!(
+        migration_names
+            .contains("20260817102306_account_remove_service_account_credentials.up.sql")
+    );
+    assert!(
+        migration_names
+            .contains("20260817102306_account_remove_service_account_credentials.down.sql")
+    );
 }
 
 #[test]
@@ -76,6 +89,24 @@ fn internal_service_account_migration_is_nullable_but_keeps_human_identity_requi
     assert!(INTERNAL_SERVICE_ACCOUNTS_UP.contains("user_type <> 'human'"));
     assert!(INTERNAL_SERVICE_ACCOUNTS_DOWN.contains("identity_id IS NULL"));
     assert!(INTERNAL_SERVICE_ACCOUNTS_DOWN.contains("identity_id SET NOT NULL"));
+}
+
+#[test]
+fn current_schema_removes_product_credential_management_reversibly() {
+    assert!(
+        REMOVE_SERVICE_ACCOUNT_CREDENTIALS_UP
+            .contains("DROP TABLE account.service_account_credentials")
+    );
+    assert!(REMOVE_SERVICE_ACCOUNT_CREDENTIALS_UP.contains("'service_accounts:credentials.read'"));
+    assert!(REMOVE_SERVICE_ACCOUNT_CREDENTIALS_UP.contains("'service_accounts:credentials.write'"));
+    assert!(
+        REMOVE_SERVICE_ACCOUNT_CREDENTIALS_DOWN
+            .contains("CREATE TABLE account.service_account_credentials")
+    );
+    assert!(
+        REMOVE_SERVICE_ACCOUNT_CREDENTIALS_DOWN
+            .contains("COMMENT ON TABLE account.service_account_credentials")
+    );
 }
 
 #[test]

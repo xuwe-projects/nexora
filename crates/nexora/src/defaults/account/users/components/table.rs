@@ -395,10 +395,6 @@ impl UserTableRow {
         TableCell::new(tag).center()
     }
 
-    fn user_is_service_account(user: &UserResponse) -> bool {
-        user.user_type == UserType::ServiceAccount
-    }
-
     fn render_actions(
         row: &Self,
         page: WeakEntity<UsersPage>,
@@ -408,10 +404,8 @@ impl UserTableRow {
         let user = &row.source;
         let role_user_id = user.id.clone();
         let status_user_id = user.id.clone();
-        let credentials_user = user.clone();
         let role_page = page.clone();
         let status_page = page.clone();
-        let credentials_page = page.clone();
         let mutation_busy = page
             .upgrade()
             .is_some_and(|page| page.read(cx).has_active_mutation(cx));
@@ -421,9 +415,6 @@ impl UserTableRow {
         let can_manage_roles =
             has_permission(cx, "users:roles.write") && has_permission(cx, "roles:read");
         let can_change_status = has_permission(cx, "users:status.write");
-        let can_manage_credentials = has_permission(cx, "service_accounts:credentials.read")
-            || has_permission(cx, "service_accounts:profile.write");
-        let is_service_account = Self::user_is_service_account(user);
         let is_active = user.status == UserStatus::Active;
         let status_action = if is_active { "停用" } else { "启用" };
         let target_status = if is_active {
@@ -476,30 +467,7 @@ impl UserTableRow {
                                 page.set_user_status(status_user_id.clone(), target_status, cx);
                             });
                         }),
-                )
-                .when(is_service_account, |this| {
-                    this.child(
-                        Button::new(format!("default-service-account-manage-{}", user.id))
-                            .with_size(component_size)
-                            .outline()
-                            .label("账号与凭据")
-                            .disabled(mutation_busy || !can_manage_credentials)
-                            .tooltip(if can_manage_credentials {
-                                "管理服务账号资料与凭据"
-                            } else {
-                                "当前账号不能查看服务账号凭据"
-                            })
-                            .on_click(move |_, window, cx| {
-                                _ = credentials_page.update(cx, |page, cx| {
-                                    page.manage_service_account(
-                                        credentials_user.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }),
-                    )
-                }),
+                ),
         )
         .center()
     }

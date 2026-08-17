@@ -213,19 +213,19 @@ impl From<AccountError> for ApiError {
                 Self::new(
                     StatusCode::CONFLICT,
                     "service_account_provider_conflict",
-                    "身份服务中已存在冲突的服务账号或凭据",
+                    "身份服务中已存在冲突的服务账号",
                 )
             }
             AccountError::ServiceAccountDirectory(ServiceAccountDirectoryError::NotFound) => {
                 Self::new(
                     StatusCode::NOT_FOUND,
                     "service_account_provider_not_found",
-                    "身份服务中的服务账号或凭据不存在",
+                    "身份服务中的服务账号不存在",
                 )
             }
             AccountError::ServiceAccountDirectory(ServiceAccountDirectoryError::Unavailable) => {
                 Self::service_unavailable(
-                    "credential_provider_unavailable",
+                    "service_account_provider_unavailable",
                     "身份服务暂时无法完成服务账号请求",
                 )
             }
@@ -260,23 +260,15 @@ impl From<AccountError> for ApiError {
                 "permission_denied",
                 "没有执行该操作的权限",
             ),
-            AccountError::InvalidInput(validation) => {
-                let code = match validation.field() {
-                    "expires_at" => "credential_expiration_invalid",
-                    "credential_type" => "credential_type_invalid",
-                    _ => "validation_failed",
-                };
-                Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, validation.message())
-                    .with_details(serde_json::json!({ "field": validation.field() }))
+            AccountError::InvalidInput(validation) => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_failed",
+                validation.message(),
+            )
+            .with_details(serde_json::json!({ "field": validation.field() })),
+            AccountError::NotFound(_) => {
+                Self::new(StatusCode::NOT_FOUND, "resource_not_found", "资源不存在")
             }
-            AccountError::NotFound(resource) => match resource {
-                "服务账号凭据" => Self::new(
-                    StatusCode::NOT_FOUND,
-                    "credential_not_found",
-                    "服务账号凭据不存在",
-                ),
-                _ => Self::new(StatusCode::NOT_FOUND, "resource_not_found", "资源不存在"),
-            },
             AccountError::Conflict { code, message } => {
                 Self::new(StatusCode::CONFLICT, code, message)
             }

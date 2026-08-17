@@ -10,9 +10,7 @@ pub use crate::account_module::{
     CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
     IdentityIssuerBindingOutcome, PORTAL_ADMIN_ROLE_KEY, Page, Permission,
     PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role, SYSTEM_ROLE_OWNER,
-    ServiceAccountCredential, ServiceAccountCredentialSource, ServiceAccountCredentialStatus,
-    ServiceAccountCredentialType, ServiceAccountDirectory, ServiceAccountDirectoryError,
-    SystemRole, User, UserStatus, UserType,
+    ServiceAccountDirectory, ServiceAccountDirectoryError, SystemRole, User, UserStatus, UserType,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,
@@ -101,7 +99,7 @@ pub(crate) mod server {
         pub personal_access_token: String,
         /// 验证 PAT/opaque Bearer token 使用的可选 resource-server Client ID。
         ///
-        /// 与 Client Secret 同时省略时服务自动降级为仅支持 JWT，并禁止创建新 PAT。
+        /// 与 Client Secret 同时省略时服务自动降级为仅支持 JWT。
         #[cfg(feature = "server")]
         #[serde(default)]
         pub introspection_client_id: String,

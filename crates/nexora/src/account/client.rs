@@ -7,11 +7,10 @@ use std::time::Duration;
 
 use contracts::{
     account::{
-        AccessProfileResponse, CreateRoleRequest, CreateServiceAccountCredentialRequest,
-        CreateServiceAccountCredentialResponse, CreateServiceAccountRequest, PermissionResponse,
+        AccessProfileResponse, CreateRoleRequest, CreateServiceAccountRequest, PermissionResponse,
         ProvisionUserRequest, ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse,
-        ServiceAccountCredentialResponse, UpdateRoleRequest, UpdateServiceAccountRequest,
-        UpdateUserStatusRequest, UserListQuery, UserPageResponse, UserResponse,
+        UpdateRoleRequest, UpdateServiceAccountRequest, UpdateUserStatusRequest, UserListQuery,
+        UserPageResponse, UserResponse,
     },
     collection::ItemsResponse,
     error::ErrorEnvelope,
@@ -520,61 +519,6 @@ impl AccountSession {
             )
             .json(request),
         )
-    }
-
-    /// 实时协调并读取服务账号凭据的非敏感元数据。
-    ///
-    /// # Errors
-    ///
-    /// 网络、Provider 协调或响应解析失败，或当前用户缺少凭据查看权限时返回错误。
-    pub fn list_service_account_credentials(
-        &self,
-        service_account_id: &str,
-    ) -> Result<Vec<ServiceAccountCredentialResponse>, AccountClientError> {
-        self.send_json(self.request(
-            Method::GET,
-            format!("service-accounts/{service_account_id}/credentials"),
-        ))
-    }
-
-    /// 创建 PAT 或轮换 Client Secret，并返回仅一次可见的敏感内容。
-    ///
-    /// `idempotency_key` 应由一次用户操作生成并在网络重试时复用；客户端不会记录响应中的
-    /// Secret/PAT。
-    ///
-    /// # Errors
-    ///
-    /// 网络、请求/响应处理失败、幂等或轮换冲突，或当前用户缺少凭据管理权限时返回错误。
-    pub fn create_service_account_credential(
-        &self,
-        service_account_id: &str,
-        idempotency_key: &str,
-        request: &CreateServiceAccountCredentialRequest,
-    ) -> Result<CreateServiceAccountCredentialResponse, AccountClientError> {
-        self.send_json(
-            self.request(
-                Method::POST,
-                format!("service-accounts/{service_account_id}/credentials"),
-            )
-            .header("idempotency-key", idempotency_key)
-            .json(request),
-        )
-    }
-
-    /// 撤销指定服务账号凭据且不影响同账号其他凭据。
-    ///
-    /// # Errors
-    ///
-    /// 网络或 Provider 操作失败、凭据不存在/已撤销，或当前用户缺少凭据管理权限时返回错误。
-    pub fn revoke_service_account_credential(
-        &self,
-        service_account_id: &str,
-        credential_id: i64,
-    ) -> Result<(), AccountClientError> {
-        self.send_empty(self.request(
-            Method::DELETE,
-            format!("service-accounts/{service_account_id}/credentials/{credential_id}"),
-        ))
     }
 
     /// 读取指定用户及其直接角色和合并权限。

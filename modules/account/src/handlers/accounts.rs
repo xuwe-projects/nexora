@@ -2,10 +2,7 @@
 
 use contracts::{
     account::{
-        AccessProfileResponse, PermissionResponse, RoleResponse, ServiceAccountCredentialResponse,
-        ServiceAccountCredentialSource as ApiCredentialSource,
-        ServiceAccountCredentialStatus as ApiCredentialStatus,
-        ServiceAccountCredentialType as ApiCredentialType, UserPageResponse, UserResponse,
+        AccessProfileResponse, PermissionResponse, RoleResponse, UserPageResponse, UserResponse,
         UserStatus as ApiUserStatus, UserType,
     },
     pagination::PageMetadata,
@@ -13,9 +10,8 @@ use contracts::{
 use kernel::{Page, PageRequest, ValidationError};
 
 use crate::{
-    AccessProfile, AccountError, Permission, PermissionKey, Role, ServiceAccountCredential,
-    ServiceAccountCredentialSource, ServiceAccountCredentialStatus, ServiceAccountCredentialType,
-    User, UserStatus, UserType as DomainUserType,
+    AccessProfile, AccountError, Permission, PermissionKey, Role, User, UserStatus,
+    UserType as DomainUserType,
 };
 
 pub(crate) mod me;
@@ -167,39 +163,6 @@ pub(super) fn role_response(role: Role) -> RoleResponse {
             .collect(),
         created_at: role.created_at.timestamp(),
         updated_at: role.updated_at.timestamp(),
-    }
-}
-
-pub(super) fn service_account_credential_response(
-    credential: ServiceAccountCredential,
-) -> ServiceAccountCredentialResponse {
-    ServiceAccountCredentialResponse {
-        id: credential.id,
-        service_account_id: credential.service_account_id,
-        credential_type: match credential.credential_type {
-            ServiceAccountCredentialType::ClientCredentials => ApiCredentialType::ClientCredentials,
-            ServiceAccountCredentialType::PersonalAccessToken => {
-                ApiCredentialType::PersonalAccessToken
-            }
-        },
-        name: credential.name,
-        provider_credential_id: credential.provider_credential_id,
-        created_by: credential.created_by,
-        created_at: credential.created_at.timestamp(),
-        expires_at: credential.expires_at.map(|value| value.timestamp()),
-        status: match credential.status {
-            ServiceAccountCredentialStatus::Active => ApiCredentialStatus::Active,
-            ServiceAccountCredentialStatus::Revoked => ApiCredentialStatus::Revoked,
-        },
-        source: match credential.source {
-            ServiceAccountCredentialSource::Nexora => ApiCredentialSource::Nexora,
-            ServiceAccountCredentialSource::ProviderExternal => {
-                ApiCredentialSource::ProviderExternal
-            }
-        },
-        revoked_by: credential.revoked_by,
-        revoked_at: credential.revoked_at.map(|value| value.timestamp()),
-        last_synchronized_at: credential.last_synchronized_at.timestamp(),
     }
 }
 

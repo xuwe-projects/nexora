@@ -49,8 +49,6 @@ permission membership; other users receive permissions through roles.
 | `PUT /users/{user_id}/roles` | `users:roles.write` |
 | `POST /service-accounts` | `service_accounts:provision`; also `users:roles.write` for non-empty `role_ids` |
 | `PATCH /service-accounts/{service_account_id}` | `service_accounts:profile.write` |
-| `GET /service-accounts/{service_account_id}/credentials` | `service_accounts:credentials.read` |
-| Credential create, rotation, and revocation | `service_accounts:credentials.write` |
 | `GET /roles`, `GET /roles/{role_id}` | `roles:read` |
 | Role create/update/delete and permission replacement | `roles:write` |
 | `GET /permissions` | `permissions:read` |
@@ -235,28 +233,21 @@ and other customer owners are unaffected. The server deduplicates up to 64 IDs. 
 
 ## Service accounts
 
-`POST /service-accounts` creates a ZITADEL JWT machine user and a local `service_account`. Its stable
-`username` is also the Client ID. `role_ids` may be empty and never adds `member`; the response is
-`201` with `Location: /users/{id}` and does not create credentials automatically.
-`PATCH /service-accounts/{id}` changes only `display_name` and nullable `description`. Status and
-roles continue to use the unified user endpoints. Service accounts cannot be deleted; suspend them
-to make both JWT and PAT requests fail the local status gate immediately.
+`POST /service-accounts` creates a ZITADEL JWT machine user and a local `service_account`.
+The stable `username` cannot be changed. If the username belongs to a human, the request returns
+`409 service_account_username_type_conflict`. If the machine user already exists locally or only
+in ZITADEL, the first request returns `409 service_account_reuse_confirmation_required`; retrying
+the same request with `"use_existing": true` imports/reuses it and replaces its complete local
+and ZITADEL Project role set. Service accounts never receive the default `member` role.
 
-`GET /service-accounts/{id}/credentials` reconciles live Provider state into non-sensitive local
-metadata, including name, type, creator, Unix-second timestamps, status, revocation data, and
-`nexora`/`provider_external` source. It never returns a Secret or PAT. Calling service-account
-operations for a human returns `409 service_account_required`.
+`PATCH /service-accounts/{id}` changes only `display_name` and nullable `description`. Status
+and roles continue to use the unified user endpoints. Service accounts cannot be deleted.
 
-`POST /service-accounts/{id}/credentials` requires a unique `Idempotency-Key`. A
-`client_credentials` request cannot carry `expires_at`; repeating it serially rotates the sole
-Client Secret. A `personal_access_token` request may create multiple PATs and accepts a future Unix
-second or null/omitted expiry. PAT creation probes introspection first, then validates the actual token
-and service-account subject before delivery. Disabled introspection returns
-`409 personal_access_token_unavailable`; a temporary outage returns
-`503 token_introspection_unavailable`. An unverifiable PAT is revoked and is neither persisted nor
-delivered. Client Credentials do not depend on introspection. `201` returns metadata plus a one-time
-`client_id`/`client_secret` or `token`; plaintext is not persisted or logged. `DELETE
-/service-accounts/{id}/credentials/{credential_id}` returns `204` and revokes only that credential.
+Nexora no longer exposes credential create, list, rotation, or revocation endpoints and stores no
+credential metadata. Developers and operators manage PATs or JWT keys directly in ZITADEL. The
+resource server still verifies JWTs locally and verifies opaque PATs when introspection client
+credentials are configured.
+
 
 ## Roles
 

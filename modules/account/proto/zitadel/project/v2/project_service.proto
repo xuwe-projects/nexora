@@ -6,6 +6,8 @@ package zitadel.project.v2;
 // 字段号和 RPC 全限定名与 ZITADEL 官方 proto 保持一致；未使用的响应字段由 Protobuf 忽略。
 service ProjectService {
   rpc AddProjectRole(AddProjectRoleRequest) returns (AddProjectRoleResponse);
+  rpc UpdateProjectRole(UpdateProjectRoleRequest) returns (UpdateProjectRoleResponse);
+  rpc RemoveProjectRole(RemoveProjectRoleRequest) returns (RemoveProjectRoleResponse);
   rpc CreateProjectGrant(CreateProjectGrantRequest) returns (CreateProjectGrantResponse);
   rpc UpdateProjectGrant(UpdateProjectGrantRequest) returns (UpdateProjectGrantResponse);
   rpc DeleteProjectGrant(DeleteProjectGrantRequest) returns (DeleteProjectGrantResponse);
@@ -25,6 +27,22 @@ message AddProjectRoleRequest {
 
 // 当前调用方只需确认创建成功，不读取创建时间。
 message AddProjectRoleResponse {}
+
+message UpdateProjectRoleRequest {
+  string project_id = 1;
+  string role_key = 2;
+  optional string display_name = 3;
+  optional string group = 4;
+}
+
+message UpdateProjectRoleResponse {}
+
+message RemoveProjectRoleRequest {
+  string project_id = 1;
+  string role_key = 2;
+}
+
+message RemoveProjectRoleResponse {}
 
 message ProjectGrant {
   string organization_id = 1;

@@ -115,19 +115,16 @@ The pages disable unavailable actions and explain the required permission using 
 profile. The server still enforces super-administrator, built-in-role, and last-active-administrator
 invariants. Default user management intentionally does not delete local users.
 
-Service accounts use a separate `FormDialog`, so human and machine fields are never mixed into a
-mode-switching form. Creation offers Client Credentials (recommended), PAT, or no initial
-credential. PAT expiry is optional; a non-expiring PAT shows a prominent warning and requires a
-second confirmation. Account creation and initial credential generation are separate server
-operations: a credential failure keeps the account and tells the operator to retry from credential
-management.
+Service accounts use a separate `FormDialog`, so human and machine fields are never mixed. When a
+machine user with the same username already exists, the official confirmation dialog asks whether
+to import and use it; confirmation retries with `use_existing = true`. A Provider-only account is
+then synchronized locally, and the selected roles replace both local and ZITADEL Project assignments.
 
-The credential panel uses the existing DataTable for name, type, status, creator/time, expiry,
-revocation, and Provider-external source. It supports Provider reconciliation refresh, Client Secret
-rotation, multiple PATs, and single-credential revocation. Plaintext appears only in a dedicated
-one-time `FormDialog` with Clipboard actions and is cleared from component state after the operator
-confirms it was saved. Service accounts use the same role and status actions, receive no automatic
-`member` role, and cannot be deleted.
+The default UI no longer exposes credential management or initial credential creation. Developers
+and operators manage PATs and JWT keys directly in ZITADEL. Service accounts continue to use the
+same role and status actions, receive no automatic `member` role, and cannot be deleted. Default
+`IMES` role definitions and user-role changes are synchronized with ZITADEL.
+
 
 ## Override defaults
 

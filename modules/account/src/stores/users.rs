@@ -44,6 +44,31 @@ pub(crate) async fn query_by_identity_id(
     .await
 }
 
+/// 按不区分大小写的稳定 username 返回本地账号。
+pub(crate) async fn query_by_username(
+    username: &str,
+    pool: &PgPool,
+) -> Result<Option<User>, StoreError> {
+    let users = sqlx::query_as::<_, User>(
+        r#"
+        SELECT id, identity_id, username, email, display_name, status, user_type, description,
+               is_super_admin, created_at, updated_at, last_login_at
+        FROM account.users
+        WHERE username IS NOT NULL AND LOWER(username) = LOWER($1)
+        ORDER BY created_at, id
+        LIMIT 2
+        "#,
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+    match users.as_slice() {
+        [] => Ok(None),
+        [user] => Ok(Some(user.clone())),
+        _ => Err(StoreError::InvalidData("重复登录用户名")),
+    }
+}
+
 /// 按页码返回本地用户实体。
 pub(crate) async fn query_page(
     request: PageRequest,
@@ -323,6 +348,38 @@ pub(crate) async fn grant_user_role(
         Err(error) if is_foreign_key_violation(&error) => Err(StoreError::NotFound("用户或角色")),
         Err(error) => Err(error.into()),
     }
+}
+
+pub(crate) async fn desired_role_definitions_for_user(
+    owner: &str,
+    user_id: &str,
+    role_ids: &[i64],
+    pool: &PgPool,
+) -> Result<Vec<(String, String)>, StoreError> {
+    let user = query_by_id(user_id, pool)
+        .await?
+        .ok_or(StoreError::NotFound("用户"))?;
+    desired_role_definitions(owner, role_ids, user.user_type == UserType::Human, pool).await
+}
+
+pub(crate) async fn desired_role_definitions(
+    owner: &str,
+    role_ids: &[i64],
+    include_member: bool,
+    pool: &PgPool,
+) -> Result<Vec<(String, String)>, StoreError> {
+    let mut transaction = pool.begin().await?;
+    let desired_role_ids =
+        desired_role_ids_for_owner(owner, role_ids, include_member, &mut transaction).await?;
+    let role_definitions = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, name FROM account.roles WHERE owner = $1 AND id = ANY($2) ORDER BY key",
+    )
+    .bind(owner)
+    .bind(desired_role_ids.as_slice())
+    .fetch_all(&mut *transaction)
+    .await?;
+    transaction.rollback().await?;
+    Ok(role_definitions)
 }
 
 pub(super) async fn grant_initial_roles(

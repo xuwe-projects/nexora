@@ -1,12 +1,8 @@
 use contracts::{
     account::{
-        CreateRoleRequest, CreateServiceAccountCredentialRequest,
-        CreateServiceAccountCredentialResponse, CreateServiceAccountRequest, PermissionResponse,
-        ProvisionUserRequest, ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse,
-        SYSTEM_ROLE_OWNER, ServiceAccountCredentialResponse, ServiceAccountCredentialSecret,
-        ServiceAccountCredentialSource, ServiceAccountCredentialStatus,
-        ServiceAccountCredentialType, UpdateRoleRequest, UserListQuery, UserResponse, UserStatus,
-        UserType,
+        CreateRoleRequest, CreateServiceAccountRequest, PermissionResponse, ProvisionUserRequest,
+        ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, RoleResponse, SYSTEM_ROLE_OWNER,
+        UpdateRoleRequest, UserListQuery, UserResponse, UserStatus, UserType,
     },
     pagination::{PageMetadata, PageQuery, PageResponse},
     patch::PatchField,
@@ -274,10 +270,18 @@ fn service_account_requests_reject_unknown_fields_and_keep_snake_case() {
     }))
     .expect("服务账号请求应当可以反序列化");
     assert_eq!(request.username, "dispenser-line-a");
+    assert!(!request.use_existing);
     assert_eq!(
         serde_json::to_value(request).expect("服务账号请求应当可以序列化")["display_name"],
         "A 线点料机"
     );
+    let reuse: CreateServiceAccountRequest = serde_json::from_value(json!({
+        "username": "dispenser-line-a",
+        "display_name": "A 线点料机",
+        "use_existing": true
+    }))
+    .expect("确认复用字段应当可以反序列化");
+    assert!(reuse.use_existing);
     assert!(
         serde_json::from_value::<CreateServiceAccountRequest>(json!({
             "username": "machine-a",
@@ -296,78 +300,4 @@ fn service_account_requests_reject_unknown_fields_and_keep_snake_case() {
         serde_json::to_value(immutable_update).expect("稳定标识更新请求应可传递给服务端拒绝"),
         json!({ "username": "machine-b", "display_name": null })
     );
-
-    let pat: CreateServiceAccountCredentialRequest = serde_json::from_value(json!({
-        "credential_type": "personal_access_token",
-        "name": "控制器",
-        "expires_at": null
-    }))
-    .expect("nullable PAT 到期时间应当可以反序列化");
-    assert_eq!(
-        pat.credential_type,
-        ServiceAccountCredentialType::PersonalAccessToken
-    );
-    assert_eq!(pat.expires_at, None);
-    let client = serde_json::to_value(CreateServiceAccountCredentialRequest {
-        credential_type: ServiceAccountCredentialType::ClientCredentials,
-        name: "OAuth 客户端".to_owned(),
-        expires_at: None,
-    })
-    .expect("Client Credentials 请求应当可以序列化");
-    assert_eq!(client["credential_type"], "client_credentials");
-    assert!(client.get("expires_at").is_none());
-    assert!(
-        serde_json::from_value::<CreateServiceAccountCredentialRequest>(json!({
-            "credential_type": "personal_access_token",
-            "name": "PAT",
-            "expiresAt": 1_800_000_000
-        }))
-        .is_err()
-    );
-    let invalid: CreateServiceAccountCredentialRequest = serde_json::from_value(json!({
-        "credential_type": "ssh_key",
-        "name": "unsupported"
-    }))
-    .expect("未知凭据类型应进入 handler 并返回稳定业务错误码");
-    assert_eq!(
-        invalid.credential_type,
-        ServiceAccountCredentialType::Invalid
-    );
-}
-
-#[test]
-fn service_account_credential_response_uses_unix_seconds_and_redacts_secret_debug() {
-    let metadata = ServiceAccountCredentialResponse {
-        id: 7,
-        service_account_id: "SaA1b2C3".to_owned(),
-        credential_type: ServiceAccountCredentialType::PersonalAccessToken,
-        name: "A 线控制器".to_owned(),
-        provider_credential_id: Some("provider-token-1".to_owned()),
-        created_by: Some("Admin001".to_owned()),
-        created_at: 1_800_000_000,
-        expires_at: None,
-        status: ServiceAccountCredentialStatus::Active,
-        source: ServiceAccountCredentialSource::Nexora,
-        revoked_by: None,
-        revoked_at: None,
-        last_synchronized_at: 1_800_000_010,
-    };
-    let response = CreateServiceAccountCredentialResponse {
-        credential: metadata,
-        secret: ServiceAccountCredentialSecret::PersonalAccessToken {
-            token: "only-visible-once".to_owned(),
-        },
-    };
-    let json = serde_json::to_value(&response).expect("一次性凭据响应应当可以序列化");
-    assert_eq!(
-        json["credential"]["credential_type"],
-        "personal_access_token"
-    );
-    assert_eq!(json["credential"]["created_at"], 1_800_000_000_i64);
-    assert!(json["credential"]["expires_at"].is_null());
-    assert_eq!(json["secret"]["token"], "only-visible-once");
-
-    let debug = format!("{response:?}");
-    assert!(!debug.contains("only-visible-once"));
-    assert!(debug.contains("<redacted>"));
 }

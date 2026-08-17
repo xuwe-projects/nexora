@@ -44,7 +44,7 @@ JWT 始终使用 discovery/JWKS 本地验签。配置有效 introspection Client
 introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固定为：Bearer 头格式、Provider
 签名或 introspection、issuer/audience/有效期、本地用户是否已开通、
 用户是否停用、目标权限。身份绑定只使用当前部署 OIDC issuer 范围内稳定的
-`identity_id`。人员 username 是目录元数据；服务账号 username 创建后不可修改并作为 Client ID。
+`identity_id`。人员 username 是目录元数据；服务账号 username 创建后不可修改。
 
 超级管理员直接通过权限判断；普通用户必须通过角色拥有下表所列权限。
 
@@ -59,8 +59,6 @@ introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固�
 | `PUT /users/{user_id}/roles` | `users:roles.write` |
 | `POST /service-accounts` | `service_accounts:provision`；`role_ids` 非空时还要 `users:roles.write` |
 | `PATCH /service-accounts/{service_account_id}` | `service_accounts:profile.write` |
-| `GET /service-accounts/{service_account_id}/credentials` | `service_accounts:credentials.read` |
-| 凭据创建、轮换和撤销 | `service_accounts:credentials.write` |
 | `GET /roles`、`GET /roles/{role_id}` | `roles:read` |
 | `POST /roles`、`PATCH /roles/{role_id}`、`DELETE /roles/{role_id}` | `roles:write` |
 | `PUT /roles/{role_id}/permissions` | `roles:write` |
@@ -188,21 +186,17 @@ introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固�
 | 409 | `system_role_immutable` | 尝试修改或删除系统角色 |
 | 409 | `last_administrator` | 操作会移除最后一个启用管理员 |
 | 409 | `super_administrator_immutable` | 尝试修改超级管理员状态或角色 |
-| 409 | `internal_service_account` | 内部服务主体没有 Provider 身份，不支持资料或凭据管理 |
+| 409 | `internal_service_account` | 内部服务主体没有 Provider 身份，不支持 Provider 资料管理 |
 | 422 | `validation_failed` | 业务字段校验失败，`details.field` 指向字段 |
 | 500 | `internal_error` | 数据库或内部操作失败；不会返回 SQL 或堆栈 |
 | 503 | `identity_issuer_not_bound` | 部署尚未完成 issuer 绑定 |
 | 503 | `identity_provider_unavailable` | OIDC Provider/JWKS 暂时不可用 |
 | 503 | `token_introspection_unavailable` | PAT introspection 暂时不可用；请求失败关闭 |
-| 503 | `credential_provider_unavailable` | ZITADEL 服务账号/凭据管理接口不可用 |
-| 409 | `service_account_required` | 对人员账号调用服务账号资料或凭据接口 |
-| 409 | `personal_access_token_unavailable` | 当前部署未启用 PAT introspection；请使用 Client Credentials |
-| 409 | `client_secret_rotation_conflict` | 另一轮 Client Secret 轮换仍在进行 |
-| 404 | `credential_not_found` | 指定凭据不存在 |
-| 409 | `service_account_already_exists` | 稳定 username 已被服务账号使用 |
+| 503 | `service_account_provider_unavailable` | ZITADEL 服务账号管理接口不可用 |
+| 409 | `service_account_required` | 对人员账号调用服务账号资料接口 |
+| 409 | `service_account_reuse_confirmation_required` | 同 username 服务账号已存在，需要管理员确认后复用 |
+| 409 | `service_account_username_type_conflict` | 同 username 已属于人员账号，不能作为服务账号复用 |
 | 409 | `service_account_identifier_immutable` | 尝试修改创建后不可变的 username |
-| 422 | `credential_type_invalid` | 请求了不支持的凭据类型 |
-| 422 | `credential_expiration_invalid` | Client Credentials 提供到期时间，或 PAT 已过期 |
 
 `401` 响应包含 `WWW-Authenticate: Bearer`。如果宿主安装 Nexora 的统一 HTTP 中间件，响应还
 会包含 `x-request-id`，并优先沿用格式有效的请求头值；错误正文的 `request_id` 与该值一致。
@@ -245,14 +239,15 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 
 `User` 响应包含 `user_type`：`human` 表示人员用户，`service_account` 同时覆盖 Provider machine
 user 与本地内部服务主体，不新增第三种用户类型。`GET /users` 只返回绑定了 `identity_id` 的可管理
-账号；`identity_id = null` 的内部服务主体不参与登录、凭据管理或默认用户界面，但仍可用本地
+账号；`identity_id = null` 的内部服务主体不参与登录或默认用户界面，但仍可用本地
 `id` 作为审计外键。
 
 ### `POST /users`
 
 在服务端后台调用 ZITADEL UserService v2 gRPC 创建带初始密码的人类用户，并把返回的 identity ID 绑定到
 Nexora Account。权限：`users:provision`；`role_ids` 非空时额外要求 `users:roles.write`。
-Provider 创建成功后，本地用户、内置 `member` 角色和初始角色关联在同一数据库事务中完成；
+Provider 创建成功后，初始角色先写入 ZITADEL Project authorization，本地用户、内置
+`member` 角色和初始角色关联再在同一数据库事务中完成；
 本地事务失败时服务端会尽力删除刚创建的 Provider 用户作为补偿。`initial_password` 不会写入
 本地数据库、日志或错误详情。
 
@@ -316,37 +311,34 @@ Provider 删除补偿；补偿本身失败只记录脱敏服务端日志，不�
 
 最多 64 项，服务端去重；`owner` 缺省为 `IMES`，此时空数组会移除后台业务角色但保留内置
 `member`。传入客户 owner 时只替换该 owner 下的角色，不影响 `IMES` 或其他客户 owner。
-成功返回更新后的 `200 AccessProfile`。目标用户、角色或授权人不存在返回 `404`；服务账号与
-人员账号共用角色系统，但服务账号不会自动保留 `member`。超级管理员仍不可挂载角色，也不能
-通过后台 owner 操作移除最后一个管理员。
+成功返回更新后的 `200 AccessProfile`。`owner = IMES` 时会把完整角色键集合同时替换到
+ZITADEL Project authorization；添加和移除都保持两边一致。本地写入失败时会尽力恢复 Provider
+中的旧集合。目标用户、角色或授权人不存在返回 `404`；服务账号与人员账号共用角色系统，但
+服务账号不会自动保留 `member`。超级管理员仍不可挂载角色，也不能通过后台 owner 操作移除
+最后一个管理员。
 
 ## 服务账号接口
 
-`POST /service-accounts` 创建 ZITADEL JWT machine user 和本地 `service_account`，稳定
-`username` 同时作为 Client ID。`role_ids` 可为空且不自动附加 `member`；接口返回
-`201`、`Location: /users/{id}`，但不自动创建凭据。`PATCH /service-accounts/{id}` 只修改
-`display_name` 与可清空的 `description`；状态和角色继续使用统一用户接口。服务账号不提供
-删除接口，只能停用。
+`POST /service-accounts` 创建 ZITADEL JWT machine user 和本地 `service_account`。稳定
+`username` 创建后不可修改；`role_ids` 可为空且不自动附加 `member`。如果同 username
+已经属于人员账号，返回 `409 service_account_username_type_conflict`。如果同名 machine user
+已存在于本地或 ZITADEL，首次请求返回
+`409 service_account_reuse_confirmation_required`；管理员确认后使用完全相同的请求并添加
+`"use_existing": true`，服务会把 Provider-only 账号同步进 `account.users`，并按当前选择
+完整替换本地与 ZITADEL Project 角色。
 
-`GET /service-accounts/{id}/credentials` 会实时读取 Provider 状态并协调本地元数据。响应包含
-名称、类型、创建人、Unix 秒时间、状态、撤销信息及 `nexora`/`provider_external` 来源，不含
-Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`；对没有 `identity_id` 的
-内部服务主体返回 `409 internal_service_account`，且不会调用 Provider。
+`PATCH /service-accounts/{id}` 只修改 `display_name` 与可清空的 `description`；状态和角色
+继续使用统一用户接口。服务账号不提供删除接口，只能停用。
 
-`POST /service-accounts/{id}/credentials` 要求唯一 `Idempotency-Key` 请求头。请求类型为
-`client_credentials` 时禁止 `expires_at`，再次创建会串行轮换唯一 Client Secret；类型为
-`personal_access_token` 时允许多个 PAT，`expires_at` 可为未来 Unix 秒或 `null`（永不过期）。
-创建 PAT 前会实时探测 introspection，创建后会校验实际 token 及其服务账号 subject；未启用时
-返回 `409 personal_access_token_unavailable`，临时故障返回
-`503 token_introspection_unavailable`，无法验证的 PAT 会被撤销且不会持久化或交付。成功返回
-`201`、凭据元数据和仅本次可见的 `client_id`/`client_secret` 或 `token`。数据库与日志只保存
-非敏感元数据。Client Credentials 不依赖 introspection。`DELETE
-/service-accounts/{id}/credentials/{credential_id}` 返回
-`204`，只撤销目标凭据。
+Nexora 不公开凭据创建、查询、轮换或撤销接口，也不保存凭据元数据。PAT/JWT key 等凭据由开发
+或运维人员直接在 ZITADEL 后台管理；服务端仍可通过
+`introspection_client_id`/`introspection_client_secret` 验证请求携带的 opaque PAT，
+JWT 则继续使用 discovery/JWKS 本地验签。
 
 内部服务主体只能由可信宿主通过应用迁移或本地 Account 存储维护。其 `user_type` 仍为
-`service_account`，但 `identity_id` 必须为 `null`，并且不能调用上述 Provider 资料、Client
-Secret 或 PAT 接口。人员账号始终必须有非空 `identity_id`，数据库约束会拒绝违反该规则的数据。
+`service_account`，但 `identity_id` 必须为 `null`，不能调用 Provider 资料接口。人员账号
+始终必须有非空 `identity_id`，数据库约束会拒绝违反该规则的数据。
+
 
 ## 角色接口
 
@@ -380,7 +372,8 @@ Secret 或 PAT 接口。人员账号始终必须有非空 `identity_id`，数据
 }
 ```
 
-成功：`201 Created`，`Location: /roles/{id}`，正文为 `Role`。重复 key 返回
+成功：`201 Created`，`Location: /roles/{id}`，正文为 `Role`。`owner = IMES` 时会同时在
+ZITADEL Project 创建同 key 的角色定义；Provider 失败会回滚本地角色。重复 key 返回
 `409 role_key_exists`；权限不存在返回 `404`；字段不合法返回 `422`。
 
 ### `GET /roles/{role_id}`
@@ -401,13 +394,14 @@ Secret 或 PAT 接口。人员账号始终必须有非空 `identity_id`，数据
 - 缺少 `description` 表示保持原说明；显式 `null` 表示清空；字符串表示替换。
 - `key` 不可修改，未知字段被拒绝。
 
-成功返回 `200 Role`。空对象返回 `422`；系统角色返回
+`owner = IMES` 且名称变化时会同时更新 ZITADEL Project 角色展示名。成功返回 `200 Role`。空对象返回 `422`；系统角色返回
 `409 system_role_immutable`；并发状态不再允许修改时可能返回 `409 role_not_modified`。
 
 ### `DELETE /roles/{role_id}`
 
-权限：`roles:write`。可选 query `owner` 缺省为 `IMES`。成功返回 `204 No Content`，无正文。系统角色不可删除；仍被用户引用的
-自定义角色返回 `409 role_in_use`；不存在返回 `404`。
+权限：`roles:write`。可选 query `owner` 缺省为 `IMES`。`owner = IMES` 时会同时删除
+ZITADEL Project 角色定义。成功返回 `204 No Content`，无正文。系统角色不可删除；仍被用户
+引用的自定义角色返回 `409 role_in_use`；不存在返回 `404`。
 
 ### `PUT /roles/{role_id}/permissions`
 

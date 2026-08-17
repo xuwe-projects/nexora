@@ -12,9 +12,8 @@ use nexora::desktop::{
     AccountClient, AccountClientError, AccountOidcSettings, AccountSettings, ApiSettings,
     client_config,
     contract::{
-        CreateRoleRequest, CreateServiceAccountCredentialRequest, CreateServiceAccountRequest,
-        ProvisionUserRequest, ReplaceRolePermissionsRequest, ReplaceUserRolesRequest,
-        SYSTEM_ROLE_OWNER, ServiceAccountCredentialSecret, ServiceAccountCredentialType,
+        CreateRoleRequest, CreateServiceAccountRequest, ProvisionUserRequest,
+        ReplaceRolePermissionsRequest, ReplaceUserRolesRequest, SYSTEM_ROLE_OWNER,
         UpdateRoleRequest, UpdateUserStatusRequest, UserListQuery, UserStatus, UserType,
     },
 };
@@ -59,22 +58,6 @@ const SERVICE_ACCOUNT_JSON: &str = r#"{
     "created_at":1,
     "updated_at":2,
     "last_login_at":3
-}"#;
-
-const CREDENTIAL_JSON: &str = r#"{
-    "id":17,
-    "service_account_id":"SvcAcc01",
-    "credential_type":"personal_access_token",
-    "name":"A 线控制器",
-    "provider_credential_id":"provider-pat-1",
-    "created_by":"User0001",
-    "created_at":1800000000,
-    "expires_at":null,
-    "status":"active",
-    "source":"nexora",
-    "revoked_by":null,
-    "revoked_at":null,
-    "last_synchronized_at":1800000001
 }"#;
 
 const ACCESS_PROFILE_JSON: &str = r#"{
@@ -141,6 +124,7 @@ fn create_service_account_posts_stable_identity_without_default_role() {
             display_name: "A 线点料机".to_owned(),
             description: Some("一号车间".to_owned()),
             role_ids: Vec::new(),
+            use_existing: false,
         })
         .expect("201 响应应按服务账号 User 契约解码");
     let request = server.join().expect("测试服务线程应结束");
@@ -150,68 +134,6 @@ fn create_service_account_posts_stable_identity_without_default_role() {
     assert_eq!(
         request_body(&request),
         r#"{"username":"dispenser-line-a","display_name":"A 线点料机","description":"一号车间"}"#
-    );
-}
-
-#[test]
-fn create_service_account_credential_sends_idempotency_key_and_decodes_secret_once() {
-    let body = format!(r#"{{"credential":{CREDENTIAL_JSON},"secret":{{"token":"one-time-pat"}}}}"#);
-    let (endpoint, server) = spawn_mock(
-        "201 Created",
-        body.as_str(),
-        &[("Location", "/service-accounts/SvcAcc01/credentials/17")],
-    );
-    let response = session(endpoint)
-        .create_service_account_credential(
-            "SvcAcc01",
-            "operation-20260814-01",
-            &CreateServiceAccountCredentialRequest {
-                credential_type: ServiceAccountCredentialType::PersonalAccessToken,
-                name: "A 线控制器".to_owned(),
-                expires_at: None,
-            },
-        )
-        .expect("201 响应应解码凭据元数据和一次性 Secret");
-    let request = server.join().expect("测试服务线程应结束");
-
-    assert_eq!(response.credential.id, 17);
-    assert!(matches!(
-        response.secret,
-        ServiceAccountCredentialSecret::PersonalAccessToken { ref token }
-            if token == "one-time-pat"
-    ));
-    assert_request(&request, "POST", "/service-accounts/SvcAcc01/credentials");
-    assert!(
-        request
-            .to_ascii_lowercase()
-            .contains("idempotency-key: operation-20260814-01\r\n")
-    );
-    assert_eq!(
-        request_body(&request),
-        r#"{"credential_type":"personal_access_token","name":"A 线控制器"}"#
-    );
-}
-
-#[test]
-fn list_and_revoke_service_account_credentials_use_resource_paths() {
-    let list_body = format!("[{CREDENTIAL_JSON}]");
-    let (endpoint, server) = spawn_mock("200 OK", list_body.as_str(), &[]);
-    let credentials = session(endpoint)
-        .list_service_account_credentials("SvcAcc01")
-        .expect("凭据列表应按元数据契约解码");
-    let request = server.join().expect("测试服务线程应结束");
-    assert_eq!(credentials[0].id, 17);
-    assert_request(&request, "GET", "/service-accounts/SvcAcc01/credentials");
-
-    let (endpoint, server) = spawn_mock("204 No Content", "", &[]);
-    session(endpoint)
-        .revoke_service_account_credential("SvcAcc01", 17)
-        .expect("204 应视为撤销成功");
-    let request = server.join().expect("测试服务线程应结束");
-    assert_request(
-        &request,
-        "DELETE",
-        "/service-accounts/SvcAcc01/credentials/17",
     );
 }
 

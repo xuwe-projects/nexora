@@ -153,14 +153,13 @@ issuer；不执行迁移、创建 Router 或启动服务。`PgPool` 是廉价克
 完整且有效时，才对 PAT/opaque token 每次实时调用 introspection。缺失、单边或被拒绝的凭据
 会降级为 JWT-only，临时故障保留配置并在后续 opaque/PAT 请求中重试。`AccountDependencies`
 同时包含人员目录和 `service_account_directory`；后者由
-同一个 `ZitadelUserDirectory` 实现 machine user、Client Secret 和 PAT 管理，不建立平行身份系统。
+同一个 `ZitadelUserDirectory` 实现 machine user 的查找、创建和资料更新，不建立平行身份系统。
+产品代码不再创建、列出或撤销 Provider 凭据。
 
-`Account` 公开的服务账号用例包括 `create_service_account`、
-`update_service_account_profile`、`service_account_credentials`、
-`create_service_account_credential` 与 `revoke_service_account_credential`。创建/轮换返回类型的
-`Debug` 会隐藏敏感内容，调用者只能在成功响应中交付一次 Secret/PAT。这些用例只管理有
-Provider 身份的 machine user；传入 `identity_id = None` 的内部服务主体会返回
-`AccountError::Conflict { code: "internal_service_account", .. }`，不会访问 Provider。
+`Account` 公开的服务账号用例包括 `create_or_reuse_service_account` 与
+`update_service_account_profile`。同 username 的 machine user 必须显式确认后复用或导入，命中
+human user 时拒绝类型冲突。PAT 由开发人员直接在 ZITADEL 创建；应用 API 收到 opaque PAT 后仍
+使用配置的 introspection client 校验。
 
 ### `user_directory`
 
@@ -187,6 +186,8 @@ pub fn user_directory<S>(settings: &S) -> Result<ZitadelUserDirectory, Directory
 调用 UserService v2 创建人类用户、设置初始密码，并把邮箱按已验证写入；`create_human_identity_with_contact`
 会在额外传入 `contact_phone` 时同步写入 ZITADEL human phone/mobile 联系信息并标记为已验证；
 `delete_identity` 用于本地事务失败后的补偿。
+系统 owner 下的 Project 角色定义和用户完整角色集合分别通过 ZITADEL v2 ProjectService 与
+AuthorizationService 同步；角色分配前会幂等确保既有本地角色已存在于 Provider。
 错误稳定映射为 `Conflict`、`NotFound` 或 `Unavailable`，不会把 PAT 或 Provider 内部响应返回
 给 HTTP 客户端。
 
@@ -232,7 +233,7 @@ pub async fn authorize(
 | `permissions` | 无 | `Vec<Permission>` | 完整权限目录 |
 | `roles` / `roles_for_owner` | owner 可选 | `Vec<Role>` | 缺省只返回 `IMES` 后台角色；owner 版本查询指定范围 |
 | `role` / `role_for_owner` | role ID、owner 可选 | `Role` | 角色不属于指定 owner 时按不存在处理 |
-| `create_role` / `create_role_for_owner` | owner、key、name、description、permission IDs | `Role` | 同事务创建自定义角色与权限关联；role key 仍全局唯一 |
+| `create_role` / `create_role_for_owner` | owner、key、name、description、permission IDs | `Role` | 同事务创建自定义角色与权限关联；系统 owner 的定义同步到 ZITADEL Project |
 | `create_generated_role_for_owner` | owner、name、description、permission IDs | `Role` | 使用数据库序列生成 `role_<id>` 全局唯一 key |
 | `update_role` / `update_role_for_owner` | owner、role ID、可选 name、三态 description | `Role` | 系统角色不可修改 |
 | `delete_role` / `delete_role_for_owner` | owner、role ID | `()` | 系统角色或被引用角色不可删除 |
@@ -242,11 +243,13 @@ pub async fn authorize(
 | `user_access` | user ID | `AccessProfile` | 用户、直接角色与合并权限 |
 | `refresh_user_from_directory` | identity ID | `AccessProfile` | 同步目录用户名、邮箱、展示名与最近登录时间，不创建陌生用户 |
 | `update_user_status` | user ID、`UserStatus` | `User` | 超级管理员和最后管理员受保护 |
-| `replace_user_roles` / `replace_user_roles_for_owner` | owner、user ID、完整 role IDs、granted_by | `AccessProfile` | 缺省替换 `IMES` 并保留 `member`；owner 版本只替换指定范围 |
+| `replace_user_roles` / `replace_user_roles_for_owner` | owner、user ID、完整 role IDs、granted_by | `AccessProfile` | 缺省替换 `IMES`、保留 `member` 并同步 ZITADEL authorization；owner 版本只替换指定范围 |
 | `grant_user_role` | user ID、role ID、granted_by | `AccessProfile` | 幂等追加角色，不清空已有角色 |
 | `provision_user` | `ExternalIdentity` | `User` | 不验证身份来源，不自动授权角色 |
 | `provision_user_with_roles` | identity、role IDs、granted_by | `User` | 用户与初始角色在同一事务中创建 |
 | `create_managed_user_with_roles` | `CreateHumanIdentity`、role IDs、granted_by | `User` | 先创建 Provider 用户，再事务绑定本地账号；失败时尽力删除 Provider 用户 |
+| `create_or_reuse_service_account` | 服务账号资料、role IDs、granted_by、复用确认 | `User` | 创建 machine user 或导入同 username 既有账号，并同步本地及 Provider 角色 |
+| `update_service_account_profile` | 本地服务账号 ID、display name、description | `User` | 带补偿地同步修改 Provider 与本地资料 |
 | `routers::<S>` | 无 | `Router<S>` | 注入 Account 私有 State，无 I/O |
 
 `AccountDependencies.identity_directory` 控制上述目录同步和托管创建；`Server::initialize`
