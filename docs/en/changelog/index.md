@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.38.1: optional introspection and safe PAT creation](./0.38.1)
 - [0.38.0: service accounts, device credentials, and unified Bearer verification](./0.38.0)
 - [0.37.0: unified desktop navigation, explicit status columns, and user filters](./0.37.0)
 - [0.36.0: extensible desktop Shell, global search, and typed CRUD](./0.36.0)
