@@ -7,19 +7,93 @@ use account::{
         VerifiedIdentity,
     },
 };
-use api::{ApiError, with_http_layers};
+use api::{ApiError, ApiQuery, with_http_layers};
 use async_trait::async_trait;
 use axum::{
-    Router,
+    Json, Router,
     body::{Body, to_bytes},
     extract::FromRef,
     http::{Request, StatusCode},
     response::IntoResponse as _,
     routing::get,
 };
-use contracts::error::ErrorEnvelope;
+use contracts::{
+    account::{UserListQuery, UserStatus, UserType},
+    error::ErrorEnvelope,
+    pagination::PageQuery,
+};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt as _;
+
+#[tokio::test]
+async fn user_list_query_extracts_flat_pagination_and_filters() {
+    let response = Router::new()
+        .route("/users", get(echo_user_list_query))
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/users?page=2&page_size=50&keyword=admin&status=suspended&user_type=service_account",
+                )
+                .body(Body::empty())
+                .expect("测试请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回响应");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .expect("查询响应正文应当可读取");
+    let query: UserListQuery = serde_json::from_slice(&body).expect("查询响应应当符合用户列表契约");
+    assert_eq!(
+        query,
+        UserListQuery {
+            page: PageQuery {
+                page: 2,
+                page_size: 50,
+            },
+            keyword: Some("admin".to_owned()),
+            status: Some(UserStatus::Suspended),
+            user_type: Some(UserType::ServiceAccount),
+        }
+    );
+}
+
+#[tokio::test]
+async fn user_list_query_keeps_defaults_and_rejects_unknown_fields() {
+    let router = Router::new().route("/users", get(echo_user_list_query));
+    let default_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/users?page=1&page_size=25")
+                .body(Body::empty())
+                .expect("默认分页请求应当有效"),
+        )
+        .await
+        .expect("路由应当返回默认分页响应");
+    assert_eq!(default_response.status(), StatusCode::OK);
+
+    let invalid_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/users?page=1&page_size=25&unknown=true")
+                .body(Body::empty())
+                .expect("未知参数请求应当可以发送"),
+        )
+        .await
+        .expect("路由应当返回未知参数错误");
+    assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(invalid_response.into_body(), 16 * 1024)
+        .await
+        .expect("错误响应正文应当可读取");
+    let error: ErrorEnvelope = serde_json::from_slice(&body).expect("错误响应应当符合公共错误契约");
+    assert_eq!(error.error.code, "invalid_query_parameter");
+}
+
+async fn echo_user_list_query(ApiQuery(query): ApiQuery<UserListQuery>) -> Json<UserListQuery> {
+    Json(query)
+}
 
 #[tokio::test]
 async fn protected_resource_rejects_missing_bearer_token_before_database_access() {

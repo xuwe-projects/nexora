@@ -313,8 +313,11 @@ pub enum UserType {
 }
 
 /// 后台用户列表支持的分页与筛选查询参数。
+///
+/// HTTP wire 中分页字段保持扁平的 `page` 与 `page_size`，Rust 调用方继续通过 [`PageQuery`]
+/// 访问分页值。
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(from = "UserListQueryWire")]
 pub struct UserListQuery {
     /// 从一开始的页码和单页数量。
     #[serde(flatten)]
@@ -328,6 +331,43 @@ pub struct UserListQuery {
     /// 按人员或服务账号筛选。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_type: Option<UserType>,
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UserListQueryWire {
+    page: u32,
+    page_size: u32,
+    keyword: Option<String>,
+    status: Option<UserStatus>,
+    user_type: Option<UserType>,
+}
+
+impl Default for UserListQueryWire {
+    fn default() -> Self {
+        let PageQuery { page, page_size } = PageQuery::default();
+        Self {
+            page,
+            page_size,
+            keyword: None,
+            status: None,
+            user_type: None,
+        }
+    }
+}
+
+impl From<UserListQueryWire> for UserListQuery {
+    fn from(query: UserListQueryWire) -> Self {
+        Self {
+            page: PageQuery {
+                page: query.page,
+                page_size: query.page_size,
+            },
+            keyword: query.keyword,
+            status: query.status,
+            user_type: query.user_type,
+        }
+    }
 }
 
 /// 修改用户访问状态的请求正文。
