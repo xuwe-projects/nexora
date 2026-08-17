@@ -7,10 +7,11 @@
 pub use crate::account_module::{
     AccessProfile, Account, AccountDependencies, AccountError, AccountInitialization,
     AccountInitializationOutcome, AccountInitializationStatus, CreateHumanIdentity,
-    CreateHumanIdentityProvision, ExternalIdentity, IdentityDirectory, IdentityDirectoryError,
-    IdentityIssuerBindingOutcome, PORTAL_ADMIN_ROLE_KEY, Page, Permission,
-    PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role, SYSTEM_ROLE_OWNER,
-    ServiceAccountDirectory, ServiceAccountDirectoryError, SystemRole, User, UserStatus, UserType,
+    CreateHumanIdentityProvision, CreateServiceAccountIdentity, ExternalIdentity,
+    IdentityDirectory, IdentityDirectoryError, IdentityIssuerBindingOutcome, PORTAL_ADMIN_ROLE_KEY,
+    Page, Permission, PermissionCatalogDefinition, PermissionDefinition, PermissionKey, Role,
+    SYSTEM_ROLE_OWNER, ServiceAccountDirectory, ServiceAccountDirectoryError, SystemRole, User,
+    UserStatus, UserType,
     authentication::{
         AccessTokenVerifier, BearerAccessToken, OidcAccessTokenVerifier, OidcResourceServer,
         VerifiedBearerIdentity, VerifiedIdentity, VerifiedOrganizationContext,

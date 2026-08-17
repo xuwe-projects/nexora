@@ -235,8 +235,8 @@ mod server {
         config::Settings as _,
         server::{
             Account, AccountOidcSettings as OidcSettings, AccountSettings as Settings,
-            AuthenticatedUser, Authorized, DirectoryUser, ExternalIdentity,
-            OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
+            AuthenticatedUser, Authorized, CreateServiceAccountIdentity, DirectoryUser,
+            ExternalIdentity, OidcAccessTokenVerifier, OidcResourceServer, PORTAL_ADMIN_ROLE_KEY,
             PermissionDefinition, PermissionKey, RequiredPermission, SYSTEM_ROLE_OWNER, Setup,
             SetupCompletionRequest, SetupUnlockRequest, VerifiedBearerIdentity, VerifiedIdentity,
             VerifiedOrganizationContext, ZitadelAuthorizationRequest, ZitadelProvisioningClient,
@@ -248,6 +248,17 @@ mod server {
         },
     };
     use serde::Deserialize;
+
+    #[test]
+    fn service_account_creation_input_is_available_from_server_facade() {
+        let input = CreateServiceAccountIdentity {
+            username: "dispenser-line-a".to_owned(),
+            display_name: "A 线点料机".to_owned(),
+            description: Some("iMES 服务员工".to_owned()),
+        };
+
+        assert_eq!(input.username, "dispenser-line-a");
+    }
 
     #[derive(Debug, Deserialize, nexora::Settings)]
     struct ServerSettings {
@@ -520,8 +531,8 @@ introspection_client_id = "resource-server-client"
         assert!(!format!("{client:?}").contains("test-personal-access-token"));
     }
 
-    #[test]
-    fn server_facade_exposes_pool_based_account_management_and_migrate_api() {
+    #[tokio::test]
+    async fn server_facade_exposes_pool_based_account_management_and_migrate_api() {
         fn assert_management_api(pool: &sqlx::PgPool) {
             let identity = ExternalIdentity {
                 identity_id: "identity-1".to_owned(),
