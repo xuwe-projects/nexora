@@ -97,8 +97,8 @@ the two sources.
 | `organization_id` | ZITADEL Organization where `POST /users` creates human users |
 | `project_id` | ZITADEL Project that carries system roles |
 | `personal_access_token` | Server credential for ZITADEL UserService/ProjectService; redacted in Debug |
-| `introspection_client_id` | ZITADEL API resource-server introspection Client ID |
-| `introspection_client_secret` | HTTP Basic introspection secret; redacted in Debug and injected securely |
+| `introspection_client_id` | Optional ZITADEL API resource-server introspection Client ID; omission selects JWT-only mode |
+| `introspection_client_secret` | Optional HTTP Basic secret supplied with the Client ID; redacted in Debug and injected securely |
 
 Advanced hosts may compose without `Server`:
 
@@ -116,8 +116,10 @@ pub fn user_directory<S>(
 `dependencies` performs OIDC discovery and issuer binding. `user_directory` constructs the ZITADEL
 gRPC clients. Neither runs migrations or starts HTTP.
 
-The composed verifier uses discovery/JWKS for JWTs and uncached real-time introspection for
-PAT/opaque tokens. `AccountDependencies` carries both the human identity directory and a
+The composed verifier uses discovery/JWKS for JWTs. It performs uncached real-time introspection for
+PAT/opaque tokens only when the Client ID/Secret pair is complete and valid. Missing, partial, or
+rejected credentials select JWT-only mode; temporary outages retain the configuration and retry on
+later opaque/PAT operations. `AccountDependencies` carries both the human identity directory and a
 `service_account_directory`; the same `ZitadelUserDirectory` implements machine-user, Client Secret,
 and PAT operations without a parallel local identity system.
 

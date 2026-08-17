@@ -41,9 +41,8 @@ project_id = "replace-with-zitadel-project-id"
 # 若确实要管理实例级全部资源可授予 IAM_OWNER，但该令牌泄露后的影响也等同实例最高权限。
 # 生产环境推荐删除本行并使用 OIDC__PERSONAL_ACCESS_TOKEN 从密钥管理系统注入。
 personal_access_token = "replace-with-zitadel-service-account-pat"
-# 实时验证 PAT/opaque Bearer token 的 resource-server Client ID。该凭据与上面的管理 PAT
-# 职责不同，应使用专门的 API Application 或 Basic Auth introspection 客户端。
-introspection_client_id = "replace-with-introspection-client-id"
-# introspection resource-server Client Secret；生产环境删除本行并通过
-# OIDC__INTROSPECTION_CLIENT_SECRET 或密钥系统注入，禁止提交真实值。
-introspection_client_secret = "replace-with-introspection-client-secret"
+# 以下两个可选字段用于实时验证 PAT/opaque Bearer token，与上面的管理 PAT 职责不同。
+# 两项都不配置时服务保持 JWT-only，并禁止创建新 PAT；配置时必须成对提供有效凭据。
+# introspection_client_id = "replace-with-introspection-client-id"
+# Secret 应通过 OIDC__INTROSPECTION_CLIENT_SECRET 或密钥系统注入，禁止提交真实值。
+# introspection_client_secret = "replace-with-introspection-client-secret"

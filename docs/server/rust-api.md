@@ -133,8 +133,8 @@ application_migrate::migrate(&pool).await?;
 | `organization_id` | `POST /users` 创建人类用户的 ZITADEL Organization ID |
 | `project_id` | ZITADEL 中承载系统角色的 Project ID，不是 API Application Client ID |
 | `personal_access_token` | 调用 ZITADEL UserService/ProjectService 的服务账号 PAT；Debug 会脱敏 |
-| `introspection_client_id` | ZITADEL API resource server 的 introspection Client ID |
-| `introspection_client_secret` | introspection HTTP Basic Secret；Debug 会脱敏且应由环境变量注入 |
+| `introspection_client_id` | 可选的 ZITADEL API resource server introspection Client ID；省略时为 JWT-only |
+| `introspection_client_secret` | 与 Client ID 成对提供的可选 HTTP Basic Secret；Debug 会脱敏且应由环境变量注入 |
 
 ### `dependencies`
 
@@ -149,8 +149,10 @@ pub async fn dependencies<S>(
 issuer；不执行迁移、创建 Router 或启动服务。`PgPool` 是廉价克隆句柄，不应再包
 `Arc<PgPool>`。
 
-装配后的统一 verifier 对 JWT 使用 discovery/JWKS，对 PAT/opaque token 每次实时调用
-introspection。`AccountDependencies` 同时包含人员目录和 `service_account_directory`；后者由
+装配后的统一 verifier 对 JWT 使用 discovery/JWKS；仅在 introspection Client ID/Secret
+完整且有效时，才对 PAT/opaque token 每次实时调用 introspection。缺失、单边或被拒绝的凭据
+会降级为 JWT-only，临时故障保留配置并在后续 opaque/PAT 请求中重试。`AccountDependencies`
+同时包含人员目录和 `service_account_directory`；后者由
 同一个 `ZitadelUserDirectory` 实现 machine user、Client Secret 和 PAT 管理，不建立平行身份系统。
 
 `Account` 公开的服务账号用例包括 `create_service_account`、

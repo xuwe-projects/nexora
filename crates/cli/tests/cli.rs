@@ -1778,12 +1778,14 @@ fn workspace_account_feature_generates_a_composable_server() {
     );
     assert!(
         server_config
-            .contains("introspection_client_id = \"replace-with-introspection-client-id\"")
+            .contains("# introspection_client_id = \"replace-with-introspection-client-id\"")
     );
     assert!(
-        server_config
-            .contains("introspection_client_secret = \"replace-with-introspection-client-secret\"")
+        server_config.contains(
+            "# introspection_client_secret = \"replace-with-introspection-client-secret\""
+        )
     );
+    assert!(server_config.contains("两项都不配置时服务保持 JWT-only"));
     assert!(!server_config.contains("initialize_empty_database"));
     let readme = fs::read_to_string(project.join("README.md")).unwrap();
     assert!(!readme.contains('\r'));

@@ -135,6 +135,32 @@ async fn deployment_issuer_mismatch_is_a_stable_authentication_failure() {
 }
 
 #[tokio::test]
+async fn pat_capability_errors_use_stable_http_contracts() {
+    let disabled = ApiError::from(AccountError::Conflict {
+        code: "personal_access_token_unavailable",
+        message: "当前部署未启用 PAT，请使用 Client Credentials",
+    })
+    .into_response();
+    assert_eq!(disabled.status(), StatusCode::CONFLICT);
+    let body = to_bytes(disabled.into_body(), 16 * 1024)
+        .await
+        .expect("PAT 能力错误响应应当可以读取");
+    let error: ErrorEnvelope = serde_json::from_slice(&body).expect("错误响应应符合公共契约");
+    assert_eq!(error.error.code, "personal_access_token_unavailable");
+
+    let unavailable = ApiError::from(AccountError::Verification(
+        VerificationError::IntrospectionUnavailable("HTTP 503".to_owned()),
+    ))
+    .into_response();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(unavailable.into_body(), 16 * 1024)
+        .await
+        .expect("introspection 临时故障响应应当可以读取");
+    let error: ErrorEnvelope = serde_json::from_slice(&body).expect("错误响应应符合公共契约");
+    assert_eq!(error.error.code, "token_introspection_unavailable");
+}
+
+#[tokio::test]
 async fn resource_server_authentication_error_does_not_echo_access_token() {
     let state = PortalState {
         resource_server: OidcResourceServer::new(Arc::new(RejectingVerifier)),

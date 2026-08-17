@@ -334,7 +334,9 @@ paths:
       summary: 生成/轮换 Client Secret 或创建 PAT
       description: >-
         要求 service_accounts:credentials.write。Idempotency-Key 在服务账号范围内永久防止重复
-        创建；一次性 Secret/PAT 仅本响应返回，服务端不持久化明文。
+        创建；一次性 Secret/PAT 仅本响应返回，服务端不持久化明文。Client Credentials 不依赖
+        introspection。PAT 创建前后都会实时校验 introspection；未启用时返回
+        409 personal_access_token_unavailable，临时故障返回 503 token_introspection_unavailable。
       security:
         - bearerAuth: []
       parameters:
@@ -747,7 +749,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT or PAT
-      description: JWT 使用 discovery/JWKS 本地校验；PAT/opaque token 每次请求实时调用 ZITADEL introspection
+      description: JWT 始终使用 discovery/JWKS 本地校验；仅配置有效 Client ID/Secret 时支持 PAT/opaque token 实时 introspection，否则 opaque token 返回 401
   parameters:
     UserId:
       name: user_id

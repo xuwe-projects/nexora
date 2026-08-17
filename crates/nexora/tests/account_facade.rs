@@ -309,6 +309,42 @@ mod server {
     }
 
     #[test]
+    fn server_settings_allow_omitted_or_partial_introspection_credentials() {
+        let omitted: ServerSettings = toml::from_str(
+            r#"
+[account.oidc]
+issuer_url = "https://identity.example.com"
+audience = "nexora-api"
+organization_id = "organization-1"
+project_id = "project-1"
+personal_access_token = "test-personal-access-token"
+"#,
+        )
+        .expect("introspection 凭据应可整体省略");
+        omitted
+            .validate()
+            .expect("省略 introspection 凭据时应启用 JWT-only 模式");
+        assert!(omitted.account.oidc.introspection_client_id.is_empty());
+        assert!(omitted.account.oidc.introspection_client_secret.is_empty());
+
+        let partial: ServerSettings = toml::from_str(
+            r#"
+[account.oidc]
+issuer_url = "https://identity.example.com"
+audience = "nexora-api"
+organization_id = "organization-1"
+project_id = "project-1"
+personal_access_token = "test-personal-access-token"
+introspection_client_id = "resource-server-client"
+"#,
+        )
+        .expect("单边 introspection 配置应由运行时安全降级");
+        partial
+            .validate()
+            .expect("单边 introspection 配置不应阻止 JWT 服务启动");
+    }
+
+    #[test]
     fn server_settings_reject_empty_audience() {
         let settings = ServerSettings {
             account: Settings {

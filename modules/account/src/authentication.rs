@@ -91,6 +91,33 @@ pub trait AccessTokenVerifier: Send + Sync {
     ///
     /// Token 无效、Provider 元数据不一致或 JWKS 暂时不可用时返回错误。
     async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError>;
+
+    /// 返回当前时刻是否可以安全创建并校验 opaque token。
+    ///
+    /// 默认实现表示 verifier 只支持 JWT。支持 introspection 的实现应实时探测 Provider，
+    /// 以便临时故障恢复后无需重启服务即可重新允许创建 PAT。
+    ///
+    /// # Errors
+    ///
+    /// Provider 暂时不可用时返回 [`VerificationError::IntrospectionUnavailable`]。
+    async fn opaque_token_validation_available(&self) -> Result<bool, VerificationError> {
+        Ok(false)
+    }
+
+    /// 强制使用 opaque token 验证路径校验 token，并返回可信身份。
+    ///
+    /// 默认实现表示 verifier 只支持 JWT。该方法用于 PAT 创建后的交付前验证，避免根据
+    /// token 文本外形误走 JWT 校验路径。
+    ///
+    /// # Errors
+    ///
+    /// 未启用 opaque token 能力、token 无效或 introspection 暂时不可用时返回错误。
+    async fn verify_opaque_token(
+        &self,
+        _token: &str,
+    ) -> Result<VerifiedIdentity, VerificationError> {
+        Err(VerificationError::InvalidToken)
+    }
 }
 
 /// 可放入 Axum State 的独立 OIDC resource server verifier。

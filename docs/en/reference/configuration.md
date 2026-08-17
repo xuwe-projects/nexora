@@ -62,15 +62,18 @@ audience = "nexora-api"
 organization_id = "zitadel-organization-id"
 project_id = "zitadel-project-id"
 personal_access_token = "replace-through-secret-injection"
-introspection_client_id = "nexora-resource-server-client-id"
-introspection_client_secret = "replace-through-secret-injection"
+# introspection_client_id = "nexora-resource-server-client-id"
+# introspection_client_secret = "replace-through-secret-injection"
 ```
 
 `organization_id` selects where UserService v2 creates human users; `project_id` carries synchronized
 system roles. Inject the service-account PAT through `OIDC__PERSONAL_ACCESS_TOKEN` or a secret manager.
-`introspection_client_id` and `introspection_client_secret` are the ZITADEL API resource-server Basic
-Auth credentials used for uncached PAT/opaque-token introspection. Inject the secret through
-`OIDC__INTROSPECTION_CLIENT_SECRET`; Provider outages fail closed with HTTP 503.
+`introspection_client_id` and `introspection_client_secret` are optional ZITADEL API resource-server
+Basic Auth credentials for uncached PAT/opaque-token introspection. Omitting both, configuring only
+one, or using credentials rejected by the Provider safely selects JWT-only mode: JWT authentication
+continues, opaque tokens return 401, and new PAT creation is disabled. A valid pair enables both token
+types. Temporary Provider outages return 503 for opaque/PAT operations and are retried after recovery.
+Inject the secret through `OIDC__INTROSPECTION_CLIENT_SECRET`.
 
 Environment variables use `__` for nesting. An explicit path wins; otherwise Nexora finds
 `config/<package>.toml`. Inject secrets through environment variables or a secret manager.

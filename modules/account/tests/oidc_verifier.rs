@@ -9,7 +9,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use account::authentication::{AccessTokenVerifier, OidcAccessTokenVerifier, VerificationError};
+use account::authentication::{
+    AccessTokenVerifier, OidcAccessTokenVerifier, VerificationError, ZitadelAccessTokenVerifier,
+};
 use jsonwebtoken::{
     Algorithm, EncodingKey, Header, encode,
     jwk::{Jwk, PublicKeyUse},
@@ -127,6 +129,106 @@ async fn verifier_accepts_any_configured_resource_server_audience() {
         .expect("命中任一 audience 的 token 应当通过");
 
     assert_eq!(identity.subject, "user-1");
+    server.join().expect("测试 Provider 应当正常退出");
+}
+
+#[tokio::test]
+async fn composite_verifier_without_introspection_credentials_is_jwt_only() {
+    let encoding_key =
+        EncodingKey::from_ec_pem(PRIVATE_KEY.as_bytes()).expect("测试私钥应当可以解析");
+    let mut jwk =
+        Jwk::from_encoding_key(&encoding_key, Algorithm::ES256).expect("测试公钥应当可以导出");
+    jwk.common.key_id = Some(KEY_ID.to_owned());
+    jwk.common.public_key_use = Some(PublicKeyUse::Signature);
+    let (issuer, server) = spawn_provider(jwk);
+    let verifier = ZitadelAccessTokenVerifier::discover(&issuer, AUDIENCE, "", "")
+        .await
+        .expect("省略 introspection 凭据时 JWT verifier 仍应初始化");
+
+    let identity = verifier
+        .verify(&signed_token(
+            &encoding_key,
+            &issuer,
+            AUDIENCE,
+            now() + 3_600,
+            None,
+        ))
+        .await
+        .expect("JWT 应继续通过本地 JWKS 校验");
+    assert_eq!(identity.subject, "user-1");
+
+    let opaque_error = verifier
+        .verify("opaque-pat-value")
+        .await
+        .expect_err("JWT-only 模式不得接受 opaque token");
+    assert!(matches!(opaque_error, VerificationError::InvalidToken));
+
+    let available = verifier
+        .opaque_token_validation_available()
+        .await
+        .expect("JWT-only 模式应返回明确的能力状态");
+    assert!(!available, "JWT-only 模式不得创建 PAT");
+    server.join().expect("测试 Provider 应当正常退出");
+}
+
+#[tokio::test]
+async fn composite_verifier_downgrades_invalid_introspection_credentials() {
+    let encoding_key =
+        EncodingKey::from_ec_pem(PRIVATE_KEY.as_bytes()).expect("测试私钥应当可以解析");
+    let mut jwk =
+        Jwk::from_encoding_key(&encoding_key, Algorithm::ES256).expect("测试公钥应当可以导出");
+    jwk.common.key_id = Some(KEY_ID.to_owned());
+    jwk.common.public_key_use = Some(PublicKeyUse::Signature);
+    let (issuer, server) = spawn_composite_provider(jwk, vec![ProbeResponse::InvalidClient]);
+
+    let verifier = ZitadelAccessTokenVerifier::discover(
+        &issuer,
+        AUDIENCE,
+        "invalid-resource-server-client",
+        "invalid-resource-server-secret",
+    )
+    .await
+    .expect("无效 introspection 凭据不应阻止 JWT 服务启动");
+
+    let opaque_error = verifier
+        .verify("opaque-pat-value")
+        .await
+        .expect_err("被拒绝的 introspection 凭据必须降级为 JWT-only");
+    assert!(matches!(opaque_error, VerificationError::InvalidToken));
+    assert!(
+        !verifier
+            .opaque_token_validation_available()
+            .await
+            .expect("降级后应返回明确的能力状态")
+    );
+    server.join().expect("测试 Provider 应当正常退出");
+}
+
+#[tokio::test]
+async fn composite_verifier_recovers_from_temporary_probe_outage_without_restart() {
+    let encoding_key =
+        EncodingKey::from_ec_pem(PRIVATE_KEY.as_bytes()).expect("测试私钥应当可以解析");
+    let mut jwk =
+        Jwk::from_encoding_key(&encoding_key, Algorithm::ES256).expect("测试公钥应当可以导出");
+    jwk.common.key_id = Some(KEY_ID.to_owned());
+    jwk.common.public_key_use = Some(PublicKeyUse::Signature);
+    let (issuer, server) =
+        spawn_composite_provider(jwk, vec![ProbeResponse::Unavailable, ProbeResponse::Active]);
+
+    let verifier = ZitadelAccessTokenVerifier::discover(
+        &issuer,
+        AUDIENCE,
+        "resource-server-client",
+        "resource-server-secret",
+    )
+    .await
+    .expect("introspection 临时故障不应阻止 JWT 服务启动");
+    let identity = verifier
+        .verify("opaque-pat-value")
+        .await
+        .expect("Provider 恢复后 opaque token 应自动重新可用");
+
+    assert_eq!(identity.subject, "machine-1");
     server.join().expect("测试 Provider 应当正常退出");
 }
 
@@ -374,6 +476,73 @@ fn spawn_discovery(jwks_uri: &'static str) -> (String, JoinHandle<()>) {
     (issuer, server)
 }
 
+#[derive(Clone, Copy)]
+enum ProbeResponse {
+    InvalidClient,
+    Unavailable,
+    Active,
+}
+
+fn spawn_composite_provider(
+    jwk: Jwk,
+    introspection_responses: Vec<ProbeResponse>,
+) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("应当可以绑定测试 Provider");
+    let issuer = format!(
+        "http://{}",
+        listener.local_addr().expect("应当可以读取监听地址")
+    );
+    let server_issuer = issuer.clone();
+    let server = thread::spawn(move || {
+        let expected_requests = 2 + introspection_responses.len();
+        let mut introspection_index = 0;
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().expect("应当接收 Provider 请求");
+            let path = read_path(&mut stream);
+            let (status, body) = match path.as_str() {
+                "/.well-known/openid-configuration" => (
+                    "200 OK",
+                    json!({
+                        "issuer": server_issuer.as_str(),
+                        "jwks_uri": format!("{server_issuer}/jwks"),
+                        "id_token_signing_alg_values_supported": ["ES256"]
+                    })
+                    .to_string(),
+                ),
+                "/jwks" => ("200 OK", json!({ "keys": [jwk.clone()] }).to_string()),
+                "/oauth/v2/introspect" => {
+                    let response = introspection_responses[introspection_index];
+                    introspection_index += 1;
+                    match response {
+                        ProbeResponse::InvalidClient => (
+                            "401 Unauthorized",
+                            json!({ "error": "invalid_client" }).to_string(),
+                        ),
+                        ProbeResponse::Unavailable => (
+                            "503 Service Unavailable",
+                            json!({ "error": "temporarily_unavailable" }).to_string(),
+                        ),
+                        ProbeResponse::Active => (
+                            "200 OK",
+                            json!({
+                                "active": true,
+                                "sub": "machine-1",
+                                "iss": server_issuer.as_str(),
+                                "aud": AUDIENCE,
+                                "exp": now() + 3_600
+                            })
+                            .to_string(),
+                        ),
+                    }
+                }
+                _ => panic!("未预期的 Provider 路径: {path}"),
+            };
+            write_response_with_status(&mut stream, status, body.as_str());
+        }
+    });
+    (issuer, server)
+}
+
 fn read_path(stream: &mut TcpStream) -> String {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
@@ -393,9 +562,13 @@ fn read_path(stream: &mut TcpStream) -> String {
 }
 
 fn write_response(stream: &mut TcpStream, body: &str) {
+    write_response_with_status(stream, "200 OK", body);
+}
+
+fn write_response_with_status(stream: &mut TcpStream, status: &str, body: &str) {
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
         body.len(),
         body
     )

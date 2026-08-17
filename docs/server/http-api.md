@@ -39,8 +39,9 @@ order: 2
 Authorization: Bearer <access_token>
 ```
 
-JWT 使用 discovery/JWKS 本地验签；PAT 或其他 opaque token 每次请求实时调用 ZITADEL
-`/oauth/v2/introspect`，成功结果不缓存。验证顺序固定为：Bearer 头格式、Provider
+JWT 始终使用 discovery/JWKS 本地验签。配置有效 introspection Client ID/Secret 时，PAT 或
+其他 opaque token 每次请求实时调用 ZITADEL `/oauth/v2/introspect`，成功结果不缓存；未启用
+introspection 时 opaque token 返回 401，JWT 不受影响。验证顺序固定为：Bearer 头格式、Provider
 签名或 introspection、issuer/audience/有效期、本地用户是否已开通、
 用户是否停用、目标权限。身份绑定只使用当前部署 OIDC issuer 范围内稳定的
 `identity_id`。人员 username 是目录元数据；服务账号 username 创建后不可修改并作为 Client ID。
@@ -194,6 +195,7 @@ JWT 使用 discovery/JWKS 本地验签；PAT 或其他 opaque token 每次请求
 | 503 | `token_introspection_unavailable` | PAT introspection 暂时不可用；请求失败关闭 |
 | 503 | `credential_provider_unavailable` | ZITADEL 服务账号/凭据管理接口不可用 |
 | 409 | `service_account_required` | 对人员账号调用服务账号资料或凭据接口 |
+| 409 | `personal_access_token_unavailable` | 当前部署未启用 PAT introspection；请使用 Client Credentials |
 | 409 | `client_secret_rotation_conflict` | 另一轮 Client Secret 轮换仍在进行 |
 | 404 | `credential_not_found` | 指定凭据不存在 |
 | 409 | `service_account_already_exists` | 稳定 username 已被服务账号使用 |
@@ -330,8 +332,12 @@ Secret/PAT 明文。对人员账号调用返回 `409 service_account_required`�
 `POST /service-accounts/{id}/credentials` 要求唯一 `Idempotency-Key` 请求头。请求类型为
 `client_credentials` 时禁止 `expires_at`，再次创建会串行轮换唯一 Client Secret；类型为
 `personal_access_token` 时允许多个 PAT，`expires_at` 可为未来 Unix 秒或 `null`（永不过期）。
-成功返回 `201`、凭据元数据和仅本次可见的 `client_id`/`client_secret` 或 `token`。数据库与
-日志只保存非敏感元数据。`DELETE /service-accounts/{id}/credentials/{credential_id}` 返回
+创建 PAT 前会实时探测 introspection，创建后会校验实际 token 及其服务账号 subject；未启用时
+返回 `409 personal_access_token_unavailable`，临时故障返回
+`503 token_introspection_unavailable`，无法验证的 PAT 会被撤销且不会持久化或交付。成功返回
+`201`、凭据元数据和仅本次可见的 `client_id`/`client_secret` 或 `token`。数据库与日志只保存
+非敏感元数据。Client Credentials 不依赖 introspection。`DELETE
+/service-accounts/{id}/credentials/{credential_id}` 返回
 `204`，只撤销目标凭据。
 
 ## 角色接口

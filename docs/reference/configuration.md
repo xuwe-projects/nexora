@@ -61,16 +61,18 @@ audience = "nexora-api"
 organization_id = "zitadel-organization-id"
 project_id = "zitadel-project-id"
 personal_access_token = "replace-through-secret-injection"
-introspection_client_id = "nexora-resource-server-client-id"
-introspection_client_secret = "replace-through-secret-injection"
+# introspection_client_id = "nexora-resource-server-client-id"
+# introspection_client_secret = "replace-through-secret-injection"
 ```
 
 `organization_id` 用于 UserService v2 创建人类用户；`project_id` 用于同步系统角色，两者职责
 不同。PAT 必须属于有权管理目标 Organization/Project 的服务账号，生产环境应通过
 `OIDC__PERSONAL_ACCESS_TOKEN` 或密钥系统注入，不要提交真实值。
-`introspection_client_id`/`introspection_client_secret` 是 ZITADEL API resource server 的
-HTTP Basic 凭据，只用于每次实时验证 PAT/opaque Bearer Token；Secret 应通过
-`OIDC__INTROSPECTION_CLIENT_SECRET` 注入。Provider 不可用时验证失败关闭并返回 503。
+`introspection_client_id`/`introspection_client_secret` 是可选的 ZITADEL API resource server
+HTTP Basic 凭据，只用于实时验证 PAT/opaque Bearer Token。两项都省略、只配置一项或凭据被
+Provider 拒绝时服务降级为 JWT-only：JWT 仍可认证，opaque token 返回 401，并禁止创建新 PAT。
+两项有效时同时支持 JWT 与 opaque token；Provider 临时不可用时 opaque/PAT 操作返回 503，恢复
+后自动重试。Secret 应通过 `OIDC__INTROSPECTION_CLIENT_SECRET` 注入。
 
 环境变量以 `__` 表示嵌套字段。显式路径优先；未传路径时根据当前 package 名查找
 `config/<package>.toml`。敏感值应由环境变量或密钥系统注入。

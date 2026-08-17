@@ -54,20 +54,27 @@ cargo run -p server -- --check-config config/server.toml
 
 服务端把认证与业务授权拆成两个边界：OIDC Provider 负责登录和签发 access token；本地
 PostgreSQL 保存用户、角色、权限及关联关系。API 只接受 `Authorization: Bearer <token>`，
-JWT 会通过 JWKS 校验签名、`iss`、`aud`、`exp`、可选的 `nbf` 和 `sub`；PAT/opaque token
-则在每个请求中实时调用 ZITADEL `/oauth/v2/introspect`，不使用成功缓存。introspection 的
-`active` 必须为真，且 issuer、audience 与有效期仍要匹配；inactive 返回 401，Provider
-不可用返回 503。生产 OIDC issuer 必须使用 HTTPS，仅 `localhost`、loopback IPv4/IPv6
-开发地址允许 HTTP。
+JWT 会通过 JWKS 校验签名、`iss`、`aud`、`exp`、可选的 `nbf` 和 `sub`；启用 introspection
+后，PAT/opaque token 会在每个请求中实时调用 ZITADEL `/oauth/v2/introspect`，不使用成功缓存。其
+`active` 必须为真，且 issuer、audience 与有效期仍要匹配；inactive 返回 401。未配置有效
+introspection 凭据时 opaque token 返回 401，但 JWT 认证保持可用；已配置凭据而 Provider
+临时不可用时 opaque token 返回 503。生产 OIDC issuer 必须使用 HTTPS，仅 `localhost`、
+loopback IPv4/IPv6 开发地址允许 HTTP。
 
-introspection 使用独立的 resource-server Client ID/Secret 通过 HTTP Basic 认证，不能复用
-上面的管理 PAT。Secret 只能通过环境变量或密钥系统注入，模板中只能保留占位值：
+introspection 可选使用独立的 resource-server Client ID/Secret 通过 HTTP Basic 认证，不能复用
+上面的管理 PAT。两项都省略时服务进入 JWT-only 模式并禁止创建新 PAT；只配置一项或凭据被
+Provider 拒绝时也会告警并安全降级。配置时 Secret 只能通过环境变量或密钥系统注入：
 
 ```toml
 [oidc]
-introspection_client_id = "api-resource-server-client-id"
-introspection_client_secret = "replace-with-secret"
+# introspection_client_id = "api-resource-server-client-id"
+# introspection_client_secret = "replace-with-secret"
 ```
+
+创建 PAT 前服务会实时探测 introspection；创建后还会验证实际 PAT 的 active、issuer、audience、
+有效期和服务账号 subject。未启用该能力时返回 `409 personal_access_token_unavailable`，临时故障
+返回 `503 token_introspection_unavailable`，且不会交付或持久化无法验证的 PAT。Client
+Credentials 不依赖 introspection。
 
 数据库迁移与服务启动相互独立。Nexora 自动创建 `nexora` schema，把框架历史固定记录在
 `nexora._sqlx_migrations`；应用业务迁移使用自己的 SQLx Migrator 和独立历史。服务端必须按

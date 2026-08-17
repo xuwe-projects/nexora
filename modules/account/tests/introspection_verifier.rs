@@ -110,6 +110,65 @@ async fn unavailable_introspection_fails_closed_without_exposing_secrets() {
     assert!(!format!("{error:?}").contains("resource-server-secret"));
 }
 
+#[tokio::test]
+async fn capability_probe_accepts_inactive_test_token_response() {
+    let provider = IntrospectionProvider::spawn_response(
+        1,
+        "200 OK",
+        "token=nexora-introspection-capability-probe",
+        |_| json!({ "active": false }).to_string(),
+    );
+
+    let available = verifier(&provider.issuer)
+        .opaque_token_validation_available()
+        .await
+        .expect("凭据合法时 inactive 探测 token 也应证明 introspection 可用");
+    assert!(available);
+
+    assert_eq!(provider.requests(), 1);
+    provider.join();
+}
+
+#[tokio::test]
+async fn capability_probe_classifies_invalid_client_without_exposing_secret() {
+    let provider = IntrospectionProvider::spawn_response(
+        1,
+        "401 Unauthorized",
+        "token=nexora-introspection-capability-probe",
+        |_| json!({ "error": "invalid_client" }).to_string(),
+    );
+
+    let error = verifier(&provider.issuer)
+        .opaque_token_validation_available()
+        .await
+        .expect_err("Provider 拒绝凭据时应识别为无效配置");
+
+    assert!(matches!(error, VerificationError::InvalidConfiguration(_)));
+    assert!(!format!("{error:?}").contains("resource-server-secret"));
+    provider.join();
+}
+
+#[tokio::test]
+async fn capability_probe_classifies_provider_outage_as_temporary() {
+    let provider = IntrospectionProvider::spawn_response(
+        1,
+        "503 Service Unavailable",
+        "token=nexora-introspection-capability-probe",
+        |_| json!({ "error": "temporarily_unavailable" }).to_string(),
+    );
+
+    let error = verifier(&provider.issuer)
+        .opaque_token_validation_available()
+        .await
+        .expect_err("Provider 临时故障时探测应失败");
+
+    assert!(matches!(
+        error,
+        VerificationError::IntrospectionUnavailable(_)
+    ));
+    provider.join();
+}
+
 fn verifier(issuer: &str) -> ZitadelIntrospectionVerifier {
     ZitadelIntrospectionVerifier::new(
         issuer,
@@ -128,6 +187,15 @@ struct IntrospectionProvider {
 
 impl IntrospectionProvider {
     fn spawn(expected_requests: usize, body: impl Fn(&str) -> String + Send + 'static) -> Self {
+        Self::spawn_response(expected_requests, "200 OK", "token=opaque-pat-value", body)
+    }
+
+    fn spawn_response(
+        expected_requests: usize,
+        status: &'static str,
+        expected_form: &'static str,
+        body: impl Fn(&str) -> String + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("应当可以绑定测试 Provider");
         let issuer = format!(
             "http://{}",
@@ -146,9 +214,9 @@ impl IntrospectionProvider {
                         .to_ascii_lowercase()
                         .contains("authorization: basic ")
                 );
-                assert!(request.ends_with("token=opaque-pat-value"));
+                assert!(request.ends_with(expected_form));
                 server_requests.fetch_add(1, Ordering::AcqRel);
-                write_response(&mut stream, body(server_issuer.as_str()).as_str());
+                write_response(&mut stream, status, body(server_issuer.as_str()).as_str());
             }
         });
         Self {
@@ -200,10 +268,10 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
     }
 }
 
-fn write_response(stream: &mut std::net::TcpStream, body: &str) {
+fn write_response(stream: &mut std::net::TcpStream, status: &str, body: &str) {
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     )

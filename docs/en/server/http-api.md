@@ -30,8 +30,10 @@ decides route merge order and middleware boundaries.
 - Stable identity lookup uses the issuer-scoped `identity_id`. Optional `username` is mutable login
   metadata and is never an authentication key.
 
-JWTs use local discovery/JWKS verification. PATs and opaque tokens call ZITADEL
-`/oauth/v2/introspect` on every request without caching successful results. Authentication validates
+JWTs always use local discovery/JWKS verification. With valid introspection Client ID/Secret
+credentials, PATs and opaque tokens call ZITADEL `/oauth/v2/introspect` on every request without
+caching successful results. Without introspection, opaque tokens return 401 while JWTs remain
+available. Authentication validates
 the Bearer syntax, Provider result, issuer/audience/expiry, local account
 registration, account status, and finally the required permission. The super administrator bypasses
 permission membership; other users receive permissions through roles.
@@ -139,7 +141,7 @@ Roles and permissions use the unpaged `{"items": [...]}` envelope.
 | 403 | `account_not_registered`, `account_suspended`, `permission_denied` |
 | 404 | `resource_not_found`, `credential_not_found`, `route_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `user_already_provisioned`, `service_account_already_exists`, `service_account_identifier_immutable`, `service_account_required`, `client_secret_rotation_conflict`, role and administrator conflict codes |
+| 409 | `user_already_provisioned`, `service_account_already_exists`, `service_account_identifier_immutable`, `service_account_required`, `personal_access_token_unavailable`, `client_secret_rotation_conflict`, role and administrator conflict codes |
 | 422 | `validation_failed`, `credential_type_invalid`, `credential_expiration_invalid`; `details.field` identifies the field |
 | 500 | `internal_error`; SQL, paths, and stack traces are never exposed |
 | 503 | `identity_issuer_not_bound`, `identity_provider_unavailable`, `token_introspection_unavailable`, `credential_provider_unavailable` |
@@ -248,8 +250,12 @@ operations for a human returns `409 service_account_required`.
 `POST /service-accounts/{id}/credentials` requires a unique `Idempotency-Key`. A
 `client_credentials` request cannot carry `expires_at`; repeating it serially rotates the sole
 Client Secret. A `personal_access_token` request may create multiple PATs and accepts a future Unix
-second or null/omitted expiry. `201` returns metadata plus a one-time `client_id`/`client_secret` or
-`token`; plaintext is not persisted or logged. `DELETE
+second or null/omitted expiry. PAT creation probes introspection first, then validates the actual token
+and service-account subject before delivery. Disabled introspection returns
+`409 personal_access_token_unavailable`; a temporary outage returns
+`503 token_introspection_unavailable`. An unverifiable PAT is revoked and is neither persisted nor
+delivered. Client Credentials do not depend on introspection. `201` returns metadata plus a one-time
+`client_id`/`client_secret` or `token`; plaintext is not persisted or logged. `DELETE
 /service-accounts/{id}/credentials/{credential_id}` returns `204` and revokes only that credential.
 
 ## Roles

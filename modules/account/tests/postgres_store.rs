@@ -379,6 +379,121 @@ async fn service_account_lifecycle_keeps_roles_credentials_and_deletion_rules(po
 }
 
 #[sqlx::test(migrator = "NEXORA_MIGRATOR")]
+async fn jwt_only_mode_rejects_pat_before_provider_creation_but_allows_client_secret(pool: PgPool) {
+    let directory = Arc::new(TestServiceAccountDirectory::default());
+    let account = test_account_with_service_directory_and_verifier(
+        pool.clone(),
+        directory.clone(),
+        Arc::new(JwtOnlyTokenIdentityVerifier),
+    )
+    .await;
+    let operator = create_user(&pool, identity("jwt-only-operator"))
+        .await
+        .expect("应当可以创建 JWT-only 测试操作者");
+    let service_account = account
+        .create_service_account(
+            CreateServiceAccountIdentity {
+                username: "jwt-only-machine".to_owned(),
+                display_name: "JWT-only 设备".to_owned(),
+                description: None,
+            },
+            &[],
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建 JWT-only 服务账号");
+
+    let error = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::PersonalAccessToken,
+            "不应创建的 PAT",
+            None,
+            Some("jwt-only-pat"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect_err("未启用 introspection 时必须在调用 Provider 前拒绝 PAT");
+    assert!(matches!(
+        error,
+        AccountError::Conflict {
+            code: "personal_access_token_unavailable",
+            ..
+        }
+    ));
+    assert_eq!(directory.personal_access_token_count(), 0);
+
+    account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::ClientCredentials,
+            "仍可创建的 Client Secret",
+            None,
+            Some("jwt-only-client-secret"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect("Client Credentials 不应依赖 introspection");
+    assert!(directory.has_client_secret());
+}
+
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
+async fn invalid_generated_pat_is_revoked_before_persistence_or_delivery(pool: PgPool) {
+    let directory = Arc::new(TestServiceAccountDirectory::default());
+    let account = test_account_with_service_directory_and_verifier(
+        pool.clone(),
+        directory.clone(),
+        Arc::new(RejectingOpaqueTokenVerifier),
+    )
+    .await;
+    let operator = create_user(&pool, identity("invalid-pat-operator"))
+        .await
+        .expect("应当可以创建 PAT 校验测试操作者");
+    let service_account = account
+        .create_service_account(
+            CreateServiceAccountIdentity {
+                username: "invalid-pat-machine".to_owned(),
+                display_name: "PAT 校验设备".to_owned(),
+                description: None,
+            },
+            &[],
+            operator.id.as_str(),
+        )
+        .await
+        .expect("应当可以创建 PAT 校验服务账号");
+
+    let error = account
+        .create_service_account_credential(
+            service_account.id.as_str(),
+            ServiceAccountCredentialType::PersonalAccessToken,
+            "无法验证的 PAT",
+            None,
+            Some("invalid-generated-pat"),
+            operator.id.as_str(),
+        )
+        .await
+        .expect_err("创建后的 PAT 未通过实时校验时不得交付");
+
+    assert!(matches!(
+        error,
+        AccountError::Verification(VerificationError::InvalidToken)
+    ));
+    assert_eq!(
+        directory.personal_access_token_count(),
+        0,
+        "无效 PAT 应被撤销"
+    );
+    let persisted = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM account.service_account_credentials WHERE service_account_id = $1",
+    )
+    .bind(service_account.id.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("应当可以核对 PAT 元数据");
+    assert_eq!(persisted, 0, "无效 PAT 不得写入本地元数据");
+}
+
+#[sqlx::test(migrator = "NEXORA_MIGRATOR")]
 async fn service_account_http_enforces_permissions_validation_and_resource_semantics(pool: PgPool) {
     let directory = Arc::new(TestServiceAccountDirectory::default());
     let account = test_account_with_service_directory(pool.clone(), directory).await;
@@ -1839,12 +1954,25 @@ async fn test_account_with_service_directory(
     pool: PgPool,
     service_account_directory: Arc<dyn ServiceAccountDirectory>,
 ) -> Account {
+    test_account_with_service_directory_and_verifier(
+        pool,
+        service_account_directory,
+        Arc::new(TokenIdentityVerifier),
+    )
+    .await
+}
+
+async fn test_account_with_service_directory_and_verifier(
+    pool: PgPool,
+    service_account_directory: Arc<dyn ServiceAccountDirectory>,
+    token_verifier: Arc<dyn AccessTokenVerifier>,
+) -> Account {
     Account::bind_identity_issuer(&pool, TEST_IDENTITY_ISSUER)
         .await
         .expect("测试部署 issuer 应当可以绑定或核对");
     Account::new(AccountDependencies {
         pool,
-        token_verifier: Arc::new(TokenIdentityVerifier),
+        token_verifier,
         identity_directory: Some(Arc::new(TestIdentityDirectory)),
         service_account_directory: Some(service_account_directory),
     })
@@ -1873,6 +2001,21 @@ impl TestServiceAccountDirectory {
                 created_at: Utc::now(),
                 expires_at,
             });
+    }
+
+    fn personal_access_token_count(&self) -> usize {
+        self.state
+            .lock()
+            .expect("测试服务账号目录锁不应中毒")
+            .personal_access_tokens
+            .len()
+    }
+
+    fn has_client_secret(&self) -> bool {
+        self.state
+            .lock()
+            .expect("测试服务账号目录锁不应中毒")
+            .has_client_secret
     }
 }
 
@@ -1930,7 +2073,7 @@ impl ServiceAccountDirectory for TestServiceAccountDirectory {
 
     async fn create_personal_access_token(
         &self,
-        _: &str,
+        identity_id: &str,
         expires_at: Option<chrono::DateTime<Utc>>,
     ) -> Result<ServiceAccountPersonalAccessTokenSecret, ServiceAccountDirectoryError> {
         let created_at = Utc::now();
@@ -1948,7 +2091,7 @@ impl ServiceAccountDirectory for TestServiceAccountDirectory {
             token_id,
             created_at,
             expires_at,
-            token: "only-visible-pat".to_owned(),
+            token: format!("pat-for:{identity_id}"),
         })
     }
 
@@ -2260,6 +2403,10 @@ fn password_identity(username: &str, password: &str) -> CreateHumanIdentity {
 
 struct TokenIdentityVerifier;
 
+struct JwtOnlyTokenIdentityVerifier;
+
+struct RejectingOpaqueTokenVerifier;
+
 struct TestIdentityDirectory;
 
 #[async_trait]
@@ -2397,18 +2544,61 @@ impl IdentityDirectory for ConflictingIdentityDirectory {
 #[async_trait]
 impl AccessTokenVerifier for TokenIdentityVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
-        let (issuer, subject) = token
-            .strip_prefix("other:")
-            .map_or((TEST_IDENTITY_ISSUER, token), |subject| {
-                (OTHER_IDENTITY_ISSUER, subject)
-            });
-        Ok(VerifiedIdentity {
-            issuer: issuer.to_owned(),
-            subject: subject.to_owned(),
-            username: Some(token.to_owned()),
-            email: Some(format!("{token}@example.com")),
-            display_name: token.to_owned(),
-            organization: None,
-        })
+        Ok(test_verified_identity(token))
+    }
+
+    async fn opaque_token_validation_available(&self) -> Result<bool, VerificationError> {
+        Ok(true)
+    }
+
+    async fn verify_opaque_token(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedIdentity, VerificationError> {
+        let subject = token
+            .strip_prefix("pat-for:")
+            .ok_or(VerificationError::InvalidToken)?;
+        Ok(test_verified_identity(subject))
+    }
+}
+
+#[async_trait]
+impl AccessTokenVerifier for JwtOnlyTokenIdentityVerifier {
+    async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
+        Ok(test_verified_identity(token))
+    }
+}
+
+#[async_trait]
+impl AccessTokenVerifier for RejectingOpaqueTokenVerifier {
+    async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
+        Ok(test_verified_identity(token))
+    }
+
+    async fn opaque_token_validation_available(&self) -> Result<bool, VerificationError> {
+        Ok(true)
+    }
+
+    async fn verify_opaque_token(
+        &self,
+        _token: &str,
+    ) -> Result<VerifiedIdentity, VerificationError> {
+        Err(VerificationError::InvalidToken)
+    }
+}
+
+fn test_verified_identity(token: &str) -> VerifiedIdentity {
+    let (issuer, subject) = token
+        .strip_prefix("other:")
+        .map_or((TEST_IDENTITY_ISSUER, token), |subject| {
+            (OTHER_IDENTITY_ISSUER, subject)
+        });
+    VerifiedIdentity {
+        issuer: issuer.to_owned(),
+        subject: subject.to_owned(),
+        username: Some(token.to_owned()),
+        email: Some(format!("{token}@example.com")),
+        display_name: token.to_owned(),
+        organization: None,
     }
 }

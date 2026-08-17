@@ -53,7 +53,7 @@ pub mod __private {
 }
 
 pub(crate) use api::ApiError;
-use authentication::AccessTokenVerifier;
+use authentication::{AccessTokenVerifier, VerificationError};
 
 pub use contracts::account::SYSTEM_ROLE_OWNER;
 pub use entities::account::{
@@ -1625,8 +1625,8 @@ impl Account {
     ///
     /// # Errors
     ///
-    /// 输入或到期时间无效、幂等键重复、轮换并发冲突、服务账号或操作者不存在、Provider
-    /// 不可用，或数据库事务失败时返回错误。
+    /// 输入或到期时间无效、未启用 PAT introspection、幂等键重复、轮换并发冲突、服务账号
+    /// 或操作者不存在、Provider 不可用，或数据库事务失败时返回错误。
     pub async fn create_service_account_credential(
         &self,
         service_account_id: &str,
@@ -1656,6 +1656,23 @@ impl Account {
             .service_account_directory
             .as_ref()
             .ok_or(ServiceAccountDirectoryError::Unavailable)?;
+        if credential_type == ServiceAccountCredentialType::PersonalAccessToken {
+            match self
+                .state
+                .token_verifier
+                .opaque_token_validation_available()
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(AccountError::Conflict {
+                        code: "personal_access_token_unavailable",
+                        message: "当前部署未启用 PAT，请使用 Client Credentials",
+                    });
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         let mut transaction = self.state.pool.begin().await.map_err(StoreError::from)?;
         if credential_type == ServiceAccountCredentialType::ClientCredentials
             && !stores::service_accounts::try_lock_client_secret_rotation(
@@ -1727,6 +1744,28 @@ impl Account {
                 let generated = directory
                     .create_personal_access_token(user.identity_id.as_str(), expires_at)
                     .await?;
+                let verified = self
+                    .state
+                    .token_verifier
+                    .verify_opaque_token(generated.token.as_str())
+                    .await
+                    .and_then(|identity| {
+                        if identity.subject == user.identity_id {
+                            Ok(identity)
+                        } else {
+                            Err(VerificationError::InvalidToken)
+                        }
+                    });
+                if let Err(error) = verified {
+                    _ = transaction.rollback().await;
+                    compensate_personal_access_token(
+                        directory.as_ref(),
+                        user.identity_id.as_str(),
+                        generated.token_id.as_str(),
+                    )
+                    .await;
+                    return Err(error.into());
+                }
                 let inserted = stores::service_accounts::insert_personal_access_token(
                     service_account_id,
                     name.as_str(),

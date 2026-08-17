@@ -17,16 +17,17 @@ use super::{
 /// 对 JWT 使用本地 JWKS 校验、对 opaque/PAT 使用实时 introspection 的统一验证器。
 pub struct ZitadelAccessTokenVerifier {
     jwt: OidcAccessTokenVerifier,
-    introspection: ZitadelIntrospectionVerifier,
+    introspection: Option<ZitadelIntrospectionVerifier>,
 }
 
 impl ZitadelAccessTokenVerifier {
-    /// 初始化 JWT discovery/JWKS 和 PAT introspection 验证能力。
+    /// 初始化 JWT discovery/JWKS，并在凭据完整且有效时启用 PAT introspection。
     ///
     /// # Errors
     ///
-    /// issuer、audience 或 introspection resource-server 凭据无效，或者 OIDC discovery/JWKS
-    /// 初始化失败时返回错误。
+    /// issuer、audience 无效，或者 OIDC discovery/JWKS 初始化失败时返回错误。
+    /// introspection 凭据缺失、不完整或被 Provider 拒绝时降级为仅支持 JWT；Provider
+    /// 临时不可用时保留 introspection 配置，后续请求会自动重试。
     pub async fn discover(
         issuer: impl AsRef<str>,
         audience: impl Into<String>,
@@ -35,12 +36,40 @@ impl ZitadelAccessTokenVerifier {
     ) -> Result<Self, VerificationError> {
         let audience = audience.into();
         let jwt = OidcAccessTokenVerifier::discover(issuer.as_ref(), audience.clone()).await?;
-        let introspection = ZitadelIntrospectionVerifier::new(
-            issuer.as_ref(),
-            audience,
-            introspection_client_id,
-            introspection_client_secret,
-        )?;
+        let client_id = introspection_client_id.into();
+        let client_secret = introspection_client_secret.into();
+        let introspection = match (client_id.trim().is_empty(), client_secret.trim().is_empty()) {
+            (true, true) => None,
+            (true, false) | (false, true) => {
+                tracing::warn!("ZITADEL introspection 凭据不完整，已降级为仅支持 JWT access token");
+                None
+            }
+            (false, false) => {
+                let verifier = ZitadelIntrospectionVerifier::new(
+                    issuer.as_ref(),
+                    audience,
+                    client_id,
+                    client_secret,
+                )?;
+                match verifier.probe().await {
+                    Ok(()) => Some(verifier),
+                    Err(VerificationError::InvalidConfiguration(_)) => {
+                        tracing::warn!(
+                            "ZITADEL introspection 凭据被 Provider 拒绝，已降级为仅支持 JWT access token"
+                        );
+                        None
+                    }
+                    Err(VerificationError::IntrospectionUnavailable(reason)) => {
+                        tracing::warn!(
+                            reason,
+                            "ZITADEL introspection 暂时不可用；JWT 校验保持可用，opaque token 请求将实时重试"
+                        );
+                        Some(verifier)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        };
         Ok(Self { jwt, introspection })
     }
 }
@@ -50,9 +79,36 @@ impl AccessTokenVerifier for ZitadelAccessTokenVerifier {
     async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
         if jwt_shaped(token) {
             self.jwt.verify(token).await
+        } else if let Some(introspection) = self.introspection.as_ref() {
+            introspection.verify_opaque_token(token).await
         } else {
-            self.introspection.verify(token).await
+            Err(VerificationError::InvalidToken)
         }
+    }
+
+    async fn opaque_token_validation_available(&self) -> Result<bool, VerificationError> {
+        let Some(introspection) = self.introspection.as_ref() else {
+            return Ok(false);
+        };
+        match introspection.probe().await {
+            Ok(()) => Ok(true),
+            Err(VerificationError::InvalidConfiguration(_)) => {
+                tracing::warn!("ZITADEL introspection 凭据被 Provider 拒绝，已禁止创建新 PAT");
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn verify_opaque_token(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedIdentity, VerificationError> {
+        self.introspection
+            .as_ref()
+            .ok_or(VerificationError::InvalidToken)?
+            .verify_opaque_token(token)
+            .await
     }
 }
 
@@ -116,15 +172,18 @@ impl ZitadelIntrospectionVerifier {
             client_secret,
         })
     }
-}
 
-#[async_trait]
-impl AccessTokenVerifier for ZitadelIntrospectionVerifier {
-    async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(VerificationError::InvalidToken);
-        }
+    async fn probe(&self) -> Result<(), VerificationError> {
+        self.request("nexora-introspection-capability-probe")
+            .await
+            .map(|_| ())
+            .map_err(IntrospectionRequestError::into_probe_error)
+    }
+
+    async fn request(
+        &self,
+        token: &str,
+    ) -> Result<IntrospectionResponse, IntrospectionRequestError> {
         let response = self
             .http
             .post(self.endpoint.clone())
@@ -133,7 +192,7 @@ impl AccessTokenVerifier for ZitadelIntrospectionVerifier {
             .send()
             .await
             .map_err(|error| {
-                VerificationError::IntrospectionUnavailable(format!(
+                IntrospectionRequestError::Unavailable(format!(
                     "请求失败（{}）",
                     error
                         .status()
@@ -141,19 +200,70 @@ impl AccessTokenVerifier for ZitadelIntrospectionVerifier {
                         .unwrap_or_else(|| "network".to_owned())
                 ))
             })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(IntrospectionRequestError::InvalidClient);
+        }
         if !response.status().is_success() {
-            return Err(VerificationError::IntrospectionUnavailable(format!(
+            return Err(IntrospectionRequestError::Unavailable(format!(
                 "端点返回 HTTP {}",
                 response.status().as_u16()
             )));
         }
-        let response = response
+        response
             .json::<IntrospectionResponse>()
             .await
-            .map_err(|_| {
-                VerificationError::IntrospectionUnavailable("响应不是有效 JSON".to_owned())
-            })?;
+            .map_err(|_| IntrospectionRequestError::Unavailable("响应不是有效 JSON".to_owned()))
+    }
+}
+
+#[async_trait]
+impl AccessTokenVerifier for ZitadelIntrospectionVerifier {
+    async fn verify(&self, token: &str) -> Result<VerifiedIdentity, VerificationError> {
+        self.verify_opaque_token(token).await
+    }
+
+    async fn opaque_token_validation_available(&self) -> Result<bool, VerificationError> {
+        self.probe().await.map(|()| true)
+    }
+
+    async fn verify_opaque_token(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedIdentity, VerificationError> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(VerificationError::InvalidToken);
+        }
+        let response = self
+            .request(token)
+            .await
+            .map_err(IntrospectionRequestError::into_runtime_error)?;
         response.verified_identity(self)
+    }
+}
+
+enum IntrospectionRequestError {
+    InvalidClient,
+    Unavailable(String),
+}
+
+impl IntrospectionRequestError {
+    fn into_probe_error(self) -> VerificationError {
+        match self {
+            Self::InvalidClient => VerificationError::InvalidConfiguration(
+                "introspection resource-server 凭据被 Provider 拒绝".to_owned(),
+            ),
+            Self::Unavailable(reason) => VerificationError::IntrospectionUnavailable(reason),
+        }
+    }
+
+    fn into_runtime_error(self) -> VerificationError {
+        match self {
+            Self::InvalidClient => VerificationError::IntrospectionUnavailable(
+                "Provider 拒绝 introspection 客户端凭据".to_owned(),
+            ),
+            Self::Unavailable(reason) => VerificationError::IntrospectionUnavailable(reason),
+        }
     }
 }
 

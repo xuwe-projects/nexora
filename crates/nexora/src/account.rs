@@ -99,13 +99,18 @@ pub(crate) mod server {
         /// 不应把真实令牌提交到配置模板或版本库。
         #[cfg(feature = "server")]
         pub personal_access_token: String,
-        /// 验证 PAT/opaque Bearer token 使用的 resource-server Client ID。
-        #[cfg(feature = "server")]
-        pub introspection_client_id: String,
-        /// 验证 PAT/opaque Bearer token 使用的 resource-server Client Secret。
+        /// 验证 PAT/opaque Bearer token 使用的可选 resource-server Client ID。
         ///
-        /// 生产部署必须通过 `OIDC__INTROSPECTION_CLIENT_SECRET` 或密钥系统注入。
+        /// 与 Client Secret 同时省略时服务自动降级为仅支持 JWT，并禁止创建新 PAT。
         #[cfg(feature = "server")]
+        #[serde(default)]
+        pub introspection_client_id: String,
+        /// 验证 PAT/opaque Bearer token 使用的可选 resource-server Client Secret。
+        ///
+        /// 配置时应与 Client ID 成对提供。生产部署应通过
+        /// `ACCOUNT__OIDC__INTROSPECTION_CLIENT_SECRET` 或密钥系统注入。
+        #[cfg(feature = "server")]
+        #[serde(default)]
         pub introspection_client_secret: String,
     }
 
@@ -279,20 +284,6 @@ pub(crate) mod server {
             return Err(ConfigError::invalid_section(
                 "account.server",
                 "oidc.personal_access_token 不能为空",
-            ));
-        }
-        #[cfg(feature = "server")]
-        if settings.introspection_client_id.trim().is_empty() {
-            return Err(ConfigError::invalid_section(
-                "account.server",
-                "oidc.introspection_client_id 不能为空",
-            ));
-        }
-        #[cfg(feature = "server")]
-        if settings.introspection_client_secret.trim().is_empty() {
-            return Err(ConfigError::invalid_section(
-                "account.server",
-                "oidc.introspection_client_secret 不能为空",
             ));
         }
         Ok(())
