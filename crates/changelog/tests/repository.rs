@@ -4,7 +4,7 @@ use semver::Version;
 #[test]
 fn current_release_is_newer_than_previous_release() {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let previous = Version::parse("0.40.1").unwrap();
+    let previous = Version::parse("0.40.2").unwrap();
 
     assert!(current > previous);
 }
@@ -59,6 +59,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.40.2",
             "0.40.0",
             "0.39.0",
             "0.38.2",

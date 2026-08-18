@@ -4902,6 +4902,7 @@ impl ApplicationShell {
                             .when_some(search_shortcut, |this, shortcut| this.child(shortcut)),
                     )
                     .tooltip("全局搜索")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_search(SearchMode::Global, window, cx);
                     })),

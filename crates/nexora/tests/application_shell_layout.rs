@@ -87,6 +87,17 @@ fn global_search_trigger_matches_prototype_structure() {
     ] {
         assert!(global_bar.contains(required), "全局搜索入口缺少 {required}");
     }
+
+    let search_trigger = global_bar
+        .split_once(".justify_center()")
+        .and_then(|(_, source)| source.split_once(".when(!toolbar.actions.is_empty()"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位全局搜索按钮交互区域");
+    assert!(
+        search_trigger
+            .contains(".on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())"),
+        "全局搜索按钮必须阻止左键按下事件进入标题栏拖拽逻辑"
+    );
 }
 
 #[test]

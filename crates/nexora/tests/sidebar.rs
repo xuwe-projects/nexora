@@ -138,7 +138,8 @@ fn shell_uses_gpui_component_sidebar_for_navigation() {
 
 #[test]
 fn collapsed_navigation_groups_open_recursive_official_popup_menus() {
-    let collapsed = APPLICATION_SOURCE
+    let normalized = APPLICATION_SOURCE.replace("\r\n", "\n");
+    let collapsed = normalized
         .split_once("fn render_collapsed_navigation_entry")
         .and_then(|(_, source)| source.split_once("#[derive(Clone)]\nstruct NavigationSearchIndex"))
         .map(|(source, _)| source)
