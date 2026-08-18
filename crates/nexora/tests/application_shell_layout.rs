@@ -50,7 +50,7 @@ fn tab_bar_keeps_navigation_prefix_feature_icons_and_open_page_suffix() {
     for action in ["tabs-back", "tabs-forward", "tabs-reload"] {
         assert!(prefix.contains(action), "标签栏前缀缺少 {action}");
     }
-    assert!(prefix.contains("workspace_icon_button("));
+    assert!(prefix.contains("workspace_toolbar_icon_button("));
     assert!(!prefix.contains(".xsmall()"));
     assert!(
         !prefix.contains(".when("),
@@ -65,7 +65,7 @@ fn tab_bar_keeps_navigation_prefix_feature_icons_and_open_page_suffix() {
         .expect("应当可以定位标签栏后缀实现");
     assert!(suffix.contains("open-feature-search"));
     assert!(suffix.contains("SearchMode::OpenPage"));
-    assert!(suffix.contains("workspace_icon_button("));
+    assert!(suffix.contains("workspace_toolbar_icon_button("));
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn global_search_kbd_exists_only_after_downstream_registers_a_binding(cx: &mut T
 }
 
 #[test]
-fn shell_toolbar_exposes_container_padding_and_uses_workspace_scale_buttons() {
+fn shell_toolbar_exposes_container_padding_and_uses_compact_icons() {
     assert_eq!(ShellToolbarOptions::new().right_padding_value(), px(12.0));
     assert_eq!(
         ShellToolbarOptions::new()
@@ -203,10 +203,18 @@ fn shell_toolbar_exposes_container_padding_and_uses_workspace_scale_buttons() {
         .map(|(source, _)| source)
         .expect("应当可以定位 ShellToolbarAction 实现");
     assert!(toolbar.contains("pub fn icon_button"));
-    assert!(toolbar.contains("COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON"));
-    assert!(toolbar.contains(".with_size(COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON)"));
-    assert!(toolbar.contains(".size_8()"));
+    assert!(toolbar.contains("workspace_toolbar_icon_button("));
     assert!(toolbar.contains("right_padding"));
+
+    let icon_button = APPLICATION_SOURCE
+        .split_once("fn workspace_toolbar_icon_button(")
+        .and_then(|(_, source)| source.split_once("fn workspace_sidebar_footer_host"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位 Shell 工具栏图标按钮实现");
+    assert!(icon_button.contains("COMPONENT_SIZE_FOR_SIXTEEN_PIXEL_ICON"));
+    assert!(icon_button.contains("workspace_icon_button_with_component_size("));
+    assert!(icon_button.contains(".with_size(component_size)"));
+    assert!(icon_button.contains(".size_8()"));
 
     let global_bar = APPLICATION_SOURCE
         .split_once("fn render_global_title_bar_content")

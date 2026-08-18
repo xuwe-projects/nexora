@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use gpui::{AnyElement, Context, ElementId, IntoElement, Pixels, Window, div, prelude::*, px};
 use gpui_component::{
-    ActiveTheme as _, TitleBar,
+    ActiveTheme as _, TITLE_BAR_HEIGHT, TitleBar,
     animation::{EffectTransition, ease_in_out_cubic},
     scroll::ScrollableElement as _,
 };
 
-/// 工作区右侧全局栏的固定高度，与视觉原型保持一致。
-pub const WORKSPACE_GLOBAL_BAR_HEIGHT: Pixels = px(44.0);
+/// 工作区右侧全局栏的高度，始终跟随 `gpui-component` 的默认标题栏高度。
+pub const WORKSPACE_GLOBAL_BAR_HEIGHT: Pixels = TITLE_BAR_HEIGHT;
 
 /// 工作区右侧 Feature 标签栏的固定高度，与视觉原型保持一致。
 pub const WORKSPACE_TAB_BAR_HEIGHT: Pixels = px(42.0);
@@ -163,10 +163,10 @@ impl WorkspaceLayout {
     /// 将桌面工作区渲染为 GPUI 元素树。
     ///
     /// 返回元素包含固定的桌面工作区结构：Sidebar 从窗口顶边延伸到底边，右侧工作区依次放置
-    /// 44px 官方窗口顶部栏、42px Feature 标签栏和剩余主内容区域。主内容可以按 feature 需要
-    /// 开启或关闭外层滚动；官方 Sidebar 负责内容折叠与交互，工作区导航框架负责统一的
-    /// 展开/收起占位和动画。颜色和背景读取当前 `gpui-component` 主题，避免业务应用重复
-    /// 处理平台差异或写死视觉样式。
+    /// `gpui-component` 默认窗口顶部栏、42px Feature 标签栏和剩余主内容区域。主内容可以按
+    /// feature 需要开启或关闭外层滚动；官方 Sidebar 负责内容折叠与交互，工作区导航框架负责
+    /// 统一的展开/收起占位和动画。颜色和背景读取当前 `gpui-component` 主题，避免业务应用
+    /// 重复处理平台差异或写死视觉样式。
     pub fn render<T>(self, window: &mut Window, cx: &mut Context<T>) -> AnyElement
     where
         T: 'static,
@@ -186,7 +186,6 @@ impl WorkspaceLayout {
         let title_bar = TitleBar::new()
             // 交通灯位于整窗高 Sidebar 内；右侧标题栏不再为它重复保留左侧空白。
             .pl(px(0.0))
-            .h(WORKSPACE_GLOBAL_BAR_HEIGHT)
             .border_b(px(0.0))
             .child(title_bar_content);
 

@@ -243,16 +243,16 @@ enum ShellToolbarRenderer {
 }
 
 impl ShellToolbarAction {
-    /// 创建与 Shell 搜索框同一视觉尺度的官方图标按钮。
+    /// 创建用于 Shell 顶部工具区的官方图标按钮。
     ///
-    /// 自定义工具动作应使用该工厂作为交互根元素，再组合 `Badge`、`Popover` 等官方
-    /// 组件，避免每个下游应用分别决定按钮与图标尺寸。
+    /// 按钮使用 16px 可见图标和 32px 点击区域。自定义工具动作应使用该工厂作为交互根元素，
+    /// 再组合 `Badge`、`Popover` 等官方组件，避免每个下游应用分别决定按钮与图标尺寸。
     pub fn icon_button(
         id: impl Into<ElementId>,
         icon: impl Into<Icon>,
         tooltip: impl Into<gpui::SharedString>,
     ) -> Button {
-        workspace_icon_button(id, icon, tooltip)
+        workspace_toolbar_icon_button(id, icon, tooltip)
     }
 
     /// 创建一个使用官方图标按钮的全局工具动作。
@@ -381,9 +381,38 @@ fn workspace_icon_button(
     // gpui-component 的自定义 Button 尺寸会把图标缩放到 75%；该基准值使最终图标为 20px，
     // 再用实例样式把可点击区域固定为 32px，继续保留官方 loading/disabled 图标语义。
     const COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON: Pixels = px(20.0 / 0.75);
+    workspace_icon_button_with_component_size(
+        id,
+        icon,
+        tooltip,
+        COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON,
+    )
+}
+
+fn workspace_toolbar_icon_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    tooltip: impl Into<gpui::SharedString>,
+) -> Button {
+    // 顶部工具动作与 Feature 标签图标统一为 16px；点击区域继续固定为 32px。
+    const COMPONENT_SIZE_FOR_SIXTEEN_PIXEL_ICON: Pixels = px(16.0 / 0.75);
+    workspace_icon_button_with_component_size(
+        id,
+        icon,
+        tooltip,
+        COMPONENT_SIZE_FOR_SIXTEEN_PIXEL_ICON,
+    )
+}
+
+fn workspace_icon_button_with_component_size(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    tooltip: impl Into<gpui::SharedString>,
+    component_size: Pixels,
+) -> Button {
     Button::new(id)
         .ghost()
-        .with_size(COMPONENT_SIZE_FOR_TWENTY_PIXEL_ICON)
+        .with_size(component_size)
         .size_8()
         .icon(icon)
         .tooltip(tooltip)
@@ -4715,7 +4744,7 @@ impl ApplicationShell {
             .flex_shrink_0()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                workspace_icon_button("tabs-back", IconName::ArrowLeft, "后退")
+                workspace_toolbar_icon_button("tabs-back", IconName::ArrowLeft, "后退")
                     .disabled(!can_navigate_back)
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
@@ -4727,7 +4756,7 @@ impl ApplicationShell {
                     })),
             )
             .child(
-                workspace_icon_button("tabs-forward", IconName::ArrowRight, "前进")
+                workspace_toolbar_icon_button("tabs-forward", IconName::ArrowRight, "前进")
                     .disabled(!can_navigate_forward)
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
@@ -4739,7 +4768,7 @@ impl ApplicationShell {
                     })),
             )
             .child(
-                workspace_icon_button(
+                workspace_toolbar_icon_button(
                     "tabs-reload",
                     Icon::default().path("icons/rotate-ccw.svg"),
                     "刷新当前页面",
@@ -4758,7 +4787,7 @@ impl ApplicationShell {
     }
 
     fn render_tab_bar_suffix(&self, cx: &mut Context<Self>) -> AnyElement {
-        workspace_icon_button("open-feature-search", IconName::Plus, "打开页面")
+        workspace_toolbar_icon_button("open-feature-search", IconName::Plus, "打开页面")
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_search(SearchMode::OpenPage, window, cx);
             }))

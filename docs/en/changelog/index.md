@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.40.2: restore native title-bar proportions](./0.40.2)
 - [0.40.1: complete the service-account host API](./0.40.1)
 - [0.40.0: unified service-account and ZITADEL role synchronization](./0.40.0)
 - [0.39.0: internal service principals without Provider identities](./0.39.0)

@@ -4,10 +4,25 @@ use ui::layout::{
     WORKSPACE_SIDEBAR_EXPANDED_WIDTH, WORKSPACE_TAB_BAR_HEIGHT, WorkspaceLayout,
 };
 
+const LAYOUT_SOURCE: &str = include_str!("../src/layout.rs");
+
 #[test]
-fn workspace_layout_uses_prototype_shell_bar_heights() {
-    assert_eq!(WORKSPACE_GLOBAL_BAR_HEIGHT, px(44.0));
+fn workspace_layout_uses_upstream_title_bar_height_and_fixed_tab_height() {
+    assert_eq!(
+        WORKSPACE_GLOBAL_BAR_HEIGHT,
+        gpui_component::TITLE_BAR_HEIGHT
+    );
     assert_eq!(WORKSPACE_TAB_BAR_HEIGHT, px(42.0));
+
+    let title_bar = LAYOUT_SOURCE
+        .split_once("let title_bar = TitleBar::new()")
+        .and_then(|(_, source)| source.split_once("let content_panel"))
+        .map(|(source, _)| source)
+        .expect("应当可以定位工作区标题栏构造逻辑");
+    assert!(
+        !title_bar.contains(".h(WORKSPACE_GLOBAL_BAR_HEIGHT)"),
+        "工作区不应覆盖 gpui-component 的默认标题栏高度"
+    );
 }
 
 #[test]
