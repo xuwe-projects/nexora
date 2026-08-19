@@ -15,7 +15,7 @@ EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.40.3 cli --locked --force --bin nexora
+  --tag v0.41.0 cli --locked --force --bin nexora
 nexora doctor
 ```
 
@@ -213,7 +213,7 @@ icons = [
 | --- | --- | --- | --- | --- | --- |
 | `schema_version` | 是 | 配置 schema；固定写 `1` | 无 | 否 | 非 1 立即失败 |
 | `publish.targets.<name>` | 是 | app 引用的稳定发布目标名，如 `rustfs` | 无 | 否 | 缺失或名称不安全时失败 |
-| `provider` | 是 | 对象存储协议；当前只支持 `s3` | 无 | 否 | 非 `s3` 失败 |
+| `provider` | 是 | 对象存储协议；通用 S3 兼容存储用 `s3`，阿里云 OSS 用 `aliyun_oss` | 无 | 否 | 未知 provider 失败 |
 | `endpoint` | 是 | S3/RustFS API 地址，由存储管理员提供 | 无 | 否 | URL 无效失败；HTTP 需显式允许 |
 | `bucket` | 是 | 已创建的 bucket 名，如 `desktop-releases` | 无 | 否 | 空值或不安全名称失败 |
 | `region` | 否 | S3 签名 region，由服务端提供 | `us-east-1` | 否 | 与服务端不符会导致请求签名/上传失败 |
@@ -227,6 +227,9 @@ icons = [
 `NEXORA_PUBLISH_BETA_ACCESS_KEY_ID` 搭配 `NEXORA_PUBLISH_SECRET_ACCESS_KEY`；空值继续回退。
 Access Key 与 Secret Key 必须最终找到，Session Token 可选。`RUSTFS_*` 已移除。bucket 必须提前
 创建，并允许 `public_base_url` 下的对象匿名下载；生产 endpoint 与下载地址都必须使用 HTTPS。
+`s3` 对 versioned 产物和 sequence manifest 使用 `If-None-Match: *` 防止覆盖；`aliyun_oss`
+改用并签名 `x-oss-forbid-overwrite: true`。channel 根 branded 对象与 `latest.json` 不携带这两种
+条件头，保持可更新。provider 必须显式配置，不能依赖 endpoint 域名推断。
 
 ### app、品牌与 release
 
@@ -512,6 +515,10 @@ publish 会读取并验签远端 `latest.json`；404 代表 sequence 1，否则�
 通过后，更新 channel 根 branded 产物和 checksum，再上传 sequence manifest，最后上传并回读
 `latest.json`。updater manifest 的 URL 始终指向 versioned update payload，不会指向下次发布会
 覆盖的 channel 根文件。
+
+通用 S3 provider 通过 `If-None-Match: *` 保护不可变对象；阿里云 OSS provider 通过签名后的
+`x-oss-forbid-overwrite: true` 提供同等保护。任何 precondition/forbid-overwrite 冲突都必须终止
+发布，不能把既有不可变对象当作成功覆盖。
 
 `latest.json` 是签名更新清单，继续保留且最后更新。新的发布不再生成 `latest.dmg`、
 `latest-<arch>.dmg`、`latest.exe`、`latest.zip` 等安装包/负载 alias。对象布局为：

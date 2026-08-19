@@ -413,10 +413,10 @@ impl<'a> SourceRuleVisitor<'a> {
         let Some((_, trait_path, _)) = &node.trait_ else {
             return;
         };
-        if !trait_path
+        if trait_path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident == "TableDelegate")
+            .is_none_or(|segment| segment.ident != "TableDelegate")
         {
             return;
         }

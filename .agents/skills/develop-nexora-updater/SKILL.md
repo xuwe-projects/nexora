@@ -1,6 +1,6 @@
 ---
 name: develop-nexora-updater
-description: 使用 Nexora 设计、实现或审查跨平台桌面自动更新系统。适用于 nexora.toml 的 app/updater/publish 配置、nexora build/publish/updater keygen、Ed25519 签名清单、sidecar 更新器、S3 兼容发布、强制更新、离线宽限、撤回、回滚、多窗口 GPUI 更新门禁，以及清理旧 Jenkins 或旧 updater 实现。
+description: 使用 Nexora 设计、实现或审查跨平台桌面自动更新系统。适用于 nexora.toml 的 app/updater/publish 配置、nexora build/publish/updater keygen、Ed25519 签名清单、sidecar 更新器、S3 兼容或阿里云 OSS 发布、强制更新、离线宽限、撤回、回滚、多窗口 GPUI 更新门禁，以及清理旧 Jenkins 或旧 updater 实现。
 ---
 
 # 开发 Nexora Updater

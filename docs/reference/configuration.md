@@ -84,7 +84,7 @@ Provider 拒绝时服务降级为 JWT-only：JWT 仍可认证，opaque token 返
 ## 自动更新发布配置
 
 桌面自动更新的构建和发布配置放在仓库根目录 `nexora.toml`，不会完整打包进客户端。`publish`
-目标支持 S3 兼容对象存储：
+目标支持通用 S3 兼容对象存储与阿里云 OSS：
 
 ```toml
 [publish.targets.rustfs]
@@ -100,11 +100,22 @@ allow_insecure_http = true
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/desktop-releases"
 allow_insecure_http = true
+
+[publish.targets.rustfs.channels.stable]
+provider = "aliyun_oss"
+endpoint = "https://s3.oss-cn-shenzhen.aliyuncs.com"
+bucket = "desktop-releases"
+region = "cn-shenzhen"
+force_path_style = false
+public_base_url = "https://downloads.example.com"
+allow_insecure_http = false
 ```
 
 `endpoint` 是带签名的 S3 API 地址；`public_base_url` 是客户端匿名读取地址。本地 RustFS 使用
 HTTP 时必须显式开启 `allow_insecure_http`。channel 表按字段覆盖基础 target，未出现的字段继承；
-合并完成后会重新验证 endpoint、公开 URL 与 HTTP 安全开关。
+合并完成后会重新验证 provider、endpoint、公开 URL 与 HTTP 安全开关。`provider = "s3"`
+对不可变对象发送 `If-None-Match: *`；阿里云 OSS 必须显式使用 `provider = "aliyun_oss"`，
+此时不可变对象改用并签名 `x-oss-forbid-overwrite: true`。Nexora 不按 endpoint 域名推断 provider。
 
 发布凭据不配置前缀，而是按当前 channel 为每个字段独立解析：先读取
 `NEXORA_PUBLISH_<CHANNEL>_<FIELD>`，再读取 `NEXORA_PUBLISH_<FIELD>`，最后读取

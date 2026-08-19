@@ -12,7 +12,7 @@ Feature、桌面 Shell、Account 认证授权、默认用户与角色管理，�
 从 GitHub tag 安装正式发布的独立 `cli` package：
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.40.3 cli --locked --force --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.41.0 cli --locked --force --bin nexora
 ```
 
 在 Nexora 仓库根目录安装本地源码：

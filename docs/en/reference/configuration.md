@@ -85,7 +85,8 @@ The Setup secret is only useful before initialization. Nexora records framework 
 ## Updater Publish Configuration
 
 Desktop updater build and publish configuration lives in the repository-root `nexora.toml`; the full
-file is not bundled into clients. Publish targets support S3-compatible object storage:
+file is not bundled into clients. Publish targets support generic S3-compatible object storage and
+Alibaba Cloud OSS:
 
 ```toml
 [publish.targets.rustfs]
@@ -101,11 +102,23 @@ allow_insecure_http = true
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/desktop-releases"
 allow_insecure_http = true
+
+[publish.targets.rustfs.channels.stable]
+provider = "aliyun_oss"
+endpoint = "https://s3.oss-cn-shenzhen.aliyuncs.com"
+bucket = "desktop-releases"
+region = "cn-shenzhen"
+force_path_style = false
+public_base_url = "https://downloads.example.com"
+allow_insecure_http = false
 ```
 
 `endpoint` is the signed S3 API URL; `public_base_url` is the anonymous client read URL. Local RustFS
 over HTTP must explicitly enable `allow_insecure_http`. Channel tables override the base target by
-field; omitted fields inherit, and the merged endpoint, public URL, and HTTP policy are revalidated.
+field; omitted fields inherit, and the merged provider, endpoint, public URL, and HTTP policy are
+revalidated. `provider = "s3"` sends `If-None-Match: *` for immutable objects. Alibaba Cloud OSS must
+explicitly use `provider = "aliyun_oss"`; immutable uploads then use the signed
+`x-oss-forbid-overwrite: true` header. Nexora never infers a provider from the endpoint hostname.
 
 Publish resolves every credential field independently for the current channel. It checks
 `NEXORA_PUBLISH_<CHANNEL>_<FIELD>`, then `NEXORA_PUBLISH_<FIELD>`, and finally `AWS_<FIELD>`. For

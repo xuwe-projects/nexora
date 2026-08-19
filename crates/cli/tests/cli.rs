@@ -100,6 +100,7 @@ impl Drop for TestDirectory {
 struct MockState {
     objects: std::collections::BTreeMap<String, Vec<u8>>,
     puts: Vec<String>,
+    put_headers: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     replace_latest_on_recheck: Option<(String, Vec<u8>)>,
     latest_reads: usize,
     fail_put_suffix: Option<String>,
@@ -126,7 +127,7 @@ impl MockObjectStore {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         stream.set_nonblocking(false).unwrap();
-                        let (method, path, body) = read_http_request(&mut stream);
+                        let (method, path, headers, body) = read_http_request(&mut stream);
                         let mut state = server_state.lock().unwrap();
                         let (status, response_body) = match method.as_str() {
                             "PUT" => {
@@ -139,6 +140,7 @@ impl MockObjectStore {
                                     ("500 Internal Server Error", Vec::new())
                                 } else {
                                     state.objects.insert(path.clone(), body);
+                                    state.put_headers.insert(path.clone(), headers);
                                     state.puts.push(path);
                                     ("200 OK", Vec::new())
                                 }
@@ -208,6 +210,16 @@ impl MockObjectStore {
         self.state.lock().unwrap().objects[path].clone()
     }
 
+    fn put_header(&self, path: &str, name: &str) -> Option<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .put_headers
+            .get(path)
+            .and_then(|headers| headers.get(&name.to_ascii_lowercase()))
+            .cloned()
+    }
+
     fn insert(&self, path: impl Into<String>, bytes: Vec<u8>) {
         self.state
             .lock()
@@ -234,7 +246,14 @@ impl Drop for MockObjectStore {
     }
 }
 
-fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String, Vec<u8>) {
+fn read_http_request(
+    stream: &mut std::net::TcpStream,
+) -> (
+    String,
+    String,
+    std::collections::BTreeMap<String, String>,
+    Vec<u8>,
+) {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
         .unwrap();
@@ -254,13 +273,15 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String, Vec<u
     let mut request = request_line.split_whitespace();
     let method = request.next().unwrap().to_owned();
     let path = request.next().unwrap().to_owned();
-    let content_length = lines
-        .find_map(|line| {
-            line.split_once(':').and_then(|(name, value)| {
-                name.eq_ignore_ascii_case("content-length")
-                    .then(|| value.trim().parse::<usize>().unwrap())
-            })
+    let headers = lines
+        .filter_map(|line| {
+            line.split_once(':')
+                .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
         })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let content_length = headers
+        .get("content-length")
+        .map(|value| value.parse::<usize>().unwrap())
         .unwrap_or(0);
     while bytes.len() < header_end + content_length {
         let count = stream.read(&mut chunk).unwrap();
@@ -270,6 +291,7 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> (String, String, Vec<u
     (
         method,
         path,
+        headers,
         bytes[header_end..header_end + content_length].to_vec(),
     )
 }
@@ -1078,6 +1100,15 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
             format!("{prefix}/latest.json"),
         ]
     );
+    let immutable_zip = format!("{prefix}/1.0.1/12/aarch64/{zip_name}");
+    assert_eq!(
+        store.put_header(&immutable_zip, "if-none-match").as_deref(),
+        Some("*")
+    );
+    assert_eq!(
+        store.put_header(&immutable_zip, "x-oss-forbid-overwrite"),
+        None
+    );
     assert_eq!(
         store.object(&format!("{prefix}/1.0.1/12/aarch64/{zip_name}.sha256")),
         format!("794f396be329ce58e99c9084550e92f52c2799a83a4ae46e6fcd6efde6b1a922  {zip_name}\n")
@@ -1108,6 +1139,66 @@ icons = ["assets/logos/desktop/logo-icon-128.png"]
             .unwrap()
             .contains("dmg")
     );
+}
+
+#[test]
+fn publish_uses_signed_aliyun_oss_forbid_overwrite_for_immutable_objects() {
+    let directory = TestDirectory::new("publish-aliyun-oss-immutable");
+    let store = MockObjectStore::new();
+    let base = store.base_url();
+    prepare_publish_app(&directory, &base);
+    let config_path = directory.path().join("nexora.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("provider = \"s3\"", "provider = \"aliyun_oss\"");
+    fs::write(config_path, config).unwrap();
+
+    let output = directory.run_with_env(
+        &["publish", "--app", "desktop", "--yes"],
+        &[
+            ("AWS_ACCESS_KEY_ID", "test-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "publish failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prefix = "/desktop-releases/e2e-test/desktop/stable";
+    let immutable_zip = format!("{prefix}/1.0.1/12/aarch64/Desktop-aarch64.app.zip");
+    assert_eq!(
+        store
+            .put_header(&immutable_zip, "x-oss-forbid-overwrite")
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(store.put_header(&immutable_zip, "if-none-match"), None);
+    let authorization = store
+        .put_header(&immutable_zip, "authorization")
+        .expect("Aliyun OSS immutable upload should be signed");
+    assert!(
+        authorization
+            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-oss-forbid-overwrite"),
+        "Aliyun OSS overwrite guard must be included in the signature: {authorization}"
+    );
+
+    for mutable in [
+        format!("{prefix}/Desktop-aarch64.app.zip"),
+        format!("{prefix}/latest.json"),
+    ] {
+        assert_eq!(
+            store.put_header(&mutable, "x-oss-forbid-overwrite"),
+            None,
+            "mutable object must remain replaceable: {mutable}"
+        );
+        assert_eq!(
+            store.put_header(&mutable, "if-none-match"),
+            None,
+            "mutable object must remain replaceable: {mutable}"
+        );
+    }
 }
 
 #[test]

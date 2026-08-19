@@ -11,7 +11,7 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.40.3 cli --locked --force --bin nexora
+  --tag v0.41.0 cli --locked --force --bin nexora
 nexora doctor
 ```
 
@@ -117,8 +117,12 @@ Publish resolves every field independently through `NEXORA_PUBLISH_<CHANNEL>_<FI
 `NEXORA_PUBLISH_<FIELD>`, and `AWS_<FIELD>`. Empty values continue fallback, so a beta access key can
 be combined with the base Nexora secret key. Access and secret are required; the session token is
 optional. `RUSTFS_*` is no longer read. Channel publish-target overrides inherit omitted fields from
-the base target and the merged URLs and HTTP policy are validated afterward. `object_prefix = ""`
-means that the stable app key starts directly at the bucket root.
+the base target and the merged provider, URLs, and HTTP policy are validated afterward.
+`provider = "s3"` protects immutable objects with `If-None-Match: *`; Alibaba Cloud OSS must use
+`provider = "aliyun_oss"`, which signs and sends `x-oss-forbid-overwrite: true` instead. Branded
+channel-root objects and `latest.json` remain replaceable. Provider selection is explicit and is not
+inferred from the endpoint hostname. `object_prefix = ""` means that the stable app key starts
+directly at the bucket root.
 
 Applications load `UpdateConfig::from_current_bundle()` from
 `.app/Contents/Resources/nexora-updater.json` on macOS or `nexora-updater.json` beside the main

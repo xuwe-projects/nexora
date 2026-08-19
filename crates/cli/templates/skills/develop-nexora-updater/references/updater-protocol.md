@@ -8,7 +8,7 @@
 - `sidecar runtime`：独立进程下载、验签、等待主程序退出、事务替换、重启、健康确认和回滚。
 - `platform adapters`：macOS `.app`、Windows 当前用户安装、Linux AppImage/便携版。
 - `nexora::desktop integration`：全局 `UpdateCoordinator`、窗口级 Dialog layer、登录前门禁和多窗口阻断。
-- `CLI build/publish`：只构建当前宿主可构建产物；只发布已有 artifact；S3 兼容对象存储上传顺序和匿名 URL 校验。
+- `CLI build/publish`：只构建当前宿主可构建产物；只发布已有 artifact；S3 兼容或阿里云 OSS 对象存储的上传顺序和匿名 URL 校验。
 
 ## nexora.toml
 
@@ -30,6 +30,14 @@ allow_insecure_http = true
 endpoint = "http://192.168.1.30:9000"
 public_base_url = "http://192.168.1.30:9000/desktop-releases"
 allow_insecure_http = true
+
+[publish.targets.internal.channels.stable]
+provider = "aliyun_oss"
+endpoint = "https://s3.oss-cn-shenzhen.aliyuncs.com"
+region = "cn-shenzhen"
+force_path_style = false
+public_base_url = "https://downloads.example.com"
+allow_insecure_http = false
 
 [apps.console]
 package = "console"
@@ -68,6 +76,7 @@ Rules:
 - Multiple apps may share a publish target. The `apps` table key is the stable remote directory identity; `display_name` is only user-visible metadata and the distribution filename stem. Changing `display_name` must not move the feed root.
 - `object_prefix = ""` means no extra prefix. Non-empty values keep safe-path validation; joining must never create leading/doubled slashes or empty components.
 - `publish.targets.<name>.channels.<channel>` overrides the base target by field. Omitted fields inherit, and the merged provider, URLs, bucket, region, path style and HTTP policy are validated together.
+- `provider = "s3"` 用 `If-None-Match: *` 保护不可变对象；阿里云 OSS 必须显式使用 `provider = "aliyun_oss"`，并改用纳入 SigV4 签名的 `x-oss-forbid-overwrite: true`。不得按 endpoint 域名猜测 provider；channel 根 branded 对象与 `latest.json` 保持可覆盖。
 - Publish resolves each credential field independently in this order: `NEXORA_PUBLISH_<CHANNEL>_<FIELD>`, `NEXORA_PUBLISH_<FIELD>`, then `AWS_<FIELD>`. Empty values continue fallback, access/secret are required, session token is optional, and `RUSTFS_*` is unsupported.
 - A single registered app is selected automatically. Multiple apps use an interactive menu; non-interactive commands require `--app`, while only publish accepts explicit `--all`. Publish must never implicitly publish all apps.
 - `release.version` accepts a literal SemVer or the complete `${CARGO_PKG_VERSION}` expression. The expression resolves the selected app `package` through `cargo metadata --no-deps --format-version 1`, including `version.workspace = true`; fragments, `${CARGO_VERSION}`, arbitrary environment variables and unknown expressions are rejected.
@@ -148,7 +157,7 @@ Platform outputs:
 [<object_prefix>/]<app_key>/<channel>/<version>/<build>/<arch>/<artifact>
 ```
 
-Versioned objects should be long cached; `latest.json` and channel-root branded objects should be no-cache or short-cache. There is no `releases` segment and public architecture directories are normalized. Keep `endpoint` and `public_base_url` separate. Support region and path-style S3. Never log secrets. Never delete legacy aliases or immutable objects automatically; administrators may clean old channel-root aliases manually.
+Versioned objects should be long cached; `latest.json` and channel-root branded objects should be no-cache or short-cache. There is no `releases` segment and public architecture directories are normalized. Keep `endpoint` and `public_base_url` separate. Support region and path-style S3. Immutable writes must fail on an existing key: generic S3 uses `If-None-Match: *`, while Alibaba Cloud OSS uses a signed `x-oss-forbid-overwrite: true`. Never log secrets. Never delete legacy aliases or immutable objects automatically; administrators may clean old channel-root aliases manually.
 
 ## Emergency Yank
 

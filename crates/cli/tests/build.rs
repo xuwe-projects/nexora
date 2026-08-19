@@ -1751,6 +1751,7 @@ fn channel_publish_target_overrides_merge_by_field_and_revalidate_http() {
             "\n[apps.one]",
             r#"
 [publish.targets.rustfs.channels.nightly]
+provider = "aliyun_oss"
 endpoint = "http://192.168.0.250:9000"
 public_base_url = "http://192.168.0.250:9000/releases"
 allow_insecure_http = true
@@ -1759,6 +1760,7 @@ allow_insecure_http = true
         );
     fs::write(fixture.config(), config).unwrap();
     let nightly = inspect_effective_publish_target(fixture.config(), "one", "nightly").unwrap();
+    assert_eq!(nightly["provider"], "aliyun_oss");
     assert_eq!(nightly["endpoint"], "http://192.168.0.250:9000");
     assert_eq!(nightly["bucket"], "releases");
     assert_eq!(nightly["region"], "us-east-1");
@@ -1766,6 +1768,7 @@ allow_insecure_http = true
     assert_eq!(nightly["allow_insecure_http"], true);
     assert!(nightly.get("credential_env_prefix").is_none());
     let stable = inspect_effective_publish_target(fixture.config(), "one", "stable").unwrap();
+    assert_eq!(stable["provider"], "s3");
     assert_eq!(stable["endpoint"], "https://s3.example.com");
     assert!(stable.get("credential_env_prefix").is_none());
 

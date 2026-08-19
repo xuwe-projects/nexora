@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.41.0: safe Alibaba Cloud OSS publishing](./0.41.0)
 - [0.40.3: fix the title-bar global-search click](./0.40.3)
 - [0.40.2: restore native title-bar proportions](./0.40.2)
 - [0.40.1: complete the service-account host API](./0.40.1)

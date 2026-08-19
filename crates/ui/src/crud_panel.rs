@@ -323,7 +323,7 @@ where
                         .child("正在刷新当前页…"),
                 )
             })
-            .when(!error.is_some() || has_rows || loading, |this| {
+            .when(error.is_none() || has_rows || loading, |this| {
                 this.child(div().w_full().flex_1().min_h_0().child(table))
             });
 

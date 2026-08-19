@@ -1,6 +1,7 @@
 schema_version = 1
 
 [publish.targets.default]
+# 通用 S3 兼容存储使用 "s3"；阿里云 OSS 使用 "aliyun_oss"。
 provider = "s3"
 endpoint = "https://example.invalid"
 bucket = "desktop-releases"

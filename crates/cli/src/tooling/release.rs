@@ -115,10 +115,17 @@ struct PublishConfigFile {
     targets: BTreeMap<String, PublishTarget>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PublishProvider {
+    S3,
+    AliyunOss,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PublishTarget {
-    provider: String,
+    provider: PublishProvider,
     endpoint: String,
     bucket: String,
     #[serde(default)]
@@ -136,7 +143,7 @@ struct PublishTarget {
 #[serde(deny_unknown_fields)]
 struct PublishTargetOverride {
     #[serde(default)]
-    provider: Option<String>,
+    provider: Option<PublishProvider>,
     #[serde(default)]
     endpoint: Option<String>,
     #[serde(default)]
@@ -159,10 +166,7 @@ impl PublishTarget {
             return target;
         };
         Self {
-            provider: override_target
-                .provider
-                .clone()
-                .unwrap_or_else(|| self.provider.clone()),
+            provider: override_target.provider.unwrap_or(self.provider),
             endpoint: override_target
                 .endpoint
                 .clone()
@@ -3856,12 +3860,6 @@ fn validate_ico(path: &Path) -> CliResult<()> {
 }
 
 fn validate_publish_target(target: &PublishTarget) -> CliResult<()> {
-    if target.provider != "s3" {
-        return Err(CliError::new(format!(
-            "不支持 publish provider `{}`",
-            target.provider
-        )));
-    }
     validate_http_url(&target.endpoint, "publish endpoint")?;
     validate_http_url(&target.public_base_url, "public_base_url")?;
     let endpoint = url::Url::parse(&target.endpoint)
@@ -5485,7 +5483,7 @@ fn upload_object(
 ) -> CliResult<()> {
     let body = upload.source.bytes()?;
     let url = s3_object_url(target, &upload.key)?;
-    let signed = signed_s3_put(target, credentials, &url, &body)?;
+    let signed = signed_s3_put(target, credentials, &url, &body, upload.immutable)?;
     let mut request = client
         .put(url)
         .header("authorization", signed.authorization)
@@ -5495,8 +5493,8 @@ fn upload_object(
         .header("content-type", upload.content_type)
         .header("cache-control", upload.cache_control)
         .body(body);
-    if upload.immutable {
-        request = request.header("if-none-match", "*");
+    if let Some((name, value)) = signed.conditional_header {
+        request = request.header(name, value);
     }
     if let Some(token) = signed.session_token {
         request = request.header("x-amz-security-token", token);
@@ -5522,6 +5520,7 @@ struct SignedPut {
     payload_sha256: String,
     amz_date: String,
     session_token: Option<String>,
+    conditional_header: Option<(&'static str, &'static str)>,
 }
 
 fn signed_s3_put(
@@ -5529,6 +5528,7 @@ fn signed_s3_put(
     credentials: &S3Credentials,
     url: &url::Url,
     body: &[u8],
+    immutable: bool,
 ) -> CliResult<SignedPut> {
     let region = target.region.as_deref().unwrap_or("us-east-1");
     let now = Utc::now();
@@ -5543,6 +5543,18 @@ fn signed_s3_put(
         canonical_headers.push_str(&format!("x-amz-security-token:{token}\n"));
         signed_headers.push_str(";x-amz-security-token");
     }
+    let conditional_header = if !immutable {
+        None
+    } else {
+        match target.provider {
+            PublishProvider::S3 => Some(("if-none-match", "*")),
+            PublishProvider::AliyunOss => {
+                canonical_headers.push_str("x-oss-forbid-overwrite:true\n");
+                signed_headers.push_str(";x-oss-forbid-overwrite");
+                Some(("x-oss-forbid-overwrite", "true"))
+            }
+        }
+    };
     let canonical_request = format!(
         "PUT\n{}\n\n{canonical_headers}\n{signed_headers}\n{payload_sha256}",
         url.path()
@@ -5563,6 +5575,7 @@ fn signed_s3_put(
         payload_sha256,
         amz_date,
         session_token: credentials.session_token.clone(),
+        conditional_header,
     })
 }
 
