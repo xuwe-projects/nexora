@@ -11,8 +11,9 @@ description: 使用 Nexora 设计、实现或审查跨平台桌面自动更新�
 2. 读取 [updater-protocol.md](references/updater-protocol.md)，当任务涉及自动更新协议、构建发布、客户端检查下载、sidecar 安装、回滚、撤回、强制更新、离线宽限或遗留 updater 清理时必须遵守其中协议。
 3. 从现有模块边界开始：配置解析、CLI build/publish、updater protocol/core、sidecar runtime、platform adapter、desktop integration 分层实现；不要创建平行 updater 或保留旧协议兼容分支。
 4. 让 `nexora.toml` 成为 build/publish 的唯一项目配置来源。多 app 必须显式 `--app` 或 `--all`；`publish` 只发布已有产物，不隐式 build。
-5. 使用 Ed25519 签名信封保护 `latest.json`，客户端和 sidecar 都必须验签；SHA-256 只验证负载完整性。S3 AK/SK、签名私钥和发布凭据不得进入客户端。
-6. 桌面 UI 只使用窗口级 `gpui-component` Dialog/AlertDialog/Progress/Button/Notification layer；强制门禁必须覆盖登录页、Shell、Sidebar、标签和业务窗口。
-7. 删除被新架构替代的 Jenkins、旧 macOS shell helper、旧 latest 协议、Console 项目专用默认和现行文档；保留真实历史 changelog、第三方名称和用户本地秘密配置。
-8. 为配置选择、签名验签、sequence 重放、build/publish 分离、S3 上传顺序、安全解压、平台 adapter、强制门禁和遗留引用清理添加与风险相称的测试。
-9. 完成后运行 `cargo fmt --all`、相关 `cargo test`、`cargo check`、严格 Clippy 和 `cargo run -p cli -- lint --workspace . --deny-warnings`；无法在当前宿主验证的 Windows/Linux/macOS 签名安装行为必须明确报告。
+5. build 必须把所选 channel 的 `runtime_config` 冻结到正式资源目录；运行时通过当前 EXE 与合法 `nexora-release.json` 复用统一资源目录，正式配置失败不得回退 cwd 或源码仓库。
+6. 使用 Ed25519 签名信封保护 `latest.json`，客户端和 sidecar 都必须验签；SHA-256 只验证负载完整性。S3 AK/SK、签名私钥和发布凭据不得进入客户端。
+7. 桌面 UI 只使用窗口级 `gpui-component` Dialog/AlertDialog/Progress/Button/Notification layer；强制门禁必须覆盖登录页、Shell、Sidebar、标签和业务窗口。
+8. 删除被新架构替代的 Jenkins、旧 macOS shell helper、旧 latest 协议、Console 项目专用默认和现行文档；保留真实历史 changelog、第三方名称和用户本地秘密配置。
+9. 为配置选择、签名验签、sequence 重放、build/publish 分离、S3 上传顺序、安全解压、平台 adapter、强制门禁和遗留引用清理添加与风险相称的测试。
+10. 完成后运行 `cargo fmt --all`、相关 `cargo test`、`cargo check`、严格 Clippy 和 `cargo run -p cli -- lint --workspace . --deny-warnings`；无法在当前宿主验证的 Windows/Linux/macOS 签名安装行为必须明确报告。

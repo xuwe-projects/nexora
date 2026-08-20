@@ -142,6 +142,11 @@ archiving. They live in `.app/Contents/Resources` on macOS and beside the main e
 Windows. Schema 1 records the app key/ID, display name, package, version, positive build number,
 channel, target, and optional notes file name, byte size, and SHA-256. It contains no secrets.
 
+The same build freezes the selected nightly/beta/stable channel's `runtime_config` as
+`config/<package>.toml`: `.app/Contents/Resources/config/<package>.toml` on macOS and
+`config/<package>.toml` beside the main EXE on Windows. The first-install artifact and self-update
+payload carry the same frozen file.
+
 Applications can read the validated identity without retaining updater state:
 
 ```rust
@@ -231,11 +236,15 @@ the local build identity; `artifact.json` indexes
 local hashes; `latest.json` is the signed remote release decision; and the sidecar independently
 re-verifies, stages, replaces, restarts, confirms health, and rolls back.
 
-When an application uses `nexora::config::initialize(None)`, Nexora ignores the internal
-`--nexora-updater-health-*` arguments injected by the sidecar and continues with the default TOML.
-Explicit configuration paths and ordinary first positional arguments retain their precedence. This
-lets the replacement process initialize configuration, create its first window, and report health
-instead of treating a health-session flag as a configuration filename.
+When an application uses `nexora::config::initialize(None)`, Nexora selects an explicit path, the
+first ordinary positional argument, the frozen formal-bundle configuration, and development
+workspace configuration in that order. Formal packages are identified only from the current
+executable and a validated `nexora-release.json`; cwd, `CARGO_MANIFEST_DIR`, and fixed installation
+paths never locate production configuration. A missing, unreadable, or invalid frozen TOML file
+fails startup without falling back to a source checkout. The sidecar's
+`--nexora-updater-health-session` and `--nexora-updater-health-file` pairs are ignored, so a health
+restart still reads the bundle configuration. Workspace lookup remains only for `cargo run` and
+`cargo test` processes without release metadata, and environment overrides are unchanged.
 
 ## Sequence and remote objects
 

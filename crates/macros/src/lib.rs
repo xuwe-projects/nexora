@@ -123,7 +123,8 @@ pub fn derive_sidebar_footer(input: TokenStream) -> TokenStream {
 /// 为应用根配置生成 Nexora 强类型配置能力。
 ///
 /// 宏会在调用方 crate 中记录 `CARGO_PKG_NAME`，使 `nexora::config::initialize(None)`
-/// 默认读取当前应用对应的配置文件。命名字段可以分别使用
+/// 在正式安装包中读取 `nexora-release.json` 所在资源目录下冻结的应用配置，在普通开发
+/// 运行中读取 workspace 的应用配置。命名字段可以分别使用
 /// `#[nexora(account_client)]` 与 `#[nexora(account_server)]` 标记桌面和服务端 Account
 /// 配置段；宏会生成对应的隐藏 provider 实现，并在配置加载后调用配置段校验。
 #[proc_macro_derive(Settings, attributes(nexora))]

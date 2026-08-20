@@ -5873,7 +5873,31 @@ pub fn inspect_release_resources(
         .get(app_key)
         .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
     let channel = project.default_release_channel(app_key, app)?;
-    let configured = project.resolved_release(app_key, app, &channel, None)?;
+    inspect_release_resources_for_channel(config_path, app_key, &channel, target)
+}
+
+/// 为集成测试按真实打包路径写入指定 channel 与 target 的冻结运行配置、发布元数据和日志。
+///
+/// macOS 使用 `.app/Contents/Resources`，Windows 使用 Setup 与 update ZIP 共用的 payload
+/// staging 目录；该入口不执行编译、签名或归档命令。
+///
+/// # Errors
+///
+/// 配置、channel、发布身份、运行配置、日志冻结、target 选择或资源写入失败时返回错误。
+#[allow(dead_code)]
+pub fn inspect_release_resources_for_channel(
+    config_path: impl AsRef<Path>,
+    app_key: &str,
+    channel: &str,
+    target: &str,
+) -> CliResult<serde_json::Value> {
+    let project = ProjectDocument::load(config_path.as_ref().to_path_buf())?;
+    let app = project
+        .config
+        .apps
+        .get(app_key)
+        .ok_or_else(|| CliError::new(format!("不存在 app `{app_key}`")))?;
+    let configured = project.resolved_release(app_key, app, channel, None)?;
     let build_number = match configured.build_number {
         ResolvedBuildNumber::BuildDatetime => {
             build_datetime_number(Local::now().fixed_offset(), None)?
@@ -5900,6 +5924,7 @@ pub fn inspect_release_resources(
     let directory = match plan.platform {
         BuildTargetPlatform::MacOs => {
             let directory = plan.app_path.join("Contents/Resources");
+            write_runtime_config_to_directory(&plan, &directory.join("config"))?;
             write_release_resources_to_directory(&plan, &directory)?;
             directory
         }
@@ -5920,10 +5945,17 @@ pub fn inspect_release_resources(
     } else {
         None
     };
+    let runtime_config_path = directory
+        .join("config")
+        .join(format!("{}.toml", plan.package));
+    let runtime_config = fs::read_to_string(&runtime_config_path)
+        .map_err(|error| CliError::new(format!("无法读取测试 bundle 运行配置: {error}")))?;
     Ok(serde_json::json!({
         "directory": inspect_path(&directory),
         "metadata": metadata,
         "notes_sha256": notes_sha256,
+        "runtime_config_path": inspect_path(&runtime_config_path),
+        "runtime_config": runtime_config,
     }))
 }
 

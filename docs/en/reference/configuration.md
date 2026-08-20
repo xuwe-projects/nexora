@@ -75,8 +75,15 @@ continues, opaque tokens return 401, and new PAT creation is disabled. A valid p
 types. Temporary Provider outages return 503 for opaque/PAT operations and are retried after recovery.
 Inject the secret through `OIDC__INTROSPECTION_CLIENT_SECRET`.
 
-Environment variables use `__` for nesting. An explicit path wins; otherwise Nexora finds
-`config/<package>.toml`. Inject secrets through environment variables or a secret manager.
+Environment variables use `__` for nesting. Configuration files are selected in this order: an
+`initialize(Some(path))` path, the first user positional argument, the frozen formal-bundle
+configuration, and finally development configuration. A valid `nexora-release.json` beside the
+installed resources identifies a formal package. macOS reads
+`.app/Contents/Resources/config/<package>.toml`; Windows reads `config/<package>.toml` beside the
+main EXE. Once identified as formal, a missing, unreadable, or invalid TOML file fails startup and
+never falls back to a source checkout. Only `cargo run`/`cargo test` processes without release
+metadata search the current directory and package-manifest ancestors. Environment variables still
+override the selected file. Inject secrets through environment variables or a secret manager.
 
 The Setup secret is only useful before initialization. Nexora records framework history in
 `nexora._sqlx_migrations`, while the application owns an independent history. Both borrow the same

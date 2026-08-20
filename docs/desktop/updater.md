@@ -101,6 +101,10 @@ nexora build --app desktop
 `version`、`build_number`、`channel`、`target`，以及日志的文件名、字节数和 SHA-256；不包含
 任何私钥、对象存储凭据或 token。
 
+同一构建还会把所选 nightly/beta/stable channel 的 `runtime_config` 冻结为
+`config/<package>.toml`：macOS 路径是 `.app/Contents/Resources/config/<package>.toml`，Windows
+路径是主 EXE 同级 `config/<package>.toml`。初始安装包与自更新负载使用同一份冻结文件。
+
 业务代码无需保留 updater 配置即可读取当前发布身份：
 
 ```rust
@@ -112,10 +116,13 @@ let build_number: Option<u64> = info.build_number();
 版本回退 `ApplicationOptions`，app ID、build number 和 channel 返回 `None`；文件存在但非法时
 启动失败。安装 updater 时，其 app ID、version、build number 和 channel 必须与通用元数据一致。
 
-应用使用 `nexora::config::initialize(None)` 时，Nexora 会忽略 sidecar 注入的
-`--nexora-updater-health-*` 内部参数并继续选择默认 TOML；显式配置路径和普通首个位置参数
-仍保持原有优先级。这样新版本可以完成配置初始化、创建主窗口并回报健康，而不会把健康会话
-参数误判为配置文件路径。
+应用使用 `nexora::config::initialize(None)` 时，Nexora 依次选择显式路径、普通首个位置参数、
+正式 bundle 冻结配置和开发 workspace 配置。正式 bundle 只通过当前可执行文件位置与经过
+校验的 `nexora-release.json` 识别；不得使用 cwd、`CARGO_MANIFEST_DIR` 或固定安装目录定位。
+一旦识别为正式发布，冻结配置缺失、不可读或 TOML 无效都会明确失败，禁止回退到源码仓库。
+sidecar 注入的 `--nexora-updater-health-session` 与 `--nexora-updater-health-file` 及其值会被
+忽略，因此健康重启仍读取 bundle 配置。普通 `cargo run`/`cargo test` 没有发布元数据时才保留
+workspace 查找；环境变量覆盖行为不变。
 
 应用成功调用 `nexora::desktop::install_updater` 后，Sidebar Footer 的“检查更新”菜单项、
 macOS 原生菜单和默认快捷键会共同分发 `CheckForUpdates` Action。快捷键在 macOS 是

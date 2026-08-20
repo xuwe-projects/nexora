@@ -1,17 +1,20 @@
 //! Nexora 应用的强类型配置加载与模块配置契约。
 //!
 //! 应用通过 `#[derive(nexora::Settings)]` 声明根配置类型，再调用
-//! `nexora::config::initialize` 按
-//! “显式路径、首个命令行参数、包名默认路径”的优先级加载 TOML 文件；sidecar 注入的
-//! updater 健康确认参数不参与路径选择。Account 客户端与服务端配置段由派生宏分别标记，
-//! 避免在同一个 workspace 中因 Cargo feature 合并而混淆两端配置。
+//! `nexora::config::initialize` 按“显式路径、首个用户位置参数、正式安装包冻结配置、开发配置”
+//! 的优先级加载 TOML 文件；sidecar 注入的 updater 健康确认参数不参与路径选择。Account
+//! 客户端与服务端配置段由派生宏分别标记，避免在同一个 workspace 中因 Cargo feature 合并
+//! 而混淆两端配置。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use configuration::ConfigurationError;
 use configuration::LayeredConfigLoader;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+
+#[path = "config/path.rs"]
+mod path;
 
 /// Nexora 根配置加载或配置段校验失败时返回的错误。
 #[derive(Debug, Error)]
@@ -22,6 +25,13 @@ pub enum ConfigError {
         /// 底层通用配置加载器返回的结构化错误。
         #[from]
         ConfigurationError,
+    ),
+    /// 定位或读取正式安装包发布元数据时，当前可执行文件位置、文件读取或校验失败。
+    #[error(transparent)]
+    ReleaseMetadata(
+        /// updater 通用发布元数据加载器返回的结构化错误。
+        #[from]
+        updater::ReleaseMetadataError,
     ),
     /// 已反序列化的模块配置不满足运行约束。
     #[error("配置段 `{section}` 无效: {message}")]
@@ -101,8 +111,15 @@ pub trait AccountServerSection {
 /// 配置文件按以下优先级选择：
 ///
 /// 1. `config_path` 显式传入的路径；
-/// 2. 当前进程第一个命令行参数（updater 健康确认参数除外）；
-/// 3. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
+/// 2. 忽略 updater 健康确认参数对后的首个用户位置参数；
+/// 3. 当前可执行文件位置的合法 `nexora-release.json` 所标识资源目录中的
+///    `config/<T::APP_NAME>.toml`；
+/// 4. 当前目录或 package 清单目录祖先中的 `config/<T::APP_NAME>.toml`。
+///
+/// 第 3 项代表正式发布边界：一旦发现并校验通过 `nexora-release.json`，对应 bundle 配置
+/// 就是唯一文件来源。文件缺失、不可读或 TOML 无效都会直接失败，不会回退到源码仓库。
+/// macOS 资源目录为 `.app/Contents/Resources`，Windows 为主 EXE 同级目录。普通
+/// `cargo run`/`cargo test` 没有发布元数据时才使用第 4 项开发回退。
 ///
 /// 文件加载后，无前缀环境变量仍可覆盖同名字段；嵌套字段使用双下划线分隔，这一行为
 /// 与 [`LayeredConfigLoader`] 保持一致。
@@ -129,35 +146,25 @@ pub trait AccountServerSection {
 ///
 /// # Errors
 ///
-/// 选中的配置文件不存在、TOML 无效、环境变量无法转换、目标类型反序列化失败，或派生宏
-/// 标记的框架模块配置段校验失败时返回 [`ConfigError`]。
+/// 当前可执行文件位置或正式发布元数据无效、选中的配置文件不存在、TOML 无效、环境变量
+/// 无法转换、目标类型反序列化失败，或派生宏标记的框架模块配置段校验失败时返回
+/// [`ConfigError`]。
 pub fn initialize<T>(config_path: Option<PathBuf>) -> Result<T, ConfigError>
 where
     T: Settings,
 {
-    let config_path = config_path
-        .or_else(|| __private::config_path_from_args(std::env::args_os()))
-        .unwrap_or_else(default_config_path::<T>);
+    let config_path = path::resolve_with_release_loader(
+        config_path,
+        std::env::args_os(),
+        T::APP_NAME,
+        T::MANIFEST_DIR,
+        updater::load_current_release_metadata,
+    )?;
     let settings = LayeredConfigLoader::<T>::new()
         .with_required_file(config_path)
         .load()?;
     settings.validate()?;
     Ok(settings)
-}
-
-fn default_config_path<T>() -> PathBuf
-where
-    T: Settings,
-{
-    let relative = PathBuf::from("config").join(format!("{}.toml", T::APP_NAME));
-    if relative.is_file() {
-        return relative;
-    }
-    Path::new(T::MANIFEST_DIR)
-        .ancestors()
-        .map(|directory| directory.join(&relative))
-        .find(|candidate| candidate.is_file())
-        .unwrap_or(relative)
 }
 
 /// 派生宏和可选业务模块之间共享的隐藏配置契约。
@@ -171,15 +178,10 @@ pub mod __private {
     ///
     /// 该函数仅供 Nexora 配置加载器和集成测试共享；sidecar 使用
     /// `--nexora-updater-health-session` 启动新版本时必须继续使用应用默认配置，而不能把内部
-    /// 参数误判为 TOML 路径。
+    /// 参数及其值误判为 TOML 路径。
     #[doc(hidden)]
     pub fn config_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
-        let first = args.into_iter().nth(1)?;
-        if first == "--nexora-updater-health-session" || first == "--nexora-updater-health-file" {
-            None
-        } else {
-            Some(PathBuf::from(first))
-        }
+        super::path::from_args(args)
     }
 
     /// 表示根配置包含一个 Account 桌面客户端配置段。

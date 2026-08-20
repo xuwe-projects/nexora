@@ -260,7 +260,7 @@ impl nexora::Application for DesktopApplication {
 }
 ```
 
-- `initialize(None)` 依次尝试进程第一个参数、当前目录及 package 清单目录祖先中的 `config/<package>.toml`；显式路径使用 `initialize(Some(path))`。
+- `initialize(None)` 依次选择首个用户位置参数、正式 bundle 冻结配置、开发配置；显式路径 `initialize(Some(path))` 始终最高优先级。正式包由当前 EXE 位置的合法 `nexora-release.json` 识别，macOS 读取 `Contents/Resources/config/<package>.toml`，Windows 读取 EXE 同级 `config/<package>.toml`；正式包配置错误必须失败且不得回退源码目录。没有发布元数据的 `cargo run`/`cargo test` 才查找当前目录和 package 清单目录祖先；updater health 内部参数及其值不属于配置路径。
 - 桌面端标记 `#[nexora(account_client)]`，服务端标记 `#[nexora(account_server)]`；不要在一个根配置中混用两端配置。
 - 应用自行创建并持有唯一 `PgPool`；`Server::new()` 不连接数据库。先调用
   `nexora::server::migrate(&pool)` 执行框架迁移，再运行应用自己的 SQLx `Migrator`；两者使用

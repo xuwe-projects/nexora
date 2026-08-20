@@ -34,7 +34,7 @@ desktop = [
     "dep:tracing",
     "dep:ui",
     "dep:url",
-    "dep:updater",
+    "updater/runtime",
     "dep:oidc",
     "dep:reqwest",
     "dep:sha2",
@@ -84,7 +84,7 @@ toml = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 ui = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-updater = { workspace = true, optional = true, features = ["runtime"] }
+updater = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { workspace = true }
@@ -93,7 +93,6 @@ keyring = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
 toml = { workspace = true }
-updater = { workspace = true, features = ["runtime"] }
 
 [lib]
 path = "src/lib.rs"

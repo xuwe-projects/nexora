@@ -13,6 +13,11 @@ use thiserror::Error;
 
 use crate::UpdateChannel;
 
+#[path = "release/resource_directory.rs"]
+mod resource_directory;
+
+use resource_directory::ExecutableLayout;
+
 /// 安装包内通用发布元数据的文件名。
 pub const RELEASE_METADATA_FILE_NAME: &str = "nexora-release.json";
 
@@ -224,24 +229,13 @@ pub enum ReleaseNotesError {
 pub fn load_current_release_metadata()
 -> Result<Option<LoadedApplicationReleaseMetadata>, ReleaseMetadataError> {
     let executable = std::env::current_exe()?;
-    let executable_directory = executable.parent().ok_or_else(|| {
-        ReleaseMetadataError::InvalidMetadata("当前可执行文件没有父目录".to_owned())
-    })?;
-    let resource_directory = if cfg!(target_os = "macos")
-        && executable_directory
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("MacOS")
-    {
-        executable_directory
-            .parent()
-            .map(|contents| contents.join("Resources"))
-            .ok_or_else(|| {
-                ReleaseMetadataError::InvalidMetadata("macOS bundle 目录结构无效".to_owned())
-            })?
+    let layout = if cfg!(target_os = "macos") {
+        ExecutableLayout::MacOs
     } else {
-        executable_directory.to_path_buf()
+        ExecutableLayout::ExecutableDirectory
     };
+    let resource_directory = resource_directory::from_executable(&executable, layout)
+        .map_err(|message| ReleaseMetadataError::InvalidMetadata(message.to_owned()))?;
     load_release_metadata_from_directory(resource_directory)
 }
 

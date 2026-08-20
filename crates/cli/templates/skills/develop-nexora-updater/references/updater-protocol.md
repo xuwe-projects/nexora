@@ -123,6 +123,7 @@ If absent, use build defaults. If present but invalid, disable this check and su
 ## Build
 
 - `nexora build` compiles only the selected app main binary and updater sidecar, initial installer artifact, update payload, standard `<artifact>.sha256` sidecars and `artifact.json`.
+- Build freezes the selected channel's `runtime_config` as `config/<package>.toml` under the same resource directory as valid `nexora-release.json`. Runtime loading must derive that directory from the current executable through the shared release-metadata loader; a formal package with missing, unreadable, or invalid TOML fails and never falls back to cwd or a source checkout.
 - Distribution files use `<display_name>-<arch><suffix>` with normalized `x86_64`/`aarch64`; version, build number, package and full triple do not enter the filename. `display_name` must pass cross-platform filename validation. Internal executable and sidecar names continue to use `package`.
 - It does not access S3 and does not publish.
 - Before any target build, resolve one identity and atomically write `dist/<app>/<channel>/release.json` with `schema_version`, `app_key`, `package`, `channel`, final `version`, final `build_number`, `version_source`, `build_number_source`, signed-integer Unix-second `created_at`, and planned `targets`.

@@ -74,8 +74,13 @@ Provider 拒绝时服务降级为 JWT-only：JWT 仍可认证，opaque token 返
 两项有效时同时支持 JWT 与 opaque token；Provider 临时不可用时 opaque/PAT 操作返回 503，恢复
 后自动重试。Secret 应通过 `OIDC__INTROSPECTION_CLIENT_SECRET` 注入。
 
-环境变量以 `__` 表示嵌套字段。显式路径优先；未传路径时根据当前 package 名查找
-`config/<package>.toml`。敏感值应由环境变量或密钥系统注入。
+环境变量以 `__` 表示嵌套字段。配置文件依次选择：`initialize(Some(path))` 显式路径、首个
+用户位置参数、正式 bundle 冻结配置、开发配置。正式包由当前可执行文件位置的合法
+`nexora-release.json` 识别，macOS 读取 `.app/Contents/Resources/config/<package>.toml`，
+Windows 读取主 EXE 同级 `config/<package>.toml`；一旦识别为正式包，配置缺失、不可读或
+TOML 无效都会直接失败，不会回退源码仓库。普通 `cargo run`/`cargo test` 没有发布元数据时，
+才查找当前目录和 package 清单目录祖先的 `config/<package>.toml`。环境变量仍在选中文件之后
+覆盖同名字段；敏感值应由环境变量或密钥系统注入。
 
 服务端 Setup secret 只在未初始化时有效。Nexora 框架迁移历史固定为
 `nexora._sqlx_migrations`，应用迁移使用独立历史；两者借用同一个 `PgPool`，不需要也不允许

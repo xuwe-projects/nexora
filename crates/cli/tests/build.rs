@@ -10,7 +10,8 @@ use commands::{
     inspect_create_windows_update_zip, inspect_credential_selection,
     inspect_effective_publish_target, inspect_freeze_release_notes, inspect_inno_setup_requirement,
     inspect_prepare_release_receipt, inspect_publish_object_layout, inspect_release_artifacts,
-    inspect_release_artifacts_for_channel, inspect_release_resources, inspect_release_selection,
+    inspect_release_artifacts_for_channel, inspect_release_resources,
+    inspect_release_resources_for_channel, inspect_release_selection,
     inspect_select_inno_setup_candidate, inspect_signing_key, inspect_windows_binary_link_args,
     inspect_windows_installer_sources, inspect_windows_resource_scripts, validate_display_name,
     write_bundle_icon, write_bundle_info, write_sha256_sidecar,
@@ -1420,6 +1421,13 @@ fn macos_and_windows_payloads_carry_receipt_identity_and_identical_notes() {
             .unwrap()
             .ends_with(".app/Contents/Resources")
     );
+    assert!(
+        resources["runtime_config_path"]
+            .as_str()
+            .unwrap()
+            .ends_with(".app/Contents/Resources/config/package-one.toml")
+    );
+    assert_eq!(resources["runtime_config"], "value = \"test\"\n");
 
     let windows = Fixture::new(
         "windows-release-resources",
@@ -1438,6 +1446,58 @@ fn macos_and_windows_payloads_carry_receipt_identity_and_identical_notes() {
             .unwrap()
             .ends_with("payload")
     );
+    assert!(
+        resources["runtime_config_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("payload/config/package-one.toml")
+    );
+    assert_eq!(resources["runtime_config"], "value = \"test\"\n");
+}
+
+#[test]
+fn nightly_beta_and_stable_bundles_freeze_the_selected_runtime_config() {
+    let config = multi_channel_app_config("one", "package-one", "应用一")
+        .replace(
+            "[apps.one.release.channels.nightly]",
+            "[apps.one.release.channels.nightly]\nruntime_config = \"config/package-one-nightly.toml\"",
+        )
+        .replace(
+            "[apps.one.release.channels.stable]",
+            "[apps.one.release.channels.stable]\nruntime_config = \"config/package-one-stable.toml\"",
+        );
+    let fixture = Fixture::new("channel-runtime-configs", &config);
+    for channel in ["nightly", "beta", "stable"] {
+        fs::write(
+            fixture
+                .root
+                .join("config")
+                .join(format!("package-one-{channel}.toml")),
+            format!("value = \"{channel}\"\n"),
+        )
+        .unwrap();
+    }
+
+    for channel in ["nightly", "beta", "stable"] {
+        let resources = inspect_release_resources_for_channel(
+            fixture.config(),
+            "one",
+            channel,
+            "aarch64-apple-darwin",
+        )
+        .unwrap();
+        assert_eq!(resources["metadata"]["channel"], channel);
+        assert_eq!(
+            resources["runtime_config"],
+            format!("value = \"{channel}\"\n")
+        );
+        assert!(
+            resources["runtime_config_path"]
+                .as_str()
+                .unwrap()
+                .ends_with(".app/Contents/Resources/config/package-one.toml")
+        );
+    }
 }
 
 #[test]
