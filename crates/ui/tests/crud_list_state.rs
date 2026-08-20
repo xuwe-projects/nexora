@@ -5,7 +5,7 @@ use gpui::{
     App, AppContext as _, Context, Empty, IntoElement as _, ParentElement as _, Render,
     TestAppContext, Window, div,
 };
-use gpui_component::table::Column;
+use gpui_component::table::{Column, TableDelegate as _};
 use serde::Serialize;
 use serde_json::{Value, json};
 use ui::{CrudColumnSort, CrudListState, CrudLoadError, CrudPage, CrudTableRow};
@@ -211,6 +211,56 @@ fn app_aware_loader_resolves_context_when_each_request_starts(cx: &mut TestAppCo
     cx.run_until_parked();
 
     assert_eq!(*requests.borrow(), [1, 2]);
+}
+
+#[gpui::test]
+fn visible_range_prefetch_does_not_reenter_table_state(cx: &mut TestAppContext) {
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = requests.clone();
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let list = CrudListState::create(
+            TestQuery::new(1),
+            move |query| {
+                captured.borrow_mut().push(query.clone());
+                async move {
+                    Ok(CrudPage::new(
+                        vec![TestRow {
+                            id: u64::from(query.page.page),
+                        }],
+                        query.page.page,
+                        query.page.page_size,
+                        100,
+                    ))
+                }
+            },
+            window,
+            cx,
+        )
+        .unwrap();
+        TestRoot { list }
+    });
+    let list = root.read_with(cx, |root, _| root.list.clone());
+
+    list.update(cx, CrudListState::load_current);
+    cx.run_until_parked();
+    let table = list.read_with(cx, |list, _| list.table_state().clone());
+    cx.update(|window, cx| {
+        table.update(cx, |table, table_cx| {
+            table
+                .delegate_mut()
+                .visible_rows_changed(15..30, window, table_cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        requests
+            .borrow()
+            .iter()
+            .map(|query| query.page.page)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
 }
 
 #[gpui::test]

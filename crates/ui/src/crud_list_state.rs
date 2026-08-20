@@ -261,9 +261,12 @@ where
             let visible_state = weak_state.clone();
             let sort_state = weak_state.clone();
             let mut delegate = configure_delegate(CrudTableDelegate::new(Vec::new()));
-            delegate = delegate.on_visible_rows_changed(move |range, _, cx| {
-                _ = visible_state.update(cx, |state, state_cx| {
-                    state.load_visible_range(range.start, range.end, state_cx);
+            delegate = delegate.on_visible_rows_changed(move |range, window, cx| {
+                let visible_state = visible_state.clone();
+                window.defer(cx, move |_, cx| {
+                    _ = visible_state.update(cx, |state, state_cx| {
+                        state.load_visible_range(range.start, range.end, state_cx);
+                    });
                 });
             });
             delegate = delegate.on_sort_change(move |sort, _, cx| {
