@@ -10,7 +10,7 @@ order: 2
 Install the released standalone `cli` package from its GitHub tag:
 
 ```bash
-cargo install --git https://github.com/xuwe-projects/nexora --tag v0.41.0 cli --locked --force --bin nexora
+cargo install --git https://github.com/xuwe-projects/nexora --tag v0.41.1 cli --locked --force --bin nexora
 ```
 
 Framework contributors can install their local checkout from the repository root:
