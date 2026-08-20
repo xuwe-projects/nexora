@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.41.2: fix CRUD table crashes while scrolling](./0.41.2)
 - [0.41.1: formal-package configuration and user-focused update notes](./0.41.1)
 - [0.41.0: safe Alibaba Cloud OSS publishing](./0.41.0)
 - [0.40.3: fix the title-bar global-search click](./0.40.3)

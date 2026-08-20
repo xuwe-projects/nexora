@@ -4,7 +4,7 @@ use semver::Version;
 #[test]
 fn current_release_is_newer_than_previous_release() {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-    let previous = Version::parse("0.41.0").unwrap();
+    let previous = Version::parse("0.41.1").unwrap();
 
     assert!(current > previous);
 }
@@ -20,7 +20,7 @@ fn embedded_repository_finds_current_api_changelog() {
     assert_eq!(entry.locale(), "zh-CN");
     assert_eq!(entry.source_path(), format!("{version}/api/zh-CN.md"));
     assert!(entry.markdown().contains("API 行为未变更"));
-    assert!(entry.markdown().contains("0.41.1"));
+    assert!(entry.markdown().contains("0.41.2"));
 }
 
 #[test]
@@ -59,6 +59,7 @@ fn component_releases_are_sorted_from_newest_to_oldest() {
         versions,
         [
             env!("CARGO_PKG_VERSION"),
+            "0.41.1",
             "0.41.0",
             "0.40.3",
             "0.40.2",
