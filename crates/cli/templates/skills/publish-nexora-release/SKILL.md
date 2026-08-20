@@ -1,6 +1,6 @@
 ---
 name: publish-nexora-release
-description: 用于准备和发布 Nexora 或 Nexora 应用的 GitHub 版本。适用于升级 SemVer、整理从上一 tag 到当前版本的完整改动、为每项标注 GitHub 处理人、关联 Issue/PR、记录破坏性变更与升级指南、执行发布验证、提交、推送 tag 和创建 GitHub Release。
+description: 用于准备和发布 Nexora 或 Nexora 应用的版本，并为启用 Updater 的应用生成面向最终用户的 release.notes。适用于升级 SemVer、整理 GitHub Release/开发者 Changelog、标注处理人与 Issue/PR、生成应用内更新说明、记录破坏性变更与升级指南，以及执行验证、提交、推送 tag 和创建 GitHub Release。
 ---
 
 # 发布 Nexora 版本
@@ -37,7 +37,9 @@ description: 用于准备和发布 Nexora 或 Nexora 应用的 GitHub 版本。�
 Issue 或 PR 仅在确实关联时写成可点击链接，例如
 `[#42](https://github.com/owner/repo/issues/42)`；没有关联项时明确写“无”。
 
-## 更新版本与文档
+## 生成 GitHub Release 与开发者 Changelog
+
+这一节的输出面向开发者，不得用后文的应用内简化格式替换。
 
 - 更新根 workspace 版本以及内部依赖的版本约束，让 `Cargo.lock` 记录全部 workspace package
   的新版本。
@@ -67,6 +69,61 @@ Issue 或 PR 仅在确实关联时写成可点击链接，例如
 
 不要只使用 GitHub 自动生成说明代替人工 Release Notes；它可以辅助收集提交，但不能省略
 用户影响、处理人和升级信息。
+
+## 生成应用内 Updater 更新说明
+
+发布启用 Updater 的应用时，为当前 app/channel 配置的 `release.notes` 单独生成
+面向最终用户的 Markdown。它与 GitHub Release/开发者 Changelog 是两种输出，
+不得相互代替：
+
+1. 从 `nexora.toml` 读取所选 app 的 `package`，通过
+   `cargo metadata --no-deps --format-version 1` 解析该 Cargo package 的实际版本，
+   包括 `version.workspace = true` 的情况。标题禁止手写、复制 tag 或使用 Nexora CLI
+   自身版本；无法唯一解析所发布 package 时停止生成。
+2. 使用准备本次发布时的实际本地日期，固定写为 `yyyy-MM-dd`；不复制旧文档
+   日期，也不手写其他日期格式。
+3. 检查上一应用版本到当前发布的实际改动，按用户能看到的结果合并条目。
+   无法从实际改动确认用户可见内容时，停止生成并要求补充信息；不得为了
+   填满分类而编造影响。
+4. 把结果写入当前 app/channel 实际配置的 `release.notes` 路径，再由现有
+   `nexora build` / `publish` 流程校验、冻结、签名和发布。不增加标题解析器，
+   也不让 Updater 运行时理解下列分类。
+
+使用以下格式，并删除没有内容的整个分类：
+
+```markdown
+## v{Cargo package version}（{yyyy-MM-dd}）
+
+### 重要提醒
+- 用户升级前后必须执行或特别注意的事项。
+
+### 新功能
+- 新增的用户能力。
+
+### 问题修复
+- 修复的用户可感知问题。
+
+### 其他调整
+- 体验、性能、兼容性或行为方面的其他调整。
+```
+
+标题必须严格为 `## v{Cargo package version}（{yyyy-MM-dd}）`。正常分类只允许
+`新功能`、`问题修复`和 `其他调整`，统一使用“其他”，不使用“其它”。没有内容的
+分类必须连同标题完全省略，不写“暂无”、“无”或占位条目；只有一个正常分类时，
+输出中不得出现其他空标题。
+
+`重要提醒` 不是固定分类。只有用户必须重新登录、备份、迁移、重新配置、停机、
+重启或人工处理，或必须提前知道环境、工作流程、兼容性或安全影响时才生成。
+它必须位于版本标题之后、所有正常分类之前；没有用户必须操作或注意的事项时，
+完全省略该标题。不得把普通优化、内部重构、测试调整或开发者注意事项写成重要提醒。
+
+每条只描述用户能看到什么变化、可以完成什么事情，或什么问题不再发生，并优先
+说明用户收益。合并同一用户能力下的内部改动，不按 commit 逐条复制。除非用户必须
+操作或理解，不写 crate、模块、类型、函数、源码路径、GPUI/Axum/SQLx、API/DTO/
+Router/handler、数据库对象与迁移、CI/Clippy/测试/构建脚本、commit/PR/Issue/处理人，
+也不解释 Updater manifest、sidecar 或签名实现。把确实影响用户的技术变化改写为
+用户结果，例如把查询参数的内部修复改写为“修复用户列表在使用分页或筛选条件时无法
+正常加载的问题”。
 
 ## 执行发布验证
 

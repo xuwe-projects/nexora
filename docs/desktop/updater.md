@@ -276,6 +276,11 @@ Access Key 与 Secret Key 必须最终找到，Session Token 可选。`RUSTFS_*`
 
 ### 更新日志冻结、发布与展示
 
+应用内更新说明的生成规则唯一维护在
+`.agents/skills/publish-nexora-release/SKILL.md`，CLI 脚手架携带与它字节一致的发布副本。
+该 Skill 使用所选 app 实际解析的 Cargo package 版本与发布准备日期，生成只包含
+最终用户可感知变化的 Markdown，并与详细的 GitHub Release/开发者 Changelog 分开维护。
+
 `release.notes` 相对仓库根目录解析，channel 的同名字段覆盖根 release 设置。启用 updater 时，
 缺失、非普通文件、越出仓库、不可读、空文件、无效 UTF-8 或超过 1 MiB 都会在打包前失败；
 未启用 updater 的应用可以省略。build 只把所选内容冻结到
@@ -286,6 +291,7 @@ available manifest 同时签名 `notes_url`、`notes_sha256` 和 `notes_size`。
 大小时仍可检查并安装，但新客户端不会下载或渲染其中的 URL。远程日志仅在 manifest 已验签、
 URL 符合传输策略、大小和 SHA-256 一致且正文为安全 UTF-8 Markdown 后交给
 `TextView::markdown`；失败只影响日志展示，不阻止更新。
+运行时不解析版本标题或分类，也不依赖其文本结构决定更新行为。
 
 更新确认 Dialog 首次点击“查看更新日志”才异步获取正文，并保留“稍后/后台下载/立即更新”原有
 行为；强制更新仍不可关闭或绕过。sidecar 替换成功后的健康启动会在首个主窗口上展示一次安装包

@@ -654,6 +654,63 @@ fn collect_relative_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn assert_publish_release_skill_contract(contents: &str) {
+    let developer_start = contents
+        .find("## 生成 GitHub Release 与开发者 Changelog")
+        .expect("发布 Skill 应保留开发者发布说明规则");
+    let application_start = contents
+        .find("## 生成应用内 Updater 更新说明")
+        .expect("发布 Skill 应包含应用内更新说明规则");
+    assert!(
+        developer_start < application_start,
+        "应先明确保留开发者说明，再定义独立的应用内说明"
+    );
+
+    let developer_contract = &contents[developer_start..application_start];
+    for required in [
+        "完整改动",
+        "每条改动的处理人 GitHub 链接",
+        "确实关联的 Issue/PR",
+        "实际执行过的验证",
+    ] {
+        assert!(
+            developer_contract.contains(required),
+            "开发者 Release Notes 不得丢失 `{required}` 要求"
+        );
+    }
+
+    let application_contract = &contents[application_start..];
+    for required in [
+        "cargo metadata --no-deps --format-version 1",
+        "version.workspace = true",
+        "## v{Cargo package version}（{yyyy-MM-dd}）",
+        "### 新功能",
+        "### 问题修复",
+        "### 其他调整",
+        "只有一个正常分类时",
+        "没有用户必须操作或注意的事项时",
+        "无法从实际改动确认用户可见内容时",
+        "不让 Updater 运行时理解下列分类",
+    ] {
+        assert!(
+            application_contract.contains(required),
+            "应用内更新说明规则应包含 `{required}`"
+        );
+    }
+
+    let title = application_contract
+        .find("## v{Cargo package version}（{yyyy-MM-dd}）")
+        .unwrap();
+    let important = application_contract.find("### 重要提醒").unwrap();
+    let features = application_contract.find("### 新功能").unwrap();
+    let fixes = application_contract.find("### 问题修复").unwrap();
+    let other = application_contract.find("### 其他调整").unwrap();
+    assert!(
+        title < important && important < features && features < fixes && fixes < other,
+        "模板应按版本、重要提醒、新功能、问题修复、其他调整排序"
+    );
+}
+
 fn assert_generated_skills(project: &Path) {
     let template_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/skills");
     let generated_root = project.join(".agents/skills");
@@ -677,6 +734,9 @@ fn assert_generated_skills(project: &Path) {
         generated_files.contains(&PathBuf::from("manage-sqlx-migrations/SKILL.md")),
         "生成项目应包含 SQLx 迁移治理 Skill"
     );
+    let publish_skill = fs::read_to_string(generated_root.join("publish-nexora-release/SKILL.md"))
+        .expect("应能读取生成项目的发布 Skill");
+    assert_publish_release_skill_contract(&publish_skill);
     for relative_path in template_files {
         assert_eq!(
             fs::read(generated_root.join(&relative_path)).unwrap(),
@@ -707,6 +767,15 @@ fn packaged_skill_templates_match_the_workspace_agent_skills() {
             relative_path.display()
         );
     }
+
+    assert_publish_release_skill_contract(
+        &fs::read_to_string(source_root.join("publish-nexora-release/SKILL.md"))
+            .expect("应能读取仓库发布 Skill"),
+    );
+    assert_publish_release_skill_contract(
+        &fs::read_to_string(template_root.join("publish-nexora-release/SKILL.md"))
+            .expect("应能读取脚手架发布 Skill 镜像"),
+    );
 }
 
 #[test]

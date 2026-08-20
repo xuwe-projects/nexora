@@ -1,4 +1,4 @@
 interface:
   display_name: "Nexora 版本发布"
-  short_description: "发布带完整说明、贡献者和升级指引的 Nexora 版本"
-  default_prompt: "使用 $publish-nexora-release 准备并发布下一个 Nexora GitHub 版本。"
+  short_description: "发布完整技术说明与用户可读的应用内更新说明"
+  default_prompt: "使用 $publish-nexora-release 准备 GitHub Release，并为启用 Updater 的应用生成面向最终用户的更新说明。"

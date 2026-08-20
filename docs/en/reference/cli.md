@@ -81,8 +81,10 @@ current repository or a locally installed CLI does not require a release tag.
 Both `nexora create` and `nexora init` generate a root `AGENTS.md` plus `.agents/skills`. The root
 file contains always-on architectural constraints, while Skills provide task-specific workflows.
 `init` preserves existing project rules and Skill files. The generated `publish-nexora-release`
-Skill covers version bumps, complete release notes, contributor and Issue/PR attribution,
-previous-to-current upgrade guides, and the tag/Release publishing gates.
+Skill keeps two release outputs separate. GitHub Releases and developer changelogs retain complete
+technical changes, owners, Issue/PR links, upgrade instructions, and validation results. Updater
+`release.notes` uses the selected app's Cargo package version and the release-preparation date, and
+contains only user-visible outcomes. The Skill also covers version bumps and tag/Release gates.
 
 Desktop updates are configured by the repository-root `nexora.toml`, which registers apps, updater
 policy, branding resources, platform icons, and S3-compatible publish targets. Each app owns an

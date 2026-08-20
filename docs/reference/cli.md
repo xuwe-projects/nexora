@@ -74,8 +74,10 @@ tag；测试本地改动时可先用 `cargo install --path crates/cli --locked -
 
 `nexora create` 与 `nexora init` 会同时生成根 `AGENTS.md` 和 `.agents/skills`。前者提供
 始终生效的架构硬约束，后者提供按任务加载的详细工作流；`init` 不会覆盖项目已有的规则或
-Skill 文件。生成的 `publish-nexora-release` Skill 负责版本升级、完整 Release Notes、处理人
-与 Issue/PR 关联、相邻版本升级指南以及 tag/Release 发布门禁。
+Skill 文件。生成的 `publish-nexora-release` Skill 区分两种发布输出：GitHub Release/
+开发者 Changelog 保留完整技术改动、处理人、Issue/PR、升级与验证信息；Updater
+`release.notes` 使用所选 app 的 Cargo package 版本和发布准备日期，只生成面向最终用户的
+可感知变化。该 Skill 同时负责 tag/Release 发布门禁。
 
 桌面自动更新使用仓库根目录 `nexora.toml` 注册 app、updater 策略和 S3 兼容发布目标。
 同一 app 记录也声明 `assets/logos/<app_key>/` 下的应用内 Logo、图标源文件以及各平台图标；

@@ -272,6 +272,12 @@ The client reads its current `(version, build_number)` from its own bundle. Serv
 
 ## Release notes trust and migration
 
+The sole authoring source for in-app release-note rules is
+`.agents/skills/publish-nexora-release/SKILL.md`; the CLI scaffold ships a byte-identical packaged
+copy. The Skill uses the selected app's resolved Cargo package version and the release-preparation
+date to write user-visible outcomes, separately from the detailed GitHub Release/developer
+changelog.
+
 `release.notes` is resolved from the repository root and may be overridden per channel. With the
 updater enabled it must be a readable, non-empty UTF-8 regular file inside the repository and no
 larger than 1 MiB. Build freezes it once as
@@ -283,7 +289,8 @@ integrity fields remain installable, but new clients do not render their remote 
 dialog downloads notes only on first request and renders them only after transport, size, digest,
 UTF-8, and content checks. A failed notes request never blocks an update. After a successful
 sidecar health launch, the new package shows its locally verified notes once; ordinary launches and
-first installation do not.
+first installation do not. Runtime code does not parse version headings or categories and never
+depends on their text structure to decide update behavior.
 
 Existing updater projects must add `notes = "docs/releases/current/en.md"` to each effective
 release (or channel override), move or reference the previous changelog explicitly, and rebuild the
