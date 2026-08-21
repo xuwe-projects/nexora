@@ -43,6 +43,26 @@ With in-process Shells, `Context<T>::navigate` targets the Shell
 containing the source entity, `App::navigate` targets the active Shell, and unresolved origins fall
 back to the main Shell.
 
+## Windows available before authentication
+
+After an application installs `AccountAuthenticator`, the `settings` Window remains available
+before sign-in without any additional registration. Applications with an account-independent
+Window, such as an About or license view, can add its stable Window ID explicitly:
+
+```rust
+use nexora::ApplicationOptions;
+
+ApplicationOptions::new().unauthenticated_window("about")
+```
+
+`about` must exactly match the stable ID of a Window registered with
+`#[derive(nexora::Window)]`. Matching is case-sensitive. Missing IDs, Feature IDs,
+NavigationGroup IDs, and duplicate entries fail in `Application::validate()` and `run()` before the
+GPUI event loop starts. The allowlist does not create or forge an authenticated session; it only
+bypasses the independent-Window gate and then uses the same typed route extraction, Window factory,
+native-window creation, and lifecycle path. Non-allowlisted Windows still return the authentication
+error, and signed-in behavior is unchanged.
+
 ### Migrating from window-session releases
 
 Remove `.single_instance(...)`, `.subprocess_windows(...)`, and `.restore_window_sessions(...)`

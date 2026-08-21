@@ -659,6 +659,12 @@ pub struct ApplicationOptions {
     ///
     /// 该位置会在进入 GPUI 事件循环前完成注册表匹配，并且必须指向 Feature。
     pub initial_path: String,
+    /// Account 门禁启用时允许未登录打开的额外独立 Window 稳定 ID。
+    ///
+    /// ID 必须精确匹配当前应用注册表中的 Window；不存在的 ID、Feature ID 和重复 ID
+    /// 会在 [`Application::validate`] 或 [`Application::run`] 进入事件循环前返回结构化错误。
+    /// 框架保留的 `settings` Window 始终允许未登录打开，无需在此重复登记。
+    pub unauthenticated_window_ids: Vec<String>,
     /// 主窗口顶部 Feature 标签栏使用的官方 `TabBar` 样式。
     ///
     /// 默认使用 [`ApplicationTabStyle::Tab`]，与 `gpui-component` 官方 `Tabs` story 保持同步；
@@ -706,6 +712,7 @@ impl Default for ApplicationOptions {
             application_assets: None,
             locale: "zh-CN".to_owned(),
             initial_path: "/".to_owned(),
+            unauthenticated_window_ids: Vec::new(),
             tab_style: ApplicationTabStyle::Tab,
             sidebar_search: false,
             tray_enabled: true,
@@ -750,6 +757,27 @@ impl ApplicationOptions {
     /// 设置主窗口首先打开的 Feature 路径或 deeplink。
     pub fn initial_path(mut self, initial_path: impl Into<String>) -> Self {
         self.initial_path = initial_path.into();
+        self
+    }
+
+    /// 登记一个允许未登录打开的额外独立 Window 稳定 ID。
+    ///
+    /// 该方法只登记稳定 ID，不会改变 Account 认证状态，也不会绕过 Window 的强类型路由、
+    /// 工厂或原生开窗流程。ID 使用大小写敏感的精确匹配；必须对应一个已注册的 Window。
+    /// `settings` 默认已经放行，无需调用本方法。重复调用同一 ID 不会静默去重，而会在
+    /// [`Application::validate`] 或 [`Application::run`] 时返回
+    /// [`ApplicationError::DuplicateUnauthenticatedWindow`]。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use nexora::ApplicationOptions;
+    ///
+    /// let options = ApplicationOptions::new().unauthenticated_window("about");
+    /// assert_eq!(options.unauthenticated_window_ids, ["about"]);
+    /// ```
+    pub fn unauthenticated_window(mut self, window_id: impl Into<String>) -> Self {
+        self.unauthenticated_window_ids.push(window_id.into());
         self
     }
 
@@ -954,6 +982,20 @@ pub enum ApplicationError {
         /// 不包含完整主题 JSON 的安全错误说明。
         message: String,
     },
+
+    /// 未登录 Window 白名单包含未注册为独立 Window 的稳定 ID。
+    #[error("未登录 Window 白名单 ID `{id}` 未注册为独立 Window")]
+    UnknownUnauthenticatedWindow {
+        /// 配置中无法匹配任何 Window 元数据的稳定 ID。
+        id: String,
+    },
+
+    /// 未登录 Window 白名单重复登记了同一个稳定 ID。
+    #[error("未登录 Window 白名单 ID `{id}` 重复登记")]
+    DuplicateUnauthenticatedWindow {
+        /// 配置中第二次出现的重复 Window 稳定 ID。
+        id: String,
+    },
 }
 
 impl From<::desktop::process::ProcessError> for ApplicationError {
@@ -1007,7 +1049,8 @@ pub trait Application: Sized + 'static {
     ///
     /// # Errors
     ///
-    /// 注册表无效、首路由无法解析，或首路由指向独立 Window 时返回错误。
+    /// 注册表或未登录 Window 白名单无效、首路由无法解析，或首路由指向独立 Window
+    /// 时返回错误。
     fn validate(&self) -> Result<(), ApplicationError> {
         prepare_application(&self.options()).map(|_| ())
     }
@@ -1019,7 +1062,8 @@ pub trait Application: Sized + 'static {
     ///
     /// # Errors
     ///
-    /// 注册表无效、首路由无法解析，或首路由指向独立 Window 时返回错误。
+    /// 注册表或未登录 Window 白名单无效、首路由无法解析，或首路由指向独立 Window
+    /// 时返回错误。
     fn run(self) -> Result<(), ApplicationError> {
         run_application(self)
     }
@@ -1857,6 +1901,7 @@ fn prepare_application(
         message: error.to_string(),
     })?;
     let registry = AppRegistry::discover_for_application(false)?;
+    validate_unauthenticated_window_ids(options, &registry)?;
     let initial_route = registry
         .resolve(options.initial_path.as_str())
         .map_err(|source| ApplicationError::InitialRoute {
@@ -1885,6 +1930,50 @@ fn prepare_application(
         account_initial_route,
         theme_catalog,
     })
+}
+
+fn validate_unauthenticated_window_ids(
+    options: &ApplicationOptions,
+    registry: &AppRegistry,
+) -> Result<(), ApplicationError> {
+    let registered_window_ids = registry
+        .windows()
+        .iter()
+        .map(|metadata| metadata.id())
+        .collect::<HashSet<_>>();
+    let mut configured_ids = HashSet::with_capacity(options.unauthenticated_window_ids.len());
+    for window_id in &options.unauthenticated_window_ids {
+        if !configured_ids.insert(window_id.as_str()) {
+            return Err(ApplicationError::DuplicateUnauthenticatedWindow {
+                id: window_id.clone(),
+            });
+        }
+        if !registered_window_ids.contains(window_id.as_str()) {
+            return Err(ApplicationError::UnknownUnauthenticatedWindow {
+                id: window_id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// 判断独立 Window 导航是否仍需要通过 Account 认证门禁。
+///
+/// 该内部策略由应用 Shell 与集成测试共享，确保 `settings` 兼容默认值、显式白名单和认证
+/// 状态始终使用同一判断。它不解析路由、不创建窗口，也不会改变认证状态。
+#[doc(hidden)]
+pub fn window_requires_authentication(
+    account_enabled: bool,
+    authenticated: bool,
+    configured_window_ids: &[String],
+    window_id: &str,
+) -> bool {
+    account_enabled
+        && !authenticated
+        && window_id != "settings"
+        && !configured_window_ids
+            .iter()
+            .any(|configured_id| configured_id == window_id)
 }
 
 fn run_application<A>(application: A) -> Result<(), ApplicationError>
@@ -1929,6 +2018,7 @@ where
     }
     let application_logo = options.application_logo;
     let sidebar_subtitle = options.sidebar_subtitle.clone();
+    let unauthenticated_window_ids = options.unauthenticated_window_ids.clone();
     let tab_style = options.tab_style;
     let sidebar_search = options.sidebar_search;
     let mut preferences_store = ShellPreferences::for_local_application(application_name.as_str());
@@ -1975,6 +2065,7 @@ where
         application_logo,
         account_enabled: false,
         sidebar_subtitle,
+        unauthenticated_window_ids,
         tab_style,
         sidebar_search,
         preferences_store,
@@ -2003,6 +2094,7 @@ struct ApplicationAdapter<A> {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    unauthenticated_window_ids: Vec<String>,
     tab_style: ApplicationTabStyle,
     sidebar_search: bool,
     preferences_store: Option<UserConfigStore<ShellPreferences>>,
@@ -2043,6 +2135,7 @@ struct ApplicationShellTemplate {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    unauthenticated_window_ids: Vec<String>,
     tab_style: ApplicationTabStyle,
     sidebar_search: bool,
 }
@@ -2054,6 +2147,7 @@ impl ApplicationShellTemplate {
             application_logo: self.application_logo,
             account_enabled: self.account_enabled,
             sidebar_subtitle: self.sidebar_subtitle.clone(),
+            unauthenticated_window_ids: self.unauthenticated_window_ids.clone(),
             tab_style: self.tab_style,
             sidebar_search: self.sidebar_search,
             window_state,
@@ -2337,6 +2431,7 @@ where
                 application_logo: self.application_logo,
                 account_enabled: self.account_enabled,
                 sidebar_subtitle: self.sidebar_subtitle.clone(),
+                unauthenticated_window_ids: self.unauthenticated_window_ids.clone(),
                 tab_style: self.tab_style,
                 sidebar_search: self.sidebar_search,
             },
@@ -2385,6 +2480,7 @@ where
         let application_logo = self.application_logo;
         let account_enabled = self.account_enabled;
         let sidebar_subtitle = self.sidebar_subtitle.clone();
+        let unauthenticated_window_ids = self.unauthenticated_window_ids.clone();
         let tab_style = self.tab_style;
         let sidebar_search = self.sidebar_search;
         let root = cx.new(|cx| {
@@ -2396,6 +2492,7 @@ where
                     application_logo,
                     account_enabled,
                     sidebar_subtitle,
+                    unauthenticated_window_ids,
                     tab_style,
                     sidebar_search,
                     window_state: RuntimeWindowState::main(),
@@ -2519,6 +2616,7 @@ struct ApplicationShellConfig {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    unauthenticated_window_ids: Vec<String>,
     tab_style: ApplicationTabStyle,
     sidebar_search: bool,
     window_state: RuntimeWindowState,
@@ -2531,6 +2629,7 @@ struct ApplicationShell {
     application_logo: Option<ApplicationLogo>,
     account_enabled: bool,
     sidebar_subtitle: Option<String>,
+    unauthenticated_window_ids: Vec<String>,
     tab_style: ApplicationTabStyle,
     sidebar_search_input: Option<Entity<InputState>>,
     sidebar_search_index: Option<NavigationSearchIndex>,
@@ -2968,6 +3067,7 @@ impl ApplicationShell {
             application_logo,
             account_enabled,
             sidebar_subtitle,
+            unauthenticated_window_ids,
             tab_style,
             sidebar_search,
             window_state,
@@ -3220,6 +3320,7 @@ impl ApplicationShell {
             application_logo,
             account_enabled,
             sidebar_subtitle,
+            unauthenticated_window_ids,
             tab_style,
             sidebar_search_input,
             sidebar_search_index,
@@ -3517,7 +3618,12 @@ impl ApplicationShell {
     ) -> Result<(), NavigationError> {
         if route.target().kind() == RouteTargetKind::Window {
             #[cfg(feature = "desktop")]
-            if self.account_enabled && !self.authenticated && route.target().id() != "settings" {
+            if window_requires_authentication(
+                self.account_enabled,
+                self.authenticated,
+                &self.unauthenticated_window_ids,
+                route.target().id(),
+            ) {
                 return Err(NavigationError::AuthenticationRequired {
                     path: route.concrete_path().to_owned(),
                 });

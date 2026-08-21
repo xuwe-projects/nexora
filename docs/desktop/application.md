@@ -40,6 +40,24 @@ Window 会话。冷启动始终只创建一个主窗口并打开 `initial_path`�
 `Context<T>::navigate` 路由到来源 Entity 所在窗口，`App::navigate` 路由到活动 Shell，
 无法确定来源时回退到主 Shell。
 
+## 未登录独立 Window 白名单
+
+安装 `AccountAuthenticator` 后，`settings` Window 默认仍可在未登录状态打开，应用无需重新
+登记。应用确实有关于页、许可信息等不依赖账号的独立 Window 时，可以按稳定 Window ID
+显式增加白名单：
+
+```rust
+use nexora::ApplicationOptions;
+
+ApplicationOptions::new().unauthenticated_window("about")
+```
+
+`about` 必须精确匹配一个由 `#[derive(nexora::Window)]` 注册的 Window ID。匹配区分大小写；
+不存在的 ID、Feature ID、NavigationGroup ID 或重复登记都会在 `Application::validate()` 和
+`run()` 进入 GPUI 事件循环前返回 `ApplicationError`。框架不会把白名单 Window 视为已经认证，
+而是只跳过独立窗口门禁，随后继续执行同一套强类型路由提取、Window factory、原生开窗和
+生命周期流程。未登记 Window 仍返回认证错误，登录后的窗口行为不变。
+
 ### 从窗口会话版本迁移
 
 删除应用中的 `.single_instance(...)`、`.subprocess_windows(...)` 和

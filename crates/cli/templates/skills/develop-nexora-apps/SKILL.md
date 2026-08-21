@@ -165,7 +165,7 @@ impl Render for AppLogin {
 - Account 失败必须保留连接、超时、响应读取、契约不兼容、结构化拒绝和非结构化响应的
   阶段分类，不得统一误报为无法连接。临时失败保留安全凭据和恢复资格；只有已有明确
   永久语义的失败才清理。界面和日志不得输出完整 endpoint、token、Authorization header 或原始响应正文。
-- 未登录时 Shell 不创建业务 Feature，并拒绝打开普通业务 Window；固定的 `/settings` 仍可用于修正认证配置。退出会清空 Feature 缓存、Sidebar 插槽和已打开的业务 Window。
+- 未登录时 Shell 不创建业务 Feature，并拒绝打开普通业务 Window；固定的 `/settings` 仍可用于修正认证配置。关于页等确实不依赖账号的普通 Window 通过 `ApplicationOptions::unauthenticated_window("稳定 Window ID")` 显式放行；ID 必须精确匹配已注册 Window，Feature、未知或重复 ID 会在启动校验失败。退出会清空 Feature 缓存、Sidebar 插槽和已打开的业务 Window。
 - 生成的 Account workspace 已在 `Application::initialize` 中调用 `nexora::desktop::install_authenticator(authenticator, cx)`。手写入口也必须先从根 Settings 构造 `client_config` 和 `AccountAuthenticator`，再安装一次。
 - 框架根据是否安装 `AccountAuthenticator` 自动启用登录门禁和默认 Account 页面；不要再在 `ApplicationOptions` 中增加重复的 `account_enabled` 布尔开关。
 - Account 桌面运行时入口都在 `nexora::desktop`：`login_snapshot(&App) -> AccountLoginSnapshot`、`start_login(&mut App) -> Result<(), AccountLoginRuntimeError>`、`login_profile(&App) -> Option<&AccessProfileResponse>`、`login_session(&App) -> Option<&OidcSession>`、`sign_out(&mut App)`。登录流程由框架在后台完成，点击回调只发起它并处理同步错误。
