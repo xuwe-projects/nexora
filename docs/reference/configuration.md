@@ -162,6 +162,10 @@ minimum_windows_build = 15063
 icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
 ```
 
+`app_id` 和 `display_name` 是 stable 基础值。CLI 对 beta 固定派生 `.beta` / ` Beta`，对 nightly
+固定派生 `.nightly` / ` Nightly`，并拒绝基础值预含这些保留后缀。派生值隔离安装目录、进程
+单例、updater 状态与日志、Account 凭据和用户偏好；远端对象目录仍使用稳定 app key 与 channel。
+
 路径必须是 workspace 内的相对路径。`targets.required` 可省略，构建会使用 `rustc -vV` 返回的
 本机 target；需要显式覆盖时使用 `nexora build --target <triple>`。当前生产打包链路实现 macOS
 `.app`/DMG，以及 Windows x86_64/ARM64 的简体中文 Inno Setup EXE 和更新 ZIP。
@@ -173,7 +177,7 @@ Xcode、cargo-bundle、create-dmg、证书和公证凭据的人工安装表见
 重跑原命令；配置中不存在恢复 `doctor --fix` 或自动安装的开关。
 
 Windows 的 `publisher` 在所有签名模式下都是安装器元数据，也是全新安装默认目录
-`%LOCALAPPDATA%\Programs\<publisher>\<display_name>` 的发布者目录名；因此必须是安全的 Windows
+`%LOCALAPPDATA%\Programs\<publisher>\<effective_display_name>` 的发布者目录名；因此必须是安全的 Windows
 路径分量，不能包含 `/`、`\`、`:` 等非法字符、保留设备名或尾随点/空格。`signing = "none"` 仍保留
 Ed25519 manifest、artifact SHA-256、ZIP 安全和 PE 架构校验，但不得同时配置
 `signing_thumbprint`、`expected_publisher` 或 `timestamp_url`。`signing = "authenticode"` 时需要

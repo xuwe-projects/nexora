@@ -3,8 +3,9 @@ use std::{env, fs, path::PathBuf};
 use semver::Version;
 use sha2::{Digest as _, Sha256};
 use updater::{
-    ApplicationReleaseMetadata, RELEASE_METADATA_FILE_NAME, RELEASE_NOTES_FILE_NAME,
-    ReleaseNotesMetadata, UpdateChannel, load_release_metadata_from_directory,
+    ApplicationReleaseMetadata, INSTALLATION_IDENTITY_FILE_NAME, RELEASE_METADATA_FILE_NAME,
+    RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, UpdateChannel,
+    load_release_metadata_from_directory, read_installation_identity,
     read_verified_local_release_notes,
 };
 
@@ -99,4 +100,42 @@ fn existing_invalid_metadata_and_corrupt_notes_are_rejected() {
     fs::write(directory.join(RELEASE_NOTES_FILE_NAME), b"tampered").unwrap();
     assert!(read_verified_local_release_notes(&directory, &notes).is_err());
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn installation_identity_marker_is_optional_but_must_be_safe_when_present() {
+    let directory = fixture("installation-identity");
+    assert_eq!(read_installation_identity(&directory).unwrap(), None);
+
+    fs::write(
+        directory.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "com.example.desktop.beta\n",
+    )
+    .unwrap();
+    assert_eq!(
+        read_installation_identity(&directory).unwrap().as_deref(),
+        Some("com.example.desktop.beta")
+    );
+
+    fs::write(
+        directory.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "../other-channel\n",
+    )
+    .unwrap();
+    assert!(read_installation_identity(&directory).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn release_metadata_enforces_fixed_channel_identity_suffixes() {
+    let mut beta = metadata(None);
+    beta.channel = UpdateChannel::Beta;
+    assert!(beta.validate().is_err());
+
+    beta.app_id = "com.example.desktop.beta".to_owned();
+    beta.display_name = "Desktop Beta".to_owned();
+    assert!(beta.validate().is_ok());
+
+    beta.app_id = "com.example.desktop.nightly.beta".to_owned();
+    assert!(beta.validate().is_err());
 }

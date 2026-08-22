@@ -9,6 +9,18 @@ use desktop::process::{
     ApplicationIdentity, CoordinatorEvent, ProcessBootstrap, ProcessBootstrapOptions, bootstrap,
 };
 
+#[test]
+fn formal_application_identity_cannot_be_overridden_at_runtime() {
+    let identity = ApplicationIdentity::resolve(
+        "Nexora Studio Beta",
+        Some("com.example.nexora.beta"),
+        Some("com.example.runtime-override"),
+    )
+    .expect("正式应用身份应当合法");
+
+    assert_eq!(identity.as_str(), "com.example.nexora.beta");
+}
+
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {

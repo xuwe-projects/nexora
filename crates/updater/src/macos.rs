@@ -105,6 +105,7 @@ pub(crate) struct InstallHelperRequest<'a> {
     pub sidecar_path: &'a Path,
     pub health_timeout: Duration,
     pub pending_records: Option<(&'a Path, &'a Path)>,
+    pub operation_log_session: Option<&'a str>,
 }
 
 pub(crate) fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<(), UpdateError> {
@@ -142,6 +143,9 @@ pub(crate) fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<
             .arg(pending_record)
             .arg("--installing-record")
             .arg(installing_record);
+    }
+    if let Some(session) = request.operation_log_session {
+        command.arg("--operation-log-session").arg(session);
     }
     command.spawn()?;
     Ok(())

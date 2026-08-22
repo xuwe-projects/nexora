@@ -360,6 +360,7 @@ fn windows_install_helper_runs_outside_the_install_directory() {
         sidecar_path: &bundled_sidecar,
         health_timeout: std::time::Duration::from_secs(120),
         pending_records: None,
+        operation_log_session: Some("1700000000000-abcdefghijklmnop"),
     };
 
     let command =
@@ -374,6 +375,10 @@ fn windows_install_helper_runs_outside_the_install_directory() {
     assert!(
         args.windows(2)
             .any(|pair| pair == ["--main-exe-name", "main.exe"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| { pair == ["--operation-log-session", "1700000000000-abcdefghijklmnop",] })
     );
 }
 

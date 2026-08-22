@@ -21,8 +21,9 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use semver::Version;
 use sha2::{Digest as _, Sha256};
 use updater::{
-    ReleaseStatus, SignedUpdateManifest, UpdateArtifact, UpdateChannel, UpdateConfig, UpdateEvent,
-    UpdateManifest, UpdateManifestSignature, UpdateTarget, Updater,
+    INSTALLATION_IDENTITY_FILE_NAME, ReleaseStatus, SignedUpdateManifest, UpdateArtifact,
+    UpdateChannel, UpdateConfig, UpdateEvent, UpdateManifest, UpdateManifestSignature,
+    UpdateTarget, Updater,
 };
 #[cfg(target_os = "windows")]
 use zip::{ZipWriter, write::SimpleFileOptions};
@@ -74,6 +75,13 @@ fn create_test_app(root: &Path, name: &str) -> PathBuf {
         ),
     )
     .unwrap();
+    let resources = app.join("Contents/Resources");
+    fs::create_dir_all(&resources).unwrap();
+    fs::write(
+        resources.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "com.example.pending-flow\n",
+    )
+    .unwrap();
     let status = Command::new("/usr/bin/codesign")
         .args(["--force", "--deep", "--sign", "-"])
         .arg(&app)
@@ -91,6 +99,11 @@ fn create_test_app(root: &Path, name: &str) -> PathBuf {
     write_current_arch_pe(&app.join(main_exe));
     write_current_arch_pe(&app.join(updater_exe));
     fs::write(app.join("nexora-updater.json"), b"{}").unwrap();
+    fs::write(
+        app.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "com.example.pending-flow\n",
+    )
+    .unwrap();
     app
 }
 

@@ -168,6 +168,12 @@ minimum_windows_build = 15063
 icons = ["assets/logos/desktop/logo-icon-16.png", "assets/logos/desktop/logo-icon-128.png"]
 ```
 
+`app_id` and `display_name` are stable base values. The CLI always derives `.beta` / ` Beta` for
+beta and `.nightly` / ` Nightly` for nightly, and rejects base values that already contain those
+reserved suffixes. Effective values isolate installation directories, process singletons, updater
+state and logs, Account credentials, and user preferences. Remote object paths remain keyed by the
+stable app key and channel.
+
 Paths must be workspace-relative and remain inside the workspace. `targets.required` is optional;
 build defaults to the host from `rustc -vV`, while `nexora build --target <triple>` overrides it.
 The production packaging path covers macOS `.app`/DMG and Windows x86_64/ARM64 Simplified Chinese
@@ -182,7 +188,7 @@ matrix. There is no configuration switch that restores `doctor --fix` or automat
 
 Windows `publisher` remains required installer metadata in every signing mode and names the
 publisher component of the fresh-install default
-`%LOCALAPPDATA%\Programs\<publisher>\<display_name>`. It must therefore be a safe Windows path
+`%LOCALAPPDATA%\Programs\<publisher>\<effective_display_name>`. It must therefore be a safe Windows path
 component without `/`, `\`, `:`, reserved device names, or trailing dots/spaces. `signing = "none"`
 retains Ed25519 manifest verification, artifact SHA-256, ZIP safety, and PE architecture checks, but
 must not include `signing_thumbprint`, `expected_publisher`, or `timestamp_url`. With

@@ -672,7 +672,10 @@ pub struct ApplicationOptions {
     pub sidebar_search: bool,
     /// 是否在关闭主窗口时提供最小化到托盘，默认开启。
     pub tray_enabled: bool,
-    /// 显式覆盖生产 app ID 或开发可执行文件派生的应用身份。
+    /// 显式覆盖开发可执行文件派生的应用身份。
+    ///
+    /// 正式安装包存在可信 `nexora-release.json` 时始终使用其中的通道级 app ID，本字段不会
+    /// 覆盖正式发布身份。
     pub application_identity_override: Option<String>,
     /// 平台不支持托盘时的降级策略。
     pub tray_unavailable_policy: TrayUnavailablePolicy,
@@ -775,7 +778,10 @@ impl ApplicationOptions {
         self
     }
 
-    /// 设置应用单例与 IPC 目录使用的显式稳定身份。
+    /// 设置开发运行时应用单例与 IPC 目录使用的显式稳定身份。
+    ///
+    /// 正式安装包始终使用发布元数据中的通道级 app ID，此选项只作用于没有正式发布元数据
+    /// 的开发和测试进程。
     pub fn application_identity(mut self, identity: impl Into<String>) -> Self {
         self.application_identity_override = Some(identity.into());
         self

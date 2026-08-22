@@ -21,8 +21,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use updater::{
-    ApplicationReleaseMetadata, MAX_RELEASE_NOTES_BYTES, RELEASE_METADATA_FILE_NAME,
-    RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, UpdateChannel, verify_release_notes_bytes,
+    ApplicationReleaseMetadata, INSTALLATION_IDENTITY_FILE_NAME, MAX_RELEASE_NOTES_BYTES,
+    RELEASE_METADATA_FILE_NAME, RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, UpdateChannel,
+    verify_release_notes_bytes,
 };
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -902,6 +903,15 @@ impl ProjectDocument {
                 )));
             }
             let channels = self.release_channel_names(app_key, app)?;
+            validate_base_channel_identity(app_key, app)?;
+            for channel in &channels {
+                let channel = parse_update_channel(channel)?;
+                validate_app_id(&channel.installation_id(&app.app_id))?;
+                validate_app_id(
+                    &channel.installation_id(app.updater.app_id.as_deref().unwrap_or(&app.app_id)),
+                )?;
+                validate_display_name(&channel.display_name(&app.display_name))?;
+            }
             let mut seen = BTreeSet::new();
             for target in &app.targets.required {
                 validate_required_target(target)?;
@@ -1481,6 +1491,11 @@ impl ProjectDocument {
         frozen_notes: Option<&FrozenReleaseNotes>,
     ) -> CliResult<Vec<BuildPlan>> {
         let app = &self.config.apps[app_key];
+        let channel = parse_update_channel(&release.channel)?;
+        let app_id = channel.installation_id(&app.app_id);
+        let updater_app_id =
+            channel.installation_id(app.updater.app_id.as_deref().unwrap_or(&app.app_id));
+        let display_name = channel.display_name(&app.display_name);
         let brand_assets = self.brand_assets(app_key, app)?;
         let publish_target =
             self.config.publish.targets[&app.publish_target].for_channel(&release.channel);
@@ -1497,18 +1512,14 @@ impl ProjectDocument {
                     .join(release.version.to_string())
                     .join(release.build_number.to_string())
                     .join(target);
-                let artifact_stem = format!("{}-{arch}", app.display_name);
+                let artifact_stem = format!("{display_name}-{arch}");
                 Ok(BuildPlan {
                     project_root: self.root.clone(),
                     app_key: app_key.to_owned(),
                     package: app.package.clone(),
-                    app_id: app.app_id.clone(),
-                    updater_app_id: app
-                        .updater
-                        .app_id
-                        .clone()
-                        .unwrap_or_else(|| app.app_id.clone()),
-                    display_name: app.display_name.clone(),
+                    app_id: app_id.clone(),
+                    updater_app_id: updater_app_id.clone(),
+                    display_name: display_name.clone(),
                     release: release.clone(),
                     target: target.clone(),
                     platform,
@@ -1567,7 +1578,9 @@ impl ProjectDocument {
             )));
         }
         let release = self.release_from_receipt(app_key, app, channel)?;
-        let updater_app_id = app.updater.app_id.as_deref().unwrap_or(&app.app_id);
+        let parsed_channel = parse_update_channel(&release.channel)?;
+        let updater_app_id =
+            parsed_channel.installation_id(app.updater.app_id.as_deref().unwrap_or(&app.app_id));
         let target = self.config.publish.targets[&app.publish_target].for_channel(&release.channel);
         let trusted_keys = parse_trusted_keys(&app.updater.trusted_public_keys)?;
         let (signing_key_id, signing_key) = read_signing_key(self, app_key, app, &trusted_keys)?;
@@ -1719,7 +1732,7 @@ impl ProjectDocument {
             }
             let payload = ManifestPayload {
                 manifest_sequence: sequence,
-                app_id: updater_app_id.to_owned(),
+                app_id: updater_app_id.clone(),
                 channel: release.channel.clone(),
                 version: release.version.clone(),
                 build_number: release.build_number,
@@ -1753,7 +1766,7 @@ impl ProjectDocument {
 
         let payload = ManifestPayload {
             manifest_sequence: sequence,
-            app_id: updater_app_id.to_owned(),
+            app_id: updater_app_id,
             channel: release.channel.clone(),
             version: release.version.clone(),
             build_number: release.build_number,
@@ -1805,6 +1818,7 @@ fn finalize_publish_plan(
     signing_key: &SigningKey,
     payload: ManifestPayload,
 ) -> CliResult<PublishPlan> {
+    let display_name = parse_update_channel(&release.channel)?.display_name(&app.display_name);
     let required_targets = release.targets.clone();
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|error| CliError::new(format!("无法序列化 manifest payload: {error}")))?;
@@ -1829,7 +1843,7 @@ fn finalize_publish_plan(
     ]);
     Ok(PublishPlan {
         app_key: app_key.to_owned(),
-        display_name: app.display_name.clone(),
+        display_name,
         publish_target_name: app.publish_target.clone(),
         target,
         trusted_keys,
@@ -2491,6 +2505,8 @@ fn windows_inno_definitions(plan: &BuildPlan, staging: &Path) -> CliResult<Vec<S
     let file_version = windows_file_version(&plan.release.version, plan.release.build_number)?;
     Ok(vec![
         inno_string_definition("AppId", &plan.app_id)?,
+        inno_string_definition("InstallIdentity", &plan.updater_app_id)?,
+        inno_number_definition("StableChannel", u64::from(plan.release.channel == "stable")),
         inno_string_definition("AppName", &plan.display_name)?,
         inno_string_definition("AppPublisher", &options.publisher)?,
         inno_string_definition("AppVersion", &plan.release.version.to_string())?,
@@ -3093,7 +3109,12 @@ fn write_release_resources_to_directory(plan: &BuildPlan, directory: &Path) -> C
         .map_err(|error| CliError::new(format!("无法序列化发布元数据: {error}")))?;
     contents.push(b'\n');
     fs::write(directory.join(RELEASE_METADATA_FILE_NAME), contents)
-        .map_err(|error| CliError::new(format!("无法写入发布元数据: {error}")))
+        .map_err(|error| CliError::new(format!("无法写入发布元数据: {error}")))?;
+    fs::write(
+        directory.join(INSTALLATION_IDENTITY_FILE_NAME),
+        format!("{}\n", plan.updater_app_id),
+    )
+    .map_err(|error| CliError::new(format!("无法写入安装身份标记: {error}")))
 }
 
 fn parse_update_channel(channel: &str) -> CliResult<UpdateChannel> {
@@ -3227,9 +3248,11 @@ fn load_release_artifacts(
                     artifact.file_name
                 )));
             }
+            let display_name =
+                parse_update_channel(&release.channel)?.display_name(&app.display_name);
             let expected_name = format!(
                 "{}-{}{}",
-                app.display_name,
+                display_name,
                 target_arch_alias(target)?,
                 expected_suffix
             );
@@ -3287,8 +3310,10 @@ fn validate_artifact_identity(
     target: &str,
     path: &Path,
 ) -> CliResult<()> {
+    let expected_app_id = parse_update_channel(&release.channel)?
+        .installation_id(app.updater.app_id.as_deref().unwrap_or(&app.app_id));
     if manifest.schema_version != ARTIFACT_SCHEMA_VERSION
-        || manifest.app_id != app.app_id
+        || manifest.app_id != expected_app_id
         || manifest.channel != release.channel
         || manifest.version != release.version.to_string()
         || manifest.build_number != release.build_number
@@ -4223,6 +4248,38 @@ fn validate_app_id(value: &str) -> CliResult<()> {
         return Err(CliError::new(format!("app_id `{value}` 格式不安全")));
     }
     Ok(())
+}
+
+fn validate_base_channel_identity(app_key: &str, app: &AppConfig) -> CliResult<()> {
+    for (label, value) in [
+        ("app_id", app.app_id.as_str()),
+        (
+            "updater.app_id",
+            app.updater.app_id.as_deref().unwrap_or_default(),
+        ),
+    ] {
+        if !value.is_empty() && has_reserved_app_id_suffix(value) {
+            return Err(CliError::new(format!(
+                "app `{app_key}` 的 {label} 不能预先包含保留通道后缀 `.beta` 或 `.nightly`"
+            )));
+        }
+    }
+    if has_reserved_display_suffix(&app.display_name) {
+        return Err(CliError::new(format!(
+            "app `{app_key}` 的 display_name 不能预先包含保留通道后缀 `Beta` 或 `Nightly`"
+        )));
+    }
+    Ok(())
+}
+
+fn has_reserved_app_id_suffix(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.ends_with(".beta") || value.ends_with(".nightly")
+}
+
+fn has_reserved_display_suffix(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.ends_with(" beta") || value.ends_with(" nightly")
 }
 
 fn validate_file_name(value: &str) -> CliResult<()> {
@@ -5729,6 +5786,8 @@ pub fn inspect_build_plans_for_channel(
             Ok(serde_json::json!({
                 "app_key": plan.app_key,
                 "package": plan.package,
+                "app_id": plan.app_id,
+                "updater_app_id": plan.updater_app_id,
                 "display_name": plan.display_name,
                 "app_path": inspect_path(&plan.app_path),
                 "app_zip_path": inspect_path(&plan.app_zip_path),
@@ -5950,12 +6009,15 @@ pub fn inspect_release_resources_for_channel(
         .join(format!("{}.toml", plan.package));
     let runtime_config = fs::read_to_string(&runtime_config_path)
         .map_err(|error| CliError::new(format!("无法读取测试 bundle 运行配置: {error}")))?;
+    let installation_identity = fs::read_to_string(directory.join(INSTALLATION_IDENTITY_FILE_NAME))
+        .map_err(|error| CliError::new(format!("无法读取测试安装身份标记: {error}")))?;
     Ok(serde_json::json!({
         "directory": inspect_path(&directory),
         "metadata": metadata,
         "notes_sha256": notes_sha256,
         "runtime_config_path": inspect_path(&runtime_config_path),
         "runtime_config": runtime_config,
+        "installation_identity": installation_identity.trim(),
     }))
 }
 
@@ -6331,6 +6393,11 @@ pub fn inspect_windows_installer_sources(
         app.targets.required.clone()
     };
     let release = configured.validated_release(build_number, configured_targets.clone());
+    let channel = parse_update_channel(&release.channel)?;
+    let app_id = channel.installation_id(&app.app_id);
+    let updater_app_id =
+        channel.installation_id(app.updater.app_id.as_deref().unwrap_or(&app.app_id));
+    let display_name = channel.display_name(&app.display_name);
     let brand_assets = project.brand_assets(app_key, app)?;
     let publish_target = &project.config.publish.targets[&app.publish_target];
     let target = configured_targets
@@ -6347,18 +6414,14 @@ pub fn inspect_windows_installer_sources(
         .join(release.version.to_string())
         .join(release.build_number.to_string())
         .join(&target);
-    let artifact_stem = format!("{}-{arch}", app.display_name);
+    let artifact_stem = format!("{display_name}-{arch}");
     let plan = BuildPlan {
         project_root: project.root.clone(),
         app_key: app_key.to_owned(),
         package: app.package.clone(),
-        app_id: app.app_id.clone(),
-        updater_app_id: app
-            .updater
-            .app_id
-            .clone()
-            .unwrap_or_else(|| app.app_id.clone()),
-        display_name: app.display_name.clone(),
+        app_id,
+        updater_app_id,
+        display_name,
         release,
         target: target.clone(),
         platform: BuildTargetPlatform::Windows,

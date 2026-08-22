@@ -15,7 +15,7 @@ EXE；应用内更新只使用 `windows.zip`。Windows 最低版本默认跟随�
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.41.2 cli --locked --force --bin nexora
+  --tag v0.42.0 cli --locked --force --bin nexora
 nexora doctor
 ```
 
@@ -95,11 +95,28 @@ nexora build --app desktop
 `iMES-x86_64.windows.zip`；version、build number、Cargo package 和完整 target triple 不进入文件名。
 内部主 executable 与 sidecar 仍使用技术 `package`，不会因展示名称变化而破坏定位契约。
 
-每个正式安装包还会在签名和归档前写入 `nexora-release.json` 与可选 `notes.md`。macOS 位于
+`stable`、`beta`、`nightly` 使用固定且不可配置的安装身份派生规则：
+
+| channel | 有效 app ID | 有效显示名称 |
+| --- | --- | --- |
+| `stable` | 基础 `app_id` | 基础 `display_name` |
+| `beta` | `<app_id>.beta` | `<display_name> Beta` |
+| `nightly` | `<app_id>.nightly` | `<display_name> Nightly` |
+
+基础 `app_id`、可选 `updater.app_id` 不能预先以 `.beta`/`.nightly` 结尾，基础显示名称也不能预先
+以 ` Beta`/` Nightly` 结尾。派生身份同时用于 bundle/Setup AppId、进程单例与激活 IPC、updater
+状态、Account 凭据服务、用户偏好和外部分发文件名；技术 EXE/sidecar 文件名仍由 Cargo package
+决定。正式包的发布元数据优先于 `ApplicationOptions::application_identity`，运行时不能改写已签入
+安装包的通道身份。各通道不会读取、迁移或删除其他通道的数据；旧版 beta/nightly 必须重新安装，
+并重新登录及设置偏好。stable 不改变既有身份和数据位置。
+
+每个正式安装包还会在签名和归档前写入 `nexora-release.json`、`nexora-install-identity` 与可选
+`notes.md`。macOS 位于
 `.app/Contents/Resources`，Windows 位于主 EXE 同级目录，因此初始 Setup 和 update ZIP 携带
 同一份发布身份。元数据 schema 1 包含 `app_key`、`app_id`、`display_name`、`package`、
 `version`、`build_number`、`channel`、`target`，以及日志的文件名、字节数和 SHA-256；不包含
-任何私钥、对象存储凭据或 token。
+任何私钥、对象存储凭据或 token。纯文本安装身份标记只包含有效通道 app ID；当前安装和每份
+暂存更新都必须匹配该标记，不能根据安装目录名或共享的技术 EXE 名猜测通道。
 
 同一构建还会把所选 nightly/beta/stable channel 的 `runtime_config` 冻结为
 `config/<package>.toml`：macOS 路径是 `.app/Contents/Resources/config/<package>.toml`，Windows
@@ -247,8 +264,8 @@ Access Key 与 Secret Key 必须最终找到，Session Token 可选。`RUSTFS_*`
 | --- | --- | --- | --- | --- | --- |
 | `apps.<app_key>` | 是 | CLI 稳定 app key，如 `desktop`；进入对象路径 | 无 | 否 | 缺 app 或 key 不安全时失败 |
 | `package` | 是 | Cargo package 名，从 `cargo metadata` 取得 | 无 | 否 | package 不存在时 build 失败 |
-| `app_id` | 是 | 永久 bundle identifier，如 `com.example.desktop` | 无 | 否 | 格式无效或冲突时失败 |
-| `display_name` | 是 | 用户可见名称和外部分发文件 stem；支持合法 Unicode | 无 | 否 | 分隔符、Windows 禁止字符/设备名、NUL、尾随点或空格失败 |
+| `app_id` | 是 | stable 基础 bundle identifier，如 `com.example.desktop`；beta/nightly 固定派生 `.beta`/`.nightly` | 无 | 否 | 格式无效、冲突或预含保留通道后缀时失败 |
+| `display_name` | 是 | stable 基础用户名称和文件 stem；beta/nightly 固定追加 ` Beta`/` Nightly` | 无 | 否 | 分隔符、Windows 禁止字符/设备名、NUL、尾随点/空格或预含保留通道后缀时失败 |
 | `publish_target` | 是 | 引用 `publish.targets` 的名称 | 无 | 否 | 目标不存在时失败 |
 | `object_prefix` | 是 | 可选额外对象前缀；`""` 表示不增加前缀 | 无 | 否 | 非空值包含不安全路径段时失败 |
 | `branding.application_logo` | 是 | 应用内 PNG，通常为 128px | 无 | 否 | 文件不存在或非 PNG 时失败 |
@@ -319,7 +336,7 @@ notes = "docs/releases/current/zh-CN.md"
 | 字段 | 必填 | 作用、来源与示例 | 默认值 | 秘密 | 配置错误行为 |
 | --- | --- | --- | --- | --- | --- |
 | `enabled` | 是 | 是否为该 app 构建 updater | 无 | 否 | 缺失无法解析 |
-| `app_id` | 否 | 清单身份覆盖；通常不要配置 | 继承 app `app_id` | 否 | 格式无效失败；远端身份不匹配失败 |
+| `app_id` | 否 | stable 清单基础身份覆盖；通常不要配置，beta/nightly 仍固定追加通道后缀 | 继承 app `app_id` | 否 | 格式无效、预含保留后缀或远端身份不匹配时失败 |
 | `check_on_launch` | 否 | 首个主窗口创建后非阻塞后台检查 | `false` | 否 | 非布尔值无法解析 |
 | `feed_url` | 启用时是 | 必须等于 `<public_base_url>/<prefix>/<app>/<channel>/latest.json` | `""` | 否 | 启用后不完全匹配预期地址即失败 |
 | `channels` | 启用时是 | 客户端内置信任通道，如 `["stable"]` | `[]` | 否 | 不含 release channel 时失败 |
@@ -341,7 +358,7 @@ notes = "docs/releases/current/zh-CN.md"
 | `platforms.macos.notarize` | 是 | 是否提交 Apple notarization | 无 | 否 | `true` 且非 Developer ID 时失败 |
 | `platforms.macos.expected_team_id` | 否 | sidecar 安装前要求的新 bundle Team ID | 未配置 | 否 | 不匹配时拒绝安装；ad-hoc 本地验证应省略 |
 | `platforms.windows.icon` | 是 | 主 EXE 与 Inno Setup EXE 使用的 ICO | 无 | 否 | 文件缺失或 ICO 无效时失败 |
-| `platforms.windows.publisher` | Windows 是 | 安装器发布者、版本资源公司名，以及 `%LOCALAPPDATA%\Programs\<publisher>\<display_name>` 的父目录名 | 无 | 否 | 缺失或不是安全 Windows 目录名时失败 |
+| `platforms.windows.publisher` | Windows 是 | 安装器发布者、版本资源公司名，以及 `%LOCALAPPDATA%\Programs\<publisher>\<effective_display_name>` 的父目录名 | 无 | 否 | 缺失或不是安全 Windows 目录名时失败 |
 | `platforms.windows.signing` | 否 | `none` 跳过 Authenticode；`authenticode` 签署并验证 Windows 文件身份 | `none` | 否 | 未知值失败；公开生产发布建议使用 `authenticode` |
 | `platforms.windows.signing_thumbprint` | Authenticode 时是 | 当前用户 `My` 证书存储中的 40 位 SHA-1 证书指纹；也可由 `WINDOWS_SIGN_CERTIFICATE_SHA1` 注入 | 未配置 | 否 | `none` 模式配置该字段，或格式无效时构建失败 |
 | `platforms.windows.expected_publisher` | 否 | updater 期望的 signer 证书 SimpleName；省略时使用 `publisher` | `publisher` | 否 | `none` 模式配置、显式空值或运行时不匹配时失败 |
@@ -482,6 +499,18 @@ Windows 应用内更新不要求管理员权限。框架会在用户所选安装
 程序运行并显示错误，不会先退出再静默失败。主程序文件名来自已验证的更新包身份，并通过
 helper 参数显式传递给 sidecar；预检、健康启动和失败恢复都定位这个精确文件，不会扫描安装
 目录里的其他 EXE，因此 Inno Setup 的 `unins000.exe` 不会再被误判为第二个候选主程序。
+
+Windows 首次安装仍允许用户选择目录，但安装器会读取目标目录中的
+`nexora-install-identity`：空目录可以安装，匹配当前有效 app ID 的目录可以升级，其它非空目录
+会被拒绝。只有 stable 可以在标记缺失时通过相同 AppId 的既有 HKCU Inno 卸载登记识别旧安装；
+beta/nightly 不接受无标记历史目录。安装器不使用共享技术 EXE 名作为跨通道关闭过滤器。
+
+每次 updater 检查、下载或完整更新都会在当前通道 updater 状态的 `logs` 子目录创建逻辑会话；
+主进程写 `main.log`，安装 sidecar 继续在同一会话写 `sidecar.log`。仅保留最近 10 个会话，两个
+文件合计最多 1 MiB。创建、写入、锁定或轮转失败只产生尽力而为告警，绝不改变下载、替换、
+健康确认或回滚结果。日志不记录配置正文、命令行秘密或 Account token，并会遮蔽凭据字段和 URL
+查询参数。Windows 的完整位置是
+`<install-parent>/.nexora-updater/<effective_app_id>/logs/<session>/`；因此三个通道互不读取日志。
 
 “稍后重启”使用同步后的临时文件和 Windows 原子替换提交 `pending.json`，已有待安装版本也可
 安全覆盖。记录一旦提交，后续目录同步只能作为尽力而为的耐久性增强，不能再把已提交 payload

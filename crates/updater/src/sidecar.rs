@@ -12,6 +12,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 
+use crate::operation_log::OperationLog;
 use crate::{UpdateError, macos, windows};
 
 const INSTALL_RESULT_SCHEMA_VERSION: u32 = 1;
@@ -40,7 +41,18 @@ pub fn run_sidecar_from_env_args() -> Result<bool, UpdateError> {
     }
 
     let command = SidecarApplyCommand::parse(&args[position + 2..])?;
+    let operation_log = command.operation_log();
+    if let Some(log) = &operation_log {
+        log.write("sidecar 安装事务开始");
+    }
     let result = apply_staged_update(&command);
+    if let Some(log) = &operation_log {
+        if result.is_ok() {
+            log.write("sidecar 安装事务完成 outcome=success");
+        } else {
+            log.write("sidecar 安装事务完成 outcome=failed");
+        }
+    }
     let old_version_available = !matches!(
         &result,
         Err(UpdateError::SidecarFailed(message)) if message.contains("无法恢复旧版本")
@@ -147,6 +159,7 @@ struct SidecarApplyCommand {
     health_timeout_seconds: u64,
     pending_record: Option<PathBuf>,
     installing_record: Option<PathBuf>,
+    operation_log_session: Option<String>,
 }
 
 impl SidecarApplyCommand {
@@ -184,6 +197,13 @@ impl SidecarApplyCommand {
                 "待安装记录参数必须成对提供".to_owned(),
             ));
         }
+        let operation_log_session = optional_value(args, "--operation-log-session")
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| UpdateError::SidecarFailed("日志会话标识不是 UTF-8".to_owned()))
+            })
+            .transpose()?;
 
         Ok(Self {
             app_id,
@@ -196,7 +216,20 @@ impl SidecarApplyCommand {
             health_timeout_seconds,
             pending_record,
             installing_record,
+            operation_log_session,
         })
+    }
+
+    fn operation_log(&self) -> Option<OperationLog> {
+        let session = self.operation_log_session.as_deref()?;
+        let cache_directory = match transaction_cache_dir(&self.staging_root) {
+            Ok(directory) => directory,
+            Err(error) => {
+                tracing::warn!(error = %error, "无法定位 sidecar 操作日志目录，安装事务继续执行");
+                return None;
+            }
+        };
+        OperationLog::open_sidecar_best_effort(&cache_directory, session)
     }
 }
 

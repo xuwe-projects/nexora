@@ -11,7 +11,7 @@ resources follow the same metadata contract, but Linux auto-installation is not 
 
 ```bash
 cargo install --git https://github.com/xuwe-projects/nexora \
-  --tag v0.41.2 cli --locked --force --bin nexora
+  --tag v0.42.0 cli --locked --force --bin nexora
 nexora doctor
 ```
 
@@ -70,7 +70,8 @@ examples, and failure behavior, is maintained in the
 `check_on_launch = false`, `check_interval = "15m"`, `check_jitter = "1m"`,
 `offline_grace_period = "24h"`, `mandatory_restart_delay = "15m"`, and
 `health_timeout = "2m"`. `expected_team_id` is unset, and updater `app_id` inherits the app
-identifier when omitted.
+identifier when omitted. It is a stable base identity; beta/nightly receive their fixed suffix
+after inheritance or override.
 
 ## Configuration
 
@@ -103,6 +104,23 @@ controls user-visible metadata and distribution filenames such as `iMES-aarch64.
 distribution filename. `${CARGO_PKG_VERSION}` reads the selected app package through `cargo
 metadata --no-deps --format-version 1`, including packages that use `version.workspace = true`; it
 is not the workspace root name or Nexora CLI version. A literal SemVer remains supported.
+
+`stable`, `beta`, and `nightly` use fixed, non-configurable installation identities:
+
+| Channel | Effective app ID | Effective display name |
+| --- | --- | --- |
+| `stable` | base `app_id` | base `display_name` |
+| `beta` | `<app_id>.beta` | `<display_name> Beta` |
+| `nightly` | `<app_id>.nightly` | `<display_name> Nightly` |
+
+The base app ID and optional updater app ID must not already end in `.beta` or `.nightly`; the base
+display name must not already end in ` Beta` or ` Nightly`. The effective identity scopes the OS
+bundle/Setup identity, process singleton and activation IPC, updater state, Account credential
+service, user preferences, and branded artifact name. Technical executable names still come from
+the Cargo package. Formal release metadata outranks `ApplicationOptions::application_identity`, so
+runtime options cannot rewrite a signed installation identity. Channels never read, migrate, or
+delete one another's data. Historical beta/nightly installations require a fresh install, login,
+and preferences; stable retains all existing identities and locations.
 
 `${BUILD_DATETIME}` is the complete 24-hour `yyMMddHHmmss` value in the build machine's local timezone. A build in the same second or after clock rollback, daylight-saving fallback, or a timezone change uses `max(current local value, previous local build number + 1)`. A literal positive integer remains supported. Expressions must occupy the entire field; unknown expressions, fragments, arbitrary environment variables, zero, and overflow are rejected.
 
@@ -137,10 +155,14 @@ Builds that intentionally support `updater.enabled = false` use
 `UpdateConfig::from_current_bundle_if_present()`. It returns `None` only when the bundled file is
 absent; an existing but invalid file remains an error and cannot bypass trust or transport checks.
 
-Every formal package receives `nexora-release.json` and optional `notes.md` before signing and
+Every formal package receives `nexora-release.json`, `nexora-install-identity`, and optional
+`notes.md` before signing and
 archiving. They live in `.app/Contents/Resources` on macOS and beside the main executable on
 Windows. Schema 1 records the app key/ID, display name, package, version, positive build number,
 channel, target, and optional notes file name, byte size, and SHA-256. It contains no secrets.
+The plain-text installation marker contains only the effective channel app ID. Both the current
+installation and every staged update must match it; neither directory names nor the shared technical
+executable name are used to guess a channel.
 
 The same build freezes the selected nightly/beta/stable channel's `runtime_config` as
 `config/<package>.toml`: `.app/Contents/Resources/config/<package>.toml` on macOS and
@@ -182,9 +204,10 @@ ZIP enters the updater manifest. Every release artifact receives a standard SHA-
 the complete branded filename and is indexed by `artifact.json`.
 
 A fresh Windows install defaults to
-`%LOCALAPPDATA%\Programs\<publisher>\<display_name>`. Both user-visible directory components must
-be safe Windows path names. The stable `app_id` continues to identify installation upgrades,
-updater transactions, manifests, and feeds; it does not become a directory component.
+`%LOCALAPPDATA%\Programs\<publisher>\<effective_display_name>`. Both user-visible directory components must
+be safe Windows path names. The effective channel display name makes the default directories
+distinct, while the effective app ID identifies installation upgrades and updater transactions.
+The remote feed layout remains keyed by `<app_key>/<channel>`.
 
 ## Windows Authenticode policy
 
@@ -313,6 +336,23 @@ installation parent. A failed preflight leaves the application running and repor
 The verified main EXE filename is carried explicitly in the helper command and used for preflight,
 health launch, and failure relaunch. The sidecar never guesses by scanning other EXEs in the install
 directory, so Inno Setup's `unins000.exe` cannot be mistaken for another main executable.
+
+The Windows directory chooser remains available. The installer accepts an empty directory or a
+directory whose `nexora-install-identity` exactly matches the effective app ID, and rejects every
+other non-empty directory. Only stable may recognize a marker-less legacy installation through the
+same AppId's existing HKCU Inno uninstall registration; beta/nightly never adopt historical
+marker-less directories. The installer does not use the shared technical EXE name as a cross-channel
+close-applications filter.
+
+Every updater check, download, or complete update creates a logical session below the current
+channel's updater-state `logs` directory. The main process writes `main.log`; the installation
+sidecar continues the same logical session in `sidecar.log`. Nexora retains the newest 10 sessions
+and caps the two files at 1 MiB in aggregate per session. Directory creation, writing, locking, and
+rotation are best-effort and never change download, replacement, health-check, or rollback results.
+Logs omit configuration bodies, command-line secrets, and Account tokens, and redact credential
+fields and URL queries. On Windows the full location is
+`<install-parent>/.nexora-updater/<effective_app_id>/logs/<session>/`, so channels cannot read one
+another's logs.
 
 **Restart Later** commits `pending.json` from a synced temporary file with Windows atomic replacement,
 including when an older pending record exists. Once committed, best-effort directory durability cannot

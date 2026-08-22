@@ -15,7 +15,9 @@ allow_insecure_http = false
 
 [apps.{{ project_name }}]
 package = "{{ project_name }}"
+# stable 使用这里的基础值；beta/nightly 固定派生 .beta/.nightly，基础值不要预含通道后缀。
 app_id = "com.example.{{ project_name }}"
+# beta/nightly 固定追加 " Beta"/" Nightly"，并用于各自默认安装目录。
 display_name = "{{ project_name }}"
 publish_target = "default"
 # 空字符串表示不增加额外对象前缀；稳定目录身份来自上面的 app key。

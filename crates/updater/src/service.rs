@@ -24,10 +24,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+use crate::operation_log::OperationLog;
 use crate::{
     MAX_RELEASE_NOTES_BYTES, RELEASE_NOTES_FILE_NAME, ReleaseNotesMetadata, SignedUpdateManifest,
     TrustedPublicKey, UpdateChannel, UpdateRelease, UpdateTarget,
-    load_release_metadata_from_directory, macos, verify_release_notes_bytes,
+    load_release_metadata_from_directory, macos, read_installation_identity,
+    verify_release_notes_bytes,
 };
 
 const MAX_APP_ID_BYTES: usize = 255;
@@ -234,6 +236,7 @@ impl UpdateConfig {
                 differences.join(", ")
             )));
         }
+        verify_installation_identity(resource_directory, &bundled.app_id, bundled.channel, true)?;
         let health_timeout = parse_bundled_duration(&bundled.health_timeout)?;
         Self::with_transport_policy(
             &bundled.feed_url,
@@ -659,6 +662,7 @@ struct StagingCleanup {
     installer_started: AtomicBool,
     retained: AtomicBool,
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
+    operation_log: Option<OperationLog>,
 }
 
 struct InstallHelperRequest<'a> {
@@ -671,6 +675,7 @@ struct InstallHelperRequest<'a> {
     sidecar_path: &'a Path,
     health_timeout: Duration,
     pending_records: Option<(&'a Path, &'a Path)>,
+    operation_log_session: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -685,6 +690,8 @@ struct PendingUpdateRecord {
     staging_root: PathBuf,
     archive_path: PathBuf,
     staged_app: PathBuf,
+    #[serde(default)]
+    operation_log_session: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -763,6 +770,11 @@ impl StagedUpdate {
             staging_root: relative_to_cache(&candidate, &cache_dir)?,
             archive_path: relative_to_cache(&archive_path, &cache_dir)?,
             staged_app: relative_to_cache(&staged_app, &cache_dir)?,
+            operation_log_session: self
+                .cleanup
+                .operation_log
+                .as_ref()
+                .map(|log| log.session_id().to_owned()),
         };
         fs::rename(&self.cleanup.staging_root, &candidate)?;
         let pending_record = cache_dir.join(PENDING_RECORD_FILE_NAME);
@@ -777,6 +789,9 @@ impl StagedUpdate {
         self.pending_record = Some(pending_record);
         self.cleanup.retained.store(true, Ordering::Release);
         cleanup_other_pending_roots(&pending_base, &candidate);
+        if let Some(log) = &self.cleanup.operation_log {
+            log.write("待安装更新已安全保留");
+        }
         Ok(())
     }
 
@@ -802,6 +817,9 @@ impl StagedUpdate {
                 return Err(error);
             }
         };
+        if let Some(log) = &self.cleanup.operation_log {
+            log.write("准备启动 updater sidecar");
+        }
         let result = spawn_install_helper(InstallHelperRequest {
             process_id: std::process::id(),
             app_id: &self.app_id,
@@ -814,14 +832,27 @@ impl StagedUpdate {
             pending_records: claimed_record
                 .as_ref()
                 .map(|(pending, installing)| (pending.as_path(), installing.as_path())),
+            operation_log_session: self
+                .cleanup
+                .operation_log
+                .as_ref()
+                .map(OperationLog::session_id),
         });
         if result.is_err() {
+            if let Some(log) = &self.cleanup.operation_log {
+                log.write("启动 updater sidecar 失败");
+            }
             if let Some((pending, installing)) = claimed_record {
                 _ = fs::rename(installing, pending);
             }
             self.cleanup
                 .installer_started
                 .store(false, Ordering::Release);
+        }
+        if result.is_ok()
+            && let Some(log) = &self.cleanup.operation_log
+        {
+            log.write("updater sidecar 已启动");
         }
         result
     }
@@ -1070,14 +1101,24 @@ impl Updater {
 }
 
 fn run_check(config: UpdateConfig, cancellation: CancellationToken, sender: Sender<UpdateEvent>) {
-    let result = run_check_inner(&config, &cancellation, &sender);
+    let operation_log = start_operation_log(&config, "check");
+    let result = run_check_inner(&config, &cancellation, &sender, operation_log.as_ref());
+    finish_operation_log(operation_log.as_ref(), &result);
     send_terminal_error(result, &sender);
 }
 
 fn run_update(config: UpdateConfig, cancellation: CancellationToken, sender: Sender<UpdateEvent>) {
+    let operation_log = start_operation_log(&config, "update");
     let cleanup_sender = start_staging_cleanup_worker();
     cleanup_stale_staging_roots(&config);
-    let result = run_update_inner(&config, &cancellation, &sender, cleanup_sender);
+    let result = run_update_inner(
+        &config,
+        &cancellation,
+        &sender,
+        cleanup_sender,
+        operation_log.as_ref(),
+    );
+    finish_operation_log(operation_log.as_ref(), &result);
     send_terminal_error(result, &sender);
 }
 
@@ -1087,6 +1128,7 @@ fn run_download(
     cancellation: CancellationToken,
     sender: Sender<UpdateEvent>,
 ) {
+    let operation_log = start_operation_log(&config, "download");
     let cleanup_sender = start_staging_cleanup_worker();
     cleanup_stale_staging_roots(&config);
     let result = build_client(&config)
@@ -1098,9 +1140,11 @@ fn run_download(
                 &cancellation,
                 &sender,
                 cleanup_sender,
+                operation_log.as_ref(),
             )
         })
         .and_then(|staged| send_event(&sender, UpdateEvent::ReadyToRestart(staged)));
+    finish_operation_log(operation_log.as_ref(), &result);
     send_terminal_error(result, &sender);
 }
 
@@ -1109,8 +1153,10 @@ fn run_update_inner(
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
+    operation_log: Option<&OperationLog>,
 ) -> Result<(), UpdateError> {
-    let Some((client, release)) = check_release(config, cancellation, sender)? else {
+    let Some((client, release)) = check_release(config, cancellation, sender, operation_log)?
+    else {
         return Ok(());
     };
 
@@ -1122,6 +1168,7 @@ fn run_update_inner(
         cancellation,
         sender,
         cleanup_sender,
+        operation_log,
     )?;
     send_event(sender, UpdateEvent::ReadyToRestart(staged))
 }
@@ -1130,8 +1177,9 @@ fn run_check_inner(
     config: &UpdateConfig,
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
+    operation_log: Option<&OperationLog>,
 ) -> Result<(), UpdateError> {
-    let Some((_, release)) = check_release(config, cancellation, sender)? else {
+    let Some((_, release)) = check_release(config, cancellation, sender, operation_log)? else {
         return Ok(());
     };
     send_event(sender, UpdateEvent::UpdateAvailable(release))
@@ -1141,7 +1189,11 @@ fn check_release(
     config: &UpdateConfig,
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
+    operation_log: Option<&OperationLog>,
 ) -> Result<Option<(Client, UpdateRelease)>, UpdateError> {
+    if let Some(log) = operation_log {
+        log.write("开始获取并验证当前通道清单");
+    }
     send_event(sender, UpdateEvent::Checking)?;
     cancellation.ensure_active()?;
 
@@ -1156,11 +1208,21 @@ fn check_release(
     let envelope: SignedUpdateManifest =
         serde_json::from_str(&manifest_text).map_err(UpdateError::InvalidManifest)?;
     let manifest = envelope.verify(config.trusted_public_keys())?;
+    if let Some(log) = operation_log {
+        log.write("当前通道清单签名验证通过");
+    }
     let target = UpdateTarget::current()?;
     let Some(release) = manifest.select_update(config, target)? else {
+        if let Some(log) = operation_log {
+            log.write("当前安装已是最新版本");
+        }
         send_event(sender, UpdateEvent::UpToDate)?;
         return Ok(None);
     };
+
+    if let Some(log) = operation_log {
+        log.write("发现可安装的新版本");
+    }
 
     Ok(Some((client, release.with_verified_manifest(envelope))))
 }
@@ -1204,7 +1266,11 @@ fn download_and_stage(
     cancellation: &CancellationToken,
     sender: &Sender<UpdateEvent>,
     cleanup_sender: Option<mpsc::Sender<PathBuf>>,
+    operation_log: Option<&OperationLog>,
 ) -> Result<StagedUpdate, UpdateError> {
+    if let Some(log) = operation_log {
+        log.write("开始下载更新产物");
+    }
     let staging_root = create_staging_root(config, &release)?;
     let archive_path = staging_root.join(artifact_archive_file_name(&release.artifact.kind)?);
     let extract_path = staging_root.join("extracted");
@@ -1241,6 +1307,9 @@ fn download_and_stage(
                 actual: downloaded,
             });
         }
+        if let Some(log) = operation_log {
+            log.write("更新产物下载完成");
+        }
 
         send_event(sender, UpdateEvent::Verifying)?;
         if !supported_artifact_kind(&release.artifact.kind) {
@@ -1256,57 +1325,73 @@ fn download_and_stage(
                 actual: actual_sha256,
             });
         }
+        if let Some(log) = operation_log {
+            log.write("更新产物摘要验证通过");
+        }
 
         cancellation.ensure_active()?;
         send_event(sender, UpdateEvent::Staging)?;
-        let (staged_app, current_app, sidecar_path, windows_main_exe_name) =
-            match release.artifact.kind.as_str() {
-                "macos_app_zip" => {
-                    macos::extract_app_archive(&archive_path, &extract_path)?;
-                    let staged_app = macos::find_app_bundle(&extract_path)?;
-                    macos::verify_code_signature(&staged_app, config.expected_team_id())?;
-                    let current_app = config
-                        .app_bundle_path
-                        .clone()
-                        .map(Ok)
-                        .unwrap_or_else(macos::current_app_bundle)?;
-                    let sidecar_path = config.sidecar_path()?;
-                    (staged_app, current_app, sidecar_path, None)
-                }
-                "windows_update_zip" | "windows_zip" => {
-                    let main_exe = crate::windows::current_main_exe_name()?;
-                    let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
-                    crate::windows::extract_windows_update_zip(
-                        &archive_path,
-                        &extract_path,
-                        &main_exe,
-                        &updater_exe,
-                    )?;
-                    crate::windows::verify_staged_update_signatures(
-                        &extract_path,
-                        &main_exe,
-                        &updater_exe,
-                        config.windows_signature(),
-                    )?;
-                    let current_app = config
-                        .app_bundle_path
-                        .clone()
-                        .map(Ok)
-                        .unwrap_or_else(crate::windows::current_install_dir)?;
-                    let sidecar_path = extract_path.join(updater_exe);
-                    (
-                        extract_path.clone(),
-                        current_app,
-                        sidecar_path,
-                        Some(main_exe),
-                    )
-                }
-                _ => {
-                    return Err(UpdateError::UnsupportedArtifactKind(
-                        release.artifact.kind.clone(),
-                    ));
-                }
-            };
+        let (staged_app, current_app, sidecar_path, windows_main_exe_name) = match release
+            .artifact
+            .kind
+            .as_str()
+        {
+            "macos_app_zip" => {
+                macos::extract_app_archive(&archive_path, &extract_path)?;
+                let staged_app = macos::find_app_bundle(&extract_path)?;
+                macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+                verify_installation_identity(
+                    &staged_app.join("Contents/Resources"),
+                    &config.app_id,
+                    config.channel,
+                    false,
+                )?;
+                let current_app = config
+                    .app_bundle_path
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(macos::current_app_bundle)?;
+                let sidecar_path = config.sidecar_path()?;
+                (staged_app, current_app, sidecar_path, None)
+            }
+            "windows_update_zip" | "windows_zip" => {
+                let main_exe = crate::windows::current_main_exe_name()?;
+                let updater_exe = crate::windows::updater_exe_name_for(&main_exe)?;
+                crate::windows::extract_windows_update_zip(
+                    &archive_path,
+                    &extract_path,
+                    &main_exe,
+                    &updater_exe,
+                )?;
+                crate::windows::verify_staged_update_signatures(
+                    &extract_path,
+                    &main_exe,
+                    &updater_exe,
+                    config.windows_signature(),
+                )?;
+                verify_installation_identity(&extract_path, &config.app_id, config.channel, false)?;
+                let current_app = config
+                    .app_bundle_path
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(crate::windows::current_install_dir)?;
+                let sidecar_path = extract_path.join(updater_exe);
+                (
+                    extract_path.clone(),
+                    current_app,
+                    sidecar_path,
+                    Some(main_exe),
+                )
+            }
+            _ => {
+                return Err(UpdateError::UnsupportedArtifactKind(
+                    release.artifact.kind.clone(),
+                ));
+            }
+        };
+        if let Some(log) = operation_log {
+            log.write("暂存更新的通道身份与平台签名验证通过");
+        }
 
         Ok(StagedUpdate {
             release,
@@ -1322,6 +1407,7 @@ fn download_and_stage(
                 installer_started: AtomicBool::new(false),
                 retained: AtomicBool::new(false),
                 cleanup_sender,
+                operation_log: operation_log.cloned(),
             }),
         })
     })();
@@ -1337,6 +1423,60 @@ fn send_event(sender: &Sender<UpdateEvent>, event: UpdateEvent) -> Result<(), Up
     sender
         .send_blocking(event)
         .map_err(|_| UpdateError::EventReceiverClosed)
+}
+
+fn start_operation_log(config: &UpdateConfig, operation: &str) -> Option<OperationLog> {
+    let cache_directory = match config.cache_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            tracing::warn!(error = %error, "无法定位 updater 操作日志目录，本次更新继续执行");
+            return None;
+        }
+    };
+    #[cfg(target_os = "windows")]
+    if let Err(error) = crate::windows::prepare_cache_dir(&cache_directory) {
+        tracing::warn!(error = %error, "无法准备 updater 操作日志目录，本次更新继续执行");
+        return None;
+    }
+    let log = OperationLog::start_best_effort(&cache_directory)?;
+    log.write(&format!(
+        "会话开始 operation={operation} channel={} app_id={}",
+        config.channel.as_str(),
+        config.app_id
+    ));
+    Some(log)
+}
+
+fn finish_operation_log(log: Option<&OperationLog>, result: &Result<(), UpdateError>) {
+    let Some(log) = log else {
+        return;
+    };
+    let outcome = match result {
+        Ok(()) => "会话完成 outcome=success",
+        Err(UpdateError::Cancelled) => "会话完成 outcome=cancelled",
+        Err(_) => "会话完成 outcome=failed",
+    };
+    log.write(outcome);
+}
+
+fn verify_installation_identity(
+    resource_directory: &Path,
+    expected_app_id: &str,
+    channel: UpdateChannel,
+    allow_legacy_stable: bool,
+) -> Result<(), UpdateError> {
+    match read_installation_identity(resource_directory)
+        .map_err(|error| UpdateError::InvalidBundleConfig(error.to_string()))?
+    {
+        Some(identity) if identity == expected_app_id => Ok(()),
+        Some(_) => Err(UpdateError::InvalidBundleConfig(
+            "安装身份标记与当前发布通道不一致".to_owned(),
+        )),
+        None if allow_legacy_stable && channel == UpdateChannel::Stable => Ok(()),
+        None => Err(UpdateError::InvalidBundleConfig(
+            "安装包缺少通道级安装身份标记".to_owned(),
+        )),
+    }
 }
 
 fn supported_artifact_kind(kind: &str) -> bool {
@@ -1373,6 +1513,7 @@ fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<(), UpdateE
             sidecar_path: request.sidecar_path,
             health_timeout: request.health_timeout,
             pending_records: request.pending_records,
+            operation_log_session: request.operation_log_session,
         });
     }
     macos::spawn_install_helper(macos::InstallHelperRequest {
@@ -1384,6 +1525,7 @@ fn spawn_install_helper(request: InstallHelperRequest<'_>) -> Result<(), UpdateE
         sidecar_path: request.sidecar_path,
         health_timeout: request.health_timeout,
         pending_records: request.pending_records,
+        operation_log_session: request.operation_log_session,
     })
 }
 
@@ -1565,6 +1707,12 @@ fn restore_pending_inner(
                 return Err(UpdateError::InvalidPendingPath);
             }
             macos::verify_code_signature(&staged_app, config.expected_team_id())?;
+            verify_installation_identity(
+                &staged_app.join("Contents/Resources"),
+                &config.app_id,
+                config.channel,
+                false,
+            )?;
             let current_app = config
                 .app_bundle_path
                 .clone()
@@ -1590,6 +1738,7 @@ fn restore_pending_inner(
                 &updater_exe,
                 config.windows_signature(),
             )?;
+            verify_installation_identity(&staged_app, &config.app_id, config.channel, false)?;
             let current_app = config
                 .app_bundle_path
                 .clone()
@@ -1605,6 +1754,14 @@ fn restore_pending_inner(
         }
     };
 
+    let operation_log = record
+        .operation_log_session
+        .as_deref()
+        .and_then(|session| OperationLog::open_main_best_effort(cache_dir, session));
+    if let Some(log) = &operation_log {
+        log.write("已恢复并重新验证待安装更新");
+    }
+
     Ok(StagedUpdate {
         release: release.with_verified_manifest(record.manifest),
         app_id: config.app_id.clone(),
@@ -1619,6 +1776,7 @@ fn restore_pending_inner(
             installer_started: AtomicBool::new(false),
             retained: AtomicBool::new(true),
             cleanup_sender: None,
+            operation_log,
         }),
     })
 }

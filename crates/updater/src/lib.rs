@@ -10,6 +10,8 @@ mod dialog;
 mod macos;
 #[cfg(feature = "runtime")]
 mod manifest;
+#[cfg(feature = "runtime")]
+mod operation_log;
 mod release;
 #[cfg(feature = "runtime")]
 mod service;
@@ -27,9 +29,10 @@ pub use manifest::{
     UpdateManifestSignature, UpdateRelease, UpdateTarget,
 };
 pub use release::{
-    ApplicationReleaseMetadata, LoadedApplicationReleaseMetadata, MAX_RELEASE_NOTES_BYTES,
-    RELEASE_METADATA_FILE_NAME, RELEASE_NOTES_FILE_NAME, ReleaseMetadataError, ReleaseNotesError,
-    ReleaseNotesMetadata, load_current_release_metadata, load_release_metadata_from_directory,
+    ApplicationReleaseMetadata, INSTALLATION_IDENTITY_FILE_NAME, LoadedApplicationReleaseMetadata,
+    MAX_RELEASE_NOTES_BYTES, RELEASE_METADATA_FILE_NAME, RELEASE_NOTES_FILE_NAME,
+    ReleaseMetadataError, ReleaseNotesError, ReleaseNotesMetadata, load_current_release_metadata,
+    load_release_metadata_from_directory, read_installation_identity,
     read_verified_local_release_notes, verify_release_notes_bytes,
 };
 #[cfg(feature = "runtime")]

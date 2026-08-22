@@ -21,6 +21,12 @@ use resource_directory::ExecutableLayout;
 /// 安装包内通用发布元数据的文件名。
 pub const RELEASE_METADATA_FILE_NAME: &str = "nexora-release.json";
 
+/// 安装位置中记录 updater 运行身份的标记文件名。
+///
+/// 文件正文是构建时冻结的通道级 `app_id`。安装器和 updater 使用该标记拒绝把一个通道
+/// 写入另一通道的安装位置；标记不包含令牌、路径或其它用户数据。
+pub const INSTALLATION_IDENTITY_FILE_NAME: &str = "nexora-install-identity";
+
 /// 安装包内冻结更新日志的统一文件名。
 pub const RELEASE_NOTES_FILE_NAME: &str = "notes.md";
 
@@ -64,8 +70,9 @@ impl ApplicationReleaseMetadata {
     ///
     /// # Errors
     ///
-    /// schema 不受支持、必需字符串为空、构建号为零、应用标识不安全，或日志描述的文件名、
-    /// 大小、SHA-256 不合法时返回 [`ReleaseMetadataError::InvalidMetadata`]。
+    /// schema 不受支持、必需字符串为空、构建号为零、应用标识不安全、app ID/显示名称不符合
+    /// 固定通道派生规则，或日志描述的文件名、大小、SHA-256 不合法时返回
+    /// [`ReleaseMetadataError::InvalidMetadata`]。
     pub fn validate(&self) -> Result<(), ReleaseMetadataError> {
         if self.schema_version != 1 {
             return Err(ReleaseMetadataError::InvalidMetadata(format!(
@@ -88,6 +95,11 @@ impl ApplicationReleaseMetadata {
         if !valid_app_id(&self.app_id) {
             return Err(ReleaseMetadataError::InvalidMetadata(
                 "app_id 不是安全的应用标识".to_owned(),
+            ));
+        }
+        if !valid_channel_identity(self.channel, &self.app_id, &self.display_name) {
+            return Err(ReleaseMetadataError::InvalidMetadata(
+                "app_id 或 display_name 与固定通道身份不一致".to_owned(),
             ));
         }
         if self.build_number == 0 {
@@ -263,6 +275,64 @@ pub fn load_release_metadata_from_directory(
         metadata,
         resource_directory,
     }))
+}
+
+fn valid_channel_identity(channel: UpdateChannel, app_id: &str, display_name: &str) -> bool {
+    match channel {
+        UpdateChannel::Stable => {
+            !has_reserved_app_id_suffix(app_id) && !has_reserved_display_suffix(display_name)
+        }
+        UpdateChannel::Beta => app_id.strip_suffix(".beta").is_some_and(|base| {
+            !has_reserved_app_id_suffix(base)
+                && display_name
+                    .strip_suffix(" Beta")
+                    .is_some_and(|name| !has_reserved_display_suffix(name))
+        }),
+        UpdateChannel::Nightly => app_id.strip_suffix(".nightly").is_some_and(|base| {
+            !has_reserved_app_id_suffix(base)
+                && display_name
+                    .strip_suffix(" Nightly")
+                    .is_some_and(|name| !has_reserved_display_suffix(name))
+        }),
+    }
+}
+
+fn has_reserved_app_id_suffix(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.ends_with(".beta") || value.ends_with(".nightly")
+}
+
+fn has_reserved_display_suffix(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.ends_with(" beta") || value.ends_with(" nightly")
+}
+
+/// 从指定安装资源目录读取通道级安装身份标记。
+///
+/// 文件缺失时返回 `Ok(None)`，供 stable 旧安装兼容逻辑显式处理；文件存在时会去除首尾
+/// 空白并验证其为安全的应用标识，不会根据目录名或可执行文件名猜测身份。
+///
+/// # Errors
+///
+/// 标记无法读取、为空或不是安全的应用标识时返回错误。
+pub fn read_installation_identity(
+    resource_directory: impl AsRef<Path>,
+) -> Result<Option<String>, ReleaseMetadataError> {
+    let path = resource_directory
+        .as_ref()
+        .join(INSTALLATION_IDENTITY_FILE_NAME);
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let identity = contents.trim();
+    if !valid_app_id(identity) {
+        return Err(ReleaseMetadataError::InvalidMetadata(
+            "安装身份标记不是安全的应用标识".to_owned(),
+        ));
+    }
+    Ok(Some(identity.to_owned()))
 }
 
 /// 读取并验证安装包中冻结的本地更新日志。

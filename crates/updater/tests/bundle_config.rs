@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use updater::{UpdateChannel, UpdateConfig, UpdateError};
+use updater::{INSTALLATION_IDENTITY_FILE_NAME, UpdateChannel, UpdateConfig, UpdateError};
 
 fn bundle_root(name: &str) -> PathBuf {
     env::temp_dir().join(format!(
@@ -21,15 +21,21 @@ fn write_bundle_config(name: &str, value: serde_json::Value) -> PathBuf {
         serde_json::to_vec_pretty(&value).unwrap(),
     )
     .unwrap();
+    let channel = value["channel"].as_str().unwrap_or("stable");
+    let display_name = match channel {
+        "beta" => "Desktop Beta",
+        "nightly" => "Desktop Nightly",
+        _ => "Desktop",
+    };
     let release = serde_json::json!({
         "schema_version": 1,
         "app_key": "desktop",
         "app_id": value["app_id"].as_str().unwrap_or("com.example.desktop"),
-        "display_name": "Desktop",
+        "display_name": display_name,
         "package": "desktop",
         "version": value["current_version"].as_str().unwrap_or("1.0.0"),
         "build_number": value["current_build_number"].as_u64().unwrap_or(2),
-        "channel": value["channel"].as_str().unwrap_or("stable"),
+        "channel": channel,
         "target": "aarch64-apple-darwin",
         "notes": null
     });
@@ -139,6 +145,51 @@ fn loads_safe_updater_configuration_from_windows_install_dir() {
     assert!(!config.check_on_launch());
 
     fs::remove_dir_all(install_dir).unwrap();
+}
+
+#[test]
+fn prerelease_bundle_requires_matching_installation_identity_marker() {
+    let value = serde_json::json!({
+        "schema_version": 1,
+        "app_id": "com.example.desktop.beta",
+        "channel": "beta",
+        "feed_url": "https://updates.example.com/desktop/beta/latest.json",
+        "trusted_public_keys": [
+            "desktop-main:ed25519:uOr57PW5BEf4f77Hhzqw/4qMiURStMouY1q7HrP3iEs="
+        ],
+        "current_version": "1.0.0",
+        "current_build_number": 2,
+        "allow_insecure_http": false,
+        "health_timeout": "20s"
+    });
+    let bundle = write_bundle_config("beta-installation-identity", value);
+    let resources = bundle.join("Contents/Resources");
+
+    assert!(matches!(
+        UpdateConfig::from_app_bundle(&bundle),
+        Err(UpdateError::InvalidBundleConfig(_))
+    ));
+
+    fs::write(
+        resources.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "com.example.desktop.nightly\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        UpdateConfig::from_app_bundle(&bundle),
+        Err(UpdateError::InvalidBundleConfig(_))
+    ));
+
+    fs::write(
+        resources.join(INSTALLATION_IDENTITY_FILE_NAME),
+        "com.example.desktop.beta\n",
+    )
+    .unwrap();
+    let config = UpdateConfig::from_app_bundle(&bundle).unwrap();
+    assert_eq!(config.channel(), UpdateChannel::Beta);
+    assert_eq!(config.app_id(), "com.example.desktop.beta");
+
+    fs::remove_dir_all(bundle).unwrap();
 }
 
 #[test]

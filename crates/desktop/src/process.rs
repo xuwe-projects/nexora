@@ -34,8 +34,9 @@ pub struct ApplicationIdentity(String);
 impl ApplicationIdentity {
     /// 根据生产 app ID，或“应用名 + 规范化可执行文件”开发身份构造稳定值。
     ///
-    /// `identity_override` 最优先，适合需要显式隔离的测试或白标应用；其次使用
-    /// `production_app_id`。两者都缺失时对应用名与可执行文件规范路径做 SHA-256。
+    /// 正式安装包提供的 `production_app_id` 最优先，调用方不能用运行时选项改变已经签入
+    /// 发布元数据的身份。开发运行没有正式身份时可以使用 `identity_override`；两者都缺失时
+    /// 对应用名与可执行文件规范路径做 SHA-256。
     ///
     /// # Errors
     ///
@@ -45,7 +46,7 @@ impl ApplicationIdentity {
         production_app_id: Option<&str>,
         identity_override: Option<&str>,
     ) -> Result<Self, ProcessError> {
-        if let Some(value) = identity_override.or(production_app_id) {
+        if let Some(value) = production_app_id.or(identity_override) {
             return Self::explicit(value);
         }
         let executable = fs::canonicalize(env::current_exe()?)?;

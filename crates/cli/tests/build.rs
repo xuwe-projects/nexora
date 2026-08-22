@@ -861,16 +861,23 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     assert!(script.contains("ChineseSimplified.isl"));
     assert!(script.contains("MessagesFile: \"{#LanguageFile}\""));
     assert!(script.contains("CloseApplications=force"));
+    assert!(!script.contains("CloseApplicationsFilter="));
     assert!(script.contains("Source: \"*\""));
     assert!(script.contains("recursesubdirs createallsubdirs"));
     assert!(script.contains("skipifsilent"));
     assert!(script.starts_with("#define AppId \"com.example.one\""));
+    assert!(script.contains("#define InstallIdentity \"com.example.one\""));
+    assert!(script.contains("#define StableChannel 1"));
     assert!(script.contains("#define AppName \"Application One\""));
     assert!(script.contains("#define ArchitectureAllowed \"x64compatible and not arm64\""));
     assert!(script.contains("#define MinimumWindowsBuild 15063"));
     assert!(script.contains("#define SourceDir \""));
     assert!(script.contains("windows installer 中文"));
     assert!(!script.contains("/DAppId"));
+    assert!(script.contains("function InstallDirectoryHasExpectedIdentity"));
+    assert!(script.contains("function PrepareToInstall"));
+    assert!(script.contains("nexora-install-identity"));
+    assert!(script.contains("ExistingStableInstallMatches"));
     assert_eq!(
         updater_config["expected_windows_signer_thumbprint"],
         "00112233445566778899AABBCCDDEEFF00112233"
@@ -878,6 +885,28 @@ fn windows_installer_source_defines_chinese_inno_flow() {
     assert_eq!(
         updater_config["expected_windows_publisher"],
         "Nexora Test Publisher"
+    );
+}
+
+#[test]
+fn nightly_windows_installer_uses_derived_identity_and_directory_name() {
+    let fixture = Fixture::new(
+        "windows-nightly-installer",
+        &with_windows_target(multi_channel_app_config(
+            "one",
+            "package-one",
+            "Application One",
+        )),
+    );
+    let sources = inspect_windows_installer_sources(fixture.config(), "one").unwrap();
+    let script = sources["iss"].as_str().unwrap();
+
+    assert!(script.starts_with("#define AppId \"com.example.one.nightly\""));
+    assert!(script.contains("#define InstallIdentity \"com.example.one.nightly\""));
+    assert!(script.contains("#define StableChannel 0"));
+    assert!(script.contains("#define AppName \"Application One Nightly\""));
+    assert!(
+        script.contains("DefaultDirName={localappdata}\\Programs\\{#AppPublisher}\\{#AppName}")
     );
 }
 
@@ -1229,6 +1258,9 @@ fn multi_channel_merges_overrides_and_generates_channel_feed() {
         .unwrap()
         .remove(0);
     assert_eq!(beta["channel"], "beta");
+    assert_eq!(beta["app_id"], "com.example.one.beta");
+    assert_eq!(beta["updater_app_id"], "com.example.one.beta");
+    assert_eq!(beta["display_name"], "应用一 Beta");
     assert_eq!(beta["build_number"], 8);
     assert_eq!(
         beta["runtime_config_source"],
@@ -1242,6 +1274,9 @@ fn multi_channel_merges_overrides_and_generates_channel_feed() {
     let nightly = inspect_build_plans_for_channel(fixture.config(), "one", "nightly")
         .unwrap()
         .remove(0);
+    assert_eq!(nightly["app_id"], "com.example.one.nightly");
+    assert_eq!(nightly["updater_app_id"], "com.example.one.nightly");
+    assert_eq!(nightly["display_name"], "应用一 Nightly");
     assert_eq!(nightly["runtime_config_source"], "config/package-one.toml");
     assert_eq!(
         nightly["updater_feed"],
@@ -1274,6 +1309,40 @@ fn multi_channel_rejects_invalid_default_and_static_feed() {
             .to_string()
             .contains("feed_url")
     );
+}
+
+#[test]
+fn base_identity_rejects_reserved_channel_suffixes() {
+    let base = multi_channel_app_config("one", "package-one", "应用一");
+    for (name, config) in [
+        (
+            "reserved-app-id",
+            base.replace(
+                "app_id = \"com.example.one\"",
+                "app_id = \"com.example.one.beta\"",
+            ),
+        ),
+        (
+            "reserved-updater-id",
+            base.replace(
+                "[apps.one.updater]\n",
+                "[apps.one.updater]\napp_id = \"com.example.updater.nightly\"\n",
+            ),
+        ),
+        (
+            "reserved-display-name",
+            base.replace(
+                "display_name = \"应用一\"",
+                "display_name = \"应用一 Beta\"",
+            ),
+        ),
+    ] {
+        let fixture = Fixture::new(name, &config);
+        let error = inspect_build_plans_for_channel(fixture.config(), "one", "stable")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("保留通道后缀"), "{name}: {error}");
+    }
 }
 
 #[test]
@@ -1487,6 +1556,14 @@ fn nightly_beta_and_stable_bundles_freeze_the_selected_runtime_config() {
         )
         .unwrap();
         assert_eq!(resources["metadata"]["channel"], channel);
+        let expected_identity = match channel {
+            "stable" => "com.example.one",
+            "beta" => "com.example.one.beta",
+            "nightly" => "com.example.one.nightly",
+            _ => unreachable!(),
+        };
+        assert_eq!(resources["metadata"]["app_id"], expected_identity);
+        assert_eq!(resources["installation_identity"], expected_identity);
         assert_eq!(
             resources["runtime_config"],
             format!("value = \"{channel}\"\n")
