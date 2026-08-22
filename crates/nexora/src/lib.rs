@@ -123,6 +123,7 @@ pub mod __private {
     pub use crate::application::{
         AccountPreferences, MainWindowPlacement, PersistedWindowBounds, ShellAppearancePreferences,
         ShellPreferences, restore_appearance_preferences, restore_main_window_options,
+        window_requires_authentication,
     };
     #[cfg(feature = "desktop")]
     pub use crate::runtime::create_login_feature;

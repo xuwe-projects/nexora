@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use gpui::{AssetSource, Context, Empty, IntoElement, SharedString, Window, px, size};
+use nexora::__private::window_requires_authentication;
 use nexora::{
     Application as _, ApplicationError, ApplicationLogo, ApplicationOptions, ApplicationTabStyle,
     ApplicationThemePreset, FeatureElement, WindowElement,
@@ -29,6 +30,16 @@ impl FeatureElement for HomeFeature {
 struct SettingsWindow;
 
 impl WindowElement for SettingsWindow {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+#[derive(Default, nexora::Window)]
+#[nexora(id = "public-info", title = "公共信息", path = "/public-info")]
+struct PublicInfoWindow;
+
+impl WindowElement for PublicInfoWindow {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
@@ -67,6 +78,20 @@ impl nexora::Application for ConfiguredApplication {
     }
 }
 
+struct WindowAccessApplication {
+    window_ids: Vec<&'static str>,
+}
+
+impl nexora::Application for WindowAccessApplication {
+    fn options(&self) -> ApplicationOptions {
+        self.window_ids
+            .iter()
+            .fold(ApplicationOptions::new(), |options, window_id| {
+                options.unauthenticated_window(*window_id)
+            })
+    }
+}
+
 #[test]
 fn default_options_are_immediately_usable() {
     let options = DefaultApplication.options();
@@ -86,6 +111,7 @@ fn default_options_are_immediately_usable() {
     );
     assert_eq!(options.locale, "zh-CN");
     assert_eq!(options.initial_path, "/");
+    assert!(options.unauthenticated_window_ids.is_empty());
     assert_eq!(options.tab_style, ApplicationTabStyle::Tab);
     assert!(!options.sidebar_search);
     assert!(options.tray_enabled);
@@ -112,6 +138,7 @@ fn option_builders_replace_framework_defaults() {
         .application_assets(TestAssets)
         .sidebar_subtitle("Project workspace")
         .initial_path("/users")
+        .unauthenticated_window("public-info")
         .tab_style(ApplicationTabStyle::Underline)
         .sidebar_search(true)
         .locale("en")
@@ -138,6 +165,7 @@ fn option_builders_replace_framework_defaults() {
     );
     assert!(options.application_assets.is_some());
     assert_eq!(options.initial_path, "/users");
+    assert_eq!(options.unauthenticated_window_ids, ["public-info"]);
     assert_eq!(options.tab_style, ApplicationTabStyle::Underline);
     assert!(options.sidebar_search);
     assert_eq!(options.locale, "en");
@@ -230,6 +258,91 @@ fn validation_accepts_discovered_initial_feature() {
     ConfiguredApplication { initial_path: "/" }
         .validate()
         .expect("派生 Feature 应当可以由 Application 自动发现");
+}
+
+#[test]
+fn validation_accepts_registered_unauthenticated_window_id() {
+    WindowAccessApplication {
+        window_ids: vec!["public-info"],
+    }
+    .validate()
+    .expect("已注册 Window 的稳定 ID 应当通过启动校验");
+}
+
+#[test]
+fn validation_rejects_unknown_or_non_window_unauthenticated_ids() {
+    for window_id in ["missing-window", "home", "PUBLIC-INFO"] {
+        let error = WindowAccessApplication {
+            window_ids: vec![window_id],
+        }
+        .validate()
+        .expect_err("不存在、Feature 或大小写不匹配的 ID 都必须在启动前失败");
+
+        assert_eq!(
+            error,
+            ApplicationError::UnknownUnauthenticatedWindow {
+                id: window_id.to_owned(),
+            }
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_duplicate_unauthenticated_window_ids() {
+    let error = WindowAccessApplication {
+        window_ids: vec!["public-info", "public-info"],
+    }
+    .validate()
+    .expect_err("重复 Window ID 不应静默去重");
+
+    assert_eq!(
+        error,
+        ApplicationError::DuplicateUnauthenticatedWindow {
+            id: "public-info".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn window_authentication_policy_uses_account_state_settings_and_exact_ids() {
+    let configured_ids = vec!["public-info".to_owned()];
+
+    assert!(!window_requires_authentication(
+        false,
+        false,
+        &configured_ids,
+        "private-window",
+    ));
+    assert!(!window_requires_authentication(
+        true,
+        true,
+        &configured_ids,
+        "private-window",
+    ));
+    assert!(!window_requires_authentication(
+        true,
+        false,
+        &configured_ids,
+        "settings",
+    ));
+    assert!(!window_requires_authentication(
+        true,
+        false,
+        &configured_ids,
+        "public-info",
+    ));
+    assert!(window_requires_authentication(
+        true,
+        false,
+        &configured_ids,
+        "PUBLIC-INFO",
+    ));
+    assert!(window_requires_authentication(
+        true,
+        false,
+        &configured_ids,
+        "private-window",
+    ));
 }
 
 struct InvalidThemeApplication;

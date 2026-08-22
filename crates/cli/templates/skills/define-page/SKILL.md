@@ -162,7 +162,7 @@ impl nexora::WindowElement for ProfileWindow {
 
 Window 支持与 Feature 相同的 `path_params/query_params/factory`。应用可覆盖 `window_options`、`initialize` 与 `closing`；Nexora 负责强类型绑定、`gpui_component::Root`、主题挂载和原生开窗，不要再手写 `cx.open_window` 或窗口 Global。
 
-在 Feature 或其它 Entity 中引入 `NavigationContextExt as _`，调用 `cx.navigate("/profile")?`。Window 不进入 Sidebar 或标签。
+在 Feature 或其它 Entity 中引入 `NavigationContextExt as _`，调用 `cx.navigate("/profile")?`。Window 不进入 Sidebar 或标签。Account 未登录时仍需开放的 Window，通过 `ApplicationOptions::unauthenticated_window("稳定 Window ID")` 显式登记；`settings` 已默认开放，未知、Feature 或重复 ID 会在启动前失败。
 
 ## 专用单例与 Sidebar 插槽
 

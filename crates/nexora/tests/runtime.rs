@@ -9,11 +9,14 @@ use std::{
 use gpui::{
     AnyView, AppContext as _, Context, Empty, Render, TestAppContext, Window, WindowHandle,
 };
-use nexora::__private::{install_navigation_handler, remove_navigation_handler};
+use nexora::__private::{
+    install_navigation_handler, remove_navigation_handler, window_requires_authentication,
+};
 use nexora::{
-    AppRegistry, FeatureContextExt as _, FeatureElement, FeatureReloadAvailability, FeatureRoute,
-    FeatureRuntimeError, NavigationContextExt as _, NavigationRequestError, Path, Query,
-    RouteExtractError, WindowContextExt as _, WindowElement, WindowRuntimeError,
+    AppRegistry, ApplicationOptions, FeatureContextExt as _, FeatureElement,
+    FeatureReloadAvailability, FeatureRoute, FeatureRuntimeError, NavigationContextExt as _,
+    NavigationRequestError, Path, Query, RouteExtractError, Window as _, WindowContextExt as _,
+    WindowElement, WindowRuntimeError,
 };
 use serde::Deserialize;
 
@@ -486,6 +489,95 @@ fn registered_windows_share_one_gpui_application_loop(cx: &mut TestAppContext) {
     second
         .update(cx, |_, window, _| window.remove_window())
         .expect("第二个窗口应能独立关闭");
+}
+
+fn open_window_through_shell_policy(
+    registry: &AppRegistry,
+    options: &ApplicationOptions,
+    account_enabled: bool,
+    authenticated: bool,
+    path: &str,
+    cx: &mut TestAppContext,
+) -> bool {
+    let route = registry.resolve(path).expect("测试 Window 路由应当存在");
+    if window_requires_authentication(
+        account_enabled,
+        authenticated,
+        &options.unauthenticated_window_ids,
+        route.target().id(),
+    ) {
+        return false;
+    }
+    cx.update(|cx| registry.open_window(route, cx))
+        .expect("已放行的 Window 应走注册表原生开窗流程");
+    true
+}
+
+fn close_all_test_windows(cx: &mut TestAppContext) {
+    for handle in cx.windows() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .expect("测试窗口应当可以关闭");
+    }
+}
+
+#[gpui::test]
+fn unauthenticated_window_policy_preserves_settings_and_routes_registered_windows(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    cx.update(theme::init);
+    let registry = AppRegistry::builder()
+        .window::<RuntimeWindow>()
+        .build()
+        .expect("运行时 Window 与默认 Settings 应当可以共同注册");
+    let default_options = ApplicationOptions::new();
+
+    assert!(open_window_through_shell_policy(
+        &registry,
+        &default_options,
+        true,
+        false,
+        "/settings",
+        cx,
+    ));
+    assert_eq!(cx.windows().len(), 1);
+    close_all_test_windows(cx);
+
+    assert!(!open_window_through_shell_policy(
+        &registry,
+        &default_options,
+        true,
+        false,
+        "/runtime-window/7?tab=guest",
+        cx,
+    ));
+    assert!(cx.windows().is_empty());
+
+    assert!(open_window_through_shell_policy(
+        &registry,
+        &default_options,
+        true,
+        true,
+        "/runtime-window/7?tab=signed-in",
+        cx,
+    ));
+    assert_eq!(cx.windows().len(), 1);
+    close_all_test_windows(cx);
+
+    let public_options =
+        ApplicationOptions::new().unauthenticated_window(RuntimeWindow::METADATA.id());
+    assert!(open_window_through_shell_policy(
+        &registry,
+        &public_options,
+        true,
+        false,
+        "/runtime-window/7?tab=guest",
+        cx,
+    ));
+    assert_eq!(cx.windows().len(), 1);
+    assert!(!cx.update(|cx| nexora::desktop::login_snapshot(cx).authenticated));
+    close_all_test_windows(cx);
 }
 
 static CONSTRUCTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
