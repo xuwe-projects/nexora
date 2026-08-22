@@ -8,6 +8,7 @@ Each release page contains the complete changes, GitHub owners, genuinely relate
 requests, compatibility notes, and an upgrade path from the immediately preceding release.
 
 - [Unreleased: pending](./unreleased)
+- [0.43.0: unauthenticated independent Window allowlist](./0.43.0)
 - [0.42.0: channel-isolated installation identities and updater operation logs](./0.42.0)
 - [0.41.2: fix CRUD table crashes while scrolling](./0.41.2)
 - [0.41.1: formal-package configuration and user-focused update notes](./0.41.1)
